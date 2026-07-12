@@ -1,6 +1,10 @@
 package httpapi
 
-import "testing"
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
 
 func TestParseRange(t *testing.T) {
 	value, partial, err := parseRange("bytes=10-19")
@@ -35,5 +39,26 @@ func TestCallerNamespacePolicy(t *testing.T) {
 		if got := callerCanUseNamespace(test.caller, test.namespace); got != test.allowed {
 			t.Fatalf("caller=%s namespace=%s allowed=%v", test.caller, test.namespace, got)
 		}
+	}
+}
+
+func TestLocalUploadCORSAllowsAdminDevelopmentOrigin(t *testing.T) {
+	nextCalled := false
+	handler := localUploadCORS(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		nextCalled = true
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	request := httptest.NewRequest(http.MethodOptions, "/dev/uploads/token", nil)
+	request.Header.Set("Origin", "http://127.0.0.1:5175")
+	request.Header.Set("Access-Control-Request-Method", http.MethodPut)
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusNoContent || nextCalled {
+		t.Fatalf("status=%d next=%v", response.Code, nextCalled)
+	}
+	if response.Header().Get("Access-Control-Allow-Origin") != "http://127.0.0.1:5175" {
+		t.Fatalf("allow origin=%q", response.Header().Get("Access-Control-Allow-Origin"))
 	}
 }
