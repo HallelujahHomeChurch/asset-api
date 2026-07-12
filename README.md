@@ -16,6 +16,7 @@ Local uploads use a short-lived signed `PUT /dev/uploads/{token}` target and sto
 - `GET /ready`
 - `GET /api/assets/public/{assetId}`
 - `POST /priv/assets/upload-sessions`
+- `GET /priv/assets/{assetId}`
 - `POST /priv/assets/{assetId}/complete`
 - `POST /priv/assets/{assetId}/grants`
 - `DELETE /priv/assets/{assetId}/grants/{grantId}`

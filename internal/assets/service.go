@@ -110,8 +110,19 @@ func (s *Service) CreateGrant(ctx context.Context, assetID string, input CreateG
 	if !asset.DeletedAt.IsZero() {
 		return Grant{}, ErrNotFound
 	}
+	if input.SubjectType == SubjectPublic && input.Permission == PermissionRead && (asset.UploadStatus != UploadCompleted || asset.ScanStatus != ScanClean || (asset.ProcessingStatus != ProcessingReady && asset.ProcessingStatus != ProcessingNotRequired)) {
+		return Grant{}, ErrInvalidUpload
+	}
 	grant := Grant{ID: newID(), AssetID: assetID, SubjectType: input.SubjectType, SubjectID: input.SubjectID, Permission: input.Permission, IdempotencyKey: input.IdempotencyKey, ExpiresAt: input.ExpiresAt, CreatedAt: s.now().UTC()}
 	return s.repository.CreateGrant(ctx, grant)
+}
+
+func (s *Service) GetAsset(ctx context.Context, assetID string) (Asset, error) {
+	asset, err := s.repository.GetAsset(ctx, assetID)
+	if err != nil || !asset.DeletedAt.IsZero() {
+		return Asset{}, ErrNotFound
+	}
+	return asset, nil
 }
 
 func (s *Service) RevokeGrant(ctx context.Context, assetID, grantID string) error {

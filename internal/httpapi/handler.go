@@ -34,6 +34,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /ready", h.ready)
 	mux.HandleFunc("GET /api/assets/public/{assetID}", h.publicDownload)
 	mux.Handle("POST /priv/assets/upload-sessions", h.internal(http.HandlerFunc(h.createUpload)))
+	mux.Handle("GET /priv/assets/{assetID}", h.internal(http.HandlerFunc(h.getAsset)))
 	mux.Handle("POST /priv/assets/{assetID}/complete", h.internal(http.HandlerFunc(h.completeUpload)))
 	mux.Handle("POST /priv/assets/{assetID}/grants", h.internal(http.HandlerFunc(h.createGrant)))
 	mux.Handle("DELETE /priv/assets/{assetID}/grants/{grantID}", h.internal(http.HandlerFunc(h.revokeGrant)))
@@ -69,6 +70,11 @@ func (h *Handler) createUpload(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &input) {
 		return
 	}
+	caller := strings.TrimSpace(r.Header.Get("X-Internal-Caller-App-Id"))
+	if input.OwnerService != caller || !callerCanUseNamespace(caller, input.Namespace) {
+		writeError(w, http.StatusForbidden, "AST_FORBIDDEN", "caller cannot use this asset namespace")
+		return
+	}
 	created, err := h.service.CreateUploadSession(r.Context(), input, r.Header.Get("Idempotency-Key"))
 	if err != nil {
 		handleError(w, err)
@@ -76,7 +82,22 @@ func (h *Handler) createUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusCreated, created)
 }
+func (h *Handler) getAsset(w http.ResponseWriter, r *http.Request) {
+	asset, err := h.service.GetAsset(r.Context(), r.PathValue("assetID"))
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+	if asset.OwnerService != strings.TrimSpace(r.Header.Get("X-Internal-Caller-App-Id")) {
+		writeError(w, http.StatusForbidden, "AST_FORBIDDEN", "caller does not own this asset")
+		return
+	}
+	writeJSON(w, http.StatusOK, asset)
+}
 func (h *Handler) completeUpload(w http.ResponseWriter, r *http.Request) {
+	if !h.requireOwnedAsset(w, r) {
+		return
+	}
 	var input assets.CompleteUploadInput
 	if !decodeJSON(w, r, &input) {
 		return
@@ -89,6 +110,9 @@ func (h *Handler) completeUpload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, asset)
 }
 func (h *Handler) createGrant(w http.ResponseWriter, r *http.Request) {
+	if !h.requireOwnedAsset(w, r) {
+		return
+	}
 	var input assets.CreateGrantInput
 	if !decodeJSON(w, r, &input) {
 		return
@@ -104,6 +128,9 @@ func (h *Handler) createGrant(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, grant)
 }
 func (h *Handler) revokeGrant(w http.ResponseWriter, r *http.Request) {
+	if !h.requireOwnedAsset(w, r) {
+		return
+	}
 	if err := h.service.RevokeGrant(r.Context(), r.PathValue("assetID"), r.PathValue("grantID")); err != nil {
 		handleError(w, err)
 		return
@@ -111,7 +138,23 @@ func (h *Handler) revokeGrant(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 func (h *Handler) publicURL(w http.ResponseWriter, r *http.Request) {
+	if !h.requireOwnedAsset(w, r) {
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"assetId": r.PathValue("assetID"), "downloadUrl": h.service.PublicURL(r.PathValue("assetID"))})
+}
+
+func (h *Handler) requireOwnedAsset(w http.ResponseWriter, r *http.Request) bool {
+	asset, err := h.service.GetAsset(r.Context(), r.PathValue("assetID"))
+	if err != nil {
+		handleError(w, err)
+		return false
+	}
+	if asset.OwnerService != strings.TrimSpace(r.Header.Get("X-Internal-Caller-App-Id")) {
+		writeError(w, http.StatusForbidden, "AST_FORBIDDEN", "caller does not own this asset")
+		return false
+	}
+	return true
 }
 
 func (h *Handler) publicDownload(w http.ResponseWriter, r *http.Request) {
@@ -208,4 +251,15 @@ func requestID(next http.Handler) http.Handler {
 		w.Header().Set("X-HHC-Request-ID", id)
 		next.ServeHTTP(w, r)
 	})
+}
+
+func callerCanUseNamespace(caller, namespace string) bool {
+	switch caller {
+	case "hhc-web-api":
+		return strings.HasPrefix(namespace, "cms.")
+	case "hhc-line-function-bot":
+		return strings.HasPrefix(namespace, "line.")
+	default:
+		return false
+	}
 }

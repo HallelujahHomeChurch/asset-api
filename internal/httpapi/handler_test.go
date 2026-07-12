@@ -20,3 +20,20 @@ func TestParseRangeRejectsSuffixAndMultipleRanges(t *testing.T) {
 		}
 	}
 }
+
+func TestCallerNamespacePolicy(t *testing.T) {
+	tests := []struct {
+		caller, namespace string
+		allowed           bool
+	}{
+		{"hhc-web-api", "cms.weekly.pdf", true},
+		{"hhc-web-api", "line.group.file", false},
+		{"hhc-line-function-bot", "line.group.file", true},
+		{"hhc-line-function-bot", "cms.page.image", false},
+	}
+	for _, test := range tests {
+		if got := callerCanUseNamespace(test.caller, test.namespace); got != test.allowed {
+			t.Fatalf("caller=%s namespace=%s allowed=%v", test.caller, test.namespace, got)
+		}
+	}
+}

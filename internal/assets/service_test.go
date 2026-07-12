@@ -72,6 +72,9 @@ func TestCleanScanAndPublicGrantEnableStableDownload(t *testing.T) {
 	blobs := newMemoryBlobStore()
 	service := NewService(repo, blobs, "https://www.alive.org.tw/api/assets", time.Now)
 	asset := completedAsset(t, ctx, service, blobs, VisibilityPublic)
+	if err := service.ApplyScanResult(ctx, ScanResult{EventID: "scan-1", AssetID: asset.ID, Status: ScanClean}); err != nil {
+		t.Fatal(err)
+	}
 	grant, err := service.CreateGrant(ctx, asset.ID, CreateGrantInput{
 		SubjectType: SubjectPublic, SubjectID: "*", Permission: PermissionRead, IdempotencyKey: "grant-1",
 	})
@@ -81,10 +84,6 @@ func TestCleanScanAndPublicGrantEnableStableDownload(t *testing.T) {
 	if grant.ID == "" {
 		t.Fatal("missing grant id")
 	}
-	if err := service.ApplyScanResult(ctx, ScanResult{EventID: "scan-1", AssetID: asset.ID, Status: ScanClean}); err != nil {
-		t.Fatal(err)
-	}
-
 	download, err := service.OpenPublic(ctx, asset.ID, ByteRange{})
 	if err != nil {
 		t.Fatal(err)
@@ -115,6 +114,24 @@ func TestInfectedScanDeniesDownloadAndIsIdempotent(t *testing.T) {
 	}
 	if _, err := service.OpenPublic(ctx, asset.ID, ByteRange{}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("infected asset was downloadable: %v", err)
+	}
+}
+
+func TestPublicGrantRequiresCleanAsset(t *testing.T) {
+	ctx := context.Background()
+	repo := newMemoryRepository()
+	blobs := newMemoryBlobStore()
+	service := NewService(repo, blobs, "https://www.alive.org.tw/api/assets", time.Now)
+	asset := completedAsset(t, ctx, service, blobs, VisibilityPublic)
+	_, err := service.CreateGrant(ctx, asset.ID, CreateGrantInput{SubjectType: SubjectPublic, SubjectID: "*", Permission: PermissionRead, IdempotencyKey: "pending-public"})
+	if !errors.Is(err, ErrInvalidUpload) {
+		t.Fatalf("pending grant error = %v", err)
+	}
+	if err := service.ApplyScanResult(ctx, ScanResult{EventID: "clean-grant", AssetID: asset.ID, Status: ScanClean}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateGrant(ctx, asset.ID, CreateGrantInput{SubjectType: SubjectPublic, SubjectID: "*", Permission: PermissionRead, IdempotencyKey: "clean-public"}); err != nil {
+		t.Fatal(err)
 	}
 }
 
