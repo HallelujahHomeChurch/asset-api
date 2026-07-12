@@ -138,7 +138,13 @@ func (s *Service) OpenPublic(ctx context.Context, assetID string, byteRange Byte
 	if err != nil || !allowed {
 		return BlobDownload{}, ErrNotFound
 	}
-	return s.blobs.Open(ctx, asset.ObjectKey, byteRange)
+	download, err := s.blobs.Open(ctx, asset.ObjectKey, byteRange)
+	if err != nil {
+		return BlobDownload{}, err
+	}
+	download.ContentType = asset.DetectedMIMEType
+	download.TotalSize = asset.SizeBytes
+	return download, nil
 }
 
 func (s *Service) PublicURL(assetID string) string { return s.publicBaseURL + "/public/" + assetID }

@@ -177,6 +177,7 @@ type ByteRange struct {
 type BlobDownload struct {
 	Body         io.ReadCloser
 	Size         int64
+	TotalSize    int64
 	ContentType  string
 	ETag         string
 	LastModified time.Time
