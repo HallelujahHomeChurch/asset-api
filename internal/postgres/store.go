@@ -32,9 +32,9 @@ func (s *Store) CreateUpload(ctx context.Context, asset assets.Asset, session as
 }
 
 func (s *Store) GetAsset(ctx context.Context, id string) (assets.Asset, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id,namespace,owner_service,owner_type,owner_id,purpose,locale,original_file_name,object_key,expected_mime_type,detected_mime_type,size_bytes,checksum_sha256,etag,upload_status,scan_status,scan_details,processing_status,visibility,created_at,updated_at,COALESCE(deleted_at,'0001-01-01'::timestamptz) FROM assets WHERE id=$1`, id)
+	row := s.db.QueryRowContext(ctx, `SELECT id,namespace,owner_service,owner_type,owner_id,purpose,locale,original_file_name,object_key,expected_mime_type,detected_mime_type,size_bytes,checksum_sha256,etag,upload_status,scan_status,scan_details,processing_status,visibility,created_at,updated_at,COALESCE(deleted_at,'0001-01-01'::timestamptz),scan_attempts FROM assets WHERE id=$1`, id)
 	var value assets.Asset
-	err := row.Scan(&value.ID, &value.Namespace, &value.OwnerService, &value.OwnerType, &value.OwnerID, &value.Purpose, &value.Locale, &value.OriginalFileName, &value.ObjectKey, &value.ExpectedMIMEType, &value.DetectedMIMEType, &value.SizeBytes, &value.ChecksumSHA256, &value.ETag, &value.UploadStatus, &value.ScanStatus, &value.ScanDetails, &value.ProcessingStatus, &value.Visibility, &value.CreatedAt, &value.UpdatedAt, &value.DeletedAt)
+	err := row.Scan(&value.ID, &value.Namespace, &value.OwnerService, &value.OwnerType, &value.OwnerID, &value.Purpose, &value.Locale, &value.OriginalFileName, &value.ObjectKey, &value.ExpectedMIMEType, &value.DetectedMIMEType, &value.SizeBytes, &value.ChecksumSHA256, &value.ETag, &value.UploadStatus, &value.ScanStatus, &value.ScanDetails, &value.ProcessingStatus, &value.Visibility, &value.CreatedAt, &value.UpdatedAt, &value.DeletedAt, &value.ScanAttempts)
 	if errors.Is(err, sql.ErrNoRows) {
 		return assets.Asset{}, assets.ErrNotFound
 	}
@@ -110,7 +110,7 @@ func (s *Store) ApplyScanResult(ctx context.Context, result assets.ScanResult, n
 	if affected == 0 {
 		return false, nil
 	}
-	updated, err := tx.ExecContext(ctx, `UPDATE assets SET scan_status=$2,scan_details=$3,etag=CASE WHEN $4='' THEN etag ELSE $4 END,updated_at=$5 WHERE id=$1`, result.AssetID, result.Status, result.Details, result.ETag, now)
+	updated, err := tx.ExecContext(ctx, `UPDATE assets SET scan_status=$2,scan_details=$3,etag=CASE WHEN $4='' THEN etag ELSE $4 END,scan_claimed_until=NULL,updated_at=$5 WHERE id=$1`, result.AssetID, result.Status, result.Details, result.ETag, now)
 	if err != nil {
 		return false, err
 	}
@@ -121,4 +121,44 @@ func (s *Store) ApplyScanResult(ctx context.Context, result assets.ScanResult, n
 		return false, err
 	}
 	return true, nil
+}
+
+func (s *Store) ClaimPendingScan(ctx context.Context, now time.Time, lease time.Duration) (assets.Asset, bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return assets.Asset{}, false, err
+	}
+	defer tx.Rollback()
+	row := tx.QueryRowContext(ctx, `
+		SELECT id FROM assets
+		WHERE upload_status='completed' AND scan_status='pending' AND deleted_at IS NULL
+		  AND (scan_next_attempt_at IS NULL OR scan_next_attempt_at <= $1)
+		  AND (scan_claimed_until IS NULL OR scan_claimed_until < $1)
+		ORDER BY COALESCE(scan_next_attempt_at, created_at), created_at
+		FOR UPDATE SKIP LOCKED LIMIT 1`, now)
+	var id string
+	if err := row.Scan(&id); errors.Is(err, sql.ErrNoRows) {
+		return assets.Asset{}, false, nil
+	} else if err != nil {
+		return assets.Asset{}, false, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE assets SET scan_attempts=scan_attempts+1,scan_claimed_until=$2 WHERE id=$1`, id, now.Add(lease)); err != nil {
+		return assets.Asset{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return assets.Asset{}, false, err
+	}
+	asset, err := s.GetAsset(ctx, id)
+	return asset, err == nil, err
+}
+
+func (s *Store) ScheduleScanRetry(ctx context.Context, assetID, details string, nextAttempt, now time.Time) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE assets SET scan_details=$2,scan_next_attempt_at=$3,scan_claimed_until=NULL,updated_at=$4 WHERE id=$1 AND scan_status='pending'`, assetID, details, nextAttempt, now)
+	if err != nil {
+		return err
+	}
+	if count, _ := result.RowsAffected(); count != 1 {
+		return assets.ErrNotFound
+	}
+	return nil
 }

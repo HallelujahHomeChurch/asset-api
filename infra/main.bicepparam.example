@@ -6,4 +6,3 @@ param uploadAllowedOrigins = [
   'https://admin.alive.org.tw'
   'https://admin-test.alive.org.tw'
 ]
-param defenderScanCapGBPerMonth = 10

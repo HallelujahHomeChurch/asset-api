@@ -90,6 +90,7 @@ type Asset struct {
 	CreatedAt        time.Time        `json:"createdAt"`
 	UpdatedAt        time.Time        `json:"updatedAt"`
 	DeletedAt        time.Time        `json:"deletedAt,omitempty"`
+	ScanAttempts     int              `json:"-"`
 }
 
 type UploadSession struct {
@@ -192,6 +193,8 @@ type Repository interface {
 	RevokeGrant(context.Context, string, string, time.Time) error
 	HasActiveGrant(context.Context, string, SubjectType, string, Permission, time.Time) (bool, error)
 	ApplyScanResult(context.Context, ScanResult, time.Time) (bool, error)
+	ClaimPendingScan(context.Context, time.Time, time.Duration) (Asset, bool, error)
+	ScheduleScanRetry(context.Context, string, string, time.Time, time.Time) error
 }
 
 type BlobStore interface {

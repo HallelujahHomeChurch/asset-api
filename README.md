@@ -1,6 +1,6 @@
 # HHC Asset API
 
-`asset-api` owns platform file mechanics: upload sessions, Blob object keys, completion validation, Defender malware scan state, grants, and stable downloads. Consumer services retain business ownership of CMS records, LINE context, or desktop sync metadata.
+`asset-api` owns platform file mechanics: upload sessions, Blob object keys, completion validation, ClamAV malware scan state, grants, and stable downloads. Consumer services retain business ownership of CMS records, LINE context, or desktop sync metadata.
 
 ## Local development
 
@@ -25,4 +25,6 @@ Private routes require a trusted `X-Internal-Caller-App-Id` supplied by the inte
 
 ## Scan lifecycle
 
-Azure Defender for Storage publishes malware scan results to Event Grid, which forwards them to the configured Service Bus queue. The worker accepts each Event Grid event once, persists its event id, and keeps every non-clean object unavailable. Production readiness requires both Service Bus settings; local development can omit them and exercise scan transitions in tests.
+After upload completion, a database-backed worker claims the pending asset and streams its private Blob directly to `clamd` with the `INSTREAM` protocol. Clean results enable the existing grant checks; infected, pending, and failed assets remain unavailable. Transient Blob or ClamAV failures use bounded exponential backoff and become `failed` after `CLAMAV_MAX_RETRIES`.
+
+`CLAMAV_HOST` must resolve to a private endpoint reachable by every asset-api replica. Port `3310` must not be exposed publicly. Keep clamd's `StreamMaxLength` at least as large as `CLAMAV_MAX_FILE_SIZE_BYTES`, and keep both limits at or above the largest upload accepted by asset-api.

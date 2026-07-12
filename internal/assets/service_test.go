@@ -214,6 +214,26 @@ func (r *memoryRepository) ApplyScanResult(_ context.Context, result ScanResult,
 	r.assets[asset.ID] = asset
 	return true, nil
 }
+func (r *memoryRepository) ClaimPendingScan(_ context.Context, _ time.Time, _ time.Duration) (Asset, bool, error) {
+	for id, asset := range r.assets {
+		if asset.UploadStatus == UploadCompleted && asset.ScanStatus == ScanPending {
+			asset.ScanAttempts++
+			r.assets[id] = asset
+			return asset, true, nil
+		}
+	}
+	return Asset{}, false, nil
+}
+func (r *memoryRepository) ScheduleScanRetry(_ context.Context, assetID, details string, _, now time.Time) error {
+	asset, ok := r.assets[assetID]
+	if !ok {
+		return ErrNotFound
+	}
+	asset.ScanDetails = details
+	asset.UpdatedAt = now
+	r.assets[assetID] = asset
+	return nil
+}
 
 type memoryBlobStore struct{ objects map[string][]byte }
 
