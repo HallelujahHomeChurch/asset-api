@@ -43,6 +43,25 @@ func TestCompleteUploadValidatesObservedBlobAndLeavesDownloadPending(t *testing.
 	}
 }
 
+func TestCreateUploadSessionReplaysIdempotencyKey(t *testing.T) {
+	repo := newMemoryRepository()
+	blobs := newMemoryBlobStore()
+	service := NewService(repo, blobs, "https://www.alive.org.tw/api/assets", time.Now)
+	input := CreateUploadInput{Namespace: "cms.news.cover", OwnerService: "hhc-web-api", OwnerType: "news", OwnerID: "news-1", OriginalFileName: "cover.jpg", ExpectedMIMEType: "image/jpeg", MaxSizeBytes: 5 << 20, Visibility: VisibilityPublic}
+
+	first, err := service.CreateUploadSession(context.Background(), input, "news-cover-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.CreateUploadSession(context.Background(), input, "news-cover-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Asset.ID != second.Asset.ID || second.Target.URL == "" {
+		t.Fatalf("first=%+v second=%+v", first, second)
+	}
+}
+
 func TestCompleteUploadRejectsMIMEAndSizeSpoofing(t *testing.T) {
 	ctx := context.Background()
 	repo := newMemoryRepository()
@@ -95,6 +114,32 @@ func TestCleanScanAndPublicGrantEnableStableDownload(t *testing.T) {
 	}
 	if got := service.PublicURL(asset.ID); got != "https://www.alive.org.tw/api/assets/public/"+asset.ID {
 		t.Fatalf("public url = %s", got)
+	}
+}
+
+func TestPublicGrantAlsoProtectsStableDerivative(t *testing.T) {
+	ctx := context.Background()
+	repo := newMemoryRepository()
+	blobs := newMemoryBlobStore()
+	service := NewService(repo, blobs, "https://www.alive.org.tw/api/assets", time.Now)
+	asset := Asset{ID: "image-1", ObjectKey: "assets/image-1/original", UploadStatus: UploadCompleted, ScanStatus: ScanClean, ProcessingStatus: ProcessingReady, Visibility: VisibilityPublic, DetectedMIMEType: "image/png", SizeBytes: 8}
+	repo.assets[asset.ID] = asset
+	repo.derivatives[asset.ID+":large"] = Derivative{AssetID: asset.ID, Variant: "large", ObjectKey: "assets/image-1/derivatives/large.jpg", MIMEType: "image/jpeg", SizeBytes: 10}
+	blobs.objects["assets/image-1/derivatives/large.jpg"] = []byte("jpeg-bytes")
+
+	if _, err := service.OpenPublicVariant(ctx, asset.ID, "large", ByteRange{}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("derivative was public without grant: %v", err)
+	}
+	if _, err := service.CreateGrant(ctx, asset.ID, CreateGrantInput{SubjectType: SubjectPublic, SubjectID: "*", Permission: PermissionRead, IdempotencyKey: "image-grant"}); err != nil {
+		t.Fatal(err)
+	}
+	download, err := service.OpenPublicVariant(ctx, asset.ID, "large", ByteRange{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer download.Body.Close()
+	if download.ContentType != "image/jpeg" {
+		t.Fatalf("content type=%s", download.ContentType)
 	}
 }
 
@@ -156,14 +201,15 @@ func completedAsset(t *testing.T, ctx context.Context, service *Service, blobs *
 }
 
 type memoryRepository struct {
-	assets   map[string]Asset
-	sessions map[string]UploadSession
-	grants   map[string]Grant
-	events   map[string]struct{}
+	assets      map[string]Asset
+	sessions    map[string]UploadSession
+	grants      map[string]Grant
+	events      map[string]struct{}
+	derivatives map[string]Derivative
 }
 
 func newMemoryRepository() *memoryRepository {
-	return &memoryRepository{assets: map[string]Asset{}, sessions: map[string]UploadSession{}, grants: map[string]Grant{}, events: map[string]struct{}{}}
+	return &memoryRepository{assets: map[string]Asset{}, sessions: map[string]UploadSession{}, grants: map[string]Grant{}, events: map[string]struct{}{}, derivatives: map[string]Derivative{}}
 }
 
 func (r *memoryRepository) CreateUpload(_ context.Context, asset Asset, session UploadSession) error {
@@ -184,6 +230,14 @@ func (r *memoryRepository) GetUploadSession(_ context.Context, assetID string) (
 		return UploadSession{}, ErrNotFound
 	}
 	return value, nil
+}
+func (r *memoryRepository) FindUploadByIdempotency(_ context.Context, key string) (Asset, UploadSession, error) {
+	for assetID, session := range r.sessions {
+		if session.IdempotencyKey == key {
+			return r.assets[assetID], session, nil
+		}
+	}
+	return Asset{}, UploadSession{}, ErrNotFound
 }
 func (r *memoryRepository) CompleteUpload(_ context.Context, asset Asset, session UploadSession) error {
 	r.assets[asset.ID] = asset
@@ -251,6 +305,13 @@ func (r *memoryRepository) ScheduleScanRetry(_ context.Context, assetID, details
 	r.assets[assetID] = asset
 	return nil
 }
+func (r *memoryRepository) GetDerivative(_ context.Context, assetID, variant string) (Derivative, error) {
+	value, ok := r.derivatives[assetID+":"+variant]
+	if !ok {
+		return Derivative{}, ErrNotFound
+	}
+	return value, nil
+}
 
 type memoryBlobStore struct{ objects map[string][]byte }
 
@@ -275,4 +336,14 @@ func (b *memoryBlobStore) Open(_ context.Context, objectKey string, _ ByteRange)
 func (b *memoryBlobStore) Delete(_ context.Context, objectKey string) error {
 	delete(b.objects, objectKey)
 	return nil
+}
+func (b *memoryBlobStore) Put(_ context.Context, objectKey string, reader io.Reader, size int64, _ string) (BlobProperties, error) {
+	value, err := io.ReadAll(reader)
+	if err != nil || int64(len(value)) != size {
+		return BlobProperties{}, ErrInvalidUpload
+	}
+	b.objects[objectKey] = value
+	properties := inspectBytes(value)
+	properties.ETag = "etag-derivative"
+	return properties, nil
 }

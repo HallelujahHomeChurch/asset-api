@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"path"
@@ -42,19 +43,56 @@ func (s *Service) CreateUploadSession(ctx context.Context, input CreateUploadInp
 	if input.Visibility == "" {
 		input.Visibility = VisibilityPrivate
 	}
+	if replay, ok, err := s.replayUpload(ctx, input, idempotencyKey); err != nil || ok {
+		return replay, err
+	}
 	now := s.now().UTC()
 	assetID := newID()
 	objectKey := path.Join(environmentPrefix(), input.Namespace, now.Format("2006"), now.Format("01"), assetID, "original")
-	asset := Asset{ID: assetID, Namespace: input.Namespace, OwnerService: input.OwnerService, OwnerType: input.OwnerType, OwnerID: input.OwnerID, Purpose: input.Purpose, Locale: input.Locale, OriginalFileName: sanitizeFileName(input.OriginalFileName), ObjectKey: objectKey, ExpectedMIMEType: input.ExpectedMIMEType, UploadStatus: UploadCreated, ScanStatus: ScanPending, ProcessingStatus: ProcessingNotRequired, Visibility: input.Visibility, CreatedAt: now, UpdatedAt: now}
+	processing := ProcessingNotRequired
+	if strings.HasPrefix(input.ExpectedMIMEType, "image/") {
+		processing = ProcessingPending
+	}
+	asset := Asset{ID: assetID, Namespace: input.Namespace, OwnerService: input.OwnerService, OwnerType: input.OwnerType, OwnerID: input.OwnerID, Purpose: input.Purpose, Locale: input.Locale, OriginalFileName: sanitizeFileName(input.OriginalFileName), ObjectKey: objectKey, ExpectedMIMEType: input.ExpectedMIMEType, UploadStatus: UploadCreated, ScanStatus: ScanPending, ProcessingStatus: processing, Visibility: input.Visibility, CreatedAt: now, UpdatedAt: now}
 	session := UploadSession{ID: newID(), AssetID: assetID, IdempotencyKey: idempotencyKey, MaxSizeBytes: input.MaxSizeBytes, Status: UploadCreated, ExpiresAt: now.Add(uploadTTL), CreatedAt: now}
 	target, err := s.blobs.CreateUploadTarget(ctx, objectKey, input.MaxSizeBytes, session.ExpiresAt)
 	if err != nil {
 		return CreatedUpload{}, fmt.Errorf("create upload target: %w", err)
 	}
 	if err := s.repository.CreateUpload(ctx, asset, session); err != nil {
+		if replay, ok, replayErr := s.replayUpload(ctx, input, idempotencyKey); replayErr == nil && ok {
+			return replay, nil
+		}
 		return CreatedUpload{}, fmt.Errorf("create upload: %w", err)
 	}
 	return CreatedUpload{Asset: asset, Session: session, Target: target}, nil
+}
+
+func (s *Service) replayUpload(ctx context.Context, input CreateUploadInput, key string) (CreatedUpload, bool, error) {
+	repository, ok := s.repository.(interface {
+		FindUploadByIdempotency(context.Context, string) (Asset, UploadSession, error)
+	})
+	if !ok {
+		return CreatedUpload{}, false, nil
+	}
+	asset, session, err := repository.FindUploadByIdempotency(ctx, key)
+	if errors.Is(err, ErrNotFound) {
+		return CreatedUpload{}, false, nil
+	}
+	if err != nil {
+		return CreatedUpload{}, false, err
+	}
+	if asset.Namespace != input.Namespace || asset.OwnerService != input.OwnerService || asset.OwnerType != input.OwnerType || asset.OwnerID != input.OwnerID || asset.ExpectedMIMEType != input.ExpectedMIMEType || session.MaxSizeBytes != input.MaxSizeBytes {
+		return CreatedUpload{}, true, ErrInvalidInput
+	}
+	created := CreatedUpload{Asset: asset, Session: session}
+	if session.Status == UploadCreated && s.now().Before(session.ExpiresAt) {
+		created.Target, err = s.blobs.CreateUploadTarget(ctx, asset.ObjectKey, session.MaxSizeBytes, session.ExpiresAt)
+		if err != nil {
+			return CreatedUpload{}, true, fmt.Errorf("replay upload target: %w", err)
+		}
+	}
+	return created, true, nil
 }
 
 func (s *Service) CompleteUpload(ctx context.Context, assetID string, input CompleteUploadInput) (Asset, error) {
@@ -138,6 +176,17 @@ func (s *Service) ApplyScanResult(ctx context.Context, result ScanResult) error 
 }
 
 func (s *Service) OpenPublic(ctx context.Context, assetID string, byteRange ByteRange) (BlobDownload, error) {
+	return s.openPublic(ctx, assetID, "", byteRange)
+}
+
+func (s *Service) OpenPublicVariant(ctx context.Context, assetID, variant string, byteRange ByteRange) (BlobDownload, error) {
+	if variant != "small" && variant != "medium" && variant != "large" {
+		return BlobDownload{}, ErrNotFound
+	}
+	return s.openPublic(ctx, assetID, variant, byteRange)
+}
+
+func (s *Service) openPublic(ctx context.Context, assetID, variant string, byteRange ByteRange) (BlobDownload, error) {
 	asset, err := s.repository.GetAsset(ctx, assetID)
 	if err != nil {
 		return BlobDownload{}, ErrNotFound
@@ -149,12 +198,28 @@ func (s *Service) OpenPublic(ctx context.Context, assetID string, byteRange Byte
 	if err != nil || !allowed {
 		return BlobDownload{}, ErrNotFound
 	}
-	download, err := s.blobs.Open(ctx, asset.ObjectKey, byteRange)
+	objectKey := asset.ObjectKey
+	contentType := asset.DetectedMIMEType
+	totalSize := asset.SizeBytes
+	if variant != "" {
+		repository, ok := s.repository.(interface {
+			GetDerivative(context.Context, string, string) (Derivative, error)
+		})
+		if !ok {
+			return BlobDownload{}, ErrNotFound
+		}
+		derivative, err := repository.GetDerivative(ctx, assetID, variant)
+		if err != nil {
+			return BlobDownload{}, ErrNotFound
+		}
+		objectKey, contentType, totalSize = derivative.ObjectKey, derivative.MIMEType, derivative.SizeBytes
+	}
+	download, err := s.blobs.Open(ctx, objectKey, byteRange)
 	if err != nil {
 		return BlobDownload{}, err
 	}
-	download.ContentType = asset.DetectedMIMEType
-	download.TotalSize = asset.SizeBytes
+	download.ContentType = contentType
+	download.TotalSize = totalSize
 	return download, nil
 }
 

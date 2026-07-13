@@ -33,6 +33,7 @@ func (h *Handler) Routes() http.Handler {
 	})
 	mux.HandleFunc("GET /ready", h.ready)
 	mux.HandleFunc("GET /api/assets/public/{assetID}", h.publicDownload)
+	mux.HandleFunc("GET /api/assets/public/{assetID}/{variant}", h.publicDerivativeDownload)
 	mux.Handle("POST /priv/assets/upload-sessions", h.internal(http.HandlerFunc(h.createUpload)))
 	mux.Handle("GET /priv/assets/{assetID}", h.internal(http.HandlerFunc(h.getAsset)))
 	mux.Handle("POST /priv/assets/{assetID}/complete", h.internal(http.HandlerFunc(h.completeUpload)))
@@ -175,12 +176,25 @@ func (h *Handler) requireOwnedAsset(w http.ResponseWriter, r *http.Request) bool
 }
 
 func (h *Handler) publicDownload(w http.ResponseWriter, r *http.Request) {
+	h.servePublicDownload(w, r, "")
+}
+
+func (h *Handler) publicDerivativeDownload(w http.ResponseWriter, r *http.Request) {
+	h.servePublicDownload(w, r, r.PathValue("variant"))
+}
+
+func (h *Handler) servePublicDownload(w http.ResponseWriter, r *http.Request, variant string) {
 	requested, partial, err := parseRange(r.Header.Get("Range"))
 	if err != nil {
 		writeError(w, http.StatusRequestedRangeNotSatisfiable, "AST_INVALID_RANGE", "invalid range")
 		return
 	}
-	download, err := h.service.OpenPublic(r.Context(), r.PathValue("assetID"), requested)
+	var download assets.BlobDownload
+	if variant == "" {
+		download, err = h.service.OpenPublic(r.Context(), r.PathValue("assetID"), requested)
+	} else {
+		download, err = h.service.OpenPublicVariant(r.Context(), r.PathValue("assetID"), variant, requested)
+	}
 	if err != nil {
 		handleError(w, err)
 		return
@@ -189,7 +203,7 @@ func (h *Handler) publicDownload(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", download.ContentType)
 	w.Header().Set("Content-Length", strconv.FormatInt(download.Size, 10))
 	w.Header().Set("Accept-Ranges", "bytes")
-	w.Header().Set("Cache-Control", "public, max-age=300, stale-while-revalidate=60")
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if download.ETag != "" {
 		w.Header().Set("ETag", download.ETag)

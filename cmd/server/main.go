@@ -14,6 +14,7 @@ import (
 	"hhc/asset-api/internal/assets"
 	"hhc/asset-api/internal/clamav"
 	"hhc/asset-api/internal/config"
+	"hhc/asset-api/internal/derivatives"
 	"hhc/asset-api/internal/httpapi"
 	"hhc/asset-api/internal/migrations"
 	"hhc/asset-api/internal/postgres"
@@ -71,9 +72,20 @@ func run() error {
 
 	scanClient := clamav.NewClient(cfg.ClamAVHost, cfg.ClamAVPort, cfg.ClamAVTimeout, cfg.ClamAVMaxFileSize)
 	scanWorker := clamav.NewWorker(repository, blobStore, scanClient, cfg.ClamAVMaxRetries, cfg.ClamAVTimeout)
+	derivativeBlobs, ok := blobStore.(derivatives.BlobStore)
+	if !ok {
+		return errors.New("storage backend does not support derivative writes")
+	}
+	derivativeWorker := derivatives.NewWorker(repository, derivativeBlobs)
 	go func() {
 		if err := scanWorker.Run(ctx); err != nil && ctx.Err() == nil {
 			slog.Error("ClamAV worker stopped", "error", err)
+			stop()
+		}
+	}()
+	go func() {
+		if err := derivativeWorker.Run(ctx); err != nil && ctx.Err() == nil {
+			slog.Error("derivative worker stopped", "error", err)
 			stop()
 		}
 	}()

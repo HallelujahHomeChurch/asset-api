@@ -50,6 +50,21 @@ func (s *Store) GetUploadSession(ctx context.Context, assetID string) (assets.Up
 	return value, err
 }
 
+func (s *Store) FindUploadByIdempotency(ctx context.Context, key string) (assets.Asset, assets.UploadSession, error) {
+	var assetID string
+	if err := s.db.QueryRowContext(ctx, `SELECT asset_id FROM upload_sessions WHERE idempotency_key=$1`, key).Scan(&assetID); errors.Is(err, sql.ErrNoRows) {
+		return assets.Asset{}, assets.UploadSession{}, assets.ErrNotFound
+	} else if err != nil {
+		return assets.Asset{}, assets.UploadSession{}, err
+	}
+	asset, err := s.GetAsset(ctx, assetID)
+	if err != nil {
+		return assets.Asset{}, assets.UploadSession{}, err
+	}
+	session, err := s.GetUploadSession(ctx, assetID)
+	return asset, session, err
+}
+
 func (s *Store) CompleteUpload(ctx context.Context, asset assets.Asset, session assets.UploadSession) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -161,4 +176,70 @@ func (s *Store) ScheduleScanRetry(ctx context.Context, assetID, details string, 
 		return assets.ErrNotFound
 	}
 	return nil
+}
+
+func (s *Store) ClaimPendingProcessing(ctx context.Context, now time.Time, lease time.Duration) (assets.Asset, bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return assets.Asset{}, false, err
+	}
+	defer tx.Rollback()
+	var id string
+	err = tx.QueryRowContext(ctx, `SELECT id FROM assets WHERE upload_status='completed' AND scan_status='clean' AND processing_status='pending' AND deleted_at IS NULL AND (processing_claimed_until IS NULL OR processing_claimed_until<$1) ORDER BY updated_at FOR UPDATE SKIP LOCKED LIMIT 1`, now).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return assets.Asset{}, false, nil
+	}
+	if err != nil {
+		return assets.Asset{}, false, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE assets SET processing_claimed_until=$2 WHERE id=$1`, id, now.Add(lease)); err != nil {
+		return assets.Asset{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return assets.Asset{}, false, err
+	}
+	asset, err := s.GetAsset(ctx, id)
+	return asset, err == nil, err
+}
+
+func (s *Store) CompleteProcessing(ctx context.Context, assetID string, derivatives []assets.Derivative, now time.Time) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, value := range derivatives {
+		_, err = tx.ExecContext(ctx, `INSERT INTO asset_derivatives(asset_id,variant,object_key,mime_type,width,height,size_bytes,etag,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(asset_id,variant) DO UPDATE SET object_key=EXCLUDED.object_key,mime_type=EXCLUDED.mime_type,width=EXCLUDED.width,height=EXCLUDED.height,size_bytes=EXCLUDED.size_bytes,etag=EXCLUDED.etag,created_at=EXCLUDED.created_at`, assetID, value.Variant, value.ObjectKey, value.MIMEType, value.Width, value.Height, value.SizeBytes, value.ETag, value.CreatedAt)
+		if err != nil {
+			return err
+		}
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE assets SET processing_status='ready',processing_error='',processing_claimed_until=NULL,updated_at=$2 WHERE id=$1 AND processing_status='pending'`, assetID, now)
+	if err != nil {
+		return err
+	}
+	if count, _ := result.RowsAffected(); count != 1 {
+		return assets.ErrNotFound
+	}
+	return tx.Commit()
+}
+
+func (s *Store) FailProcessing(ctx context.Context, assetID, details string, now time.Time) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE assets SET processing_status='failed',processing_error=$2,processing_claimed_until=NULL,updated_at=$3 WHERE id=$1 AND processing_status='pending'`, assetID, details, now)
+	if err != nil {
+		return err
+	}
+	if count, _ := result.RowsAffected(); count != 1 {
+		return assets.ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) GetDerivative(ctx context.Context, assetID, variant string) (assets.Derivative, error) {
+	var value assets.Derivative
+	err := s.db.QueryRowContext(ctx, `SELECT asset_id,variant,object_key,mime_type,width,height,size_bytes,etag,created_at FROM asset_derivatives WHERE asset_id=$1 AND variant=$2`, assetID, variant).Scan(&value.AssetID, &value.Variant, &value.ObjectKey, &value.MIMEType, &value.Width, &value.Height, &value.SizeBytes, &value.ETag, &value.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return assets.Derivative{}, assets.ErrNotFound
+	}
+	return value, err
 }

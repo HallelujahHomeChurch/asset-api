@@ -117,6 +117,14 @@ func (s *Store) Delete(ctx context.Context, objectKey string) error {
 	return mapError(err)
 }
 
+func (s *Store) Put(ctx context.Context, objectKey string, reader io.Reader, _ int64, mimeType string) (assets.BlobProperties, error) {
+	_, err := s.client.UploadStream(ctx, s.container, objectKey, reader, &azblob.UploadStreamOptions{HTTPHeaders: &blob.HTTPHeaders{BlobContentType: &mimeType}})
+	if err != nil {
+		return assets.BlobProperties{}, mapError(err)
+	}
+	return s.Inspect(ctx, objectKey)
+}
+
 func (s *Store) userDelegationCredential(ctx context.Context) (*service.UserDelegationCredential, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

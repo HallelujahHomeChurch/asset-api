@@ -174,6 +174,30 @@ func (s *Store) Delete(_ context.Context, objectKey string) error {
 	}
 	return err
 }
+func (s *Store) Put(_ context.Context, objectKey string, reader io.Reader, size int64, _ string) (assets.BlobProperties, error) {
+	filePath, err := s.safePath(objectKey)
+	if err != nil {
+		return assets.BlobProperties{}, err
+	}
+	if err := os.MkdirAll(filepath.Dir(filePath), 0o750); err != nil {
+		return assets.BlobProperties{}, err
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(filePath), ".derivative-*")
+	if err != nil {
+		return assets.BlobProperties{}, err
+	}
+	temporaryName := temporary.Name()
+	defer os.Remove(temporaryName)
+	written, copyErr := io.Copy(temporary, io.LimitReader(reader, size+1))
+	closeErr := temporary.Close()
+	if copyErr != nil || closeErr != nil || written != size {
+		return assets.BlobProperties{}, assets.ErrInvalidUpload
+	}
+	if err := os.Rename(temporaryName, filePath); err != nil {
+		return assets.BlobProperties{}, err
+	}
+	return s.Inspect(context.Background(), objectKey)
+}
 func (s *Store) sign(value string) string {
 	mac := hmac.New(sha256.New, s.signingKey)
 	_, _ = mac.Write([]byte(value))

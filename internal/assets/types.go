@@ -93,6 +93,18 @@ type Asset struct {
 	ScanAttempts     int              `json:"-"`
 }
 
+type Derivative struct {
+	AssetID   string    `json:"assetId"`
+	Variant   string    `json:"variant"`
+	ObjectKey string    `json:"-"`
+	MIMEType  string    `json:"mimeType"`
+	Width     int       `json:"width"`
+	Height    int       `json:"height"`
+	SizeBytes int64     `json:"sizeBytes"`
+	ETag      string    `json:"etag"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
 type UploadSession struct {
 	ID             string       `json:"id"`
 	AssetID        string       `json:"assetId"`
