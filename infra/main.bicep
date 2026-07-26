@@ -27,6 +27,21 @@ resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' existing =
   name: containerRegistryName
 }
 
+resource pullIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: 'asset-api-acr-pull'
+  location: location
+}
+
+resource acrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(registry.id, pullIdentity.id, 'acr-pull')
+  scope: registry
+  properties: {
+    principalId: pullIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
+  }
+}
+
 resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
   name: storageAccountName
 }
@@ -99,7 +114,10 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
   name: 'asset-api'
   location: location
   identity: {
-    type: 'SystemAssigned'
+    type: 'SystemAssigned, UserAssigned'
+    userAssignedIdentities: {
+      '${pullIdentity.id}': {}
+    }
   }
   properties: {
     managedEnvironmentId: environment.id
@@ -115,7 +133,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
       registries: [
         {
           server: registry.properties.loginServer
-          identity: 'system'
+          identity: pullIdentity.id
         }
       ]
       secrets: [
@@ -171,16 +189,9 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
       }
     }
   }
-}
-
-resource acrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(registry.id, app.id, 'acr-pull')
-  scope: registry
-  properties: {
-    principalId: app.identity.principalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
-  }
+  dependsOn: [
+    acrPull
+  ]
 }
 
 resource assetBlobContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {

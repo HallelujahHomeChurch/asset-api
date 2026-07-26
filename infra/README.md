@@ -2,8 +2,8 @@
 
 The template creates `asset-api` in the existing `alive-env`, enables Dapr
 with app id `asset-api`, creates a private Blob container, and assigns its
-system identity ACR pull, container-scoped Blob contributor, and
-account-scoped Blob delegator roles. No Container Apps ingress is created;
+dedicated pull identity ACR pull, plus its system identity container-scoped
+Blob contributor and account-scoped Blob delegator roles. No Container Apps ingress is created;
 gateway and owner services invoke it through Dapr.
 It also allows only the ACA subnet (`172.16.66.0/23`) to reach clamd at
 `172.16.65.5:3310`.
