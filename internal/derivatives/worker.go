@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image"
 	"image/jpeg"
+	_ "image/png"
 	"io"
 	"log/slog"
 	"path"
@@ -30,12 +31,12 @@ type Worker struct {
 
 type Repository interface {
 	ClaimPendingProcessing(context.Context, time.Time, time.Duration) (assets.Asset, bool, error)
-	CompleteProcessing(context.Context, string, []assets.Derivative, time.Time) error
-	FailProcessing(context.Context, string, string, time.Time) error
+	CompleteProcessing(context.Context, string, string, []assets.Derivative, time.Time) error
+	FailProcessing(context.Context, string, string, string, time.Time) error
 }
 
 type BlobStore interface {
-	Open(context.Context, string, assets.ByteRange) (assets.BlobDownload, error)
+	Open(context.Context, string, assets.ByteRange, string) (assets.BlobDownload, error)
 	Put(context.Context, string, io.Reader, int64, string) (assets.BlobProperties, error)
 }
 
@@ -64,19 +65,30 @@ func (w *Worker) ProcessOne(ctx context.Context) error {
 		return err
 	}
 	if err := w.process(ctx, asset); err != nil {
-		_ = w.repository.FailProcessing(ctx, asset.ID, truncate(err.Error(), 500), w.now().UTC())
+		_ = w.repository.FailProcessing(ctx, asset.ID, asset.ETag, truncate(err.Error(), 500), w.now().UTC())
 		return err
 	}
 	return nil
 }
 
 func (w *Worker) process(ctx context.Context, asset assets.Asset) error {
-	download, err := w.blobs.Open(ctx, asset.ObjectKey, assets.ByteRange{})
+	download, err := w.blobs.Open(ctx, asset.ObjectKey, assets.ByteRange{}, asset.ETag)
 	if err != nil {
 		return fmt.Errorf("open original: %w", err)
 	}
 	defer download.Body.Close()
-	decoded, _, err := image.Decode(io.LimitReader(download.Body, 25<<20))
+	encoded, err := io.ReadAll(io.LimitReader(download.Body, (25<<20)+1))
+	if err != nil || len(encoded) > 25<<20 {
+		return fmt.Errorf("read image: %w", assets.ErrInvalidUpload)
+	}
+	config, _, err := image.DecodeConfig(bytes.NewReader(encoded))
+	if err != nil {
+		return fmt.Errorf("decode image config: %w", err)
+	}
+	if err := validateImageConfig(config); err != nil {
+		return err
+	}
+	decoded, _, err := image.Decode(bytes.NewReader(encoded))
 	if err != nil {
 		return fmt.Errorf("decode image: %w", err)
 	}
@@ -102,8 +114,15 @@ func (w *Worker) process(ctx context.Context, asset assets.Asset) error {
 		}
 		values = append(values, assets.Derivative{AssetID: asset.ID, Variant: variant.name, ObjectKey: objectKey, MIMEType: "image/jpeg", Width: width, Height: height, SizeBytes: properties.Size, ETag: properties.ETag, CreatedAt: now})
 	}
-	if err := w.repository.CompleteProcessing(ctx, asset.ID, values, now); err != nil {
+	if err := w.repository.CompleteProcessing(ctx, asset.ID, asset.ETag, values, now); err != nil {
 		return fmt.Errorf("complete processing: %w", err)
+	}
+	return nil
+}
+
+func validateImageConfig(config image.Config) error {
+	if config.Width < 1 || config.Height < 1 || config.Width > 8192 || config.Height > 8192 || int64(config.Width)*int64(config.Height) > 40_000_000 {
+		return fmt.Errorf("invalid image dimensions")
 	}
 	return nil
 }

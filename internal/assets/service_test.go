@@ -27,7 +27,7 @@ func TestCompleteUploadValidatesObservedBlobAndLeavesDownloadPending(t *testing.
 	}
 
 	payload := []byte("%PDF-1.7\nweekly bulletin")
-	blobs.objects[created.Asset.ObjectKey] = payload
+	blobs.objects[created.Session.StagingObjectKey] = payload
 	sum := sha256.Sum256(payload)
 	asset, err := service.CompleteUpload(ctx, created.Asset.ID, CompleteUploadInput{
 		SizeBytes: int64(len(payload)), ChecksumSHA256: hex.EncodeToString(sum[:]), MIMEType: "application/pdf",
@@ -37,6 +37,15 @@ func TestCompleteUploadValidatesObservedBlobAndLeavesDownloadPending(t *testing.
 	}
 	if asset.ScanStatus != ScanPending {
 		t.Fatalf("scan status = %s", asset.ScanStatus)
+	}
+	if created.Session.StagingObjectKey == "" || created.Session.StagingObjectKey == asset.ObjectKey {
+		t.Fatalf("staging=%q final=%q", created.Session.StagingObjectKey, asset.ObjectKey)
+	}
+	if _, ok := blobs.objects[created.Session.StagingObjectKey]; ok {
+		t.Fatal("staging object remains after completion")
+	}
+	if _, ok := blobs.objects[asset.ObjectKey]; !ok {
+		t.Fatal("final object is missing after completion")
 	}
 	if _, err := service.OpenPublic(ctx, asset.ID, ByteRange{}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("public download before clean scan: %v", err)
@@ -105,7 +114,7 @@ func TestCompleteUploadRejectsMIMEAndSizeSpoofing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	blobs.objects[created.Asset.ObjectKey] = []byte("<html>not a pdf</html>")
+	blobs.objects[created.Session.StagingObjectKey] = []byte("<html>not a pdf</html>")
 
 	_, err = service.CompleteUpload(ctx, created.Asset.ID, CompleteUploadInput{
 		SizeBytes: 1, ChecksumSHA256: "invalid", MIMEType: "application/pdf",
@@ -192,6 +201,22 @@ func TestInfectedScanDeniesDownloadAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestScanResultRejectsChangedCommittedETag(t *testing.T) {
+	ctx := context.Background()
+	repo := newMemoryRepository()
+	blobs := newMemoryBlobStore()
+	service := NewService(repo, blobs, "https://www.alive.org.tw/api/assets", time.Now)
+	asset := completedAsset(t, ctx, service, blobs, VisibilityPublic)
+	originalETag := asset.ETag
+	asset.ETag = "mutated"
+	repo.assets[asset.ID] = asset
+
+	err := service.ApplyScanResult(ctx, ScanResult{EventID: "stale-scan", AssetID: asset.ID, Status: ScanClean, ETag: originalETag})
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("scan error = %v", err)
+	}
+}
+
 func TestPublicGrantRequiresCleanAsset(t *testing.T) {
 	ctx := context.Background()
 	repo := newMemoryRepository()
@@ -221,7 +246,7 @@ func completedAsset(t *testing.T, ctx context.Context, service *Service, blobs *
 		t.Fatal(err)
 	}
 	payload := []byte("%PDF-1.7\nclean weekly bulletin")
-	blobs.objects[created.Asset.ObjectKey] = payload
+	blobs.objects[created.Session.StagingObjectKey] = payload
 	sum := sha256.Sum256(payload)
 	asset, err := service.CompleteUpload(ctx, created.Asset.ID, CompleteUploadInput{SizeBytes: int64(len(payload)), ChecksumSHA256: hex.EncodeToString(sum[:]), MIMEType: "application/pdf"})
 	if err != nil {
@@ -308,6 +333,9 @@ func (r *memoryRepository) ApplyScanResult(_ context.Context, result ScanResult,
 	if !ok {
 		return false, ErrNotFound
 	}
+	if asset.ScanStatus != ScanPending || asset.ETag != result.ETag {
+		return false, ErrConflict
+	}
 	r.events[result.EventID] = struct{}{}
 	asset.ScanStatus = result.Status
 	asset.ScanDetails = result.Details
@@ -354,14 +382,35 @@ func (b *memoryBlobStore) Inspect(_ context.Context, objectKey string) (BlobProp
 	if !ok {
 		return BlobProperties{}, ErrNotFound
 	}
-	return inspectBytes(value), nil
+	properties := inspectBytes(value)
+	properties.ETag = "etag-" + properties.ChecksumSHA256
+	return properties, nil
 }
-func (b *memoryBlobStore) Open(_ context.Context, objectKey string, _ ByteRange) (BlobDownload, error) {
+func (b *memoryBlobStore) Commit(ctx context.Context, stagingObjectKey, finalObjectKey string) (BlobProperties, error) {
+	value, ok := b.objects[stagingObjectKey]
+	if !ok {
+		if _, finalExists := b.objects[finalObjectKey]; finalExists {
+			return b.Inspect(ctx, finalObjectKey)
+		}
+		return BlobProperties{}, ErrNotFound
+	}
+	if _, exists := b.objects[finalObjectKey]; exists {
+		return BlobProperties{}, ErrConflict
+	}
+	b.objects[finalObjectKey] = append([]byte(nil), value...)
+	delete(b.objects, stagingObjectKey)
+	return b.Inspect(ctx, finalObjectKey)
+}
+func (b *memoryBlobStore) Open(ctx context.Context, objectKey string, _ ByteRange, expectedETag string) (BlobDownload, error) {
 	value, ok := b.objects[objectKey]
 	if !ok {
 		return BlobDownload{}, ErrNotFound
 	}
-	return BlobDownload{Body: io.NopCloser(bytes.NewReader(value)), Size: int64(len(value)), ContentType: "application/pdf", ETag: "etag"}, nil
+	properties, _ := b.Inspect(ctx, objectKey)
+	if expectedETag != "" && properties.ETag != expectedETag {
+		return BlobDownload{}, ErrInvalidUpload
+	}
+	return BlobDownload{Body: io.NopCloser(bytes.NewReader(value)), Size: int64(len(value)), ContentType: "application/pdf", ETag: properties.ETag}, nil
 }
 func (b *memoryBlobStore) Delete(_ context.Context, objectKey string) error {
 	delete(b.objects, objectKey)

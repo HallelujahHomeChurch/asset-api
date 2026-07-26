@@ -107,17 +107,18 @@ type Derivative struct {
 }
 
 type UploadSession struct {
-	ID             string       `json:"id"`
-	AssetID        string       `json:"assetId"`
-	IdempotencyKey string       `json:"-"`
-	CallerService  string       `json:"-"`
-	Operation      string       `json:"-"`
-	Fingerprint    string       `json:"-"`
-	MaxSizeBytes   int64        `json:"maxSizeBytes"`
-	Status         UploadStatus `json:"status"`
-	ExpiresAt      time.Time    `json:"expiresAt"`
-	CreatedAt      time.Time    `json:"createdAt"`
-	CompletedAt    time.Time    `json:"completedAt,omitempty"`
+	ID               string       `json:"id"`
+	AssetID          string       `json:"assetId"`
+	IdempotencyKey   string       `json:"-"`
+	CallerService    string       `json:"-"`
+	Operation        string       `json:"-"`
+	Fingerprint      string       `json:"-"`
+	StagingObjectKey string       `json:"-"`
+	MaxSizeBytes     int64        `json:"maxSizeBytes"`
+	Status           UploadStatus `json:"status"`
+	ExpiresAt        time.Time    `json:"expiresAt"`
+	CreatedAt        time.Time    `json:"createdAt"`
+	CompletedAt      time.Time    `json:"completedAt,omitempty"`
 }
 
 type Grant struct {
@@ -219,6 +220,7 @@ type Repository interface {
 type BlobStore interface {
 	CreateUploadTarget(context.Context, string, int64, time.Time) (UploadTarget, error)
 	Inspect(context.Context, string) (BlobProperties, error)
-	Open(context.Context, string, ByteRange) (BlobDownload, error)
+	Commit(context.Context, string, string) (BlobProperties, error)
+	Open(context.Context, string, ByteRange, string) (BlobDownload, error)
 	Delete(context.Context, string) error
 }

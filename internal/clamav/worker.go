@@ -53,7 +53,7 @@ func (w *Worker) processNext(ctx context.Context) (bool, error) {
 	if err != nil || !found {
 		return false, err
 	}
-	download, err := w.blobs.Open(ctx, asset.ObjectKey, assets.ByteRange{})
+	download, err := w.blobs.Open(ctx, asset.ObjectKey, assets.ByteRange{}, asset.ETag)
 	if err == nil {
 		name, scanErr := w.scanner.Scan(ctx, download.Body, asset.SizeBytes)
 		closeErr := download.Body.Close()

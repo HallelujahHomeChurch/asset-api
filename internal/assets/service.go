@@ -44,10 +44,12 @@ func (s *Service) CreateUploadSession(ctx context.Context, input CreateUploadInp
 	}
 	now := s.now().UTC()
 	assetID := newID()
+	sessionID := newID()
 	objectKey := path.Join(environmentPrefix(), input.Namespace, now.Format("2006"), now.Format("01"), assetID, "original")
+	stagingObjectKey := path.Join(environmentPrefix(), input.Namespace, now.Format("2006"), now.Format("01"), assetID, "staging", sessionID)
 	asset := Asset{ID: assetID, Namespace: input.Namespace, OwnerService: input.OwnerService, OwnerType: input.OwnerType, OwnerID: input.OwnerID, Purpose: input.Purpose, Locale: input.Locale, OriginalFileName: sanitizeFileName(input.OriginalFileName), ObjectKey: objectKey, ExpectedMIMEType: input.ExpectedMIMEType, UploadStatus: UploadCreated, ScanStatus: ScanPending, ProcessingStatus: policy.Processing, Visibility: input.Visibility, CreatedAt: now, UpdatedAt: now}
-	session := UploadSession{ID: newID(), AssetID: assetID, IdempotencyKey: idempotencyKey, CallerService: input.OwnerService, Operation: "create_upload", Fingerprint: requestFingerprint(input), MaxSizeBytes: input.MaxSizeBytes, Status: UploadCreated, ExpiresAt: now.Add(uploadTTL), CreatedAt: now}
-	target, err := s.blobs.CreateUploadTarget(ctx, objectKey, input.MaxSizeBytes, session.ExpiresAt)
+	session := UploadSession{ID: sessionID, AssetID: assetID, IdempotencyKey: idempotencyKey, CallerService: input.OwnerService, Operation: "create_upload", Fingerprint: requestFingerprint(input), StagingObjectKey: stagingObjectKey, MaxSizeBytes: input.MaxSizeBytes, Status: UploadCreated, ExpiresAt: now.Add(uploadTTL), CreatedAt: now}
+	target, err := s.blobs.CreateUploadTarget(ctx, stagingObjectKey, input.MaxSizeBytes, session.ExpiresAt)
 	if err != nil {
 		return CreatedUpload{}, fmt.Errorf("create upload target: %w", err)
 	}
@@ -79,7 +81,7 @@ func (s *Service) replayUpload(ctx context.Context, input CreateUploadInput, key
 	}
 	created := CreatedUpload{Asset: asset, Session: session}
 	if session.Status == UploadCreated && s.now().Before(session.ExpiresAt) {
-		created.Target, err = s.blobs.CreateUploadTarget(ctx, asset.ObjectKey, session.MaxSizeBytes, session.ExpiresAt)
+		created.Target, err = s.blobs.CreateUploadTarget(ctx, session.StagingObjectKey, session.MaxSizeBytes, session.ExpiresAt)
 		if err != nil {
 			return CreatedUpload{}, true, fmt.Errorf("replay upload target: %w", err)
 		}
@@ -105,7 +107,7 @@ func (s *Service) CompleteUpload(ctx context.Context, assetID string, input Comp
 	if s.now().After(session.ExpiresAt) {
 		return Asset{}, ErrInvalidUpload
 	}
-	observed, err := s.blobs.Inspect(ctx, asset.ObjectKey)
+	observed, err := s.blobs.Inspect(ctx, session.StagingObjectKey)
 	if err != nil {
 		return Asset{}, fmt.Errorf("inspect blob: %w", err)
 	}
@@ -113,11 +115,18 @@ func (s *Service) CompleteUpload(ctx context.Context, assetID string, input Comp
 	if !ok || observed.Size <= 0 || observed.Size > session.MaxSizeBytes || observed.Size > policy.MaxSizeBytes || observed.Size != input.SizeBytes || !policy.AllowsMIME(observed.DetectedMIMEType) || observed.DetectedMIMEType != asset.ExpectedMIMEType || observed.DetectedMIMEType != input.MIMEType || !strings.EqualFold(observed.ChecksumSHA256, input.ChecksumSHA256) {
 		return Asset{}, ErrInvalidUpload
 	}
+	committed, err := s.blobs.Commit(ctx, session.StagingObjectKey, asset.ObjectKey)
+	if err != nil {
+		return Asset{}, fmt.Errorf("commit blob: %w", err)
+	}
+	if committed.Size != observed.Size || committed.DetectedMIMEType != observed.DetectedMIMEType || !strings.EqualFold(committed.ChecksumSHA256, observed.ChecksumSHA256) {
+		return Asset{}, ErrInvalidUpload
+	}
 	now := s.now().UTC()
-	asset.SizeBytes = observed.Size
-	asset.ChecksumSHA256 = strings.ToLower(observed.ChecksumSHA256)
-	asset.DetectedMIMEType = observed.DetectedMIMEType
-	asset.ETag = observed.ETag
+	asset.SizeBytes = committed.Size
+	asset.ChecksumSHA256 = strings.ToLower(committed.ChecksumSHA256)
+	asset.DetectedMIMEType = committed.DetectedMIMEType
+	asset.ETag = committed.ETag
 	asset.UploadStatus = UploadCompleted
 	asset.ScanStatus = ScanPending
 	asset.UpdatedAt = now
@@ -167,6 +176,13 @@ func (s *Service) ApplyScanResult(ctx context.Context, result ScanResult) error 
 	if result.EventID == "" || result.AssetID == "" || (result.Status != ScanClean && result.Status != ScanInfected && result.Status != ScanFailed) {
 		return ErrInvalidInput
 	}
+	if result.ETag == "" {
+		asset, err := s.repository.GetAsset(ctx, result.AssetID)
+		if err != nil {
+			return err
+		}
+		result.ETag = asset.ETag
+	}
 	_, err := s.repository.ApplyScanResult(ctx, result, s.now().UTC())
 	return err
 }
@@ -197,6 +213,7 @@ func (s *Service) openPublic(ctx context.Context, assetID, variant string, byteR
 	objectKey := asset.ObjectKey
 	contentType := asset.DetectedMIMEType
 	totalSize := asset.SizeBytes
+	expectedETag := asset.ETag
 	if variant != "" {
 		repository, ok := s.repository.(interface {
 			GetDerivative(context.Context, string, string) (Derivative, error)
@@ -209,8 +226,9 @@ func (s *Service) openPublic(ctx context.Context, assetID, variant string, byteR
 			return BlobDownload{}, ErrNotFound
 		}
 		objectKey, contentType, totalSize = derivative.ObjectKey, derivative.MIMEType, derivative.SizeBytes
+		expectedETag = derivative.ETag
 	}
-	download, err := s.blobs.Open(ctx, objectKey, byteRange)
+	download, err := s.blobs.Open(ctx, objectKey, byteRange, expectedETag)
 	if err != nil {
 		return BlobDownload{}, err
 	}

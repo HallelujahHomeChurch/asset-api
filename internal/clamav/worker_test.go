@@ -71,14 +71,17 @@ func (s scannerStub) Scan(_ context.Context, reader io.Reader, _ int64) (string,
 
 type workerBlobs struct{}
 
-func (workerBlobs) Open(context.Context, string, assets.ByteRange) (assets.BlobDownload, error) {
+func (workerBlobs) Open(context.Context, string, assets.ByteRange, string) (assets.BlobDownload, error) {
 	return assets.BlobDownload{Body: io.NopCloser(bytes.NewReader([]byte("clean"))), Size: 5}, nil
 }
 func (workerBlobs) CreateUploadTarget(context.Context, string, int64, time.Time) (assets.UploadTarget, error) {
 	panic("not used")
 }
 func (workerBlobs) Inspect(context.Context, string) (assets.BlobProperties, error) { panic("not used") }
-func (workerBlobs) Delete(context.Context, string) error                           { panic("not used") }
+func (workerBlobs) Commit(context.Context, string, string) (assets.BlobProperties, error) {
+	panic("not used")
+}
+func (workerBlobs) Delete(context.Context, string) error { panic("not used") }
 
 type workerRepository struct {
 	asset  assets.Asset

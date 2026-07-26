@@ -88,7 +88,10 @@ func (s *Store) PutHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid upload", http.StatusBadRequest)
 		return
 	}
-	if err := os.Rename(temporaryName, filePath); err != nil {
+	if err := os.Link(temporaryName, filePath); os.IsExist(err) {
+		http.Error(w, "upload target already used", http.StatusConflict)
+		return
+	} else if err != nil {
 		http.Error(w, "storage unavailable", http.StatusInternalServerError)
 		return
 	}
@@ -129,7 +132,38 @@ func (s *Store) Inspect(_ context.Context, objectKey string) (assets.BlobPropert
 	return assets.BlobProperties{Size: size, DetectedMIMEType: mime, ChecksumSHA256: hex.EncodeToString(hash.Sum(nil)), ETag: fmt.Sprintf("%x-%x", size, info.ModTime().UnixNano())}, nil
 }
 
-func (s *Store) Open(_ context.Context, objectKey string, requested assets.ByteRange) (assets.BlobDownload, error) {
+func (s *Store) Commit(ctx context.Context, stagingObjectKey, finalObjectKey string) (assets.BlobProperties, error) {
+	stagingPath, err := s.safePath(stagingObjectKey)
+	if err != nil {
+		return assets.BlobProperties{}, err
+	}
+	finalPath, err := s.safePath(finalObjectKey)
+	if err != nil {
+		return assets.BlobProperties{}, err
+	}
+	if err := os.MkdirAll(filepath.Dir(finalPath), 0o750); err != nil {
+		return assets.BlobProperties{}, err
+	}
+	if err := os.Link(stagingPath, finalPath); os.IsExist(err) {
+		if _, stagingErr := os.Stat(stagingPath); os.IsNotExist(stagingErr) {
+			return s.Inspect(ctx, finalObjectKey)
+		}
+		return assets.BlobProperties{}, assets.ErrConflict
+	} else if os.IsNotExist(err) {
+		if properties, inspectErr := s.Inspect(ctx, finalObjectKey); inspectErr == nil {
+			return properties, nil
+		}
+		return assets.BlobProperties{}, assets.ErrNotFound
+	} else if err != nil {
+		return assets.BlobProperties{}, err
+	}
+	if err := os.Remove(stagingPath); err != nil {
+		return assets.BlobProperties{}, err
+	}
+	return s.Inspect(ctx, finalObjectKey)
+}
+
+func (s *Store) Open(_ context.Context, objectKey string, requested assets.ByteRange, expectedETag string) (assets.BlobDownload, error) {
 	filePath, err := s.safePath(objectKey)
 	if err != nil {
 		return assets.BlobDownload{}, assets.ErrNotFound
@@ -146,6 +180,11 @@ func (s *Store) Open(_ context.Context, objectKey string, requested assets.ByteR
 		file.Close()
 		return assets.BlobDownload{}, err
 	}
+	etag := fmt.Sprintf("%x-%x", info.Size(), info.ModTime().UnixNano())
+	if expectedETag != "" && expectedETag != etag {
+		file.Close()
+		return assets.BlobDownload{}, assets.ErrInvalidUpload
+	}
 	var reader io.Reader = file
 	size := info.Size()
 	if requested.Offset > 0 || requested.Count > 0 {
@@ -160,7 +199,7 @@ func (s *Store) Open(_ context.Context, objectKey string, requested assets.ByteR
 		reader = io.NewSectionReader(file, requested.Offset, count)
 		size = count
 	}
-	return assets.BlobDownload{Body: &readCloser{Reader: reader, Closer: file}, Size: size, TotalSize: info.Size(), ContentType: mimeFromExtension(filePath), ETag: fmt.Sprintf("%x-%x", info.Size(), info.ModTime().UnixNano()), LastModified: info.ModTime()}, nil
+	return assets.BlobDownload{Body: &readCloser{Reader: reader, Closer: file}, Size: size, TotalSize: info.Size(), ContentType: mimeFromExtension(filePath), ETag: etag, LastModified: info.ModTime()}, nil
 }
 
 func (s *Store) Delete(_ context.Context, objectKey string) error {

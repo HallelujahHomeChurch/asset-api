@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"time"
 
 	"hhc/asset-api/internal/assets"
@@ -24,7 +23,7 @@ func (s *Store) CreateUpload(ctx context.Context, asset assets.Asset, session as
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO upload_sessions (id,asset_id,idempotency_key,caller_service,operation,request_fingerprint,max_size_bytes,status,expires_at,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, session.ID, session.AssetID, session.IdempotencyKey, session.CallerService, session.Operation, session.Fingerprint, session.MaxSizeBytes, session.Status, session.ExpiresAt, session.CreatedAt)
+	_, err = tx.ExecContext(ctx, `INSERT INTO upload_sessions (id,asset_id,idempotency_key,caller_service,operation,request_fingerprint,staging_object_key,max_size_bytes,status,expires_at,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, session.ID, session.AssetID, session.IdempotencyKey, session.CallerService, session.Operation, session.Fingerprint, session.StagingObjectKey, session.MaxSizeBytes, session.Status, session.ExpiresAt, session.CreatedAt)
 	if err != nil {
 		return err
 	}
@@ -43,7 +42,7 @@ func (s *Store) GetAsset(ctx context.Context, id string) (assets.Asset, error) {
 
 func (s *Store) GetUploadSession(ctx context.Context, assetID string) (assets.UploadSession, error) {
 	var value assets.UploadSession
-	err := s.db.QueryRowContext(ctx, `SELECT id,asset_id,idempotency_key,caller_service,operation,request_fingerprint,max_size_bytes,status,expires_at,created_at,COALESCE(completed_at,'0001-01-01'::timestamptz) FROM upload_sessions WHERE asset_id=$1`, assetID).Scan(&value.ID, &value.AssetID, &value.IdempotencyKey, &value.CallerService, &value.Operation, &value.Fingerprint, &value.MaxSizeBytes, &value.Status, &value.ExpiresAt, &value.CreatedAt, &value.CompletedAt)
+	err := s.db.QueryRowContext(ctx, `SELECT id,asset_id,idempotency_key,caller_service,operation,request_fingerprint,staging_object_key,max_size_bytes,status,expires_at,created_at,COALESCE(completed_at,'0001-01-01'::timestamptz) FROM upload_sessions WHERE asset_id=$1`, assetID).Scan(&value.ID, &value.AssetID, &value.IdempotencyKey, &value.CallerService, &value.Operation, &value.Fingerprint, &value.StagingObjectKey, &value.MaxSizeBytes, &value.Status, &value.ExpiresAt, &value.CreatedAt, &value.CompletedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return assets.UploadSession{}, assets.ErrNotFound
 	}
@@ -125,12 +124,12 @@ func (s *Store) ApplyScanResult(ctx context.Context, result assets.ScanResult, n
 	if affected == 0 {
 		return false, nil
 	}
-	updated, err := tx.ExecContext(ctx, `UPDATE assets SET scan_status=$2,scan_details=$3,etag=CASE WHEN $4='' THEN etag ELSE $4 END,scan_claimed_until=NULL,updated_at=$5 WHERE id=$1`, result.AssetID, result.Status, result.Details, result.ETag, now)
+	updated, err := tx.ExecContext(ctx, `UPDATE assets SET scan_status=$2,scan_details=$3,scan_claimed_until=NULL,updated_at=$5 WHERE id=$1 AND scan_status='pending' AND etag=$4`, result.AssetID, result.Status, result.Details, result.ETag, now)
 	if err != nil {
 		return false, err
 	}
 	if count, _ := updated.RowsAffected(); count != 1 {
-		return false, fmt.Errorf("scan asset: %w", assets.ErrNotFound)
+		return false, assets.ErrConflict
 	}
 	if err := tx.Commit(); err != nil {
 		return false, err
@@ -202,7 +201,7 @@ func (s *Store) ClaimPendingProcessing(ctx context.Context, now time.Time, lease
 	return asset, err == nil, err
 }
 
-func (s *Store) CompleteProcessing(ctx context.Context, assetID string, derivatives []assets.Derivative, now time.Time) error {
+func (s *Store) CompleteProcessing(ctx context.Context, assetID, expectedETag string, derivatives []assets.Derivative, now time.Time) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -214,7 +213,7 @@ func (s *Store) CompleteProcessing(ctx context.Context, assetID string, derivati
 			return err
 		}
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE assets SET processing_status='ready',processing_error='',processing_claimed_until=NULL,updated_at=$2 WHERE id=$1 AND processing_status='pending'`, assetID, now)
+	result, err := tx.ExecContext(ctx, `UPDATE assets SET processing_status='ready',processing_error='',processing_claimed_until=NULL,updated_at=$3 WHERE id=$1 AND processing_status='pending' AND etag=$2`, assetID, expectedETag, now)
 	if err != nil {
 		return err
 	}
@@ -224,8 +223,8 @@ func (s *Store) CompleteProcessing(ctx context.Context, assetID string, derivati
 	return tx.Commit()
 }
 
-func (s *Store) FailProcessing(ctx context.Context, assetID, details string, now time.Time) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE assets SET processing_status='failed',processing_error=$2,processing_claimed_until=NULL,updated_at=$3 WHERE id=$1 AND processing_status='pending'`, assetID, details, now)
+func (s *Store) FailProcessing(ctx context.Context, assetID, expectedETag, details string, now time.Time) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE assets SET processing_status='failed',processing_error=$3,processing_claimed_until=NULL,updated_at=$4 WHERE id=$1 AND processing_status='pending' AND etag=$2`, assetID, expectedETag, details, now)
 	if err != nil {
 		return err
 	}

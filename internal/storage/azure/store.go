@@ -12,6 +12,7 @@ import (
 
 	"hhc/asset-api/internal/assets"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blob"
@@ -44,7 +45,7 @@ func (s *Store) CreateUploadTarget(ctx context.Context, objectKey string, _ int6
 	if err != nil {
 		return assets.UploadTarget{}, err
 	}
-	query, err := (sas.BlobSignatureValues{Protocol: sas.ProtocolHTTPS, StartTime: time.Now().UTC().Add(-5 * time.Minute), ExpiryTime: expiresAt.UTC(), Permissions: (&sas.BlobPermissions{Create: true, Write: true}).String(), ContainerName: s.container, BlobName: objectKey}).SignWithUserDelegation(credential)
+	query, err := (sas.BlobSignatureValues{Protocol: sas.ProtocolHTTPS, StartTime: time.Now().UTC().Add(-5 * time.Minute), ExpiryTime: expiresAt.UTC(), Permissions: (&sas.BlobPermissions{Create: true}).String(), ContainerName: s.container, BlobName: objectKey}).SignWithUserDelegation(credential)
 	if err != nil {
 		return assets.UploadTarget{}, err
 	}
@@ -84,10 +85,43 @@ func (s *Store) Inspect(ctx context.Context, objectKey string) (assets.BlobPrope
 	return assets.BlobProperties{Size: size, DetectedMIMEType: mime, ChecksumSHA256: hex.EncodeToString(hash.Sum(nil)), ETag: etag}, nil
 }
 
-func (s *Store) Open(ctx context.Context, objectKey string, requested assets.ByteRange) (assets.BlobDownload, error) {
+func (s *Store) Commit(ctx context.Context, stagingObjectKey, finalObjectKey string) (assets.BlobProperties, error) {
+	response, err := s.client.DownloadStream(ctx, s.container, stagingObjectKey, nil)
+	if err != nil {
+		if properties, inspectErr := s.Inspect(ctx, finalObjectKey); inspectErr == nil {
+			return properties, nil
+		}
+		return assets.BlobProperties{}, mapError(err)
+	}
+	defer response.Body.Close()
+	noneMatch := azcore.ETagAny
+	contentType := "application/octet-stream"
+	if response.ContentType != nil {
+		contentType = *response.ContentType
+	}
+	_, err = s.client.UploadStream(ctx, s.container, finalObjectKey, response.Body, &azblob.UploadStreamOptions{
+		HTTPHeaders: &blob.HTTPHeaders{BlobContentType: &contentType},
+		AccessConditions: &blob.AccessConditions{
+			ModifiedAccessConditions: &blob.ModifiedAccessConditions{IfNoneMatch: &noneMatch},
+		},
+	})
+	if err != nil {
+		return assets.BlobProperties{}, mapError(err)
+	}
+	if err := s.Delete(ctx, stagingObjectKey); err != nil {
+		return assets.BlobProperties{}, err
+	}
+	return s.Inspect(ctx, finalObjectKey)
+}
+
+func (s *Store) Open(ctx context.Context, objectKey string, requested assets.ByteRange, expectedETag string) (assets.BlobDownload, error) {
 	options := &azblob.DownloadStreamOptions{}
 	if requested.Offset > 0 || requested.Count > 0 {
 		options.Range = blob.HTTPRange{Offset: requested.Offset, Count: requested.Count}
+	}
+	if expectedETag != "" {
+		match := azcore.ETag(expectedETag)
+		options.AccessConditions = &blob.AccessConditions{ModifiedAccessConditions: &blob.ModifiedAccessConditions{IfMatch: &match}}
 	}
 	response, err := s.client.DownloadStream(ctx, s.container, objectKey, options)
 	if err != nil {

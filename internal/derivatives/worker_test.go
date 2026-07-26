@@ -13,6 +13,20 @@ import (
 	"hhc/asset-api/internal/assets"
 )
 
+func TestValidateImageConfigRejectsExcessiveDimensions(t *testing.T) {
+	for _, config := range []image.Config{
+		{Width: 8193, Height: 1},
+		{Width: 8000, Height: 6000},
+	} {
+		if err := validateImageConfig(config); err == nil {
+			t.Fatalf("accepted config %+v", config)
+		}
+	}
+	if err := validateImageConfig(image.Config{Width: 512, Height: 512}); err != nil {
+		t.Fatalf("valid config rejected: %v", err)
+	}
+}
+
 func TestWorkerCreatesStableResponsiveVariants(t *testing.T) {
 	var original bytes.Buffer
 	imageValue := image.NewRGBA(image.Rect(0, 0, 1200, 600))
@@ -51,11 +65,11 @@ type processingRepository struct {
 func (r *processingRepository) ClaimPendingProcessing(context.Context, time.Time, time.Duration) (assets.Asset, bool, error) {
 	return r.asset, true, nil
 }
-func (r *processingRepository) CompleteProcessing(_ context.Context, _ string, values []assets.Derivative, _ time.Time) error {
+func (r *processingRepository) CompleteProcessing(_ context.Context, _, _ string, values []assets.Derivative, _ time.Time) error {
 	r.derivatives = values
 	return nil
 }
-func (*processingRepository) FailProcessing(context.Context, string, string, time.Time) error {
+func (*processingRepository) FailProcessing(context.Context, string, string, string, time.Time) error {
 	return nil
 }
 func (*processingRepository) CreateUpload(context.Context, assets.Asset, assets.UploadSession) error {
@@ -100,7 +114,7 @@ func (*processingBlobs) CreateUploadTarget(context.Context, string, int64, time.
 func (*processingBlobs) Inspect(context.Context, string) (assets.BlobProperties, error) {
 	return assets.BlobProperties{}, nil
 }
-func (b *processingBlobs) Open(_ context.Context, key string, _ assets.ByteRange) (assets.BlobDownload, error) {
+func (b *processingBlobs) Open(_ context.Context, key string, _ assets.ByteRange, _ string) (assets.BlobDownload, error) {
 	value := b.objects[key]
 	return assets.BlobDownload{Body: io.NopCloser(bytes.NewReader(value)), Size: int64(len(value)), TotalSize: int64(len(value))}, nil
 }
