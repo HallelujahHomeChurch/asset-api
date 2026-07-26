@@ -3,3 +3,4 @@
 bin/
 /server
 coverage.out
+infra/main.bicepparam

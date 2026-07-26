@@ -1,0 +1,98 @@
+trigger:
+  branches:
+    include: [main]
+  paths:
+    include:
+      - azure-pipelines.yml
+      - Dockerfile
+      - go.mod
+      - go.sum
+      - cmd/**
+      - internal/**
+
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  azureSubscription: alive-azure-rm
+  acrName: alive
+  acrLoginServer: alive.azurecr.io
+  imageRepository: alive/asset-api
+  imageTag: $(Build.SourceBranchName)-$(Build.BuildId)
+  resourceGroup: alive
+  containerAppName: asset-api
+
+stages:
+  - stage: Verify
+    jobs:
+      - job: service
+        steps:
+          - task: GoTool@0
+            inputs:
+              version: 1.24.6
+          - script: |
+              set -euo pipefail
+              go test ./...
+              go vet ./...
+              docker build --tag hhc-asset-api:verify .
+            displayName: Test and build
+
+  - stage: BuildAndPush
+    dependsOn: Verify
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - job: image
+        steps:
+          - task: AzureCLI@2
+            inputs:
+              azureSubscription: $(azureSubscription)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+                az acr build \
+                  --registry "$(acrName)" \
+                  --image "$(imageRepository):$(imageTag)" \
+                  --file "$(Build.SourcesDirectory)/Dockerfile" \
+                  "$(Build.SourcesDirectory)"
+
+  - stage: Deploy
+    dependsOn: BuildAndPush
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - job: container_app
+        steps:
+          - task: AzureCLI@2
+            inputs:
+              azureSubscription: $(azureSubscription)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+                az containerapp show --resource-group "$(resourceGroup)" --name "$(containerAppName)" --output none
+                image_ref="$(acrLoginServer)/$(imageRepository):$(imageTag)"
+                az containerapp update \
+                  --resource-group "$(resourceGroup)" \
+                  --name "$(containerAppName)" \
+                  --image "${image_ref}" \
+                  --only-show-errors \
+                  --output none
+
+                target_revision="$(az containerapp show --resource-group "$(resourceGroup)" --name "$(containerAppName)" --query properties.latestRevisionName --output tsv)"
+                for attempt in {1..30}; do
+                  state="$(az containerapp show \
+                    --resource-group "$(resourceGroup)" \
+                    --name "$(containerAppName)" \
+                    --query '[properties.latestReadyRevisionName,properties.runningStatus,properties.template.containers[0].image]' \
+                    --output tsv)"
+                  read -r ready status deployed_image <<< "${state}"
+                  if [[ "${ready}" == "${target_revision}" && "${status}" == "Running" && "${deployed_image}" == "${image_ref}" ]]; then
+                    echo "Deployed ${image_ref} to ${target_revision}"
+                    exit 0
+                  fi
+                  sleep 10
+                done
+                echo "Revision ${target_revision} did not become ready" >&2
+                exit 1

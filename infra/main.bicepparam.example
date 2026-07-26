@@ -1,8 +1,4 @@
 using './main.bicep'
 
-param storageAccountName = 'replace-me'
-param assetApiPrincipalId = '00000000-0000-0000-0000-000000000000'
-param uploadAllowedOrigins = [
-  'https://admin.alive.org.tw'
-  'https://admin-test.alive.org.tw'
-]
+param storageAccountName = 'alivestoragebb99ee6e'
+param databaseUrl = readEnvironmentVariable('ASSET_DATABASE_URL')

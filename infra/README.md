@@ -1,21 +1,50 @@
-# Asset infrastructure
+# Asset API Azure deployment
 
-`main.bicep` configures the existing asset storage account with:
+The template creates `asset-api` in the existing `alive-env`, enables Dapr
+with app id `asset-api`, creates a private Blob container, and assigns its
+system identity ACR pull, container-scoped Blob contributor, and
+account-scoped Blob delegator roles. No Container Apps ingress is created;
+gateway and owner services invoke it through Dapr.
+It also allows only the ACA subnet (`172.16.66.0/23`) to reach clamd at
+`172.16.65.5:3310`.
 
-- a private `assets` Blob container
-- CORS restricted to Admin origins and `PUT`/`OPTIONS`
-- least-privilege Blob contributor and user-delegation roles for asset-api
+## First deployment
 
-Malware scanning is performed by the private ClamAV service configured through `CLAMAV_HOST` and `CLAMAV_PORT`. Event Grid and the scan-result Service Bus queue are not provisioned. The template explicitly disables Defender for this storage account and overrides a subscription-level plan so on-upload scanning is not billed.
+1. Create the `asset` database and least-privilege login on the existing
+   private PostgreSQL server.
+2. Build the initial image:
 
-The asset-api runtime network must be able to reach clamd on private TCP port `3310`; do not add a public ingress rule for clamd.
+   ```sh
+   az acr build -r alive -t alive/asset-api:latest .
+   ```
 
-Validate and deploy:
+3. Prepare the ignored parameter file and deploy:
+
+   ```sh
+   export ASSET_DATABASE_URL='postgres://asset:REDACTED@hhc-pg.postgres.database.azure.com:5432/asset?sslmode=require'
+   cp infra/main.bicepparam.example infra/main.bicepparam
+   az bicep build --file infra/main.bicep
+   az deployment group what-if -g alive -f infra/main.bicep -p infra/main.bicepparam
+   az deployment group create -g alive -f infra/main.bicep -p infra/main.bicepparam
+   ```
+
+4. Confirm the revision is ready, Dapr app id is `asset-api`, ingress is
+   disabled, and the app identity has all three role assignments.
+5. Prove TCP access from the ACA environment to `172.16.65.5:3310` and confirm
+   current ClamAV signatures before accepting uploads.
+
+The template explicitly disables Defender for Storage; ClamAV is the only
+malware scanner. `ASSET_ALLOW_DEV_CALLER_HEADER` remains false in Azure.
+
+## Storage hardening gate
+
+The current storage account may have consumers outside asset-api. Audit them
+before disabling Shared Key. Once asset-api is the only confirmed owner and a
+clean upload/download succeeds with managed identity:
 
 ```sh
-az bicep build --file infra/main.bicep
-az deployment group what-if \
-  --resource-group "$RESOURCE_GROUP" \
-  --template-file infra/main.bicep \
-  --parameters infra/main.bicepparam
+az storage account update -g alive -n alivestoragebb99ee6e --allow-shared-key-access false
 ```
+
+Do not change the storage firewall to default-deny until a private endpoint or
+equivalent ACA subnet path has been deployed and verified.

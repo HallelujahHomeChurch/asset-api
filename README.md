@@ -53,3 +53,11 @@ Owner deletion is a soft-delete command and immediately denies download. A
 PostgreSQL-leased worker removes expired staging uploads, deleted assets,
 derivatives, and retained terminal scan failures. Blob deletion is idempotent
 and retried independently of the database transaction.
+
+## Azure deployment
+
+`infra/main.bicep` provisions the internal Dapr-enabled Container App and Blob
+RBAC. The checked-in pipeline tests, builds an immutable ACR tag, and updates
+only the existing `asset-api` Container App. Run the one-time infrastructure
+deployment in `infra/README.md` before pushing `main`; the pipeline intentionally
+does not create databases or inject first-deployment secrets.
