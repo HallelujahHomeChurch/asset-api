@@ -68,23 +68,18 @@ jobs:
             --only-show-errors \
             --output none
 
-          target_revision="$(az containerapp show \
-            --resource-group "${RESOURCE_GROUP}" \
-            --name "${CONTAINER_APP_NAME}" \
-            --query properties.latestRevisionName \
-            --output tsv)"
           for attempt in {1..30}; do
             state="$(az containerapp show \
               --resource-group "${RESOURCE_GROUP}" \
               --name "${CONTAINER_APP_NAME}" \
-              --query '[properties.latestReadyRevisionName,properties.runningStatus,properties.template.containers[0].image]' \
+              --query '[properties.latestRevisionName,properties.latestReadyRevisionName,properties.runningStatus,properties.template.containers[0].image]' \
               --output tsv)"
-            read -r ready status deployed_image <<< "${state}"
-            if [[ "${ready}" == "${target_revision}" && "${status}" == "Running" && "${deployed_image}" == "${image_ref}" ]]; then
-              echo "Deployed ${image_ref} to ${target_revision}"
+            read -r latest ready status deployed_image <<< "${state}"
+            if [[ "${latest}" == "${ready}" && "${status}" == "Running" && "${deployed_image}" == "${image_ref}" ]]; then
+              echo "Deployed ${image_ref} to ${ready}"
               exit 0
             fi
             sleep 10
           done
-          echo "Revision ${target_revision} did not become ready" >&2
+          echo "Latest revision did not become ready" >&2
           exit 1
