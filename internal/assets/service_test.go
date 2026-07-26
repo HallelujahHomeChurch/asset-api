@@ -235,6 +235,87 @@ func TestPublicGrantRequiresCleanAsset(t *testing.T) {
 	}
 }
 
+func TestPublicDownloadUsesNamespaceCachePolicy(t *testing.T) {
+	ctx := context.Background()
+	repo := newMemoryRepository()
+	blobs := newMemoryBlobStore()
+	service := NewService(repo, blobs, "https://www.alive.org.tw/api/assets", time.Now)
+	weekly := completedAsset(t, ctx, service, blobs, VisibilityPublic)
+	if err := service.ApplyScanResult(ctx, ScanResult{EventID: "cache-weekly", AssetID: weekly.ID, Status: ScanClean}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateGrant(ctx, weekly.ID, CreateGrantInput{SubjectType: SubjectPublic, SubjectID: "*", Permission: PermissionRead, IdempotencyKey: "cache-weekly-grant"}); err != nil {
+		t.Fatal(err)
+	}
+	download, err := service.OpenPublic(ctx, weekly.ID, ByteRange{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = download.Body.Close()
+	if download.CacheControl != "public, max-age=31536000, immutable" {
+		t.Fatalf("weekly cache = %q", download.CacheControl)
+	}
+
+	avatar := Asset{ID: "avatar-1", Namespace: "account.avatar", OwnerService: "account-api", ObjectKey: "assets/avatar-1/original", UploadStatus: UploadCompleted, ScanStatus: ScanClean, ProcessingStatus: ProcessingNotRequired, Visibility: VisibilityPublic, DetectedMIMEType: "image/jpeg", SizeBytes: 4, ETag: "etag-avatar"}
+	repo.assets[avatar.ID] = avatar
+	blobs.objects[avatar.ObjectKey] = []byte("jpeg")
+	properties, _ := blobs.Inspect(ctx, avatar.ObjectKey)
+	avatar.ETag = properties.ETag
+	repo.assets[avatar.ID] = avatar
+	if _, err := service.CreateGrant(ctx, avatar.ID, CreateGrantInput{SubjectType: SubjectPublic, SubjectID: "*", Permission: PermissionRead, IdempotencyKey: "cache-avatar-grant"}); err != nil {
+		t.Fatal(err)
+	}
+	download, err = service.OpenPublic(ctx, avatar.ID, ByteRange{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = download.Body.Close()
+	if download.CacheControl != "public, max-age=300, must-revalidate" {
+		t.Fatalf("avatar cache = %q", download.CacheControl)
+	}
+}
+
+func TestSoftDeleteImmediatelyBlocksPublicDownload(t *testing.T) {
+	ctx := context.Background()
+	repo := newMemoryRepository()
+	blobs := newMemoryBlobStore()
+	service := NewService(repo, blobs, "https://www.alive.org.tw/api/assets", time.Now)
+	asset := completedAsset(t, ctx, service, blobs, VisibilityPublic)
+	if err := service.ApplyScanResult(ctx, ScanResult{EventID: "delete-clean", AssetID: asset.ID, Status: ScanClean}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateGrant(ctx, asset.ID, CreateGrantInput{SubjectType: SubjectPublic, SubjectID: "*", Permission: PermissionRead, IdempotencyKey: "delete-grant"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.SoftDelete(ctx, asset.ID, "hhc-web-api"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.OpenPublic(ctx, asset.ID, ByteRange{}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleted download error = %v", err)
+	}
+	if err := service.SoftDelete(ctx, asset.ID, "hhc-web-api"); err != nil {
+		t.Fatalf("soft delete is not idempotent: %v", err)
+	}
+}
+
+func TestRequeueScanAllowsFailedButNotInfected(t *testing.T) {
+	ctx := context.Background()
+	repo := newMemoryRepository()
+	service := NewService(repo, newMemoryBlobStore(), "https://www.alive.org.tw/api/assets", time.Now)
+	repo.assets["failed"] = Asset{ID: "failed", OwnerService: "hhc-web-api", ScanStatus: ScanFailed}
+	repo.assets["infected"] = Asset{ID: "infected", OwnerService: "hhc-web-api", ScanStatus: ScanInfected}
+
+	if err := service.RequeueScan(ctx, "failed", "hhc-web-api"); err != nil {
+		t.Fatal(err)
+	}
+	if repo.assets["failed"].ScanStatus != ScanPending {
+		t.Fatalf("failed scan status = %q", repo.assets["failed"].ScanStatus)
+	}
+	if err := service.RequeueScan(ctx, "infected", "hhc-web-api"); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("infected requeue error = %v", err)
+	}
+}
+
 func completedAsset(t *testing.T, ctx context.Context, service *Service, blobs *memoryBlobStore, visibility Visibility) Asset {
 	t.Helper()
 	created, err := service.CreateUploadSession(ctx, CreateUploadInput{
@@ -359,6 +440,31 @@ func (r *memoryRepository) ScheduleScanRetry(_ context.Context, assetID, details
 		return ErrNotFound
 	}
 	asset.ScanDetails = details
+	asset.UpdatedAt = now
+	r.assets[assetID] = asset
+	return nil
+}
+func (r *memoryRepository) SoftDeleteAsset(_ context.Context, assetID, owner string, now time.Time) error {
+	asset, ok := r.assets[assetID]
+	if !ok || asset.OwnerService != owner {
+		return ErrNotFound
+	}
+	if asset.DeletedAt.IsZero() {
+		asset.DeletedAt = now
+		r.assets[assetID] = asset
+	}
+	return nil
+}
+func (r *memoryRepository) RequeueFailedScan(_ context.Context, assetID, owner string, now time.Time) error {
+	asset, ok := r.assets[assetID]
+	if !ok || asset.OwnerService != owner {
+		return ErrNotFound
+	}
+	if asset.ScanStatus != ScanFailed {
+		return ErrInvalidInput
+	}
+	asset.ScanStatus = ScanPending
+	asset.ScanAttempts = 0
 	asset.UpdatedAt = now
 	r.assets[assetID] = asset
 	return nil

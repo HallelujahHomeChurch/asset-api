@@ -16,6 +16,7 @@ import (
 	"hhc/asset-api/internal/config"
 	"hhc/asset-api/internal/derivatives"
 	"hhc/asset-api/internal/httpapi"
+	"hhc/asset-api/internal/lifecycle"
 	"hhc/asset-api/internal/migrations"
 	"hhc/asset-api/internal/postgres"
 	azurestorage "hhc/asset-api/internal/storage/azure"
@@ -77,6 +78,7 @@ func run() error {
 		return errors.New("storage backend does not support derivative writes")
 	}
 	derivativeWorker := derivatives.NewWorker(repository, derivativeBlobs)
+	lifecycleWorker := lifecycle.NewWorker(repository, blobStore)
 	go func() {
 		if err := scanWorker.Run(ctx); err != nil && ctx.Err() == nil {
 			slog.Error("ClamAV worker stopped", "error", err)
@@ -86,6 +88,12 @@ func run() error {
 	go func() {
 		if err := derivativeWorker.Run(ctx); err != nil && ctx.Err() == nil {
 			slog.Error("derivative worker stopped", "error", err)
+			stop()
+		}
+	}()
+	go func() {
+		if err := lifecycleWorker.Run(ctx); err != nil && ctx.Err() == nil {
+			slog.Error("lifecycle worker stopped", "error", err)
 			stop()
 		}
 	}()

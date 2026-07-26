@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -143,12 +145,20 @@ func (s *Store) Open(ctx context.Context, objectKey string, requested assets.Byt
 	if response.LastModified != nil {
 		modified = *response.LastModified
 	}
-	return assets.BlobDownload{Body: response.Body, Size: size, TotalSize: size, ContentType: contentType, ETag: etag, LastModified: modified}, nil
+	totalSize := size
+	if response.ContentRange != nil {
+		totalSize = contentRangeTotal(*response.ContentRange, size)
+	}
+	return assets.BlobDownload{Body: response.Body, Size: size, TotalSize: totalSize, ContentType: contentType, ETag: etag, LastModified: modified}, nil
 }
 
 func (s *Store) Delete(ctx context.Context, objectKey string) error {
 	_, err := s.client.DeleteBlob(ctx, s.container, objectKey, nil)
-	return mapError(err)
+	err = mapError(err)
+	if errors.Is(err, assets.ErrNotFound) {
+		return nil
+	}
+	return err
 }
 
 func (s *Store) Put(ctx context.Context, objectKey string, reader io.Reader, _ int64, mimeType string) (assets.BlobProperties, error) {
@@ -186,4 +196,16 @@ func mapError(err error) error {
 		return assets.ErrNotFound
 	}
 	return err
+}
+
+func contentRangeTotal(value string, fallback int64) int64 {
+	index := strings.LastIndexByte(value, '/')
+	if index < 0 {
+		return fallback
+	}
+	total, err := strconv.ParseInt(value[index+1:], 10, 64)
+	if err != nil || total < fallback {
+		return fallback
+	}
+	return total
 }

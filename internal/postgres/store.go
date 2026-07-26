@@ -4,9 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"path"
 	"time"
 
 	"hhc/asset-api/internal/assets"
+	"hhc/asset-api/internal/lifecycle"
 )
 
 type Store struct{ db *sql.DB }
@@ -175,6 +177,146 @@ func (s *Store) ScheduleScanRetry(ctx context.Context, assetID, details string, 
 		return assets.ErrNotFound
 	}
 	return nil
+}
+
+func (s *Store) SoftDeleteAsset(ctx context.Context, assetID, ownerService string, now time.Time) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE assets SET deleted_at=COALESCE(deleted_at,$3),updated_at=$3 WHERE id=$1 AND owner_service=$2`, assetID, ownerService, now)
+	if err != nil {
+		return err
+	}
+	if count, _ := result.RowsAffected(); count != 1 {
+		return assets.ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) RequeueFailedScan(ctx context.Context, assetID, ownerService string, now time.Time) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE assets SET scan_status='pending',scan_details='',scan_attempts=0,scan_next_attempt_at=$3,scan_claimed_until=NULL,updated_at=$3 WHERE id=$1 AND owner_service=$2 AND scan_status='failed' AND deleted_at IS NULL`, assetID, ownerService, now)
+	if err != nil {
+		return err
+	}
+	if count, _ := result.RowsAffected(); count != 1 {
+		return assets.ErrInvalidInput
+	}
+	return nil
+}
+
+func (s *Store) GetOperations(ctx context.Context, now time.Time) (assets.Operations, error) {
+	var value assets.Operations
+	var oldest sql.NullTime
+	err := s.db.QueryRowContext(ctx, `
+		SELECT
+		  COUNT(*) FILTER (WHERE scan_status='pending' AND deleted_at IS NULL),
+		  COUNT(*) FILTER (WHERE scan_status='failed' AND deleted_at IS NULL),
+		  MIN(updated_at) FILTER (WHERE scan_status='pending' AND deleted_at IS NULL),
+		  COUNT(*) FILTER (
+		    WHERE purged_at IS NULL AND (
+		      deleted_at IS NOT NULL OR
+		      (upload_status='created' AND EXISTS (
+		        SELECT 1 FROM upload_sessions u WHERE u.asset_id=assets.id AND u.expires_at < $1
+		      )) OR
+		      (scan_status IN ('infected','failed') AND updated_at < $1 - interval '7 days')
+		    )
+		  )
+		FROM assets`, now).Scan(&value.ScanPending, &value.ScanFailed, &oldest, &value.PurgePending)
+	if oldest.Valid {
+		value.OldestScanPending = oldest.Time
+	}
+	return value, err
+}
+
+func (s *Store) ClaimPurge(ctx context.Context, now time.Time, lease time.Duration) (lifecycle.Candidate, bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return lifecycle.Candidate{}, false, err
+	}
+	defer tx.Rollback()
+	var assetID string
+	err = tx.QueryRowContext(ctx, `
+		SELECT a.id
+		FROM assets a
+		LEFT JOIN upload_sessions u ON u.asset_id=a.id
+		WHERE a.purged_at IS NULL
+		  AND (a.purge_next_attempt_at IS NULL OR a.purge_next_attempt_at <= $1)
+		  AND (a.purge_claimed_until IS NULL OR a.purge_claimed_until < $1)
+		  AND (
+		    a.deleted_at IS NOT NULL OR
+		    (a.upload_status='created' AND u.expires_at < $1) OR
+		    (a.scan_status IN ('infected','failed') AND a.updated_at < $1 - interval '7 days')
+		  )
+		ORDER BY a.updated_at
+		FOR UPDATE OF a SKIP LOCKED
+		LIMIT 1`, now).Scan(&assetID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return lifecycle.Candidate{}, false, nil
+	}
+	if err != nil {
+		return lifecycle.Candidate{}, false, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE assets SET purge_claimed_until=$2 WHERE id=$1`, assetID, now.Add(lease)); err != nil {
+		return lifecycle.Candidate{}, false, err
+	}
+	var objectKey, stagingKey string
+	if err := tx.QueryRowContext(ctx, `SELECT a.object_key,COALESCE(u.staging_object_key,'') FROM assets a LEFT JOIN upload_sessions u ON u.asset_id=a.id WHERE a.id=$1`, assetID).Scan(&objectKey, &stagingKey); err != nil {
+		return lifecycle.Candidate{}, false, err
+	}
+	keys := []string{stagingKey, objectKey}
+	rows, err := tx.QueryContext(ctx, `SELECT object_key FROM asset_derivatives WHERE asset_id=$1`, assetID)
+	if err != nil {
+		return lifecycle.Candidate{}, false, err
+	}
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			rows.Close()
+			return lifecycle.Candidate{}, false, err
+		}
+		keys = append(keys, key)
+	}
+	if err := rows.Close(); err != nil {
+		return lifecycle.Candidate{}, false, err
+	}
+	for _, variant := range []string{"small", "medium", "large"} {
+		keys = append(keys, path.Join(path.Dir(objectKey), "derivatives", variant+".jpg"))
+	}
+	if err := tx.Commit(); err != nil {
+		return lifecycle.Candidate{}, false, err
+	}
+	return lifecycle.Candidate{AssetID: assetID, Keys: uniqueStrings(keys)}, true, nil
+}
+
+func (s *Store) CompletePurge(ctx context.Context, assetID string, now time.Time) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE assets SET purged_at=$2,purge_claimed_until=NULL,purge_error='',updated_at=$2 WHERE id=$1 AND purged_at IS NULL`, assetID, now)
+	if err != nil {
+		return err
+	}
+	if count, _ := result.RowsAffected(); count != 1 {
+		return assets.ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) RetryPurge(ctx context.Context, assetID, details string, nextAttempt, now time.Time) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE assets SET purge_error=$2,purge_next_attempt_at=$3,purge_claimed_until=NULL,updated_at=$4 WHERE id=$1 AND purged_at IS NULL`, assetID, details, nextAttempt, now)
+	if err != nil {
+		return err
+	}
+	if count, _ := result.RowsAffected(); count != 1 {
+		return assets.ErrNotFound
+	}
+	return nil
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]bool, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if value != "" && !seen[value] {
+			seen[value] = true
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func (s *Store) ClaimPendingProcessing(ctx context.Context, now time.Time, lease time.Duration) (assets.Asset, bool, error) {

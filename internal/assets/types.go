@@ -202,6 +202,14 @@ type BlobDownload struct {
 	ContentType  string
 	ETag         string
 	LastModified time.Time
+	CacheControl string
+}
+
+type Operations struct {
+	ScanPending       int64     `json:"scanPending"`
+	ScanFailed        int64     `json:"scanFailed"`
+	OldestScanPending time.Time `json:"oldestScanPending,omitempty"`
+	PurgePending      int64     `json:"purgePending"`
 }
 
 type Repository interface {

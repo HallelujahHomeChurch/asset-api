@@ -36,10 +36,13 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /api/assets/public/{assetID}", h.publicDownload)
 	mux.HandleFunc("GET /api/assets/public/{assetID}/{variant}", h.publicDerivativeDownload)
 	mux.Handle("POST /priv/assets/upload-sessions", h.internal(http.HandlerFunc(h.createUpload)))
+	mux.Handle("GET /priv/assets/operations", h.internal(http.HandlerFunc(h.operations)))
 	mux.Handle("GET /priv/assets/{assetID}", h.internal(http.HandlerFunc(h.getAsset)))
 	mux.Handle("POST /priv/assets/{assetID}/complete", h.internal(http.HandlerFunc(h.completeUpload)))
 	mux.Handle("POST /priv/assets/{assetID}/grants", h.internal(http.HandlerFunc(h.createGrant)))
 	mux.Handle("DELETE /priv/assets/{assetID}/grants/{grantID}", h.internal(http.HandlerFunc(h.revokeGrant)))
+	mux.Handle("POST /priv/assets/{assetID}/scan/requeue", h.internal(http.HandlerFunc(h.requeueScan)))
+	mux.Handle("DELETE /priv/assets/{assetID}", h.internal(http.HandlerFunc(h.deleteAsset)))
 	mux.Handle("GET /priv/assets/{assetID}/public-url", h.internal(http.HandlerFunc(h.publicURL)))
 	if h.localUpload != nil {
 		mux.Handle("/dev/uploads/{token}", localUploadCORS(http.HandlerFunc(h.localUpload)))
@@ -164,6 +167,34 @@ func (h *Handler) publicURL(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"assetId": r.PathValue("assetID"), "downloadUrl": h.service.PublicURL(r.PathValue("assetID"))})
 }
 
+func (h *Handler) deleteAsset(w http.ResponseWriter, r *http.Request) {
+	if err := h.service.SoftDelete(r.Context(), r.PathValue("assetID"), callerFromRequest(r, h.allowDevCallerHeader)); err != nil {
+		handleError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) requeueScan(w http.ResponseWriter, r *http.Request) {
+	if !h.requireOwnedAsset(w, r) {
+		return
+	}
+	if err := h.service.RequeueScan(r.Context(), r.PathValue("assetID"), callerFromRequest(r, h.allowDevCallerHeader)); err != nil {
+		handleError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
+func (h *Handler) operations(w http.ResponseWriter, r *http.Request) {
+	value, err := h.service.Operations(r.Context())
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
+}
+
 func (h *Handler) requireOwnedAsset(w http.ResponseWriter, r *http.Request) bool {
 	asset, err := h.service.GetAsset(r.Context(), r.PathValue("assetID"))
 	if err != nil {
@@ -205,7 +236,7 @@ func (h *Handler) servePublicDownload(w http.ResponseWriter, r *http.Request, va
 	w.Header().Set("Content-Type", download.ContentType)
 	w.Header().Set("Content-Length", strconv.FormatInt(download.Size, 10))
 	w.Header().Set("Accept-Ranges", "bytes")
-	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	w.Header().Set("Cache-Control", download.CacheControl)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if download.ETag != "" {
 		w.Header().Set("ETag", download.ETag)

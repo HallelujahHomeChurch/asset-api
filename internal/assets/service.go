@@ -172,6 +172,46 @@ func (s *Service) RevokeGrant(ctx context.Context, assetID, grantID string) erro
 	return s.repository.RevokeGrant(ctx, assetID, grantID, s.now().UTC())
 }
 
+func (s *Service) SoftDelete(ctx context.Context, assetID, ownerService string) error {
+	repository, ok := s.repository.(interface {
+		SoftDeleteAsset(context.Context, string, string, time.Time) error
+	})
+	if !ok {
+		return ErrForbidden
+	}
+	return repository.SoftDeleteAsset(ctx, assetID, ownerService, s.now().UTC())
+}
+
+func (s *Service) RequeueScan(ctx context.Context, assetID, ownerService string) error {
+	asset, err := s.repository.GetAsset(ctx, assetID)
+	if err != nil {
+		return err
+	}
+	if asset.OwnerService != ownerService {
+		return ErrForbidden
+	}
+	if asset.ScanStatus != ScanFailed {
+		return ErrInvalidInput
+	}
+	repository, ok := s.repository.(interface {
+		RequeueFailedScan(context.Context, string, string, time.Time) error
+	})
+	if !ok {
+		return ErrForbidden
+	}
+	return repository.RequeueFailedScan(ctx, assetID, ownerService, s.now().UTC())
+}
+
+func (s *Service) Operations(ctx context.Context) (Operations, error) {
+	repository, ok := s.repository.(interface {
+		GetOperations(context.Context, time.Time) (Operations, error)
+	})
+	if !ok {
+		return Operations{}, ErrForbidden
+	}
+	return repository.GetOperations(ctx, s.now().UTC())
+}
+
 func (s *Service) ApplyScanResult(ctx context.Context, result ScanResult) error {
 	if result.EventID == "" || result.AssetID == "" || (result.Status != ScanClean && result.Status != ScanInfected && result.Status != ScanFailed) {
 		return ErrInvalidInput
@@ -234,6 +274,9 @@ func (s *Service) openPublic(ctx context.Context, assetID, variant string, byteR
 	}
 	download.ContentType = contentType
 	download.TotalSize = totalSize
+	if policy, ok := PolicyFor(asset.Namespace); ok {
+		download.CacheControl = policy.CacheControl
+	}
 	return download, nil
 }
 
