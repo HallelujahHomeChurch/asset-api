@@ -24,7 +24,6 @@ env:
   ACR_NAME: alive
   ACR_LOGIN_SERVER: alive.azurecr.io
   IMAGE_REPOSITORY: alive/asset-api
-  IMAGE_TAG: main-${{ github.run_id }}
   RESOURCE_GROUP: alive
   CONTAINER_APP_NAME: asset-api
 
@@ -38,6 +37,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Set image tag
+        run: echo "IMAGE_TAG=main-${GITHUB_SHA::7}" >> "${GITHUB_ENV}"
       - name: Verify
         run: |
           go test ./...
