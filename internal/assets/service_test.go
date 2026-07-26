@@ -62,6 +62,36 @@ func TestCreateUploadSessionReplaysIdempotencyKey(t *testing.T) {
 	}
 }
 
+func TestCreateUploadSessionRejectsIdempotencyReplayWithDifferentPurpose(t *testing.T) {
+	repo := newMemoryRepository()
+	service := NewService(repo, newMemoryBlobStore(), "https://www.alive.org.tw/api/assets", time.Now)
+	input := CreateUploadInput{Namespace: "cms.news.cover", OwnerService: "hhc-web-api", OwnerType: "news", OwnerID: "news-1", Purpose: "cover", OriginalFileName: "cover.jpg", ExpectedMIMEType: "image/jpeg", MaxSizeBytes: 5 << 20, Visibility: VisibilityPublic}
+
+	if _, err := service.CreateUploadSession(context.Background(), input, "semantic-replay"); err != nil {
+		t.Fatal(err)
+	}
+	input.Purpose = "inline"
+	if _, err := service.CreateUploadSession(context.Background(), input, "semantic-replay"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("replay error = %v", err)
+	}
+}
+
+func TestCreateUploadSessionEnforcesNamespaceOwnerSizeAndVisibility(t *testing.T) {
+	service := NewService(newMemoryRepository(), newMemoryBlobStore(), "https://www.alive.org.tw/api/assets", time.Now)
+	base := CreateUploadInput{Namespace: "account.avatar", OwnerService: "account-api", OwnerType: "user", OwnerID: "user-1", Purpose: "avatar", OriginalFileName: "avatar.jpg", ExpectedMIMEType: "image/jpeg", MaxSizeBytes: 1 << 20, Visibility: VisibilityPublic}
+
+	tests := []CreateUploadInput{
+		func() CreateUploadInput { value := base; value.OwnerService = "hhc-web-api"; return value }(),
+		func() CreateUploadInput { value := base; value.MaxSizeBytes = (1 << 20) + 1; return value }(),
+		func() CreateUploadInput { value := base; value.Visibility = VisibilityPrivate; return value }(),
+	}
+	for index, input := range tests {
+		if _, err := service.CreateUploadSession(context.Background(), input, "invalid-policy-"+string(rune('a'+index))); !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("case %d error = %v", index, err)
+		}
+	}
+}
+
 func TestCompleteUploadRejectsMIMEAndSizeSpoofing(t *testing.T) {
 	ctx := context.Background()
 	repo := newMemoryRepository()
@@ -231,9 +261,9 @@ func (r *memoryRepository) GetUploadSession(_ context.Context, assetID string) (
 	}
 	return value, nil
 }
-func (r *memoryRepository) FindUploadByIdempotency(_ context.Context, key string) (Asset, UploadSession, error) {
+func (r *memoryRepository) FindUploadByIdempotency(_ context.Context, caller, operation, key string) (Asset, UploadSession, error) {
 	for assetID, session := range r.sessions {
-		if session.IdempotencyKey == key {
+		if session.CallerService == caller && session.Operation == operation && session.IdempotencyKey == key {
 			return r.assets[assetID], session, nil
 		}
 	}
@@ -246,7 +276,7 @@ func (r *memoryRepository) CompleteUpload(_ context.Context, asset Asset, sessio
 }
 func (r *memoryRepository) CreateGrant(_ context.Context, grant Grant) (Grant, error) {
 	for _, value := range r.grants {
-		if value.IdempotencyKey == grant.IdempotencyKey {
+		if value.CallerService == grant.CallerService && value.Operation == grant.Operation && value.IdempotencyKey == grant.IdempotencyKey {
 			return value, nil
 		}
 	}

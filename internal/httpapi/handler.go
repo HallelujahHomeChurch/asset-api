@@ -16,14 +16,15 @@ import (
 )
 
 type Handler struct {
-	service        *assets.Service
-	db             *sql.DB
-	allowedCallers map[string]bool
-	localUpload    http.HandlerFunc
+	service              *assets.Service
+	db                   *sql.DB
+	allowedCallers       map[string]bool
+	allowDevCallerHeader bool
+	localUpload          http.HandlerFunc
 }
 
-func New(service *assets.Service, db *sql.DB, allowedCallers map[string]bool, localUpload http.HandlerFunc) *Handler {
-	return &Handler{service: service, db: db, allowedCallers: allowedCallers, localUpload: localUpload}
+func New(service *assets.Service, db *sql.DB, allowedCallers map[string]bool, allowDevCallerHeader bool, localUpload http.HandlerFunc) *Handler {
+	return &Handler{service: service, db: db, allowedCallers: allowedCallers, allowDevCallerHeader: allowDevCallerHeader, localUpload: localUpload}
 }
 
 func (h *Handler) Routes() http.Handler {
@@ -65,7 +66,7 @@ func localUploadCORS(next http.Handler) http.Handler {
 
 func (h *Handler) internal(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		caller := strings.TrimSpace(r.Header.Get("X-Internal-Caller-App-Id"))
+		caller := callerFromRequest(r, h.allowDevCallerHeader)
 		if !h.allowedCallers[caller] {
 			writeError(w, http.StatusForbidden, "AST_FORBIDDEN", "caller is not allowed")
 			return
@@ -88,8 +89,9 @@ func (h *Handler) createUpload(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	caller := strings.TrimSpace(r.Header.Get("X-Internal-Caller-App-Id"))
-	if input.OwnerService != caller || !callerCanUseNamespace(caller, input.Namespace) {
+	caller := callerFromRequest(r, h.allowDevCallerHeader)
+	policy, ok := assets.PolicyFor(input.Namespace)
+	if !ok || input.OwnerService != caller || policy.OwnerService != caller {
 		writeError(w, http.StatusForbidden, "AST_FORBIDDEN", "caller cannot use this asset namespace")
 		return
 	}
@@ -106,7 +108,7 @@ func (h *Handler) getAsset(w http.ResponseWriter, r *http.Request) {
 		handleError(w, err)
 		return
 	}
-	if asset.OwnerService != strings.TrimSpace(r.Header.Get("X-Internal-Caller-App-Id")) {
+	if asset.OwnerService != callerFromRequest(r, h.allowDevCallerHeader) {
 		writeError(w, http.StatusForbidden, "AST_FORBIDDEN", "caller does not own this asset")
 		return
 	}
@@ -168,7 +170,7 @@ func (h *Handler) requireOwnedAsset(w http.ResponseWriter, r *http.Request) bool
 		handleError(w, err)
 		return false
 	}
-	if asset.OwnerService != strings.TrimSpace(r.Header.Get("X-Internal-Caller-App-Id")) {
+	if asset.OwnerService != callerFromRequest(r, h.allowDevCallerHeader) {
 		writeError(w, http.StatusForbidden, "AST_FORBIDDEN", "caller does not own this asset")
 		return false
 	}
@@ -234,6 +236,8 @@ func handleError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusBadRequest, "AST_INVALID_REQUEST", err.Error())
 	case errors.Is(err, assets.ErrForbidden):
 		writeError(w, http.StatusForbidden, "AST_FORBIDDEN", "operation is not allowed")
+	case errors.Is(err, assets.ErrConflict):
+		writeError(w, http.StatusConflict, "AST_CONFLICT", "idempotency key conflicts with an existing request")
 	case errors.Is(err, assets.ErrNotFound):
 		writeError(w, http.StatusNotFound, "AST_NOT_FOUND", "asset not found")
 	default:
@@ -284,13 +288,12 @@ func requestID(next http.Handler) http.Handler {
 	})
 }
 
-func callerCanUseNamespace(caller, namespace string) bool {
-	switch caller {
-	case "hhc-web-api":
-		return strings.HasPrefix(namespace, "cms.")
-	case "hhc-line-function-bot":
-		return strings.HasPrefix(namespace, "line.")
-	default:
-		return false
+func callerFromRequest(r *http.Request, allowDevelopmentHeader bool) string {
+	if caller := strings.TrimSpace(r.Header.Get("Dapr-Caller-App-Id")); caller != "" {
+		return caller
 	}
+	if allowDevelopmentHeader {
+		return strings.TrimSpace(r.Header.Get("X-Internal-Caller-App-Id"))
+	}
+	return ""
 }

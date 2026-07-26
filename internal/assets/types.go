@@ -12,6 +12,7 @@ var (
 	ErrInvalidUpload = errors.New("invalid upload")
 	ErrNotFound      = errors.New("not found")
 	ErrForbidden     = errors.New("forbidden")
+	ErrConflict      = errors.New("conflict")
 )
 
 type Visibility string
@@ -109,6 +110,9 @@ type UploadSession struct {
 	ID             string       `json:"id"`
 	AssetID        string       `json:"assetId"`
 	IdempotencyKey string       `json:"-"`
+	CallerService  string       `json:"-"`
+	Operation      string       `json:"-"`
+	Fingerprint    string       `json:"-"`
 	MaxSizeBytes   int64        `json:"maxSizeBytes"`
 	Status         UploadStatus `json:"status"`
 	ExpiresAt      time.Time    `json:"expiresAt"`
@@ -123,6 +127,9 @@ type Grant struct {
 	SubjectID      string      `json:"subjectId"`
 	Permission     Permission  `json:"permission"`
 	IdempotencyKey string      `json:"-"`
+	CallerService  string      `json:"-"`
+	Operation      string      `json:"-"`
+	Fingerprint    string      `json:"-"`
 	ExpiresAt      time.Time   `json:"expiresAt,omitempty"`
 	CreatedAt      time.Time   `json:"createdAt"`
 	RevokedAt      time.Time   `json:"revokedAt,omitempty"`

@@ -24,7 +24,7 @@ func (s *Store) CreateUpload(ctx context.Context, asset assets.Asset, session as
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO upload_sessions (id,asset_id,idempotency_key,max_size_bytes,status,expires_at,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)`, session.ID, session.AssetID, session.IdempotencyKey, session.MaxSizeBytes, session.Status, session.ExpiresAt, session.CreatedAt)
+	_, err = tx.ExecContext(ctx, `INSERT INTO upload_sessions (id,asset_id,idempotency_key,caller_service,operation,request_fingerprint,max_size_bytes,status,expires_at,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, session.ID, session.AssetID, session.IdempotencyKey, session.CallerService, session.Operation, session.Fingerprint, session.MaxSizeBytes, session.Status, session.ExpiresAt, session.CreatedAt)
 	if err != nil {
 		return err
 	}
@@ -43,16 +43,16 @@ func (s *Store) GetAsset(ctx context.Context, id string) (assets.Asset, error) {
 
 func (s *Store) GetUploadSession(ctx context.Context, assetID string) (assets.UploadSession, error) {
 	var value assets.UploadSession
-	err := s.db.QueryRowContext(ctx, `SELECT id,asset_id,idempotency_key,max_size_bytes,status,expires_at,created_at,COALESCE(completed_at,'0001-01-01'::timestamptz) FROM upload_sessions WHERE asset_id=$1`, assetID).Scan(&value.ID, &value.AssetID, &value.IdempotencyKey, &value.MaxSizeBytes, &value.Status, &value.ExpiresAt, &value.CreatedAt, &value.CompletedAt)
+	err := s.db.QueryRowContext(ctx, `SELECT id,asset_id,idempotency_key,caller_service,operation,request_fingerprint,max_size_bytes,status,expires_at,created_at,COALESCE(completed_at,'0001-01-01'::timestamptz) FROM upload_sessions WHERE asset_id=$1`, assetID).Scan(&value.ID, &value.AssetID, &value.IdempotencyKey, &value.CallerService, &value.Operation, &value.Fingerprint, &value.MaxSizeBytes, &value.Status, &value.ExpiresAt, &value.CreatedAt, &value.CompletedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return assets.UploadSession{}, assets.ErrNotFound
 	}
 	return value, err
 }
 
-func (s *Store) FindUploadByIdempotency(ctx context.Context, key string) (assets.Asset, assets.UploadSession, error) {
+func (s *Store) FindUploadByIdempotency(ctx context.Context, caller, operation, key string) (assets.Asset, assets.UploadSession, error) {
 	var assetID string
-	if err := s.db.QueryRowContext(ctx, `SELECT asset_id FROM upload_sessions WHERE idempotency_key=$1`, key).Scan(&assetID); errors.Is(err, sql.ErrNoRows) {
+	if err := s.db.QueryRowContext(ctx, `SELECT asset_id FROM upload_sessions WHERE caller_service=$1 AND operation=$2 AND idempotency_key=$3`, caller, operation, key).Scan(&assetID); errors.Is(err, sql.ErrNoRows) {
 		return assets.Asset{}, assets.UploadSession{}, assets.ErrNotFound
 	} else if err != nil {
 		return assets.Asset{}, assets.UploadSession{}, err
@@ -86,12 +86,12 @@ func (s *Store) CompleteUpload(ctx context.Context, asset assets.Asset, session 
 }
 
 func (s *Store) CreateGrant(ctx context.Context, grant assets.Grant) (assets.Grant, error) {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO asset_grants (id,asset_id,subject_type,subject_id,permission,idempotency_key,expires_at,created_at) VALUES ($1,$2,$3,$4,$5,$6,NULLIF($7,'0001-01-01'::timestamptz),$8) ON CONFLICT (idempotency_key) DO NOTHING`, grant.ID, grant.AssetID, grant.SubjectType, grant.SubjectID, grant.Permission, grant.IdempotencyKey, grant.ExpiresAt, grant.CreatedAt)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO asset_grants (id,asset_id,subject_type,subject_id,permission,idempotency_key,caller_service,operation,request_fingerprint,expires_at,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULLIF($10,'0001-01-01'::timestamptz),$11) ON CONFLICT (caller_service,operation,idempotency_key) DO NOTHING`, grant.ID, grant.AssetID, grant.SubjectType, grant.SubjectID, grant.Permission, grant.IdempotencyKey, grant.CallerService, grant.Operation, grant.Fingerprint, grant.ExpiresAt, grant.CreatedAt)
 	if err != nil {
 		return assets.Grant{}, err
 	}
 	var value assets.Grant
-	err = s.db.QueryRowContext(ctx, `SELECT id,asset_id,subject_type,subject_id,permission,idempotency_key,COALESCE(expires_at,'0001-01-01'::timestamptz),created_at,COALESCE(revoked_at,'0001-01-01'::timestamptz) FROM asset_grants WHERE idempotency_key=$1`, grant.IdempotencyKey).Scan(&value.ID, &value.AssetID, &value.SubjectType, &value.SubjectID, &value.Permission, &value.IdempotencyKey, &value.ExpiresAt, &value.CreatedAt, &value.RevokedAt)
+	err = s.db.QueryRowContext(ctx, `SELECT id,asset_id,subject_type,subject_id,permission,idempotency_key,caller_service,operation,request_fingerprint,COALESCE(expires_at,'0001-01-01'::timestamptz),created_at,COALESCE(revoked_at,'0001-01-01'::timestamptz) FROM asset_grants WHERE caller_service=$1 AND operation=$2 AND idempotency_key=$3`, grant.CallerService, grant.Operation, grant.IdempotencyKey).Scan(&value.ID, &value.AssetID, &value.SubjectType, &value.SubjectID, &value.Permission, &value.IdempotencyKey, &value.CallerService, &value.Operation, &value.Fingerprint, &value.ExpiresAt, &value.CreatedAt, &value.RevokedAt)
 	return value, err
 }
 

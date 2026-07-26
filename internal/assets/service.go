@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -15,14 +16,6 @@ import (
 )
 
 const uploadTTL = 10 * time.Minute
-
-var namespaceMIMEs = map[string]map[string]bool{
-	"cms.weekly.pdf":              {"application/pdf": true},
-	"cms.news.cover":              {"image/jpeg": true, "image/png": true, "image/webp": true},
-	"cms.page.image":              {"image/jpeg": true, "image/png": true, "image/webp": true},
-	"line.group.file":             {"application/pdf": true, "image/jpeg": true, "image/png": true, "image/webp": true},
-	"desktop.cloud-folder.object": {"application/pdf": true, "image/jpeg": true, "image/png": true, "image/webp": true, "application/octet-stream": true},
-}
 
 type Service struct {
 	repository    Repository
@@ -36,12 +29,15 @@ func NewService(repository Repository, blobs BlobStore, publicBaseURL string, no
 }
 
 func (s *Service) CreateUploadSession(ctx context.Context, input CreateUploadInput, idempotencyKey string) (CreatedUpload, error) {
-	allowed, ok := namespaceMIMEs[input.Namespace]
-	if !ok || !allowed[input.ExpectedMIMEType] || input.OwnerService == "" || input.OwnerType == "" || input.OwnerID == "" || input.MaxSizeBytes <= 0 || idempotencyKey == "" {
+	policy, ok := PolicyFor(input.Namespace)
+	if !ok || policy.OwnerService != input.OwnerService || !policy.AllowsMIME(input.ExpectedMIMEType) || input.OwnerType == "" || input.OwnerID == "" || input.MaxSizeBytes <= 0 || input.MaxSizeBytes > policy.MaxSizeBytes || idempotencyKey == "" {
 		return CreatedUpload{}, ErrInvalidInput
 	}
 	if input.Visibility == "" {
-		input.Visibility = VisibilityPrivate
+		input.Visibility = policy.DefaultVisibility
+	}
+	if !policy.AllowsVisibility(input.Visibility) {
+		return CreatedUpload{}, ErrInvalidInput
 	}
 	if replay, ok, err := s.replayUpload(ctx, input, idempotencyKey); err != nil || ok {
 		return replay, err
@@ -49,12 +45,8 @@ func (s *Service) CreateUploadSession(ctx context.Context, input CreateUploadInp
 	now := s.now().UTC()
 	assetID := newID()
 	objectKey := path.Join(environmentPrefix(), input.Namespace, now.Format("2006"), now.Format("01"), assetID, "original")
-	processing := ProcessingNotRequired
-	if strings.HasPrefix(input.ExpectedMIMEType, "image/") {
-		processing = ProcessingPending
-	}
-	asset := Asset{ID: assetID, Namespace: input.Namespace, OwnerService: input.OwnerService, OwnerType: input.OwnerType, OwnerID: input.OwnerID, Purpose: input.Purpose, Locale: input.Locale, OriginalFileName: sanitizeFileName(input.OriginalFileName), ObjectKey: objectKey, ExpectedMIMEType: input.ExpectedMIMEType, UploadStatus: UploadCreated, ScanStatus: ScanPending, ProcessingStatus: processing, Visibility: input.Visibility, CreatedAt: now, UpdatedAt: now}
-	session := UploadSession{ID: newID(), AssetID: assetID, IdempotencyKey: idempotencyKey, MaxSizeBytes: input.MaxSizeBytes, Status: UploadCreated, ExpiresAt: now.Add(uploadTTL), CreatedAt: now}
+	asset := Asset{ID: assetID, Namespace: input.Namespace, OwnerService: input.OwnerService, OwnerType: input.OwnerType, OwnerID: input.OwnerID, Purpose: input.Purpose, Locale: input.Locale, OriginalFileName: sanitizeFileName(input.OriginalFileName), ObjectKey: objectKey, ExpectedMIMEType: input.ExpectedMIMEType, UploadStatus: UploadCreated, ScanStatus: ScanPending, ProcessingStatus: policy.Processing, Visibility: input.Visibility, CreatedAt: now, UpdatedAt: now}
+	session := UploadSession{ID: newID(), AssetID: assetID, IdempotencyKey: idempotencyKey, CallerService: input.OwnerService, Operation: "create_upload", Fingerprint: requestFingerprint(input), MaxSizeBytes: input.MaxSizeBytes, Status: UploadCreated, ExpiresAt: now.Add(uploadTTL), CreatedAt: now}
 	target, err := s.blobs.CreateUploadTarget(ctx, objectKey, input.MaxSizeBytes, session.ExpiresAt)
 	if err != nil {
 		return CreatedUpload{}, fmt.Errorf("create upload target: %w", err)
@@ -70,20 +62,20 @@ func (s *Service) CreateUploadSession(ctx context.Context, input CreateUploadInp
 
 func (s *Service) replayUpload(ctx context.Context, input CreateUploadInput, key string) (CreatedUpload, bool, error) {
 	repository, ok := s.repository.(interface {
-		FindUploadByIdempotency(context.Context, string) (Asset, UploadSession, error)
+		FindUploadByIdempotency(context.Context, string, string, string) (Asset, UploadSession, error)
 	})
 	if !ok {
 		return CreatedUpload{}, false, nil
 	}
-	asset, session, err := repository.FindUploadByIdempotency(ctx, key)
+	asset, session, err := repository.FindUploadByIdempotency(ctx, input.OwnerService, "create_upload", key)
 	if errors.Is(err, ErrNotFound) {
 		return CreatedUpload{}, false, nil
 	}
 	if err != nil {
 		return CreatedUpload{}, false, err
 	}
-	if asset.Namespace != input.Namespace || asset.OwnerService != input.OwnerService || asset.OwnerType != input.OwnerType || asset.OwnerID != input.OwnerID || asset.ExpectedMIMEType != input.ExpectedMIMEType || session.MaxSizeBytes != input.MaxSizeBytes {
-		return CreatedUpload{}, true, ErrInvalidInput
+	if session.Fingerprint != requestFingerprint(input) {
+		return CreatedUpload{}, true, ErrConflict
 	}
 	created := CreatedUpload{Asset: asset, Session: session}
 	if session.Status == UploadCreated && s.now().Before(session.ExpiresAt) {
@@ -117,8 +109,8 @@ func (s *Service) CompleteUpload(ctx context.Context, assetID string, input Comp
 	if err != nil {
 		return Asset{}, fmt.Errorf("inspect blob: %w", err)
 	}
-	allowed := namespaceMIMEs[asset.Namespace][observed.DetectedMIMEType]
-	if observed.Size <= 0 || observed.Size > session.MaxSizeBytes || observed.Size != input.SizeBytes || !allowed || observed.DetectedMIMEType != input.MIMEType || !strings.EqualFold(observed.ChecksumSHA256, input.ChecksumSHA256) {
+	policy, ok := PolicyFor(asset.Namespace)
+	if !ok || observed.Size <= 0 || observed.Size > session.MaxSizeBytes || observed.Size > policy.MaxSizeBytes || observed.Size != input.SizeBytes || !policy.AllowsMIME(observed.DetectedMIMEType) || observed.DetectedMIMEType != asset.ExpectedMIMEType || observed.DetectedMIMEType != input.MIMEType || !strings.EqualFold(observed.ChecksumSHA256, input.ChecksumSHA256) {
 		return Asset{}, ErrInvalidUpload
 	}
 	now := s.now().UTC()
@@ -151,8 +143,12 @@ func (s *Service) CreateGrant(ctx context.Context, assetID string, input CreateG
 	if input.SubjectType == SubjectPublic && input.Permission == PermissionRead && (asset.UploadStatus != UploadCompleted || asset.ScanStatus != ScanClean || (asset.ProcessingStatus != ProcessingReady && asset.ProcessingStatus != ProcessingNotRequired)) {
 		return Grant{}, ErrInvalidUpload
 	}
-	grant := Grant{ID: newID(), AssetID: assetID, SubjectType: input.SubjectType, SubjectID: input.SubjectID, Permission: input.Permission, IdempotencyKey: input.IdempotencyKey, ExpiresAt: input.ExpiresAt, CreatedAt: s.now().UTC()}
-	return s.repository.CreateGrant(ctx, grant)
+	grant := Grant{ID: newID(), AssetID: assetID, SubjectType: input.SubjectType, SubjectID: input.SubjectID, Permission: input.Permission, IdempotencyKey: input.IdempotencyKey, CallerService: asset.OwnerService, Operation: "create_grant", Fingerprint: requestFingerprint(input), ExpiresAt: input.ExpiresAt, CreatedAt: s.now().UTC()}
+	value, err := s.repository.CreateGrant(ctx, grant)
+	if err == nil && value.Fingerprint != "" && value.Fingerprint != grant.Fingerprint {
+		return Grant{}, ErrConflict
+	}
+	return value, err
 }
 
 func (s *Service) GetAsset(ctx context.Context, assetID string) (Asset, error) {
@@ -249,3 +245,12 @@ func sanitizeFileName(value string) string {
 	return value
 }
 func environmentPrefix() string { return "assets" }
+
+func requestFingerprint(value any) string {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
+	sum := sha256.Sum256(encoded)
+	return hex.EncodeToString(sum[:])
+}
