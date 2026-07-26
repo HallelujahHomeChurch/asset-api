@@ -57,7 +57,8 @@ and retried independently of the database transaction.
 ## Azure deployment
 
 `infra/main.bicep` provisions the internal Dapr-enabled Container App and Blob
-RBAC. The checked-in pipeline tests, builds an immutable ACR tag, and updates
-only the existing `asset-api` Container App. Run the one-time infrastructure
-deployment in `infra/README.md` before pushing `main`; the pipeline intentionally
-does not create databases or inject first-deployment secrets.
+RBAC. The GitHub Actions release workflow tests, builds an immutable ACR tag,
+and updates only the existing `asset-api` Container App. Run the one-time
+infrastructure deployment in `infra/README.md` before pushing `main`; the
+workflow intentionally does not create databases or inject first-deployment
+secrets.

@@ -1,0 +1,90 @@
+name: Production Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/release.yml
+      - Dockerfile
+      - go.mod
+      - go.sum
+      - cmd/**
+      - internal/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: asset-api-production
+  cancel-in-progress: false
+
+env:
+  ACR_NAME: alive
+  ACR_LOGIN_SERVER: alive.azurecr.io
+  IMAGE_REPOSITORY: alive/asset-api
+  IMAGE_TAG: main-${{ github.run_id }}
+  RESOURCE_GROUP: alive
+  CONTAINER_APP_NAME: asset-api
+
+jobs:
+  release:
+    name: Build and release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Verify
+        run: |
+          go test ./...
+          go vet ./...
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --yes
+      - name: Build and push image to ACR
+        run: |
+          az acr build \
+            --registry "${ACR_NAME}" \
+            --image "${IMAGE_REPOSITORY}:${IMAGE_TAG}" \
+            --image "${IMAGE_REPOSITORY}:latest" \
+            --file Dockerfile \
+            .
+      - name: Deploy image and wait for ready revision
+        run: |
+          image_ref="${ACR_LOGIN_SERVER}/${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+          az containerapp update \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${CONTAINER_APP_NAME}" \
+            --image "${image_ref}" \
+            --only-show-errors \
+            --output none
+
+          target_revision="$(az containerapp show \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${CONTAINER_APP_NAME}" \
+            --query properties.latestRevisionName \
+            --output tsv)"
+          for attempt in {1..30}; do
+            state="$(az containerapp show \
+              --resource-group "${RESOURCE_GROUP}" \
+              --name "${CONTAINER_APP_NAME}" \
+              --query '[properties.latestReadyRevisionName,properties.runningStatus,properties.template.containers[0].image]' \
+              --output tsv)"
+            read -r ready status deployed_image <<< "${state}"
+            if [[ "${ready}" == "${target_revision}" && "${status}" == "Running" && "${deployed_image}" == "${image_ref}" ]]; then
+              echo "Deployed ${image_ref} to ${target_revision}"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Revision ${target_revision} did not become ready" >&2
+          exit 1
