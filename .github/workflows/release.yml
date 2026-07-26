@@ -72,10 +72,10 @@ jobs:
             state="$(az containerapp show \
               --resource-group "${RESOURCE_GROUP}" \
               --name "${CONTAINER_APP_NAME}" \
-              --query '[properties.latestRevisionName,properties.latestReadyRevisionName,properties.runningStatus,properties.template.containers[0].image]' \
+              --query "join('|', [properties.latestRevisionName, properties.latestReadyRevisionName, properties.runningStatus, properties.template.containers[0].image])" \
               --output tsv)"
-            read -r latest ready status deployed_image <<< "${state}"
-            if [[ "${latest}" == "${ready}" && "${status}" == "Running" && "${deployed_image}" == "${image_ref}" ]]; then
+            IFS='|' read -r latest ready running_status deployed_image <<< "${state}"
+            if [[ "${latest}" == "${ready}" && "${running_status}" == "Running" && "${deployed_image}" == "${image_ref}" ]]; then
               echo "Deployed ${image_ref} to ${ready}"
               exit 0
             fi
