@@ -11,7 +11,16 @@ It also allows only the ACA subnet (`172.16.66.0/23`) to reach clamd at
 ## First deployment
 
 1. Create the `asset` database and least-privilege login on the existing
-   private PostgreSQL server.
+   private PostgreSQL server at `172.16.68.4`. The role owns the database and
+   its public schema:
+
+   ```sql
+   CREATE ROLE asset LOGIN PASSWORD 'REDACTED';
+   CREATE DATABASE asset OWNER asset;
+   \connect asset
+   ALTER SCHEMA public OWNER TO asset;
+   GRANT USAGE, CREATE ON SCHEMA public TO asset;
+   ```
 2. Build the initial image:
 
    ```sh
@@ -21,7 +30,7 @@ It also allows only the ACA subnet (`172.16.66.0/23`) to reach clamd at
 3. Prepare the ignored parameter file and deploy:
 
    ```sh
-   export ASSET_DATABASE_URL='postgres://asset:REDACTED@hhc-pg.postgres.database.azure.com:5432/asset?sslmode=require'
+   export ASSET_DATABASE_URL='postgres://asset:REDACTED@172.16.68.4:5432/asset?sslmode=require'
    cp infra/main.bicepparam.example infra/main.bicepparam
    az bicep build --file infra/main.bicep
    az deployment group what-if -g alive -f infra/main.bicep -p infra/main.bicepparam
