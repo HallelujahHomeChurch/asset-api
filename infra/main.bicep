@@ -4,7 +4,7 @@ param location string = resourceGroup().location
 param containerAppEnvironmentName string = 'alive-env'
 param containerRegistryName string = 'alive'
 param storageAccountName string
-param image string = '${containerRegistryName}.azurecr.io/alive/asset-api:latest'
+param image string
 
 @secure()
 param databaseUrl string
