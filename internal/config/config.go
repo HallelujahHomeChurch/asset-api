@@ -23,6 +23,9 @@ type Config struct {
 	ClamAVTimeout        time.Duration
 	ClamAVMaxFileSize    int64
 	ClamAVMaxRetries     int
+	DBMaxOpenConns       int
+	DBMaxIdleConns       int
+	DBConnMaxLifetime    time.Duration
 	AllowedCallers       map[string]bool
 	AllowDevCallerHeader bool
 	ShutdownTimeout      time.Duration
@@ -44,6 +47,9 @@ func Load() (Config, error) {
 		ClamAVTimeout:        2 * time.Minute,
 		ClamAVMaxFileSize:    25 << 20,
 		ClamAVMaxRetries:     5,
+		DBMaxOpenConns:       10,
+		DBMaxIdleConns:       5,
+		DBConnMaxLifetime:    30 * time.Minute,
 		AllowedCallers:       splitSet(value("ASSET_ALLOWED_CALLERS", "account-api,hhc-web-api,hhc-line-function-bot")),
 		AllowDevCallerHeader: strings.EqualFold(value("ASSET_ALLOW_DEV_CALLER_HEADER", "false"), "true"),
 		ShutdownTimeout:      10 * time.Second,
@@ -65,6 +71,22 @@ func Load() (Config, error) {
 	}
 	if err := positiveInt64("CLAMAV_MAX_FILE_SIZE_BYTES", &cfg.ClamAVMaxFileSize); err != nil {
 		return Config{}, err
+	}
+	if err := positiveInt("DB_MAX_OPEN_CONNS", &cfg.DBMaxOpenConns); err != nil {
+		return Config{}, err
+	}
+	if err := positiveInt("DB_MAX_IDLE_CONNS", &cfg.DBMaxIdleConns); err != nil {
+		return Config{}, err
+	}
+	if cfg.DBMaxIdleConns > cfg.DBMaxOpenConns {
+		return Config{}, fmt.Errorf("DB_MAX_IDLE_CONNS cannot exceed DB_MAX_OPEN_CONNS")
+	}
+	if value := strings.TrimSpace(os.Getenv("DB_CONN_MAX_LIFETIME")); value != "" {
+		duration, err := time.ParseDuration(value)
+		if err != nil || duration <= 0 {
+			return Config{}, fmt.Errorf("invalid DB_CONN_MAX_LIFETIME")
+		}
+		cfg.DBConnMaxLifetime = duration
 	}
 	if value := os.Getenv("CLAMAV_TIMEOUT_SECONDS"); value != "" {
 		seconds, err := strconv.Atoi(value)

@@ -44,6 +44,9 @@ It also allows only the ACA subnet (`172.16.66.0/23`) to reach clamd at
 
 The template explicitly disables Defender for Storage; ClamAV is the only
 malware scanner. `ASSET_ALLOW_DEV_CALLER_HEADER` remains false in Azure.
+The live PostgreSQL server allows 50 connections. Production uses
+`DB_MAX_OPEN_CONNS=4`; at three replicas asset-api consumes at most 12 and
+leaves 38 for other services, migrations, and operations.
 
 ## Storage hardening gate
 

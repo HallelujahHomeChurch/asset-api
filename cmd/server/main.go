@@ -43,6 +43,9 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	db.SetMaxOpenConns(cfg.DBMaxOpenConns)
+	db.SetMaxIdleConns(cfg.DBMaxIdleConns)
+	db.SetConnMaxLifetime(cfg.DBConnMaxLifetime)
 	defer db.Close()
 	migrationCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()

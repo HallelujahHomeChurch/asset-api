@@ -151,6 +151,9 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
           env: [
             { name: 'PORT', value: '8080' }
             { name: 'DATABASE_URL', secretRef: 'database-url' }
+            { name: 'DB_MAX_OPEN_CONNS', value: '4' }
+            { name: 'DB_MAX_IDLE_CONNS', value: '2' }
+            { name: 'DB_CONN_MAX_LIFETIME', value: '30m' }
             { name: 'ASSET_PUBLIC_BASE_URL', value: publicBaseUrl }
             { name: 'ASSET_STORAGE_BACKEND', value: 'azure' }
             { name: 'ASSET_AZURE_ACCOUNT_URL', value: 'https://${storageAccount.name}.blob.${az.environment().suffixes.storage}' }
