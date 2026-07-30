@@ -11,6 +11,7 @@ on:
       - cmd/**
       - internal/**
       - infra/**
+      - scripts/**
   workflow_dispatch:
 
 permissions:
@@ -46,6 +47,7 @@ jobs:
         run: |
           go test ./...
           go vet ./...
+          ./scripts/test-release-workflow.sh
       - name: Sign in to Azure with OIDC
         uses: azure/login@v2
         with:
@@ -63,9 +65,20 @@ jobs:
             --revision "$revision" \
             --query properties.template.containers[0].image -o tsv --only-show-errors)"
           test -n "$image"
+          if [[ "$image" == *@sha256:* ]]; then
+            previous_image_ref="$image"
+          else
+            repository_and_tag="${image#${ACR_LOGIN_SERVER}/}"
+            digest="$(az acr repository show \
+              --name "$ACR_NAME" \
+              --image "$repository_and_tag" \
+              --query digest -o tsv --only-show-errors)"
+            test -n "$digest"
+            previous_image_ref="${ACR_LOGIN_SERVER}/${repository_and_tag%:*}@${digest}"
+          fi
           {
             echo "PREVIOUS_READY_REVISION=$revision"
-            echo "PREVIOUS_IMAGE=$image"
+            echo "PREVIOUS_IMAGE_REF=$previous_image_ref"
           } >> "$GITHUB_ENV"
       - name: Build and push image to ACR
         run: |
@@ -74,19 +87,25 @@ jobs:
             --image "${IMAGE_REPOSITORY}:${IMAGE_TAG}" \
             --file Dockerfile \
             .
+      - name: Resolve immutable image digest
+        run: |
+          digest="$(az acr repository show \
+            --name "$ACR_NAME" \
+            --image "${IMAGE_REPOSITORY}:${IMAGE_TAG}" \
+            --query digest -o tsv --only-show-errors)"
+          [[ "$digest" == sha256:* ]]
+          echo "IMAGE_REF=${ACR_LOGIN_SERVER}/${IMAGE_REPOSITORY}@${digest}" >> "$GITHUB_ENV"
       - name: Deploy image
         id: deploy_runtime
         run: |
-          image_ref="${ACR_LOGIN_SERVER}/${IMAGE_REPOSITORY}:${IMAGE_TAG}"
           az containerapp update \
             --resource-group "${RESOURCE_GROUP}" \
             --name "${CONTAINER_APP_NAME}" \
-            --image "${image_ref}" \
+            --image "${IMAGE_REF}" \
             --only-show-errors \
             --output none
       - name: Wait for ready revision
         run: |
-          image_ref="${ACR_LOGIN_SERVER}/${IMAGE_REPOSITORY}:${IMAGE_TAG}"
           for attempt in {1..30}; do
             state="$(az containerapp show \
               --resource-group "${RESOURCE_GROUP}" \
@@ -94,8 +113,8 @@ jobs:
               --query "join('|', [properties.latestRevisionName, properties.latestReadyRevisionName, properties.runningStatus, properties.template.containers[0].image])" \
               --output tsv)"
             IFS='|' read -r latest ready running_status deployed_image <<< "${state}"
-            if [[ "${latest}" == "${ready}" && "${running_status}" == "Running" && "${deployed_image}" == "${image_ref}" ]]; then
-              echo "Deployed ${image_ref} to ${ready}"
+            if [[ "${latest}" == "${ready}" && "${running_status}" == "Running" && "${deployed_image}" == "${IMAGE_REF}" ]]; then
+              echo "Deployed ${IMAGE_REF} to ${ready}"
               exit 0
             fi
             sleep 10
@@ -118,6 +137,7 @@ jobs:
             -g "$RESOURCE_GROUP" \
             -n "$CONTAINER_APP_NAME" \
             --from-revision "$PREVIOUS_READY_REVISION" \
+            --image "$PREVIOUS_IMAGE_REF" \
             --revision-suffix "rollback-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --only-show-errors \
             --output none
@@ -129,9 +149,9 @@ jobs:
               --query properties.latestReadyRevisionName -o tsv --only-show-errors)"
             if [[ -n "$latest" && "$latest" == "$ready" ]]; then
               image="$(az containerapp revision show -g "$RESOURCE_GROUP" -n "$CONTAINER_APP_NAME" \
-                --revision "$ready" \
-                --query properties.template.containers[0].image -o tsv --only-show-errors)"
-              [[ "$image" == "$PREVIOUS_IMAGE" ]] && exit 0
+              --revision "$ready" \
+              --query properties.template.containers[0].image -o tsv --only-show-errors)"
+              [[ "$image" == "$PREVIOUS_IMAGE_REF" ]] && exit 0
             fi
             sleep 10
           done
