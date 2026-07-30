@@ -8,11 +8,12 @@ import (
 )
 
 var (
-	ErrInvalidInput  = errors.New("invalid input")
-	ErrInvalidUpload = errors.New("invalid upload")
-	ErrNotFound      = errors.New("not found")
-	ErrForbidden     = errors.New("forbidden")
-	ErrConflict      = errors.New("conflict")
+	ErrInvalidInput         = errors.New("invalid input")
+	ErrInvalidUpload        = errors.New("invalid upload")
+	ErrNotFound             = errors.New("not found")
+	ErrForbidden            = errors.New("forbidden")
+	ErrConflict             = errors.New("conflict")
+	ErrCommitOutcomeUnknown = errors.New("commit outcome unknown")
 )
 
 type Visibility string
@@ -69,29 +70,30 @@ const (
 )
 
 type Asset struct {
-	ID               string           `json:"id"`
-	Namespace        string           `json:"namespace"`
-	OwnerService     string           `json:"ownerService"`
-	OwnerType        string           `json:"ownerType"`
-	OwnerID          string           `json:"ownerId"`
-	Purpose          string           `json:"purpose"`
-	Locale           string           `json:"locale,omitempty"`
-	OriginalFileName string           `json:"originalFileName"`
-	ObjectKey        string           `json:"-"`
-	ExpectedMIMEType string           `json:"expectedMimeType"`
-	DetectedMIMEType string           `json:"detectedMimeType,omitempty"`
-	SizeBytes        int64            `json:"sizeBytes,omitempty"`
-	ChecksumSHA256   string           `json:"checksumSha256,omitempty"`
-	ETag             string           `json:"etag,omitempty"`
-	UploadStatus     UploadStatus     `json:"uploadStatus"`
-	ScanStatus       ScanStatus       `json:"scanStatus"`
-	ScanDetails      string           `json:"scanDetails,omitempty"`
-	ProcessingStatus ProcessingStatus `json:"processingStatus"`
-	Visibility       Visibility       `json:"visibility"`
-	CreatedAt        time.Time        `json:"createdAt"`
-	UpdatedAt        time.Time        `json:"updatedAt"`
-	DeletedAt        time.Time        `json:"deletedAt,omitempty"`
-	ScanAttempts     int              `json:"-"`
+	ID                 string           `json:"id"`
+	Namespace          string           `json:"namespace"`
+	OwnerService       string           `json:"ownerService"`
+	OwnerType          string           `json:"ownerType"`
+	OwnerID            string           `json:"ownerId"`
+	Purpose            string           `json:"purpose"`
+	Locale             string           `json:"locale,omitempty"`
+	OriginalFileName   string           `json:"originalFileName"`
+	ObjectKey          string           `json:"-"`
+	ExpectedMIMEType   string           `json:"expectedMimeType"`
+	DetectedMIMEType   string           `json:"detectedMimeType,omitempty"`
+	SizeBytes          int64            `json:"sizeBytes,omitempty"`
+	ChecksumSHA256     string           `json:"checksumSha256,omitempty"`
+	ETag               string           `json:"etag,omitempty"`
+	UploadStatus       UploadStatus     `json:"uploadStatus"`
+	ScanStatus         ScanStatus       `json:"scanStatus"`
+	ScanDetails        string           `json:"scanDetails,omitempty"`
+	ProcessingStatus   ProcessingStatus `json:"processingStatus"`
+	Visibility         Visibility       `json:"visibility"`
+	CreatedAt          time.Time        `json:"createdAt"`
+	UpdatedAt          time.Time        `json:"updatedAt"`
+	DeletedAt          time.Time        `json:"deletedAt,omitempty"`
+	ScanAttempts       int              `json:"-"`
+	ProcessingAttempts int              `json:"-"`
 }
 
 type Derivative struct {

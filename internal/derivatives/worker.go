@@ -3,6 +3,7 @@ package derivatives
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"image"
 	"image/jpeg"
@@ -31,13 +32,15 @@ type Worker struct {
 
 type Repository interface {
 	ClaimPendingProcessing(context.Context, time.Time, time.Duration) (assets.Asset, bool, error)
-	CompleteProcessing(context.Context, string, string, []assets.Derivative, time.Time) error
-	FailProcessing(context.Context, string, string, string, time.Time) error
+	CompleteProcessing(context.Context, string, string, int, []assets.Derivative, time.Time) error
+	FailProcessing(context.Context, string, string, int, string, time.Time) error
+	ScheduleProcessingRetry(context.Context, string, string, int, string, time.Time, time.Time) error
 }
 
 type BlobStore interface {
 	Open(context.Context, string, assets.ByteRange, string) (assets.BlobDownload, error)
 	Put(context.Context, string, io.Reader, int64, string) (assets.BlobProperties, error)
+	Delete(context.Context, string) error
 }
 
 func NewWorker(repository Repository, blobs BlobStore) *Worker {
@@ -64,40 +67,57 @@ func (w *Worker) ProcessOne(ctx context.Context) error {
 	if err != nil || !ok {
 		return err
 	}
-	if err := w.process(ctx, asset); err != nil {
-		_ = w.repository.FailProcessing(ctx, asset.ID, asset.ETag, truncate(err.Error(), 500), w.now().UTC())
+	written, err := w.process(ctx, asset)
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, assets.ErrCommitOutcomeUnknown) {
 		return err
 	}
-	return nil
+	for _, key := range written {
+		err = errors.Join(err, w.blobs.Delete(ctx, key))
+	}
+	now := w.now().UTC()
+	details := truncate(err.Error(), 500)
+	var invalid terminalError
+	if errors.As(err, &invalid) || asset.ProcessingAttempts >= 5 {
+		return errors.Join(err, w.repository.FailProcessing(ctx, asset.ID, asset.ETag, asset.ProcessingAttempts, details, now))
+	}
+	nextAttempt := now.Add(time.Minute << (asset.ProcessingAttempts - 1))
+	return errors.Join(err, w.repository.ScheduleProcessingRetry(ctx, asset.ID, asset.ETag, asset.ProcessingAttempts, details, nextAttempt, now))
 }
 
-func (w *Worker) process(ctx context.Context, asset assets.Asset) error {
+func (w *Worker) process(ctx context.Context, asset assets.Asset) ([]string, error) {
 	download, err := w.blobs.Open(ctx, asset.ObjectKey, assets.ByteRange{}, asset.ETag)
 	if err != nil {
-		return fmt.Errorf("open original: %w", err)
+		return nil, fmt.Errorf("open original: %w", err)
 	}
 	defer download.Body.Close()
 	encoded, err := io.ReadAll(io.LimitReader(download.Body, (25<<20)+1))
-	if err != nil || len(encoded) > 25<<20 {
-		return fmt.Errorf("read image: %w", assets.ErrInvalidUpload)
+	if err != nil {
+		return nil, fmt.Errorf("read image: %w", err)
+	}
+	if len(encoded) > 25<<20 {
+		return nil, terminalError{fmt.Errorf("read image: %w", assets.ErrInvalidUpload)}
 	}
 	config, _, err := image.DecodeConfig(bytes.NewReader(encoded))
 	if err != nil {
-		return fmt.Errorf("decode image config: %w", err)
+		return nil, terminalError{fmt.Errorf("decode image config: %w", err)}
 	}
 	if err := validateImageConfig(config); err != nil {
-		return err
+		return nil, terminalError{err}
 	}
 	decoded, _, err := image.Decode(bytes.NewReader(encoded))
 	if err != nil {
-		return fmt.Errorf("decode image: %w", err)
+		return nil, terminalError{fmt.Errorf("decode image: %w", err)}
 	}
 	source := decoded.Bounds()
 	if source.Dx() < 1 || source.Dy() < 1 {
-		return fmt.Errorf("invalid image dimensions")
+		return nil, terminalError{fmt.Errorf("invalid image dimensions")}
 	}
 	now := w.now().UTC()
 	values := make([]assets.Derivative, 0, len(variants))
+	written := make([]string, 0, len(variants))
 	for _, variant := range variants {
 		width := min(variant.width, source.Dx())
 		height := max(1, source.Dy()*width/source.Dx())
@@ -105,19 +125,20 @@ func (w *Worker) process(ctx context.Context, asset assets.Asset) error {
 		draw.CatmullRom.Scale(target, target.Bounds(), decoded, source, draw.Over, nil)
 		var encoded bytes.Buffer
 		if err := jpeg.Encode(&encoded, target, &jpeg.Options{Quality: 88}); err != nil {
-			return fmt.Errorf("encode %s: %w", variant.name, err)
+			return written, terminalError{fmt.Errorf("encode %s: %w", variant.name, err)}
 		}
-		objectKey := path.Join(path.Dir(asset.ObjectKey), "derivatives", variant.name+".jpg")
+		objectKey := path.Join(path.Dir(asset.ObjectKey), "derivatives", fmt.Sprintf("attempt-%d", asset.ProcessingAttempts), variant.name+".jpg")
+		written = append(written, objectKey)
 		properties, err := w.blobs.Put(ctx, objectKey, bytes.NewReader(encoded.Bytes()), int64(encoded.Len()), "image/jpeg")
 		if err != nil {
-			return fmt.Errorf("store %s: %w", variant.name, err)
+			return written, fmt.Errorf("store %s: %w", variant.name, err)
 		}
 		values = append(values, assets.Derivative{AssetID: asset.ID, Variant: variant.name, ObjectKey: objectKey, MIMEType: "image/jpeg", Width: width, Height: height, SizeBytes: properties.Size, ETag: properties.ETag, CreatedAt: now})
 	}
-	if err := w.repository.CompleteProcessing(ctx, asset.ID, asset.ETag, values, now); err != nil {
-		return fmt.Errorf("complete processing: %w", err)
+	if err := w.repository.CompleteProcessing(ctx, asset.ID, asset.ETag, asset.ProcessingAttempts, values, now); err != nil {
+		return written, fmt.Errorf("complete processing: %w", err)
 	}
-	return nil
+	return written, nil
 }
 
 func validateImageConfig(config image.Config) error {
@@ -133,3 +154,5 @@ func truncate(value string, limit int) string {
 	}
 	return value[:limit]
 }
+
+type terminalError struct{ error }
