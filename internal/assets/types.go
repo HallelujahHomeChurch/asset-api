@@ -191,6 +191,13 @@ type BlobProperties struct {
 	ETag             string
 }
 
+type BlobMetadata struct {
+	Size         int64
+	ContentType  string
+	ETag         string
+	LastModified time.Time
+}
+
 type ByteRange struct {
 	Offset int64
 	Count  int64
@@ -217,6 +224,7 @@ type Repository interface {
 	GetAsset(context.Context, string) (Asset, error)
 	GetUploadSession(context.Context, string) (UploadSession, error)
 	CompleteUpload(context.Context, Asset, UploadSession) error
+	FailUpload(context.Context, string, time.Time) error
 	CreateGrant(context.Context, Grant) (Grant, error)
 	RevokeGrant(context.Context, string, string, time.Time) error
 	HasActiveGrant(context.Context, string, SubjectType, string, Permission, time.Time) (bool, error)
@@ -227,7 +235,8 @@ type Repository interface {
 
 type BlobStore interface {
 	CreateUploadTarget(context.Context, string, int64, time.Time) (UploadTarget, error)
-	Inspect(context.Context, string) (BlobProperties, error)
+	InspectProperties(context.Context, string) (BlobMetadata, error)
+	Inspect(context.Context, string, string, int64) (BlobProperties, error)
 	Commit(context.Context, string, string) (BlobProperties, error)
 	Open(context.Context, string, ByteRange, string) (BlobDownload, error)
 	Delete(context.Context, string) error

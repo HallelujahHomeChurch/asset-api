@@ -77,7 +77,12 @@ func (workerBlobs) Open(context.Context, string, assets.ByteRange, string) (asse
 func (workerBlobs) CreateUploadTarget(context.Context, string, int64, time.Time) (assets.UploadTarget, error) {
 	panic("not used")
 }
-func (workerBlobs) Inspect(context.Context, string) (assets.BlobProperties, error) { panic("not used") }
+func (workerBlobs) InspectProperties(context.Context, string) (assets.BlobMetadata, error) {
+	panic("not used")
+}
+func (workerBlobs) Inspect(context.Context, string, string, int64) (assets.BlobProperties, error) {
+	panic("not used")
+}
 func (workerBlobs) Commit(context.Context, string, string) (assets.BlobProperties, error) {
 	panic("not used")
 }
@@ -110,6 +115,7 @@ func (*workerRepository) GetUploadSession(context.Context, string) (assets.Uploa
 func (*workerRepository) CompleteUpload(context.Context, assets.Asset, assets.UploadSession) error {
 	panic("not used")
 }
+func (*workerRepository) FailUpload(context.Context, string, time.Time) error { panic("not used") }
 func (*workerRepository) CreateGrant(context.Context, assets.Grant) (assets.Grant, error) {
 	panic("not used")
 }

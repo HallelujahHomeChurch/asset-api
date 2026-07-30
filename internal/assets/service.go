@@ -99,27 +99,86 @@ func (s *Service) CompleteUpload(ctx context.Context, assetID string, input Comp
 		return Asset{}, err
 	}
 	if session.Status == UploadCompleted {
+		asset, err = s.repository.GetAsset(ctx, assetID)
+		if err != nil {
+			return Asset{}, err
+		}
 		if asset.SizeBytes == input.SizeBytes && asset.ChecksumSHA256 == strings.ToLower(input.ChecksumSHA256) && asset.DetectedMIMEType == input.MIMEType {
+			if err := s.blobs.Delete(ctx, session.StagingObjectKey); err != nil {
+				return Asset{}, fmt.Errorf("delete committed staging blob: %w", err)
+			}
 			return asset, nil
 		}
 		return Asset{}, ErrInvalidUpload
 	}
-	if s.now().After(session.ExpiresAt) {
+	if session.Status == UploadFailed {
+		if err := s.deleteUploadObjects(ctx, asset, session); err != nil {
+			return Asset{}, fmt.Errorf("delete failed upload: %w", err)
+		}
 		return Asset{}, ErrInvalidUpload
 	}
-	observed, err := s.blobs.Inspect(ctx, session.StagingObjectKey)
+	policy, ok := PolicyFor(asset.Namespace)
+	if !ok {
+		return Asset{}, ErrInvalidUpload
+	}
+	sourceKey := asset.ObjectKey
+	metadata, err := s.blobs.InspectProperties(ctx, sourceKey)
+	alreadyCommitted := err == nil
+	if errors.Is(err, ErrNotFound) {
+		sourceKey = session.StagingObjectKey
+		metadata, err = s.blobs.InspectProperties(ctx, sourceKey)
+	}
+	if errors.Is(err, ErrNotFound) {
+		if err := s.rejectUpload(ctx, asset, session); err != nil {
+			return Asset{}, err
+		}
+		return Asset{}, ErrInvalidUpload
+	}
+	if err != nil {
+		return Asset{}, fmt.Errorf("inspect blob properties: %w", err)
+	}
+	if !alreadyCommitted && s.now().After(session.ExpiresAt) {
+		if err := s.rejectUpload(ctx, asset, session); err != nil {
+			return Asset{}, err
+		}
+		return Asset{}, ErrInvalidUpload
+	}
+	if metadata.Size <= 0 || metadata.Size > session.MaxSizeBytes || metadata.Size > policy.MaxSizeBytes {
+		if err := s.rejectUpload(ctx, asset, session); err != nil {
+			return Asset{}, err
+		}
+		return Asset{}, ErrInvalidUpload
+	}
+	observed, err := s.blobs.Inspect(ctx, sourceKey, metadata.ETag, min(session.MaxSizeBytes, policy.MaxSizeBytes))
 	if err != nil {
 		return Asset{}, fmt.Errorf("inspect blob: %w", err)
 	}
-	policy, ok := PolicyFor(asset.Namespace)
-	if !ok || observed.Size <= 0 || observed.Size > session.MaxSizeBytes || observed.Size > policy.MaxSizeBytes || observed.Size != input.SizeBytes || !policy.AllowsMIME(observed.DetectedMIMEType) || observed.DetectedMIMEType != asset.ExpectedMIMEType || observed.DetectedMIMEType != input.MIMEType || !strings.EqualFold(observed.ChecksumSHA256, input.ChecksumSHA256) {
+	if observed.Size != metadata.Size || (metadata.ETag != "" && observed.ETag != metadata.ETag) || observed.Size != input.SizeBytes || !policy.AllowsMIME(observed.DetectedMIMEType) || observed.DetectedMIMEType != asset.ExpectedMIMEType || observed.DetectedMIMEType != input.MIMEType || !strings.EqualFold(observed.ChecksumSHA256, input.ChecksumSHA256) {
+		if err := s.rejectUpload(ctx, asset, session); err != nil {
+			return Asset{}, err
+		}
 		return Asset{}, ErrInvalidUpload
 	}
-	committed, err := s.blobs.Commit(ctx, session.StagingObjectKey, asset.ObjectKey)
-	if err != nil {
-		return Asset{}, fmt.Errorf("commit blob: %w", err)
+	committed := observed
+	if !alreadyCommitted {
+		committed, err = s.blobs.Commit(ctx, session.StagingObjectKey, asset.ObjectKey)
+		if errors.Is(err, ErrConflict) || errors.Is(err, ErrInvalidUpload) {
+			finalMetadata, metadataErr := s.blobs.InspectProperties(ctx, asset.ObjectKey)
+			if metadataErr == nil && finalMetadata.Size == observed.Size {
+				committed, metadataErr = s.blobs.Inspect(ctx, asset.ObjectKey, finalMetadata.ETag, min(session.MaxSizeBytes, policy.MaxSizeBytes))
+			}
+			if metadataErr == nil && committed.Size == observed.Size && committed.DetectedMIMEType == observed.DetectedMIMEType && strings.EqualFold(committed.ChecksumSHA256, observed.ChecksumSHA256) {
+				err = nil
+			}
+		}
+		if err != nil {
+			return Asset{}, fmt.Errorf("commit blob: %w", err)
+		}
 	}
 	if committed.Size != observed.Size || committed.DetectedMIMEType != observed.DetectedMIMEType || !strings.EqualFold(committed.ChecksumSHA256, observed.ChecksumSHA256) {
+		if err := s.rejectUpload(ctx, asset, session); err != nil {
+			return Asset{}, err
+		}
 		return Asset{}, ErrInvalidUpload
 	}
 	now := s.now().UTC()
@@ -135,7 +194,24 @@ func (s *Service) CompleteUpload(ctx context.Context, assetID string, input Comp
 	if err := s.repository.CompleteUpload(ctx, asset, session); err != nil {
 		return Asset{}, fmt.Errorf("complete upload: %w", err)
 	}
+	if err := s.blobs.Delete(ctx, session.StagingObjectKey); err != nil {
+		return Asset{}, fmt.Errorf("delete committed staging blob: %w", err)
+	}
 	return asset, nil
+}
+
+func (s *Service) rejectUpload(ctx context.Context, asset Asset, session UploadSession) error {
+	if err := s.repository.FailUpload(ctx, asset.ID, s.now().UTC()); err != nil {
+		return fmt.Errorf("mark upload failed: %w", err)
+	}
+	return s.deleteUploadObjects(ctx, asset, session)
+}
+
+func (s *Service) deleteUploadObjects(ctx context.Context, asset Asset, session UploadSession) error {
+	return errors.Join(
+		s.blobs.Delete(ctx, session.StagingObjectKey),
+		s.blobs.Delete(ctx, asset.ObjectKey),
+	)
 }
 
 func (s *Service) CreateGrant(ctx context.Context, assetID string, input CreateGrantInput) (Grant, error) {

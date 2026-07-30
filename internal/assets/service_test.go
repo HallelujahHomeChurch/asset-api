@@ -52,6 +52,217 @@ func TestCompleteUploadValidatesObservedBlobAndLeavesDownloadPending(t *testing.
 	}
 }
 
+func TestCompleteUploadRejectsOversizeBeforeRead(t *testing.T) {
+	ctx := context.Background()
+	repo := newMemoryRepository()
+	blobs := newMemoryBlobStore()
+	service := NewService(repo, blobs, "https://www.alive.org.tw/api/assets", time.Now)
+	created, err := service.CreateUploadSession(ctx, CreateUploadInput{
+		Namespace: "account.avatar", OwnerService: "account-api", OwnerType: "user",
+		OwnerID: "user-1", Purpose: "avatar", OriginalFileName: "avatar.jpg",
+		ExpectedMIMEType: "image/jpeg", MaxSizeBytes: 8, Visibility: VisibilityPublic,
+	}, "oversize")
+	if err != nil {
+		t.Fatal(err)
+	}
+	blobs.objects[created.Session.StagingObjectKey] = []byte("too-large")
+
+	_, err = service.CompleteUpload(ctx, created.Asset.ID, CompleteUploadInput{
+		SizeBytes: 9, ChecksumSHA256: "irrelevant", MIMEType: "image/jpeg",
+	})
+	if !errors.Is(err, ErrInvalidUpload) {
+		t.Fatalf("error = %v", err)
+	}
+	if blobs.inspectCalls != 0 {
+		t.Fatalf("content inspection calls = %d", blobs.inspectCalls)
+	}
+	if _, ok := blobs.objects[created.Session.StagingObjectKey]; ok {
+		t.Fatal("oversize staging object was not deleted")
+	}
+	if repo.assets[created.Asset.ID].UploadStatus != UploadFailed || repo.sessions[created.Asset.ID].Status != UploadFailed {
+		t.Fatal("oversize upload was not marked failed")
+	}
+}
+
+func TestCompleteUploadRecoversAfterBlobCommitAndDatabaseFailure(t *testing.T) {
+	ctx := context.Background()
+	repo := newMemoryRepository()
+	repo.completeFailures = 1
+	blobs := newMemoryBlobStore()
+	service := NewService(repo, blobs, "https://www.alive.org.tw/api/assets", time.Now)
+	created, err := service.CreateUploadSession(ctx, CreateUploadInput{
+		Namespace: "cms.weekly.pdf", OwnerService: "hhc-web-api", OwnerType: "bulletin_version",
+		OwnerID: "version-1", Purpose: "pdf", OriginalFileName: "weekly.pdf",
+		ExpectedMIMEType: "application/pdf", MaxSizeBytes: 1024, Visibility: VisibilityPublic,
+	}, "recover-completion")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte("%PDF-1.7\nrecover")
+	blobs.objects[created.Session.StagingObjectKey] = payload
+	sum := sha256.Sum256(payload)
+	input := CompleteUploadInput{SizeBytes: int64(len(payload)), ChecksumSHA256: hex.EncodeToString(sum[:]), MIMEType: "application/pdf"}
+
+	if _, err := service.CompleteUpload(ctx, created.Asset.ID, input); err == nil {
+		t.Fatal("first completion should expose the database failure")
+	}
+	if _, ok := blobs.objects[created.Session.StagingObjectKey]; ok {
+		t.Fatal("staging object should already be committed")
+	}
+	asset, err := service.CompleteUpload(ctx, created.Asset.ID, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if asset.UploadStatus != UploadCompleted {
+		t.Fatalf("upload status = %q", asset.UploadStatus)
+	}
+}
+
+func TestCompleteUploadRetriesOversizeFailureAndCleanup(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		failDatabaseOnce bool
+		failDeleteOnce   bool
+	}{
+		{name: "database failure", failDatabaseOnce: true},
+		{name: "blob delete failure", failDeleteOnce: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			repo := newMemoryRepository()
+			if tc.failDatabaseOnce {
+				repo.failUploadFailures = 1
+			}
+			blobs := newMemoryBlobStore()
+			if tc.failDeleteOnce {
+				blobs.deleteFailures = 1
+			}
+			service := NewService(repo, blobs, "https://www.alive.org.tw/api/assets", time.Now)
+			created, err := service.CreateUploadSession(ctx, CreateUploadInput{
+				Namespace: "account.avatar", OwnerService: "account-api", OwnerType: "user",
+				OwnerID: "user-1", Purpose: "avatar", OriginalFileName: "avatar.jpg",
+				ExpectedMIMEType: "image/jpeg", MaxSizeBytes: 8, Visibility: VisibilityPublic,
+			}, "oversize-retry-"+tc.name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			blobs.objects[created.Session.StagingObjectKey] = []byte("too-large")
+			input := CompleteUploadInput{SizeBytes: 9, ChecksumSHA256: "irrelevant", MIMEType: "image/jpeg"}
+
+			if _, err := service.CompleteUpload(ctx, created.Asset.ID, input); err == nil {
+				t.Fatal("first rejection should expose the dependency failure")
+			}
+			if _, err := service.CompleteUpload(ctx, created.Asset.ID, input); !errors.Is(err, ErrInvalidUpload) {
+				t.Fatalf("retry error = %v", err)
+			}
+			if _, ok := blobs.objects[created.Session.StagingObjectKey]; ok {
+				t.Fatal("staging object remains after retry")
+			}
+			if repo.assets[created.Asset.ID].UploadStatus != UploadFailed {
+				t.Fatal("upload was not marked failed")
+			}
+		})
+	}
+}
+
+func TestCompleteUploadRecoversFinalWithStagingAfterExpiry(t *testing.T) {
+	ctx := context.Background()
+	repo := newMemoryRepository()
+	repo.completeFailures = 1
+	blobs := newMemoryBlobStore()
+	blobs.commitLeavesStaging = true
+	now := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	service := NewService(repo, blobs, "https://www.alive.org.tw/api/assets", func() time.Time { return now })
+	created, err := service.CreateUploadSession(ctx, CreateUploadInput{
+		Namespace: "cms.weekly.pdf", OwnerService: "hhc-web-api", OwnerType: "bulletin_version",
+		OwnerID: "version-2", Purpose: "pdf", OriginalFileName: "weekly.pdf",
+		ExpectedMIMEType: "application/pdf", MaxSizeBytes: 1024, Visibility: VisibilityPublic,
+	}, "recover-final-and-staging")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte("%PDF-1.7\nrecover")
+	blobs.objects[created.Session.StagingObjectKey] = payload
+	sum := sha256.Sum256(payload)
+	input := CompleteUploadInput{SizeBytes: int64(len(payload)), ChecksumSHA256: hex.EncodeToString(sum[:]), MIMEType: "application/pdf"}
+
+	if _, err := service.CompleteUpload(ctx, created.Asset.ID, input); err == nil {
+		t.Fatal("first completion should expose the database failure")
+	}
+	now = created.Session.ExpiresAt.Add(time.Hour)
+	if _, err := service.CompleteUpload(ctx, created.Asset.ID, input); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := blobs.objects[created.Session.StagingObjectKey]; ok {
+		t.Fatal("recovered completion did not remove staging")
+	}
+}
+
+func TestCompleteUploadRefetchesAssetForCompletedSession(t *testing.T) {
+	ctx := context.Background()
+	repo := newMemoryRepository()
+	blobs := newMemoryBlobStore()
+	service := NewService(repo, blobs, "https://www.alive.org.tw/api/assets", time.Now)
+	created, err := service.CreateUploadSession(ctx, CreateUploadInput{
+		Namespace: "cms.weekly.pdf", OwnerService: "hhc-web-api", OwnerType: "bulletin_version",
+		OwnerID: "version-3", Purpose: "pdf", OriginalFileName: "weekly.pdf",
+		ExpectedMIMEType: "application/pdf", MaxSizeBytes: 1024, Visibility: VisibilityPublic,
+	}, "completed-refetch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed := created.Asset
+	completed.SizeBytes = 12
+	completed.ChecksumSHA256 = "checksum"
+	completed.DetectedMIMEType = "application/pdf"
+	completed.UploadStatus = UploadCompleted
+	session := created.Session
+	session.Status = UploadCompleted
+	repo.assets[created.Asset.ID] = completed
+	repo.sessions[created.Asset.ID] = session
+	stale := created.Asset
+	repo.staleAssetOnce = &stale
+
+	asset, err := service.CompleteUpload(ctx, created.Asset.ID, CompleteUploadInput{
+		SizeBytes: 12, ChecksumSHA256: "checksum", MIMEType: "application/pdf",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if asset.UploadStatus != UploadCompleted {
+		t.Fatalf("upload status = %q", asset.UploadStatus)
+	}
+}
+
+func TestCompleteUploadAcceptsConcurrentFinalCommit(t *testing.T) {
+	ctx := context.Background()
+	repo := newMemoryRepository()
+	blobs := newMemoryBlobStore()
+	blobs.commitConflictCreatesFinal = true
+	service := NewService(repo, blobs, "https://www.alive.org.tw/api/assets", time.Now)
+	created, err := service.CreateUploadSession(ctx, CreateUploadInput{
+		Namespace: "cms.weekly.pdf", OwnerService: "hhc-web-api", OwnerType: "bulletin_version",
+		OwnerID: "version-4", Purpose: "pdf", OriginalFileName: "weekly.pdf",
+		ExpectedMIMEType: "application/pdf", MaxSizeBytes: 1024, Visibility: VisibilityPublic,
+	}, "concurrent-final")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte("%PDF-1.7\nconcurrent")
+	blobs.objects[created.Session.StagingObjectKey] = payload
+	sum := sha256.Sum256(payload)
+
+	asset, err := service.CompleteUpload(ctx, created.Asset.ID, CompleteUploadInput{
+		SizeBytes: int64(len(payload)), ChecksumSHA256: hex.EncodeToString(sum[:]), MIMEType: "application/pdf",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if asset.UploadStatus != UploadCompleted {
+		t.Fatalf("upload status = %q", asset.UploadStatus)
+	}
+}
+
 func TestCreateUploadSessionReplaysIdempotencyKey(t *testing.T) {
 	repo := newMemoryRepository()
 	blobs := newMemoryBlobStore()
@@ -259,7 +470,7 @@ func TestPublicDownloadUsesNamespaceCachePolicy(t *testing.T) {
 	avatar := Asset{ID: "avatar-1", Namespace: "account.avatar", OwnerService: "account-api", ObjectKey: "assets/avatar-1/original", UploadStatus: UploadCompleted, ScanStatus: ScanClean, ProcessingStatus: ProcessingNotRequired, Visibility: VisibilityPublic, DetectedMIMEType: "image/jpeg", SizeBytes: 4, ETag: "etag-avatar"}
 	repo.assets[avatar.ID] = avatar
 	blobs.objects[avatar.ObjectKey] = []byte("jpeg")
-	properties, _ := blobs.Inspect(ctx, avatar.ObjectKey)
+	properties, _ := blobs.Inspect(ctx, avatar.ObjectKey, "", 0)
 	avatar.ETag = properties.ETag
 	repo.assets[avatar.ID] = avatar
 	if _, err := service.CreateGrant(ctx, avatar.ID, CreateGrantInput{SubjectType: SubjectPublic, SubjectID: "*", Permission: PermissionRead, IdempotencyKey: "cache-avatar-grant"}); err != nil {
@@ -337,11 +548,14 @@ func completedAsset(t *testing.T, ctx context.Context, service *Service, blobs *
 }
 
 type memoryRepository struct {
-	assets      map[string]Asset
-	sessions    map[string]UploadSession
-	grants      map[string]Grant
-	events      map[string]struct{}
-	derivatives map[string]Derivative
+	assets             map[string]Asset
+	sessions           map[string]UploadSession
+	grants             map[string]Grant
+	events             map[string]struct{}
+	derivatives        map[string]Derivative
+	completeFailures   int
+	failUploadFailures int
+	staleAssetOnce     *Asset
 }
 
 func newMemoryRepository() *memoryRepository {
@@ -354,6 +568,11 @@ func (r *memoryRepository) CreateUpload(_ context.Context, asset Asset, session 
 	return nil
 }
 func (r *memoryRepository) GetAsset(_ context.Context, id string) (Asset, error) {
+	if r.staleAssetOnce != nil {
+		value := *r.staleAssetOnce
+		r.staleAssetOnce = nil
+		return value, nil
+	}
 	value, ok := r.assets[id]
 	if !ok {
 		return Asset{}, ErrNotFound
@@ -376,8 +595,35 @@ func (r *memoryRepository) FindUploadByIdempotency(_ context.Context, caller, op
 	return Asset{}, UploadSession{}, ErrNotFound
 }
 func (r *memoryRepository) CompleteUpload(_ context.Context, asset Asset, session UploadSession) error {
+	if r.completeFailures > 0 {
+		r.completeFailures--
+		return errors.New("database unavailable")
+	}
 	r.assets[asset.ID] = asset
 	r.sessions[asset.ID] = session
+	return nil
+}
+func (r *memoryRepository) FailUpload(_ context.Context, assetID string, now time.Time) error {
+	if r.failUploadFailures > 0 {
+		r.failUploadFailures--
+		return errors.New("database unavailable")
+	}
+	asset, ok := r.assets[assetID]
+	if !ok {
+		return ErrNotFound
+	}
+	session := r.sessions[assetID]
+	if asset.UploadStatus == UploadFailed && session.Status == UploadFailed {
+		return nil
+	}
+	if asset.UploadStatus != UploadCreated || session.Status != UploadCreated {
+		return ErrConflict
+	}
+	asset.UploadStatus = UploadFailed
+	asset.UpdatedAt = now
+	session.Status = UploadFailed
+	r.assets[assetID] = asset
+	r.sessions[assetID] = session
 	return nil
 }
 func (r *memoryRepository) CreateGrant(_ context.Context, grant Grant) (Grant, error) {
@@ -477,26 +723,44 @@ func (r *memoryRepository) GetDerivative(_ context.Context, assetID, variant str
 	return value, nil
 }
 
-type memoryBlobStore struct{ objects map[string][]byte }
+type memoryBlobStore struct {
+	objects                    map[string][]byte
+	inspectCalls               int
+	deleteFailures             int
+	commitLeavesStaging        bool
+	commitConflictCreatesFinal bool
+}
 
 func newMemoryBlobStore() *memoryBlobStore { return &memoryBlobStore{objects: map[string][]byte{}} }
 func (b *memoryBlobStore) CreateUploadTarget(_ context.Context, objectKey string, _ int64, expiresAt time.Time) (UploadTarget, error) {
 	return UploadTarget{URL: "https://upload.example/" + objectKey, Method: "PUT", ExpiresAt: expiresAt, Headers: map[string]string{"x-ms-blob-type": "BlockBlob"}}, nil
 }
-func (b *memoryBlobStore) Inspect(_ context.Context, objectKey string) (BlobProperties, error) {
+func (b *memoryBlobStore) InspectProperties(_ context.Context, objectKey string) (BlobMetadata, error) {
+	value, ok := b.objects[objectKey]
+	if !ok {
+		return BlobMetadata{}, ErrNotFound
+	}
+	properties := inspectBytes(value)
+	return BlobMetadata{Size: properties.Size, ContentType: "application/octet-stream", ETag: "etag-" + properties.ChecksumSHA256}, nil
+}
+func (b *memoryBlobStore) Inspect(_ context.Context, objectKey, expectedETag string, maxSize int64) (BlobProperties, error) {
+	b.inspectCalls++
 	value, ok := b.objects[objectKey]
 	if !ok {
 		return BlobProperties{}, ErrNotFound
 	}
 	properties := inspectBytes(value)
 	properties.ETag = "etag-" + properties.ChecksumSHA256
+	if (expectedETag != "" && expectedETag != properties.ETag) || (maxSize > 0 && properties.Size > maxSize) {
+		return BlobProperties{}, ErrInvalidUpload
+	}
 	return properties, nil
 }
 func (b *memoryBlobStore) Commit(ctx context.Context, stagingObjectKey, finalObjectKey string) (BlobProperties, error) {
 	value, ok := b.objects[stagingObjectKey]
 	if !ok {
 		if _, finalExists := b.objects[finalObjectKey]; finalExists {
-			return b.Inspect(ctx, finalObjectKey)
+			return b.Inspect(ctx, finalObjectKey, "", 0)
 		}
 		return BlobProperties{}, ErrNotFound
 	}
@@ -504,21 +768,30 @@ func (b *memoryBlobStore) Commit(ctx context.Context, stagingObjectKey, finalObj
 		return BlobProperties{}, ErrConflict
 	}
 	b.objects[finalObjectKey] = append([]byte(nil), value...)
-	delete(b.objects, stagingObjectKey)
-	return b.Inspect(ctx, finalObjectKey)
+	if b.commitConflictCreatesFinal {
+		return BlobProperties{}, ErrConflict
+	}
+	if !b.commitLeavesStaging {
+		delete(b.objects, stagingObjectKey)
+	}
+	return b.Inspect(ctx, finalObjectKey, "", 0)
 }
 func (b *memoryBlobStore) Open(ctx context.Context, objectKey string, _ ByteRange, expectedETag string) (BlobDownload, error) {
 	value, ok := b.objects[objectKey]
 	if !ok {
 		return BlobDownload{}, ErrNotFound
 	}
-	properties, _ := b.Inspect(ctx, objectKey)
+	properties, _ := b.Inspect(ctx, objectKey, "", 0)
 	if expectedETag != "" && properties.ETag != expectedETag {
 		return BlobDownload{}, ErrInvalidUpload
 	}
 	return BlobDownload{Body: io.NopCloser(bytes.NewReader(value)), Size: int64(len(value)), ContentType: "application/pdf", ETag: properties.ETag}, nil
 }
 func (b *memoryBlobStore) Delete(_ context.Context, objectKey string) error {
+	if b.deleteFailures > 0 {
+		b.deleteFailures--
+		return errors.New("blob unavailable")
+	}
 	delete(b.objects, objectKey)
 	return nil
 }

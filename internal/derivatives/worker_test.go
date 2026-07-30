@@ -84,6 +84,7 @@ func (*processingRepository) GetUploadSession(context.Context, string) (assets.U
 func (*processingRepository) CompleteUpload(context.Context, assets.Asset, assets.UploadSession) error {
 	return nil
 }
+func (*processingRepository) FailUpload(context.Context, string, time.Time) error { return nil }
 func (*processingRepository) CreateGrant(context.Context, assets.Grant) (assets.Grant, error) {
 	return assets.Grant{}, nil
 }
@@ -111,7 +112,10 @@ type processingBlobs struct{ objects map[string][]byte }
 func (*processingBlobs) CreateUploadTarget(context.Context, string, int64, time.Time) (assets.UploadTarget, error) {
 	return assets.UploadTarget{}, nil
 }
-func (*processingBlobs) Inspect(context.Context, string) (assets.BlobProperties, error) {
+func (*processingBlobs) InspectProperties(context.Context, string) (assets.BlobMetadata, error) {
+	return assets.BlobMetadata{}, nil
+}
+func (*processingBlobs) Inspect(context.Context, string, string, int64) (assets.BlobProperties, error) {
 	return assets.BlobProperties{}, nil
 }
 func (b *processingBlobs) Open(_ context.Context, key string, _ assets.ByteRange, _ string) (assets.BlobDownload, error) {

@@ -72,6 +72,20 @@ func (s *Store) CompleteUpload(ctx context.Context, asset assets.Asset, session 
 		return err
 	}
 	defer tx.Rollback()
+	var assetStatus, sessionStatus string
+	err = tx.QueryRowContext(ctx, `SELECT a.upload_status,u.status FROM assets a JOIN upload_sessions u ON u.asset_id=a.id WHERE a.id=$1 FOR UPDATE OF a,u`, asset.ID).Scan(&assetStatus, &sessionStatus)
+	if errors.Is(err, sql.ErrNoRows) {
+		return assets.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if assetStatus == string(assets.UploadCompleted) && sessionStatus == string(assets.UploadCompleted) {
+		return nil
+	}
+	if assetStatus != string(assets.UploadCreated) || sessionStatus != string(assets.UploadCreated) {
+		return assets.ErrConflict
+	}
 	result, err := tx.ExecContext(ctx, `UPDATE assets SET detected_mime_type=$2,size_bytes=$3,checksum_sha256=$4,etag=$5,upload_status=$6,scan_status=$7,updated_at=$8 WHERE id=$1`, asset.ID, asset.DetectedMIMEType, asset.SizeBytes, asset.ChecksumSHA256, asset.ETag, asset.UploadStatus, asset.ScanStatus, asset.UpdatedAt)
 	if err != nil {
 		return err
@@ -79,9 +93,45 @@ func (s *Store) CompleteUpload(ctx context.Context, asset assets.Asset, session 
 	if affected, _ := result.RowsAffected(); affected != 1 {
 		return assets.ErrNotFound
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE upload_sessions SET status=$2,completed_at=$3 WHERE asset_id=$1`, asset.ID, session.Status, session.CompletedAt)
+	result, err = tx.ExecContext(ctx, `UPDATE upload_sessions SET status=$2,completed_at=$3 WHERE asset_id=$1`, asset.ID, session.Status, session.CompletedAt)
 	if err != nil {
 		return err
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		return assets.ErrNotFound
+	}
+	return tx.Commit()
+}
+
+func (s *Store) FailUpload(ctx context.Context, assetID string, now time.Time) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var assetStatus, sessionStatus string
+	err = tx.QueryRowContext(ctx, `SELECT a.upload_status,u.status FROM assets a JOIN upload_sessions u ON u.asset_id=a.id WHERE a.id=$1 FOR UPDATE OF a,u`, assetID).Scan(&assetStatus, &sessionStatus)
+	if errors.Is(err, sql.ErrNoRows) {
+		return assets.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if assetStatus == string(assets.UploadFailed) && sessionStatus == string(assets.UploadFailed) {
+		return nil
+	}
+	if assetStatus != string(assets.UploadCreated) || sessionStatus != string(assets.UploadCreated) {
+		return assets.ErrConflict
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE assets SET upload_status='failed',updated_at=$2 WHERE id=$1`, assetID, now); err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE upload_sessions SET status='failed' WHERE asset_id=$1`, assetID)
+	if err != nil {
+		return err
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		return assets.ErrConflict
 	}
 	return tx.Commit()
 }
@@ -210,12 +260,13 @@ func (s *Store) GetOperations(ctx context.Context, now time.Time) (assets.Operat
 		  COUNT(*) FILTER (WHERE scan_status='failed' AND deleted_at IS NULL),
 		  MIN(updated_at) FILTER (WHERE scan_status='pending' AND deleted_at IS NULL),
 		  COUNT(*) FILTER (
-		    WHERE purged_at IS NULL AND (
-		      deleted_at IS NOT NULL OR
-		      (upload_status='created' AND EXISTS (
-		        SELECT 1 FROM upload_sessions u WHERE u.asset_id=assets.id AND u.expires_at < $1
-		      )) OR
-		      (scan_status IN ('infected','failed') AND updated_at < $1 - interval '7 days')
+			    WHERE purged_at IS NULL AND (
+			      deleted_at IS NOT NULL OR
+			      (upload_status='created' AND EXISTS (
+			        SELECT 1 FROM upload_sessions u WHERE u.asset_id=assets.id AND u.expires_at < $1
+			      )) OR
+			      upload_status='failed' OR
+			      (scan_status IN ('infected','failed') AND updated_at < $1 - interval '7 days')
 		    )
 		  )
 		FROM assets`, now).Scan(&value.ScanPending, &value.ScanFailed, &oldest, &value.PurgePending)
@@ -239,10 +290,11 @@ func (s *Store) ClaimPurge(ctx context.Context, now time.Time, lease time.Durati
 		WHERE a.purged_at IS NULL
 		  AND (a.purge_next_attempt_at IS NULL OR a.purge_next_attempt_at <= $1)
 		  AND (a.purge_claimed_until IS NULL OR a.purge_claimed_until < $1)
-		  AND (
-		    a.deleted_at IS NOT NULL OR
-		    (a.upload_status='created' AND u.expires_at < $1) OR
-		    (a.scan_status IN ('infected','failed') AND a.updated_at < $1 - interval '7 days')
+			  AND (
+			    a.deleted_at IS NOT NULL OR
+			    (a.upload_status='created' AND u.expires_at < $1) OR
+			    a.upload_status='failed' OR
+			    (a.scan_status IN ('infected','failed') AND a.updated_at < $1 - interval '7 days')
 		  )
 		ORDER BY a.updated_at
 		FOR UPDATE OF a SKIP LOCKED
