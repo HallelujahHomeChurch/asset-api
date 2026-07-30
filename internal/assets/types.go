@@ -203,6 +203,7 @@ type BlobMetadata struct {
 type ByteRange struct {
 	Offset int64
 	Count  int64
+	Suffix int64
 }
 type BlobDownload struct {
 	Body         io.ReadCloser
@@ -214,11 +215,23 @@ type BlobDownload struct {
 	CacheControl string
 }
 
+type PublicDownloadMetadata struct {
+	Size         int64
+	ContentType  string
+	ETag         string
+	LastModified time.Time
+	CacheControl string
+	objectKey    string
+}
+
 type Operations struct {
-	ScanPending       int64     `json:"scanPending"`
-	ScanFailed        int64     `json:"scanFailed"`
-	OldestScanPending time.Time `json:"oldestScanPending,omitempty"`
-	PurgePending      int64     `json:"purgePending"`
+	ScanPending             int64     `json:"scanPending"`
+	ScanFailed              int64     `json:"scanFailed"`
+	OldestScanPending       time.Time `json:"oldestScanPending,omitempty"`
+	ProcessingPending       int64     `json:"processingPending"`
+	ProcessingFailed        int64     `json:"processingFailed"`
+	OldestProcessingPending time.Time `json:"oldestProcessingPending,omitempty"`
+	PurgePending            int64     `json:"purgePending"`
 }
 
 type Repository interface {

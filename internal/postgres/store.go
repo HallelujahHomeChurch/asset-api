@@ -254,12 +254,15 @@ func (s *Store) RequeueFailedScan(ctx context.Context, assetID, ownerService str
 
 func (s *Store) GetOperations(ctx context.Context, now time.Time) (assets.Operations, error) {
 	var value assets.Operations
-	var oldest sql.NullTime
+	var oldestScan, oldestProcessing sql.NullTime
 	err := s.db.QueryRowContext(ctx, `
 		SELECT
 		  COUNT(*) FILTER (WHERE scan_status='pending' AND deleted_at IS NULL AND purged_at IS NULL),
 		  COUNT(*) FILTER (WHERE scan_status='failed' AND deleted_at IS NULL AND purged_at IS NULL),
 		  MIN(updated_at) FILTER (WHERE scan_status='pending' AND deleted_at IS NULL AND purged_at IS NULL),
+		  COUNT(*) FILTER (WHERE upload_status='completed' AND scan_status='clean' AND processing_status='pending' AND deleted_at IS NULL AND purged_at IS NULL),
+		  COUNT(*) FILTER (WHERE upload_status='completed' AND scan_status='clean' AND processing_status='failed' AND deleted_at IS NULL AND purged_at IS NULL),
+		  MIN(updated_at) FILTER (WHERE upload_status='completed' AND scan_status='clean' AND processing_status='pending' AND deleted_at IS NULL AND purged_at IS NULL),
 		  COUNT(*) FILTER (
 			    WHERE purged_at IS NULL AND (
 			      deleted_at IS NOT NULL OR
@@ -271,9 +274,16 @@ func (s *Store) GetOperations(ctx context.Context, now time.Time) (assets.Operat
 			      (processing_status='failed' AND updated_at < $1 - interval '7 days')
 		    )
 		  )
-		FROM assets`, now).Scan(&value.ScanPending, &value.ScanFailed, &oldest, &value.PurgePending)
-	if oldest.Valid {
-		value.OldestScanPending = oldest.Time
+		FROM assets`, now).Scan(
+		&value.ScanPending, &value.ScanFailed, &oldestScan,
+		&value.ProcessingPending, &value.ProcessingFailed, &oldestProcessing,
+		&value.PurgePending,
+	)
+	if oldestScan.Valid {
+		value.OldestScanPending = oldestScan.Time
+	}
+	if oldestProcessing.Valid {
+		value.OldestProcessingPending = oldestProcessing.Time
 	}
 	return value, err
 }
@@ -365,6 +375,26 @@ func (s *Store) RetryPurge(ctx context.Context, assetID, details string, nextAtt
 		return assets.ErrNotFound
 	}
 	return nil
+}
+
+func (s *Store) DeleteExpiredPurge(ctx context.Context, before time.Time, limit int) (int64, error) {
+	if limit <= 0 {
+		return 0, assets.ErrInvalidInput
+	}
+	result, err := s.db.ExecContext(ctx, `
+		DELETE FROM assets
+		WHERE id IN (
+			SELECT id
+			FROM assets
+			WHERE purged_at < $1
+			ORDER BY purged_at,id
+			FOR UPDATE SKIP LOCKED
+			LIMIT $2
+		)`, before, limit)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 func uniqueStrings(values []string) []string {

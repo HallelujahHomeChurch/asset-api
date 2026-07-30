@@ -253,6 +253,71 @@ func TestRetentionForeignKeysCascadeAndIndexesExist(t *testing.T) {
 	}
 }
 
+func TestDeleteExpiredPurgeIsBoundedAndPreservesRecentOrActiveAssets(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	cutoff := now.Add(-180 * 24 * time.Hour)
+	insertAsset(t, db, "old-1", assets.UploadCompleted, assets.ScanClean, assets.ProcessingNotRequired, cutoff.Add(-2*time.Hour), cutoff.Add(-2*time.Hour))
+	insertAsset(t, db, "old-2", assets.UploadCompleted, assets.ScanClean, assets.ProcessingNotRequired, cutoff.Add(-time.Hour), cutoff.Add(-time.Hour))
+	insertAsset(t, db, "recent", assets.UploadCompleted, assets.ScanClean, assets.ProcessingNotRequired, cutoff, cutoff)
+	insertAsset(t, db, "active", assets.UploadCompleted, assets.ScanClean, assets.ProcessingNotRequired, cutoff.Add(-time.Hour), time.Time{})
+	for _, assetID := range []string{"old-1", "old-2"} {
+		if _, err := db.Exec(`INSERT INTO asset_grants(id,asset_id,subject_type,subject_id,permission,idempotency_key,created_at) VALUES($1,$2,'public','*','read',$1,$3)`, "grant-"+assetID, assetID, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	deleted, err := store.DeleteExpiredPurge(ctx, cutoff, 1)
+	if err != nil || deleted != 1 {
+		t.Fatalf("deleted=%d err=%v", deleted, err)
+	}
+	for _, id := range []string{"old-2", "recent", "active"} {
+		var count int
+		if err := db.QueryRow(`SELECT count(*) FROM assets WHERE id=$1`, id).Scan(&count); err != nil || count != 1 {
+			t.Fatalf("%s count=%d err=%v", id, count, err)
+		}
+	}
+	var oldAsset, oldGrant int
+	if err := db.QueryRow(`SELECT count(*) FROM assets WHERE id='old-1'`).Scan(&oldAsset); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT count(*) FROM asset_grants WHERE asset_id='old-1'`).Scan(&oldGrant); err != nil {
+		t.Fatal(err)
+	}
+	if oldAsset != 0 || oldGrant != 0 {
+		t.Fatalf("old asset=%d grant=%d", oldAsset, oldGrant)
+	}
+
+	var retentionIndex bool
+	if err := db.QueryRow(`SELECT EXISTS(SELECT 1 FROM pg_indexes WHERE schemaname=current_schema() AND indexname='assets_purged_retention_idx')`).Scan(&retentionIndex); err != nil {
+		t.Fatal(err)
+	}
+	if !retentionIndex {
+		t.Fatal("missing assets_purged_retention_idx")
+	}
+}
+
+func TestOperationsIncludesProcessingBacklog(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	oldest := now.Add(-time.Hour)
+	insertAsset(t, db, "processing-pending", assets.UploadCompleted, assets.ScanClean, assets.ProcessingPending, oldest, time.Time{})
+	insertAsset(t, db, "processing-failed", assets.UploadCompleted, assets.ScanClean, assets.ProcessingFailed, now, time.Time{})
+
+	operations, err := store.GetOperations(ctx, now)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if operations.ProcessingPending != 1 || operations.ProcessingFailed != 1 || !operations.OldestProcessingPending.Equal(oldest) {
+		t.Fatalf("operations=%+v", operations)
+	}
+}
+
 func TestPurgeIncludesAttemptSpecificDerivativeKeys(t *testing.T) {
 	db := integrationDB(t)
 	store := New(db)

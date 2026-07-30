@@ -217,39 +217,130 @@ func (h *Handler) publicDerivativeDownload(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *Handler) servePublicDownload(w http.ResponseWriter, r *http.Request, variant string) {
-	requested, partial, err := parseRange(r.Header.Get("Range"))
+	metadata, err := h.service.PublicMetadata(r.Context(), r.PathValue("assetID"), variant)
 	if err != nil {
-		writeError(w, http.StatusRequestedRangeNotSatisfiable, "AST_INVALID_RANGE", "invalid range")
+		handleError(w, err)
 		return
 	}
-	var download assets.BlobDownload
-	if variant == "" {
-		download, err = h.service.OpenPublic(r.Context(), r.PathValue("assetID"), requested)
-	} else {
-		download, err = h.service.OpenPublicVariant(r.Context(), r.PathValue("assetID"), variant, requested)
+	if matchesETag(r.Header.Get("If-None-Match"), metadata.ETag) {
+		setPublicHeaders(w, metadata, -1)
+		w.WriteHeader(http.StatusNotModified)
+		return
 	}
+	rangeValue := r.Header.Get("Range")
+	if rangeValue != "" && !matchesIfRange(r.Header.Get("If-Range"), metadata) {
+		rangeValue = ""
+	}
+	requested, partial, err := parseRange(rangeValue)
+	if err != nil {
+		writeUnsatisfiedRange(w, metadata.Size)
+		return
+	}
+	contentLength := metadata.Size
+	contentRange := ""
+	if partial {
+		requested, contentLength, err = resolveRange(requested, metadata.Size)
+		if err != nil {
+			writeUnsatisfiedRange(w, metadata.Size)
+			return
+		}
+		end := requested.Offset + contentLength - 1
+		contentRange = fmt.Sprintf("bytes %d-%d/%d", requested.Offset, end, metadata.Size)
+	}
+	if r.Method == http.MethodHead {
+		setPublicHeaders(w, metadata, contentLength)
+		if partial {
+			w.Header().Set("Content-Range", contentRange)
+			w.WriteHeader(http.StatusPartialContent)
+		}
+		return
+	}
+	download, err := h.service.OpenPublicMetadata(r.Context(), metadata, requested)
 	if err != nil {
 		handleError(w, err)
 		return
 	}
 	defer download.Body.Close()
-	w.Header().Set("Content-Type", download.ContentType)
-	w.Header().Set("Content-Length", strconv.FormatInt(download.Size, 10))
-	w.Header().Set("Accept-Ranges", "bytes")
-	w.Header().Set("Cache-Control", download.CacheControl)
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	if download.ETag != "" {
-		w.Header().Set("ETag", download.ETag)
-	}
-	if !download.LastModified.IsZero() {
-		w.Header().Set("Last-Modified", download.LastModified.UTC().Format(http.TimeFormat))
-	}
+	setPublicHeaders(w, metadata, contentLength)
 	if partial {
-		end := requested.Offset + download.Size - 1
-		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", requested.Offset, end, download.TotalSize))
+		w.Header().Set("Content-Range", contentRange)
 		w.WriteHeader(http.StatusPartialContent)
 	}
 	_, _ = io.Copy(w, download.Body)
+}
+
+func setPublicHeaders(w http.ResponseWriter, metadata assets.PublicDownloadMetadata, contentLength int64) {
+	w.Header().Set("Content-Type", metadata.ContentType)
+	w.Header().Set("Accept-Ranges", "bytes")
+	w.Header().Set("Cache-Control", metadata.CacheControl)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if contentLength >= 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(contentLength, 10))
+	}
+	if metadata.ETag != "" {
+		w.Header().Set("ETag", metadata.ETag)
+	}
+	if !metadata.LastModified.IsZero() {
+		w.Header().Set("Last-Modified", metadata.LastModified.UTC().Format(http.TimeFormat))
+	}
+}
+
+func writeUnsatisfiedRange(w http.ResponseWriter, total int64) {
+	w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", total))
+	writeError(w, http.StatusRequestedRangeNotSatisfiable, "AST_INVALID_RANGE", "invalid range")
+}
+
+func resolveRange(requested assets.ByteRange, total int64) (assets.ByteRange, int64, error) {
+	if requested.Suffix > 0 {
+		if total <= 0 {
+			return assets.ByteRange{}, 0, fmt.Errorf("suffix range for empty content")
+		}
+		count := min(requested.Suffix, total)
+		return assets.ByteRange{Offset: total - count, Count: count}, count, nil
+	}
+	if requested.Offset >= total {
+		return assets.ByteRange{}, 0, fmt.Errorf("range starts beyond content")
+	}
+	count := requested.Count
+	remaining := total - requested.Offset
+	if count == 0 || count > remaining {
+		count = remaining
+	}
+	requested.Count = count
+	return requested, count, nil
+}
+
+func matchesETag(value, current string) bool {
+	if value == "" || current == "" {
+		return false
+	}
+	current = strings.TrimPrefix(strings.TrimSpace(current), "W/")
+	for _, candidate := range strings.Split(value, ",") {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "*" || strings.TrimPrefix(candidate, "W/") == current {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesIfRange(value string, metadata assets.PublicDownloadMetadata) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return true
+	}
+	if strings.HasPrefix(value, "W/") {
+		return false
+	}
+	current := strings.TrimSpace(metadata.ETag)
+	if strings.HasPrefix(value, `"`) {
+		return !strings.HasPrefix(current, "W/") && value == current
+	}
+	date, err := http.ParseTime(value)
+	if err != nil || metadata.LastModified.IsZero() {
+		return false
+	}
+	return !metadata.LastModified.UTC().Truncate(time.Second).After(date.UTC())
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, destination any) bool {
@@ -291,8 +382,15 @@ func parseRange(value string) (assets.ByteRange, bool, error) {
 		return assets.ByteRange{}, false, fmt.Errorf("invalid range")
 	}
 	parts := strings.Split(strings.TrimPrefix(value, "bytes="), "-")
-	if len(parts) != 2 || parts[0] == "" {
+	if len(parts) != 2 {
 		return assets.ByteRange{}, false, fmt.Errorf("invalid range")
+	}
+	if parts[0] == "" {
+		suffix, err := strconv.ParseInt(parts[1], 10, 64)
+		if err != nil || suffix <= 0 {
+			return assets.ByteRange{}, false, fmt.Errorf("invalid range")
+		}
+		return assets.ByteRange{Suffix: suffix}, true, nil
 	}
 	start, err := strconv.ParseInt(parts[0], 10, 64)
 	if err != nil || start < 0 {
@@ -305,6 +403,9 @@ func parseRange(value string) (assets.ByteRange, bool, error) {
 			return assets.ByteRange{}, false, fmt.Errorf("invalid range")
 		}
 		count = end - start + 1
+		if count <= 0 {
+			return assets.ByteRange{}, false, fmt.Errorf("invalid range")
+		}
 	}
 	return assets.ByteRange{Offset: start, Count: count}, true, nil
 }

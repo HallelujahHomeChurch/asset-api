@@ -304,55 +304,70 @@ func (s *Service) ApplyScanResult(ctx context.Context, result ScanResult) error 
 }
 
 func (s *Service) OpenPublic(ctx context.Context, assetID string, byteRange ByteRange) (BlobDownload, error) {
-	return s.openPublic(ctx, assetID, "", byteRange)
+	metadata, err := s.PublicMetadata(ctx, assetID, "")
+	if err != nil {
+		return BlobDownload{}, err
+	}
+	return s.OpenPublicMetadata(ctx, metadata, byteRange)
 }
 
 func (s *Service) OpenPublicVariant(ctx context.Context, assetID, variant string, byteRange ByteRange) (BlobDownload, error) {
-	if variant != "small" && variant != "medium" && variant != "large" {
-		return BlobDownload{}, ErrNotFound
+	metadata, err := s.PublicMetadata(ctx, assetID, variant)
+	if err != nil {
+		return BlobDownload{}, err
 	}
-	return s.openPublic(ctx, assetID, variant, byteRange)
+	return s.OpenPublicMetadata(ctx, metadata, byteRange)
 }
 
-func (s *Service) openPublic(ctx context.Context, assetID, variant string, byteRange ByteRange) (BlobDownload, error) {
+func (s *Service) PublicMetadata(ctx context.Context, assetID, variant string) (PublicDownloadMetadata, error) {
+	if variant != "" && variant != "small" && variant != "medium" && variant != "large" {
+		return PublicDownloadMetadata{}, ErrNotFound
+	}
 	asset, err := s.repository.GetAsset(ctx, assetID)
 	if err != nil {
-		return BlobDownload{}, ErrNotFound
+		return PublicDownloadMetadata{}, ErrNotFound
 	}
 	if asset.Visibility != VisibilityPublic || asset.UploadStatus != UploadCompleted || asset.ScanStatus != ScanClean || !asset.DeletedAt.IsZero() || (asset.ProcessingStatus != ProcessingReady && asset.ProcessingStatus != ProcessingNotRequired) {
-		return BlobDownload{}, ErrNotFound
+		return PublicDownloadMetadata{}, ErrNotFound
 	}
 	allowed, err := s.repository.HasActiveGrant(ctx, assetID, SubjectPublic, "*", PermissionRead, s.now().UTC())
 	if err != nil || !allowed {
-		return BlobDownload{}, ErrNotFound
+		return PublicDownloadMetadata{}, ErrNotFound
 	}
-	objectKey := asset.ObjectKey
-	contentType := asset.DetectedMIMEType
-	totalSize := asset.SizeBytes
-	expectedETag := asset.ETag
+	metadata := PublicDownloadMetadata{
+		Size: asset.SizeBytes, ContentType: asset.DetectedMIMEType, ETag: asset.ETag,
+		LastModified: asset.UpdatedAt, objectKey: asset.ObjectKey,
+	}
 	if variant != "" {
 		repository, ok := s.repository.(interface {
 			GetDerivative(context.Context, string, string) (Derivative, error)
 		})
 		if !ok {
-			return BlobDownload{}, ErrNotFound
+			return PublicDownloadMetadata{}, ErrNotFound
 		}
 		derivative, err := repository.GetDerivative(ctx, assetID, variant)
 		if err != nil {
-			return BlobDownload{}, ErrNotFound
+			return PublicDownloadMetadata{}, ErrNotFound
 		}
-		objectKey, contentType, totalSize = derivative.ObjectKey, derivative.MIMEType, derivative.SizeBytes
-		expectedETag = derivative.ETag
+		metadata.Size, metadata.ContentType, metadata.ETag = derivative.SizeBytes, derivative.MIMEType, derivative.ETag
+		metadata.LastModified, metadata.objectKey = derivative.CreatedAt, derivative.ObjectKey
 	}
-	download, err := s.blobs.Open(ctx, objectKey, byteRange, expectedETag)
+	if policy, ok := PolicyFor(asset.Namespace); ok {
+		metadata.CacheControl = policy.CacheControl
+	}
+	return metadata, nil
+}
+
+func (s *Service) OpenPublicMetadata(ctx context.Context, metadata PublicDownloadMetadata, byteRange ByteRange) (BlobDownload, error) {
+	download, err := s.blobs.Open(ctx, metadata.objectKey, byteRange, metadata.ETag)
 	if err != nil {
 		return BlobDownload{}, err
 	}
-	download.ContentType = contentType
-	download.TotalSize = totalSize
-	if policy, ok := PolicyFor(asset.Namespace); ok {
-		download.CacheControl = policy.CacheControl
-	}
+	download.ContentType = metadata.ContentType
+	download.TotalSize = metadata.Size
+	download.ETag = metadata.ETag
+	download.LastModified = metadata.LastModified
+	download.CacheControl = metadata.CacheControl
 	return download, nil
 }
 
