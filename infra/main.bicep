@@ -69,6 +69,10 @@ resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01'
   parent: storageAccount
   name: 'default'
   properties: {
+    deleteRetentionPolicy: {
+      enabled: false
+      allowPermanentDelete: false
+    }
     cors: {
       corsRules: [
         {
@@ -98,6 +102,8 @@ resource assetContainer 'Microsoft.Storage/storageAccounts/blobServices/containe
   name: 'assets'
   properties: {
     publicAccess: 'None'
+    defaultEncryptionScope: '$account-encryption-key'
+    denyEncryptionScopeOverride: false
   }
 }
 
@@ -107,6 +113,15 @@ resource defenderForStorageDisabled 'Microsoft.Security/defenderForStorageSettin
   properties: {
     isEnabled: false
     overrideSubscriptionLevelSettings: true
+    malwareScanning: {
+      onUpload: {
+        isEnabled: false
+        capGBPerMonth: -1
+      }
+    }
+    sensitiveDataDiscovery: {
+      isEnabled: false
+    }
   }
 }
 
@@ -121,8 +136,10 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
   }
   properties: {
     managedEnvironmentId: environment.id
+    workloadProfileName: 'Consumption'
     configuration: {
       activeRevisionsMode: 'Single'
+      maxInactiveRevisions: 100
       dapr: {
         enabled: true
         appId: 'asset-api'

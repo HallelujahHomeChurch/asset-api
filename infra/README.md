@@ -48,6 +48,12 @@ The live PostgreSQL server allows 50 connections. Production uses
 `DB_MAX_OPEN_CONNS=4`; at three replicas asset-api consumes at most 12 and
 leaves 38 for other services, migrations, and operations.
 
+The template also preserves the live Container App inactive-revision limit,
+Consumption workload profile, disabled Blob soft-delete policy, default
+encryption scope, and the complete disabled Defender settings. Review the full
+`what-if` before deployment; only the intended application and pool changes
+should remain.
+
 ## Storage hardening gate
 
 The current storage account may have consumers outside asset-api. Audit them
@@ -60,3 +66,5 @@ az storage account update -g alive -n alivestoragebb99ee6e --allow-shared-key-ac
 
 Do not change the storage firewall to default-deny until a private endpoint or
 equivalent ACA subnet path has been deployed and verified.
+The live account currently reports `minimumTlsVersion=TLS1_0`; raise it to
+`TLS1_2` only after the shared-account consumer audit confirms compatibility.
