@@ -10,6 +10,7 @@ on:
       - go.sum
       - cmd/**
       - internal/**
+      - infra/**
   workflow_dispatch:
 
 permissions:
@@ -26,11 +27,13 @@ env:
   IMAGE_REPOSITORY: alive/asset-api
   RESOURCE_GROUP: alive
   CONTAINER_APP_NAME: asset-api
+  API_GATEWAY_APP_NAME: api-gateway
 
 jobs:
   release:
     name: Build and release
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -51,15 +54,28 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       - name: Install Container Apps extension
         run: az extension add --name containerapp --upgrade --yes
+      - name: Capture rollback revision
+        run: |
+          revision="$(az containerapp show -g "$RESOURCE_GROUP" -n "$CONTAINER_APP_NAME" \
+            --query properties.latestReadyRevisionName -o tsv --only-show-errors)"
+          test -n "$revision"
+          image="$(az containerapp revision show -g "$RESOURCE_GROUP" -n "$CONTAINER_APP_NAME" \
+            --revision "$revision" \
+            --query properties.template.containers[0].image -o tsv --only-show-errors)"
+          test -n "$image"
+          {
+            echo "PREVIOUS_READY_REVISION=$revision"
+            echo "PREVIOUS_IMAGE=$image"
+          } >> "$GITHUB_ENV"
       - name: Build and push image to ACR
         run: |
           az acr build \
             --registry "${ACR_NAME}" \
             --image "${IMAGE_REPOSITORY}:${IMAGE_TAG}" \
-            --image "${IMAGE_REPOSITORY}:latest" \
             --file Dockerfile \
             .
-      - name: Deploy image and wait for ready revision
+      - name: Deploy image
+        id: deploy_runtime
         run: |
           image_ref="${ACR_LOGIN_SERVER}/${IMAGE_REPOSITORY}:${IMAGE_TAG}"
           az containerapp update \
@@ -68,7 +84,9 @@ jobs:
             --image "${image_ref}" \
             --only-show-errors \
             --output none
-
+      - name: Wait for ready revision
+        run: |
+          image_ref="${ACR_LOGIN_SERVER}/${IMAGE_REPOSITORY}:${IMAGE_TAG}"
           for attempt in {1..30}; do
             state="$(az containerapp show \
               --resource-group "${RESOURCE_GROUP}" \
@@ -83,4 +101,39 @@ jobs:
             sleep 10
           done
           echo "Latest revision did not become ready" >&2
+          exit 1
+      - name: Verify Dapr readiness through API gateway
+        run: |
+          output="$(timeout 60s script -q -e -c \
+            "az containerapp exec -g \"$RESOURCE_GROUP\" -n \"$API_GATEWAY_APP_NAME\" --command \"/usr/bin/wget -S -O - http://localhost:3500/v1.0/invoke/asset-api/method/ready\"" \
+            /dev/null 2>&1)"
+          output="${output//$'\r'/}"
+          printf '%s\n' "$output"
+          grep -Eq 'HTTP/1\.[01][[:space:]]+200' <<< "$output"
+          grep -Eq '"status"[[:space:]]*:[[:space:]]*"ready"' <<< "$output"
+      - name: Roll back failed runtime
+        if: ${{ failure() && steps.deploy_runtime.outcome != 'skipped' }}
+        run: |
+          az containerapp revision copy \
+            -g "$RESOURCE_GROUP" \
+            -n "$CONTAINER_APP_NAME" \
+            --from-revision "$PREVIOUS_READY_REVISION" \
+            --revision-suffix "rollback-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --only-show-errors \
+            --output none
+
+          for attempt in {1..60}; do
+            latest="$(az containerapp show -g "$RESOURCE_GROUP" -n "$CONTAINER_APP_NAME" \
+              --query properties.latestRevisionName -o tsv --only-show-errors)"
+            ready="$(az containerapp show -g "$RESOURCE_GROUP" -n "$CONTAINER_APP_NAME" \
+              --query properties.latestReadyRevisionName -o tsv --only-show-errors)"
+            if [[ -n "$latest" && "$latest" == "$ready" ]]; then
+              image="$(az containerapp revision show -g "$RESOURCE_GROUP" -n "$CONTAINER_APP_NAME" \
+                --revision "$ready" \
+                --query properties.template.containers[0].image -o tsv --only-show-errors)"
+              [[ "$image" == "$PREVIOUS_IMAGE" ]] && exit 0
+            fi
+            sleep 10
+          done
+          echo "Asset API rollback did not become ready" >&2
           exit 1
