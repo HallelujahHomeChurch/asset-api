@@ -99,8 +99,8 @@ jobs:
           migration_vault="$(az keyvault show -g "$RESOURCE_GROUP" -n alive-asset-migrate-kv --query id -o tsv --only-show-errors)"
           [[ "$(az role assignment list --scope "$runtime_vault" --assignee-object-id "$runtime_principal" --query "[?roleDefinitionName=='Key Vault Secrets User'] | length(@)" -o tsv --only-show-errors)" == "1" ]]
           [[ "$(az role assignment list --scope "$migration_vault" --assignee-object-id "$migration_principal" --query "[?roleDefinitionName=='Key Vault Secrets User'] | length(@)" -o tsv --only-show-errors)" == "1" ]]
-          az keyvault secret show --vault-name alive-asset-runtime-kv --name database-url --query id -o tsv --only-show-errors >/dev/null
-          az keyvault secret show --vault-name alive-asset-migrate-kv --name database-url --query id -o tsv --only-show-errors >/dev/null
+          [[ "$(az resource show --ids "$runtime_vault/secrets/database-url" --api-version 2024-11-01 --query properties.attributes.enabled -o tsv --only-show-errors)" == "true" ]]
+          [[ "$(az resource show --ids "$migration_vault/secrets/database-url" --api-version 2024-11-01 --query properties.attributes.enabled -o tsv --only-show-errors)" == "true" ]]
       - name: Capture rollback revision
         run: |
           resolve_image_ref() {

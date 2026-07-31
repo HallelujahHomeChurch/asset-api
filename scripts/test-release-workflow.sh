@@ -11,6 +11,11 @@ if grep -q '^  push:' "$workflow"; then
 fi
 grep -q 'environment: production' "$workflow"
 grep -q 'Verify isolated runtime prerequisites' "$workflow"
+grep -q 'az resource show --ids' "$workflow"
+if grep -q 'az keyvault secret show' "$workflow"; then
+  echo 'release preflight must not read secret values' >&2
+  exit 1
+fi
 grep -q 'IMAGE_REF=.*@${digest}' "$workflow"
 grep -q 'az deployment group what-if' "$workflow"
 grep -q './scripts/check-what-if.sh what-if.json' "$workflow"
