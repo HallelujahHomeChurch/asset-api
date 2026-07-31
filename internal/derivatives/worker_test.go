@@ -223,7 +223,7 @@ func (*processingRepository) ApplyScanResult(context.Context, assets.ScanResult,
 func (*processingRepository) ClaimPendingScan(context.Context, time.Time, time.Duration) (assets.Asset, bool, error) {
 	return assets.Asset{}, false, nil
 }
-func (*processingRepository) ScheduleScanRetry(context.Context, string, string, time.Time, time.Time) error {
+func (*processingRepository) ScheduleScanRetry(context.Context, string, int, string, time.Time, time.Time) error {
 	return nil
 }
 func (*processingRepository) GetDerivative(context.Context, string, string) (assets.Derivative, error) {

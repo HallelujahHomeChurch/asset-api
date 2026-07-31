@@ -166,11 +166,12 @@ type CreateGrantInput struct {
 }
 
 type ScanResult struct {
-	EventID string     `json:"eventId"`
-	AssetID string     `json:"assetId"`
-	Status  ScanStatus `json:"status"`
-	Details string     `json:"details,omitempty"`
-	ETag    string     `json:"etag,omitempty"`
+	EventID         string     `json:"eventId"`
+	AssetID         string     `json:"assetId"`
+	Status          ScanStatus `json:"status"`
+	Details         string     `json:"details,omitempty"`
+	ETag            string     `json:"etag,omitempty"`
+	ExpectedAttempt int        `json:"-"`
 }
 
 type UploadTarget struct {
@@ -245,7 +246,7 @@ type Repository interface {
 	HasActiveGrant(context.Context, string, SubjectType, string, Permission, time.Time) (bool, error)
 	ApplyScanResult(context.Context, ScanResult, time.Time) (bool, error)
 	ClaimPendingScan(context.Context, time.Time, time.Duration) (Asset, bool, error)
-	ScheduleScanRetry(context.Context, string, string, time.Time, time.Time) error
+	ScheduleScanRetry(context.Context, string, int, string, time.Time, time.Time) error
 }
 
 type BlobStore interface {

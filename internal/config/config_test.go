@@ -24,6 +24,7 @@ func TestLoadEnablesDevelopmentCallerHeaderExplicitly(t *testing.T) {
 
 func TestLoadUsesDatabasePoolDefaults(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://test")
+	t.Setenv("ASSET_ALLOW_DEV_CALLER_HEADER", "true")
 	t.Setenv("DB_MAX_OPEN_CONNS", "")
 	t.Setenv("DB_MAX_IDLE_CONNS", "")
 	t.Setenv("DB_CONN_MAX_LIFETIME", "")
@@ -45,6 +46,7 @@ func TestLoadUsesDatabasePoolDefaults(t *testing.T) {
 
 func TestLoadReadsDatabasePoolSettings(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://test")
+	t.Setenv("ASSET_ALLOW_DEV_CALLER_HEADER", "true")
 	t.Setenv("DB_MAX_OPEN_CONNS", "12")
 	t.Setenv("DB_MAX_IDLE_CONNS", "6")
 	t.Setenv("DB_CONN_MAX_LIFETIME", "45m")
@@ -74,6 +76,7 @@ func TestLoadRejectsInvalidDatabasePoolSettings(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv("DATABASE_URL", "postgres://test")
+			t.Setenv("ASSET_ALLOW_DEV_CALLER_HEADER", "true")
 			t.Setenv(tt.key, tt.value)
 
 			_, err := Load()
@@ -81,5 +84,21 @@ func TestLoadRejectsInvalidDatabasePoolSettings(t *testing.T) {
 				t.Fatalf("Load() error = %v, want error containing %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestLoadRequiresAppAPITokenOutsideDevelopment(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://test")
+	t.Setenv("ASSET_ALLOW_DEV_CALLER_HEADER", "false")
+	t.Setenv("APP_API_TOKEN", "")
+
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "APP_API_TOKEN") {
+		t.Fatalf("Load() error = %v, want APP_API_TOKEN error", err)
+	}
+
+	t.Setenv("APP_API_TOKEN", "secret")
+	if _, err := Load(); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -61,22 +61,22 @@ func (w *Worker) processNext(ctx context.Context) (bool, error) {
 			scanErr = closeErr
 		}
 		if errors.Is(scanErr, ErrInfected) {
-			result := assets.ScanResult{EventID: scanEventID(asset), AssetID: asset.ID, Status: assets.ScanInfected, Details: name, ETag: asset.ETag}
+			result := assets.ScanResult{EventID: scanEventID(asset), AssetID: asset.ID, Status: assets.ScanInfected, Details: name, ETag: asset.ETag, ExpectedAttempt: asset.ScanAttempts}
 			return true, w.repositoryResult(ctx, result)
 		}
 		err = scanErr
 	}
 	if err == nil {
-		result := assets.ScanResult{EventID: scanEventID(asset), AssetID: asset.ID, Status: assets.ScanClean, ETag: asset.ETag}
+		result := assets.ScanResult{EventID: scanEventID(asset), AssetID: asset.ID, Status: assets.ScanClean, ETag: asset.ETag, ExpectedAttempt: asset.ScanAttempts}
 		return true, w.repositoryResult(ctx, result)
 	}
 	details := safeDetails(err)
 	if asset.ScanAttempts >= w.maxRetries {
-		result := assets.ScanResult{EventID: scanEventID(asset), AssetID: asset.ID, Status: assets.ScanFailed, Details: details, ETag: asset.ETag}
+		result := assets.ScanResult{EventID: scanEventID(asset), AssetID: asset.ID, Status: assets.ScanFailed, Details: details, ETag: asset.ETag, ExpectedAttempt: asset.ScanAttempts}
 		return true, w.repositoryResult(ctx, result)
 	}
 	backoff := time.Duration(1<<min(asset.ScanAttempts-1, 6)) * 15 * time.Second
-	return true, w.repository.ScheduleScanRetry(ctx, asset.ID, details, now.Add(backoff), now)
+	return true, w.repository.ScheduleScanRetry(ctx, asset.ID, asset.ScanAttempts, details, now.Add(backoff), now)
 }
 
 func (w *Worker) repositoryResult(ctx context.Context, result assets.ScanResult) error {

@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -20,11 +21,12 @@ type Handler struct {
 	db                   *sql.DB
 	allowedCallers       map[string]bool
 	allowDevCallerHeader bool
+	appAPIToken          string
 	localUpload          http.HandlerFunc
 }
 
-func New(service *assets.Service, db *sql.DB, allowedCallers map[string]bool, allowDevCallerHeader bool, localUpload http.HandlerFunc) *Handler {
-	return &Handler{service: service, db: db, allowedCallers: allowedCallers, allowDevCallerHeader: allowDevCallerHeader, localUpload: localUpload}
+func New(service *assets.Service, db *sql.DB, allowedCallers map[string]bool, allowDevCallerHeader bool, appAPIToken string, localUpload http.HandlerFunc) *Handler {
+	return &Handler{service: service, db: db, allowedCallers: allowedCallers, allowDevCallerHeader: allowDevCallerHeader, appAPIToken: appAPIToken, localUpload: localUpload}
 }
 
 func (h *Handler) Routes() http.Handler {
@@ -69,6 +71,10 @@ func localUploadCORS(next http.Handler) http.Handler {
 
 func (h *Handler) internal(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !h.allowDevCallerHeader && !sameToken(r.Header.Get("dapr-api-token"), h.appAPIToken) {
+			writeError(w, http.StatusForbidden, "AST_FORBIDDEN", "invalid app token")
+			return
+		}
 		caller := callerFromRequest(r, h.allowDevCallerHeader)
 		if !h.allowedCallers[caller] {
 			writeError(w, http.StatusForbidden, "AST_FORBIDDEN", "caller is not allowed")
@@ -76,6 +82,10 @@ func (h *Handler) internal(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func sameToken(got, want string) bool {
+	return got != "" && want != "" && subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
 func (h *Handler) ready(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)

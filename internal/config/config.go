@@ -28,6 +28,7 @@ type Config struct {
 	DBConnMaxLifetime    time.Duration
 	AllowedCallers       map[string]bool
 	AllowDevCallerHeader bool
+	AppAPIToken          string
 	ShutdownTimeout      time.Duration
 }
 
@@ -52,6 +53,7 @@ func Load() (Config, error) {
 		DBConnMaxLifetime:    30 * time.Minute,
 		AllowedCallers:       splitSet(value("ASSET_ALLOWED_CALLERS", "account-api,hhc-web-api,hhc-line-function-bot")),
 		AllowDevCallerHeader: strings.EqualFold(value("ASSET_ALLOW_DEV_CALLER_HEADER", "false"), "true"),
+		AppAPIToken:          os.Getenv("APP_API_TOKEN"),
 		ShutdownTimeout:      10 * time.Second,
 	}
 	if cfg.DatabaseURL == "" {
@@ -62,6 +64,9 @@ func Load() (Config, error) {
 	}
 	if cfg.StorageBackend == "azure" && cfg.AzureAccountURL == "" {
 		return Config{}, fmt.Errorf("ASSET_AZURE_ACCOUNT_URL is required for azure storage")
+	}
+	if !cfg.AllowDevCallerHeader && cfg.AppAPIToken == "" {
+		return Config{}, fmt.Errorf("APP_API_TOKEN is required when development caller headers are disabled")
 	}
 	if err := positiveInt("CLAMAV_PORT", &cfg.ClamAVPort); err != nil {
 		return Config{}, err

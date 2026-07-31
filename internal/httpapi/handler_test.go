@@ -60,6 +60,56 @@ func TestProductionCallerRejectsDevelopmentHeader(t *testing.T) {
 	}
 }
 
+func TestInternalRequiresAppTokenInProduction(t *testing.T) {
+	handler := (&Handler{
+		allowedCallers: map[string]bool{"account-api": true},
+		appAPIToken:    "secret",
+	}).internal(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	for _, test := range []struct {
+		name  string
+		token string
+		want  int
+	}{
+		{name: "missing", want: http.StatusForbidden},
+		{name: "wrong", token: "wrong", want: http.StatusForbidden},
+		{name: "valid", token: "secret", want: http.StatusNoContent},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/priv/assets/upload-sessions", nil)
+			request.Header.Set("Dapr-Caller-App-Id", "account-api")
+			request.Header.Set("dapr-api-token", test.token)
+			response := httptest.NewRecorder()
+
+			handler.ServeHTTP(response, request)
+
+			if response.Code != test.want {
+				t.Fatalf("status = %d, want %d", response.Code, test.want)
+			}
+		})
+	}
+}
+
+func TestInternalAllowsExplicitDevelopmentCaller(t *testing.T) {
+	handler := (&Handler{
+		allowedCallers:       map[string]bool{"account-api": true},
+		allowDevCallerHeader: true,
+	}).internal(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	request := httptest.NewRequest(http.MethodPost, "/priv/assets/upload-sessions", nil)
+	request.Header.Set("X-Internal-Caller-App-Id", "account-api")
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusNoContent)
+	}
+}
+
 func TestLocalUploadCORSAllowsAdminDevelopmentOrigin(t *testing.T) {
 	nextCalled := false
 	handler := localUploadCORS(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -251,7 +301,7 @@ func publicDownloadHandlerWithOriginal(t *testing.T, original []byte) (http.Hand
 	}
 	blobs := &downloadBlobStore{objects: map[string][]byte{"original": original, "small": []byte("xyz")}}
 	service := assets.NewService(repository, blobs, "https://www.alive.org.tw/api/assets", func() time.Time { return modified })
-	return New(service, nil, nil, false, nil).Routes(), blobs
+	return New(service, nil, nil, false, "", nil).Routes(), blobs
 }
 
 type downloadRepository struct {

@@ -202,7 +202,7 @@ func TestPurgedAssetsAreExcludedFromStateTransitions(t *testing.T) {
 	if err := store.FailUpload(ctx, "purged", now); !errors.Is(err, assets.ErrNotFound) {
 		t.Fatalf("FailUpload err=%v", err)
 	}
-	if err := store.ScheduleScanRetry(ctx, "purged", "temporary", now.Add(time.Minute), now); !errors.Is(err, assets.ErrNotFound) {
+	if err := store.ScheduleScanRetry(ctx, "purged", 1, "temporary", now.Add(time.Minute), now); !errors.Is(err, assets.ErrNotFound) {
 		t.Fatalf("ScheduleScanRetry err=%v", err)
 	}
 	if _, ok, err := store.ClaimPendingScan(ctx, now, time.Minute); err != nil || ok {
@@ -213,6 +213,44 @@ func TestPurgedAssetsAreExcludedFromStateTransitions(t *testing.T) {
 	}
 	if err := store.RequeueFailedScan(ctx, "purged", "test", now); !errors.Is(err, assets.ErrInvalidInput) {
 		t.Fatalf("RequeueFailedScan err=%v", err)
+	}
+}
+
+func TestScanLeaseRejectsStaleWorkerWrites(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	insertAsset(t, db, "scan-fence", assets.UploadCompleted, assets.ScanPending, assets.ProcessingPending, now, time.Time{})
+
+	claimed, ok, err := store.ClaimPendingScan(ctx, now, time.Minute)
+	if err != nil || !ok || claimed.ScanAttempts != 1 {
+		t.Fatalf("claim: asset=%+v ok=%v err=%v", claimed, ok, err)
+	}
+	if _, err := db.Exec(`UPDATE assets SET scan_attempts=2,scan_claimed_until=$2 WHERE id=$1`, claimed.ID, now.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	result := assets.ScanResult{
+		EventID:         "stale-scan",
+		AssetID:         claimed.ID,
+		Status:          assets.ScanClean,
+		ETag:            claimed.ETag,
+		ExpectedAttempt: claimed.ScanAttempts,
+	}
+	if _, err := store.ApplyScanResult(ctx, result, now); !errors.Is(err, assets.ErrConflict) {
+		t.Fatalf("ApplyScanResult err=%v", err)
+	}
+	if err := store.ScheduleScanRetry(ctx, claimed.ID, claimed.ScanAttempts, "stale", now.Add(time.Minute), now); !errors.Is(err, assets.ErrConflict) {
+		t.Fatalf("ScheduleScanRetry err=%v", err)
+	}
+
+	current, err := store.GetAsset(ctx, claimed.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.ScanStatus != assets.ScanPending || current.ScanAttempts != 2 {
+		t.Fatalf("current asset=%+v", current)
 	}
 }
 

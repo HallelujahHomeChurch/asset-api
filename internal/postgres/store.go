@@ -177,7 +177,7 @@ func (s *Store) ApplyScanResult(ctx context.Context, result assets.ScanResult, n
 	if affected == 0 {
 		return false, nil
 	}
-	updated, err := tx.ExecContext(ctx, `UPDATE assets SET scan_status=$2,scan_details=$3,scan_claimed_until=NULL,updated_at=$5 WHERE id=$1 AND scan_status='pending' AND etag=$4 AND deleted_at IS NULL AND purged_at IS NULL`, result.AssetID, result.Status, result.Details, result.ETag, now)
+	updated, err := tx.ExecContext(ctx, `UPDATE assets SET scan_status=$2,scan_details=$3,scan_claimed_until=NULL,updated_at=$6 WHERE id=$1 AND scan_status='pending' AND etag=$4 AND scan_attempts=$5 AND deleted_at IS NULL AND purged_at IS NULL`, result.AssetID, result.Status, result.Details, result.ETag, result.ExpectedAttempt, now)
 	if err != nil {
 		return false, err
 	}
@@ -219,12 +219,19 @@ func (s *Store) ClaimPendingScan(ctx context.Context, now time.Time, lease time.
 	return asset, err == nil, err
 }
 
-func (s *Store) ScheduleScanRetry(ctx context.Context, assetID, details string, nextAttempt, now time.Time) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE assets SET scan_details=$2,scan_next_attempt_at=$3,scan_claimed_until=NULL,updated_at=$4 WHERE id=$1 AND scan_status='pending' AND deleted_at IS NULL AND purged_at IS NULL`, assetID, details, nextAttempt, now)
+func (s *Store) ScheduleScanRetry(ctx context.Context, assetID string, expectedAttempt int, details string, nextAttempt, now time.Time) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE assets SET scan_details=$3,scan_next_attempt_at=$4,scan_claimed_until=NULL,updated_at=$5 WHERE id=$1 AND scan_attempts=$2 AND scan_status='pending' AND deleted_at IS NULL AND purged_at IS NULL`, assetID, expectedAttempt, details, nextAttempt, now)
 	if err != nil {
 		return err
 	}
 	if count, _ := result.RowsAffected(); count != 1 {
+		var exists bool
+		if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM assets WHERE id=$1 AND deleted_at IS NULL AND purged_at IS NULL)`, assetID).Scan(&exists); err != nil {
+			return err
+		}
+		if exists {
+			return assets.ErrConflict
+		}
 		return assets.ErrNotFound
 	}
 	return nil

@@ -680,7 +680,7 @@ func (r *memoryRepository) ClaimPendingScan(_ context.Context, _ time.Time, _ ti
 	}
 	return Asset{}, false, nil
 }
-func (r *memoryRepository) ScheduleScanRetry(_ context.Context, assetID, details string, _, now time.Time) error {
+func (r *memoryRepository) ScheduleScanRetry(_ context.Context, assetID string, _ int, details string, _, now time.Time) error {
 	asset, ok := r.assets[assetID]
 	if !ok {
 		return ErrNotFound
