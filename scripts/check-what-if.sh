@@ -6,7 +6,17 @@ file="${1:?what-if JSON is required}"
 jq -e '
   ([.changes[] | select(.changeType == "Delete" or .changeType == "Unsupported")] | length == 0)
   and
-  ([.changes[] | .. | objects | select(.propertyChangeType? == "Delete")] | length == 0)
+  ([.changes[]
+    | .resourceId as $resourceId
+    | ..
+    | objects
+    | select(.propertyChangeType? == "Delete")
+    | select(
+        (.path == "properties.runningStatus"
+          and ($resourceId | contains("/Microsoft.App/containerApps/")))
+        | not
+      )
+  ] | length == 0)
   and
   ([.changes[]
     | select(.changeType != "Ignore" and .changeType != "NoChange")
