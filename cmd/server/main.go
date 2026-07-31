@@ -17,7 +17,6 @@ import (
 	"hhc/asset-api/internal/derivatives"
 	"hhc/asset-api/internal/httpapi"
 	"hhc/asset-api/internal/lifecycle"
-	"hhc/asset-api/internal/migrations"
 	"hhc/asset-api/internal/postgres"
 	azurestorage "hhc/asset-api/internal/storage/azure"
 	localstorage "hhc/asset-api/internal/storage/local"
@@ -47,12 +46,6 @@ func run() error {
 	db.SetMaxIdleConns(cfg.DBMaxIdleConns)
 	db.SetConnMaxLifetime(cfg.DBConnMaxLifetime)
 	defer db.Close()
-	migrationCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	if err := migrations.Run(migrationCtx, db); err != nil {
-		return err
-	}
-
 	var blobStore assets.BlobStore
 	var localUpload http.HandlerFunc
 	if cfg.StorageBackend == "azure" {

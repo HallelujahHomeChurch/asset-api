@@ -4,10 +4,16 @@ param location string = resourceGroup().location
 param containerAppEnvironmentName string = 'alive-env'
 param containerRegistryName string = 'alive'
 param storageAccountName string
-param image string
-
-@secure()
-param databaseUrl string
+param runtimeKeyVaultName string = 'alive-asset-runtime-kv'
+param migrationKeyVaultName string = 'alive-asset-migrate-kv'
+@minLength(1)
+param runtimeImage string
+@minLength(1)
+param migrationImage string
+param deployRuntime bool = true
+param deployMigrationJob bool = true
+param provisionPermissions bool = true
+param manageSharedInfrastructure bool = true
 
 param publicBaseUrl string = 'https://www.alive.org.tw/api/assets'
 param clamavHost string = '172.16.65.5'
@@ -19,6 +25,8 @@ param uploadAllowedOrigins array = [
   'https://admin-test.alive.org.tw'
 ]
 
+var keyVaultSecretsUserRole = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
+
 resource environment 'Microsoft.App/managedEnvironments@2024-03-01' existing = {
   name: containerAppEnvironmentName
 }
@@ -27,18 +35,84 @@ resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' existing =
   name: containerRegistryName
 }
 
+resource runtimeVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
+  name: runtimeKeyVaultName
+  location: location
+  properties: {
+    tenantId: subscription().tenantId
+    sku: {
+      family: 'A'
+      name: 'standard'
+    }
+    accessPolicies: []
+    enablePurgeProtection: true
+    enableRbacAuthorization: true
+    enableSoftDelete: true
+    softDeleteRetentionInDays: 90
+    publicNetworkAccess: 'Enabled'
+  }
+}
+
+resource migrationVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
+  name: migrationKeyVaultName
+  location: location
+  properties: {
+    tenantId: subscription().tenantId
+    sku: {
+      family: 'A'
+      name: 'standard'
+    }
+    accessPolicies: []
+    enablePurgeProtection: true
+    enableRbacAuthorization: true
+    enableSoftDelete: true
+    softDeleteRetentionInDays: 90
+    publicNetworkAccess: 'Enabled'
+  }
+}
+
 resource pullIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: 'asset-api-acr-pull'
   location: location
 }
 
-resource acrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource runtimeIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: 'asset-api-runtime-identity'
+  location: location
+}
+
+resource migrationIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: 'asset-migrate-identity'
+  location: location
+}
+
+resource acrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (provisionPermissions) {
   name: guid(registry.id, pullIdentity.id, 'acr-pull')
   scope: registry
   properties: {
     principalId: pullIdentity.properties.principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
+  }
+}
+
+resource runtimeSecretAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (provisionPermissions) {
+  name: guid(runtimeVault.id, runtimeIdentity.id, 'key-vault-secrets-user')
+  scope: runtimeVault
+  properties: {
+    principalId: runtimeIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: keyVaultSecretsUserRole
+  }
+}
+
+resource migrationSecretAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (provisionPermissions) {
+  name: guid(migrationVault.id, migrationIdentity.id, 'key-vault-secrets-user')
+  scope: migrationVault
+  properties: {
+    principalId: migrationIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: keyVaultSecretsUserRole
   }
 }
 
@@ -50,7 +124,7 @@ resource clamavNetworkSecurityGroup 'Microsoft.Network/networkSecurityGroups@202
   name: clamavNetworkSecurityGroupName
 }
 
-resource allowACAtoClamAV 'Microsoft.Network/networkSecurityGroups/securityRules@2024-05-01' = {
+resource allowACAtoClamAV 'Microsoft.Network/networkSecurityGroups/securityRules@2024-05-01' = if (manageSharedInfrastructure) {
   parent: clamavNetworkSecurityGroup
   name: 'AllowACAtoClamAV'
   properties: {
@@ -65,7 +139,7 @@ resource allowACAtoClamAV 'Microsoft.Network/networkSecurityGroups/securityRules
   }
 }
 
-resource denyOtherVNetClamAV 'Microsoft.Network/networkSecurityGroups/securityRules@2024-05-01' = {
+resource denyOtherVNetClamAV 'Microsoft.Network/networkSecurityGroups/securityRules@2024-05-01' = if (manageSharedInfrastructure) {
   parent: clamavNetworkSecurityGroup
   name: 'DenyOtherVNetToClamAV'
   properties: {
@@ -80,7 +154,7 @@ resource denyOtherVNetClamAV 'Microsoft.Network/networkSecurityGroups/securityRu
   }
 }
 
-resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = {
+resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = if (manageSharedInfrastructure) {
   parent: storageAccount
   name: 'default'
   properties: {
@@ -112,7 +186,7 @@ resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01'
   }
 }
 
-resource assetContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+resource assetContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = if (manageSharedInfrastructure) {
   parent: blobService
   name: 'assets'
   properties: {
@@ -122,7 +196,7 @@ resource assetContainer 'Microsoft.Storage/storageAccounts/blobServices/containe
   }
 }
 
-resource defenderForStorageDisabled 'Microsoft.Security/defenderForStorageSettings@2025-01-01' = {
+resource defenderForStorageDisabled 'Microsoft.Security/defenderForStorageSettings@2025-01-01' = if (manageSharedInfrastructure) {
   scope: storageAccount
   name: 'current'
   properties: {
@@ -140,13 +214,14 @@ resource defenderForStorageDisabled 'Microsoft.Security/defenderForStorageSettin
   }
 }
 
-resource app 'Microsoft.App/containerApps@2024-03-01' = {
+resource app 'Microsoft.App/containerApps@2024-03-01' = if (deployRuntime) {
   name: 'asset-api'
   location: location
   identity: {
     type: 'SystemAssigned, UserAssigned'
     userAssignedIdentities: {
       '${pullIdentity.id}': {}
+      '${runtimeIdentity.id}': {}
     }
   }
   properties: {
@@ -171,7 +246,8 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
       secrets: [
         {
           name: 'database-url'
-          value: databaseUrl
+          keyVaultUrl: '${runtimeVault.properties.vaultUri}secrets/database-url'
+          identity: runtimeIdentity.id
         }
       ]
     }
@@ -179,7 +255,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
       containers: [
         {
           name: 'asset-api'
-          image: image
+          image: runtimeImage
           env: [
             { name: 'PORT', value: '8080' }
             { name: 'DATABASE_URL', secretRef: 'database-url' }
@@ -189,7 +265,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'ASSET_PUBLIC_BASE_URL', value: publicBaseUrl }
             { name: 'ASSET_STORAGE_BACKEND', value: 'azure' }
             { name: 'ASSET_AZURE_ACCOUNT_URL', value: 'https://${storageAccount.name}.blob.${az.environment().suffixes.storage}' }
-            { name: 'ASSET_AZURE_CONTAINER', value: assetContainer.name }
+            { name: 'ASSET_AZURE_CONTAINER', value: 'assets' }
             { name: 'ASSET_ALLOWED_CALLERS', value: 'account-api,hhc-web-api,hhc-line-function-bot' }
             { name: 'ASSET_ALLOW_DEV_CALLER_HEADER', value: 'false' }
             { name: 'CLAMAV_HOST', value: clamavHost }
@@ -226,29 +302,88 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
   }
   dependsOn: [
     acrPull
+    runtimeSecretAccess
   ]
 }
 
-resource assetBlobContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(assetContainer.id, app.id, 'storage-blob-data-contributor')
-  scope: assetContainer
+resource assetBlobContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (deployRuntime && manageSharedInfrastructure) {
+  name: guid(assetContainer!.id, app!.id, 'storage-blob-data-contributor')
+  scope: assetContainer!
   properties: {
-    principalId: app.identity.principalId
+    principalId: app!.identity.principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
   }
 }
 
-resource assetBlobDelegator 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(storageAccount.id, app.id, 'storage-blob-delegator')
+resource assetBlobDelegator 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (deployRuntime && manageSharedInfrastructure) {
+  name: guid(storageAccount.id, app!.id, 'storage-blob-delegator')
   scope: storageAccount
   properties: {
-    principalId: app.identity.principalId
+    principalId: app!.identity.principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'db58b8e5-c6ad-4a2a-8342-4190687cbf4a')
   }
 }
 
-output containerAppName string = app.name
-output principalId string = app.identity.principalId
-output assetContainerName string = assetContainer.name
+resource migrate 'Microsoft.App/jobs@2024-03-01' = if (deployMigrationJob) {
+  name: 'asset-migrate'
+  location: location
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${pullIdentity.id}': {}
+      '${migrationIdentity.id}': {}
+    }
+  }
+  properties: {
+    environmentId: environment.id
+    workloadProfileName: 'Consumption'
+    configuration: {
+      triggerType: 'Manual'
+      replicaTimeout: 300
+      replicaRetryLimit: 0
+      manualTriggerConfig: {
+        parallelism: 1
+        replicaCompletionCount: 1
+      }
+      registries: [
+        {
+          server: registry.properties.loginServer
+          identity: pullIdentity.id
+        }
+      ]
+      secrets: [
+        {
+          name: 'database-url'
+          keyVaultUrl: '${migrationVault.properties.vaultUri}secrets/database-url'
+          identity: migrationIdentity.id
+        }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'asset-migrate'
+          image: migrationImage
+          command: ['/asset-migrate']
+          env: [
+            { name: 'DATABASE_URL', secretRef: 'database-url' }
+          ]
+          resources: {
+            cpu: json('0.25')
+            memory: '0.5Gi'
+          }
+        }
+      ]
+    }
+  }
+  dependsOn: [
+    acrPull
+    migrationSecretAccess
+  ]
+}
+
+output containerAppName string = 'asset-api'
+output migrationJobName string = 'asset-migrate'
+output assetContainerName string = 'assets'

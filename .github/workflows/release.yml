@@ -1,159 +1,203 @@
 name: Production Release
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/release.yml
-      - Dockerfile
-      - go.mod
-      - go.sum
-      - cmd/**
-      - internal/**
-      - infra/**
-      - scripts/**
   workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type deploy-asset-api-production
+        required: true
+        type: string
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
   group: asset-api-production
   cancel-in-progress: false
 
-env:
-  ACR_NAME: alive
-  ACR_LOGIN_SERVER: alive.azurecr.io
-  IMAGE_REPOSITORY: alive/asset-api
-  RESOURCE_GROUP: alive
-  CONTAINER_APP_NAME: asset-api
-  API_GATEWAY_APP_NAME: api-gateway
-
 jobs:
-  release:
-    name: Build and release
+  verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: asset_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d asset_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/asset_test?sslmode=disable
+      TEST_POSTGRES_DSN: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+      ASSET_ALLOW_DESTRUCTIVE_TEST: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
           cache: true
-      - name: Set image tag
-        run: echo "IMAGE_TAG=main-${GITHUB_SHA::7}" >> "${GITHUB_ENV}"
-      - name: Verify
-        run: |
-          go test ./...
+      - run: |
+          ./scripts/bootstrap-migration-role.test.sh
+          ./scripts/test-migration-policy-test.sh
+          ./scripts/test-migration-policy.sh internal/migrations/sql/*.sql
+          ./scripts/test-what-if-policy.sh
+          go test -race ./... -count=1 -p=1
           go vet ./...
           ./scripts/test-release-workflow.sh
+          docker build -t asset-api:verify .
+
+  deploy:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      ACR_NAME: alive
+      ACR_LOGIN_SERVER: alive.azurecr.io
+      IMAGE_REPOSITORY: alive/asset-api
+      RESOURCE_GROUP: alive
+      STORAGE_ACCOUNT_NAME: alivestoragebb99ee6e
+      MIGRATION_JOB_NAME: asset-migrate
+      API_APP_NAME: asset-api
+      API_GATEWAY_APP_NAME: api-gateway
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      RELEASE_CONFIRMATION: ${{ inputs.confirmation }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Validate release configuration
+        run: |
+          [[ "$GITHUB_REF" == "refs/heads/main" ]]
+          [[ "$RELEASE_CONFIRMATION" == "deploy-asset-api-production" ]]
+          for name in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID; do
+            test -n "${!name:-}" || { echo "Missing repository variable: ${name}" >&2; exit 1; }
+          done
+      - name: Set image tag
+        run: echo "IMAGE_TAG=main-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
       - name: Sign in to Azure with OIDC
-        uses: azure/login@v2
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      - name: Install Container Apps extension
-        run: az extension add --name containerapp --upgrade --yes
+      - run: az extension add --name containerapp --upgrade --yes
+      - name: Verify isolated runtime prerequisites
+        run: |
+          runtime_principal="$(az identity show -g "$RESOURCE_GROUP" -n asset-api-runtime-identity --query principalId -o tsv --only-show-errors)"
+          migration_principal="$(az identity show -g "$RESOURCE_GROUP" -n asset-migrate-identity --query principalId -o tsv --only-show-errors)"
+          runtime_vault="$(az keyvault show -g "$RESOURCE_GROUP" -n alive-asset-runtime-kv --query id -o tsv --only-show-errors)"
+          migration_vault="$(az keyvault show -g "$RESOURCE_GROUP" -n alive-asset-migrate-kv --query id -o tsv --only-show-errors)"
+          [[ "$(az role assignment list --scope "$runtime_vault" --assignee-object-id "$runtime_principal" --query "[?roleDefinitionName=='Key Vault Secrets User'] | length(@)" -o tsv --only-show-errors)" == "1" ]]
+          [[ "$(az role assignment list --scope "$migration_vault" --assignee-object-id "$migration_principal" --query "[?roleDefinitionName=='Key Vault Secrets User'] | length(@)" -o tsv --only-show-errors)" == "1" ]]
+          az keyvault secret show --vault-name alive-asset-runtime-kv --name database-url --query id -o tsv --only-show-errors >/dev/null
+          az keyvault secret show --vault-name alive-asset-migrate-kv --name database-url --query id -o tsv --only-show-errors >/dev/null
       - name: Capture rollback revision
         run: |
-          revision="$(az containerapp show -g "$RESOURCE_GROUP" -n "$CONTAINER_APP_NAME" \
-            --query properties.latestReadyRevisionName -o tsv --only-show-errors)"
-          test -n "$revision"
-          image="$(az containerapp revision show -g "$RESOURCE_GROUP" -n "$CONTAINER_APP_NAME" \
-            --revision "$revision" \
-            --query properties.template.containers[0].image -o tsv --only-show-errors)"
-          test -n "$image"
-          if [[ "$image" == *@sha256:* ]]; then
-            previous_image_ref="$image"
-          else
-            repository_and_tag="${image#${ACR_LOGIN_SERVER}/}"
-            digest="$(az acr repository show \
-              --name "$ACR_NAME" \
-              --image "$repository_and_tag" \
-              --query digest -o tsv --only-show-errors)"
-            test -n "$digest"
-            previous_image_ref="${ACR_LOGIN_SERVER}/${repository_and_tag%:*}@${digest}"
-          fi
+          resolve_image_ref() {
+            local image="$1"
+            if [[ "$image" == *@sha256:* ]]; then printf '%s\n' "$image"; return; fi
+            local image_spec="${image#${ACR_LOGIN_SERVER}/}"
+            local repository="${image_spec%:*}"
+            local digest
+            digest="$(az acr repository show --name "$ACR_NAME" --image "$image_spec" --query digest -o tsv --only-show-errors)"
+            [[ "$digest" == sha256:* ]]
+            printf '%s/%s@%s\n' "$ACR_LOGIN_SERVER" "$repository" "$digest"
+          }
+          revision="$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_APP_NAME" --query properties.latestReadyRevisionName -o tsv --only-show-errors)"
+          image="$(az containerapp revision show -g "$RESOURCE_GROUP" -n "$API_APP_NAME" --revision "$revision" --query properties.template.containers[0].image -o tsv --only-show-errors)"
           {
             echo "PREVIOUS_READY_REVISION=$revision"
-            echo "PREVIOUS_IMAGE_REF=$previous_image_ref"
+            echo "PREVIOUS_IMAGE_REF=$(resolve_image_ref "$image")"
           } >> "$GITHUB_ENV"
-      - name: Build and push image to ACR
-        run: |
-          az acr build \
-            --registry "${ACR_NAME}" \
-            --image "${IMAGE_REPOSITORY}:${IMAGE_TAG}" \
-            --file Dockerfile \
-            .
+      - name: Build and push image
+        run: az acr build --registry "$ACR_NAME" --image "${IMAGE_REPOSITORY}:${IMAGE_TAG}" --file Dockerfile .
       - name: Resolve immutable image digest
         run: |
-          digest="$(az acr repository show \
-            --name "$ACR_NAME" \
-            --image "${IMAGE_REPOSITORY}:${IMAGE_TAG}" \
-            --query digest -o tsv --only-show-errors)"
+          digest="$(az acr repository show --name "$ACR_NAME" --image "${IMAGE_REPOSITORY}:${IMAGE_TAG}" --query digest -o tsv --only-show-errors)"
           [[ "$digest" == sha256:* ]]
           echo "IMAGE_REF=${ACR_LOGIN_SERVER}/${IMAGE_REPOSITORY}@${digest}" >> "$GITHUB_ENV"
-      - name: Deploy image
+      - name: Reject destructive infrastructure changes
+        run: |
+          az deployment group what-if \
+            --resource-group "$RESOURCE_GROUP" \
+            --template-file infra/main.bicep \
+            --parameters storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" deployRuntime=true deployMigrationJob=true provisionPermissions=false manageSharedInfrastructure=false \
+            --validation-level Provider --result-format FullResourcePayloads --no-pretty-print --only-show-errors \
+            --output json > what-if.json
+          ./scripts/check-what-if.sh what-if.json
+      - name: Update migration job
+        run: |
+          az deployment group create \
+            --name "asset-migrate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --resource-group "$RESOURCE_GROUP" --template-file infra/main.bicep \
+            --parameters storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" deployRuntime=false deployMigrationJob=true provisionPermissions=false manageSharedInfrastructure=false \
+            --only-show-errors --output none
+      - name: Run migrations
+        run: |
+          execution_name="$(az containerapp job start -g "$RESOURCE_GROUP" -n "$MIGRATION_JOB_NAME" --query name -o tsv --only-show-errors)"
+          for attempt in {1..60}; do
+            status="$(az containerapp job execution list -g "$RESOURCE_GROUP" -n "$MIGRATION_JOB_NAME" --query "[?name=='${execution_name}'].properties.status | [0]" -o tsv --only-show-errors)"
+            case "$status" in
+              Succeeded) exit 0 ;;
+              Failed|Canceled|Cancelled|Stopped)
+                az containerapp job logs show -g "$RESOURCE_GROUP" -n "$MIGRATION_JOB_NAME" --execution "$execution_name" --container asset-migrate --tail 200 || true
+                exit 1
+                ;;
+            esac
+            sleep 10
+          done
+          echo "Migration timed out" >&2
+          exit 1
+      - name: Deploy API
         id: deploy_runtime
         run: |
-          az containerapp update \
-            --resource-group "${RESOURCE_GROUP}" \
-            --name "${CONTAINER_APP_NAME}" \
-            --image "${IMAGE_REF}" \
-            --only-show-errors \
-            --output none
-      - name: Wait for ready revision
+          az deployment group create \
+            --name "asset-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --resource-group "$RESOURCE_GROUP" --template-file infra/main.bicep \
+            --parameters storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" deployRuntime=true deployMigrationJob=true provisionPermissions=false manageSharedInfrastructure=false \
+            --only-show-errors --output none
+      - name: Wait for API revision
         run: |
-          for attempt in {1..30}; do
-            state="$(az containerapp show \
-              --resource-group "${RESOURCE_GROUP}" \
-              --name "${CONTAINER_APP_NAME}" \
-              --query "join('|', [properties.latestRevisionName, properties.latestReadyRevisionName, properties.runningStatus, properties.template.containers[0].image])" \
-              --output tsv)"
-            IFS='|' read -r latest ready running_status deployed_image <<< "${state}"
-            if [[ "${latest}" == "${ready}" && "${running_status}" == "Running" && "${deployed_image}" == "${IMAGE_REF}" ]]; then
-              echo "Deployed ${IMAGE_REF} to ${ready}"
-              exit 0
+          for attempt in {1..60}; do
+            latest="$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_APP_NAME" --query properties.latestRevisionName -o tsv --only-show-errors)"
+            ready="$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_APP_NAME" --query properties.latestReadyRevisionName -o tsv --only-show-errors)"
+            if [[ -n "$latest" && "$latest" == "$ready" ]]; then
+              image="$(az containerapp revision show -g "$RESOURCE_GROUP" -n "$API_APP_NAME" --revision "$ready" --query properties.template.containers[0].image -o tsv --only-show-errors)"
+              [[ "$image" == "$IMAGE_REF" ]] && exit 0
             fi
             sleep 10
           done
-          echo "Latest revision did not become ready" >&2
           exit 1
       - name: Verify Dapr readiness through API gateway
         run: |
-          output="$(timeout 60s script -q -e -c \
-            "az containerapp exec -g \"$RESOURCE_GROUP\" -n \"$API_GATEWAY_APP_NAME\" --command \"/usr/bin/wget -S -O - http://localhost:3500/v1.0/invoke/asset-api/method/ready\"" \
-            /dev/null 2>&1)"
+          output="$(timeout 60s script -q -e -c "az containerapp exec -g \"$RESOURCE_GROUP\" -n \"$API_GATEWAY_APP_NAME\" --command \"/usr/bin/wget -S -O - http://localhost:3500/v1.0/invoke/asset-api/method/ready\"" /dev/null 2>&1)"
           output="${output//$'\r'/}"
-          printf '%s\n' "$output"
-          grep -Eq 'HTTP/1\.[01][[:space:]]+200' <<< "$output"
-          grep -Eq '"status"[[:space:]]*:[[:space:]]*"ready"' <<< "$output"
+          grep -Eq 'HTTP/1\.[01][[:space:]]+200' <<<"$output"
+          grep -Eq '"status"[[:space:]]*:[[:space:]]*"ready"' <<<"$output"
       - name: Roll back failed runtime
         if: ${{ failure() && steps.deploy_runtime.outcome != 'skipped' }}
         run: |
-          az containerapp revision copy \
-            -g "$RESOURCE_GROUP" \
-            -n "$CONTAINER_APP_NAME" \
-            --from-revision "$PREVIOUS_READY_REVISION" \
-            --image "$PREVIOUS_IMAGE_REF" \
+          az containerapp revision copy -g "$RESOURCE_GROUP" -n "$API_APP_NAME" \
+            --from-revision "$PREVIOUS_READY_REVISION" --image "$PREVIOUS_IMAGE_REF" \
             --revision-suffix "rollback-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
-            --only-show-errors \
-            --output none
-
+            --only-show-errors --output none
           for attempt in {1..60}; do
-            latest="$(az containerapp show -g "$RESOURCE_GROUP" -n "$CONTAINER_APP_NAME" \
-              --query properties.latestRevisionName -o tsv --only-show-errors)"
-            ready="$(az containerapp show -g "$RESOURCE_GROUP" -n "$CONTAINER_APP_NAME" \
-              --query properties.latestReadyRevisionName -o tsv --only-show-errors)"
+            latest="$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_APP_NAME" --query properties.latestRevisionName -o tsv --only-show-errors)"
+            ready="$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_APP_NAME" --query properties.latestReadyRevisionName -o tsv --only-show-errors)"
             if [[ -n "$latest" && "$latest" == "$ready" ]]; then
-              image="$(az containerapp revision show -g "$RESOURCE_GROUP" -n "$CONTAINER_APP_NAME" \
-              --revision "$ready" \
-              --query properties.template.containers[0].image -o tsv --only-show-errors)"
+              image="$(az containerapp revision show -g "$RESOURCE_GROUP" -n "$API_APP_NAME" --revision "$ready" --query properties.template.containers[0].image -o tsv --only-show-errors)"
               [[ "$image" == "$PREVIOUS_IMAGE_REF" ]] && exit 0
             fi
             sleep 10
           done
-          echo "Asset API rollback did not become ready" >&2
           exit 1

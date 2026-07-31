@@ -8,39 +8,57 @@ gateway and owner services invoke it through Dapr.
 It also allows only the ACA subnet (`172.16.66.0/23`) to reach clamd at
 `172.16.65.5:3310`.
 
-## First deployment
+## One-time production cutover
 
-1. Create the `asset` database and least-privilege login on the existing
-   private PostgreSQL server at `172.16.68.4`. The role owns the database and
-   its public schema:
+The existing `asset` login becomes the DML-only runtime role. Migrations use
+`asset_migrate` through a manual Container Apps job. Runtime and migration
+database URLs are stored in separate RBAC Key Vaults.
 
-   ```sql
-   CREATE ROLE asset LOGIN PASSWORD 'REDACTED';
-   CREATE DATABASE asset OWNER asset;
-   \connect asset
-   ALTER SCHEMA public OWNER TO asset;
-   GRANT USAGE, CREATE ON SCHEMA public TO asset;
-   ```
-2. Build the initial image:
+1. Build an image containing both binaries and resolve its digest:
 
    ```sh
-   az acr build -r alive -t alive/asset-api:latest .
+   az acr build -r alive -t alive/asset-api:bootstrap .
+   digest="$(az acr repository show -n alive --image alive/asset-api:bootstrap --query digest -o tsv)"
+   image="alive.azurecr.io/alive/asset-api@${digest}"
    ```
 
-3. Prepare the ignored parameter file and deploy:
+2. Review and create only the vaults, identities, role assignments, storage
+   policy, and ClamAV NSG rules. This does not touch the running app:
 
    ```sh
-   export ASSET_DATABASE_URL='postgres://asset:REDACTED@172.16.68.4:5432/asset?sslmode=require'
-   cp infra/main.bicepparam.example infra/main.bicepparam
-   az bicep build --file infra/main.bicep
-   az deployment group what-if -g alive -f infra/main.bicep -p infra/main.bicepparam
-   az deployment group create -g alive -f infra/main.bicep -p infra/main.bicepparam
+   az deployment group what-if -g alive -f infra/main.bicep \
+     -p storageAccountName=alivestoragebb99ee6e runtimeImage="$image" migrationImage="$image" \
+        deployRuntime=false deployMigrationJob=false provisionPermissions=true
+   az deployment group create -g alive -f infra/main.bicep \
+     -p storageAccountName=alivestoragebb99ee6e runtimeImage="$image" migrationImage="$image" \
+        deployRuntime=false deployMigrationJob=false provisionPermissions=true
    ```
 
-4. Confirm the revision is ready, Dapr app id is `asset-api`, ingress is
-   disabled, and the app identity has all three role assignments.
-5. Prove TCP access from the ACA environment to `172.16.65.5:3310` and confirm
-   current ClamAV signatures before accepting uploads.
+3. Create the migration role, transfer schema ownership, restrict the runtime
+   role, and write both vault secrets:
+
+   ```sh
+   ./scripts/bootstrap-migration-role.sh
+   ```
+
+4. Review and create the migration job without touching the runtime:
+
+   ```sh
+   az deployment group what-if -g alive -f infra/main.bicep \
+     -p storageAccountName=alivestoragebb99ee6e runtimeImage="$image" migrationImage="$image" \
+        deployRuntime=false deployMigrationJob=true provisionPermissions=false
+   az deployment group create -g alive -f infra/main.bicep \
+     -p storageAccountName=alivestoragebb99ee6e runtimeImage="$image" migrationImage="$image" \
+        deployRuntime=false deployMigrationJob=true provisionPermissions=false
+   ```
+
+5. Trigger the manual GitHub `Production Release` workflow from `main` with
+   confirmation `deploy-asset-api-production`. It runs migrations before
+   replacing the runtime and rolls back only the runtime image on failure.
+
+6. Confirm ingress remains disabled, Dapr app id is `asset-api`, the app is
+   ready through Dapr, and ACA can reach current ClamAV signatures at
+   `172.16.65.5:3310`.
 
 The template explicitly disables Defender for Storage; ClamAV is the only
 malware scanner. `ASSET_ALLOW_DEV_CALLER_HEADER` remains false in Azure.
