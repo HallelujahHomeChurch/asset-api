@@ -337,6 +337,22 @@ func TestDeleteExpiredPurgeIsBoundedAndPreservesRecentOrActiveAssets(t *testing.
 	}
 }
 
+func TestAssetStateConstraintsRejectUnknownValues(t *testing.T) {
+	db := integrationDB(t)
+	now := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	insertAsset(t, db, "state-constraints", assets.UploadCompleted, assets.ScanClean, assets.ProcessingReady, now, time.Time{})
+
+	for _, statement := range []string{
+		`UPDATE assets SET upload_status='unknown' WHERE id='state-constraints'`,
+		`UPDATE assets SET scan_status='unknown' WHERE id='state-constraints'`,
+		`UPDATE assets SET processing_status='unknown' WHERE id='state-constraints'`,
+	} {
+		if _, err := db.Exec(statement); err == nil {
+			t.Fatalf("statement unexpectedly succeeded: %s", statement)
+		}
+	}
+}
+
 func TestOperationsIncludesProcessingBacklog(t *testing.T) {
 	db := integrationDB(t)
 	store := New(db)

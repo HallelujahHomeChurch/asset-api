@@ -367,6 +367,52 @@ func TestCleanScanAndPublicGrantEnableStableDownload(t *testing.T) {
 	}
 }
 
+func TestRestrictedDownloadRequiresMatchingGrant(t *testing.T) {
+	ctx := context.Background()
+	repo := newMemoryRepository()
+	blobs := newMemoryBlobStore()
+	service := NewService(repo, blobs, "https://www.alive.org.tw/api/assets", time.Now)
+	asset := Asset{
+		ID: "line-file", Namespace: "line.group.file", OwnerService: "hhc-line-function-bot",
+		ObjectKey: "assets/line-file/original", UploadStatus: UploadCompleted, ScanStatus: ScanClean,
+		ProcessingStatus: ProcessingNotRequired, Visibility: VisibilityRestricted,
+		DetectedMIMEType: "application/pdf", SizeBytes: 4, ETag: "etag",
+	}
+	repo.assets[asset.ID] = asset
+	blobs.objects[asset.ObjectKey] = []byte("%PDF")
+	if _, err := service.CreateGrant(ctx, asset.ID, CreateGrantInput{
+		SubjectType: SubjectLineGroup, SubjectID: "group-1", Permission: PermissionRead, IdempotencyKey: "line-read",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	metadata, err := service.AuthorizedMetadata(ctx, asset.ID, SubjectLineGroup, "group-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.CacheControl != "private, no-store" {
+		t.Fatalf("cache control = %q", metadata.CacheControl)
+	}
+	if _, err := service.AuthorizedMetadata(ctx, asset.ID, SubjectLineGroup, "group-2"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("wrong subject error = %v", err)
+	}
+	if _, err := service.AuthorizedMetadata(ctx, asset.ID, SubjectPublic, "*"); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("public subject error = %v", err)
+	}
+}
+
+func TestGrantRejectsUnknownSubjectAndPermission(t *testing.T) {
+	service := NewService(newMemoryRepository(), newMemoryBlobStore(), "https://www.alive.org.tw/api/assets", time.Now)
+	for _, input := range []CreateGrantInput{
+		{SubjectType: "unknown", SubjectID: "id", Permission: PermissionRead, IdempotencyKey: "unknown-subject"},
+		{SubjectType: SubjectUser, SubjectID: "id", Permission: "write", IdempotencyKey: "unknown-permission"},
+	} {
+		if _, err := service.CreateGrant(context.Background(), "asset", input); !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("input=%+v err=%v", input, err)
+		}
+	}
+}
+
 func TestPublicGrantAlsoProtectsStableDerivative(t *testing.T) {
 	ctx := context.Background()
 	repo := newMemoryRepository()
@@ -463,7 +509,7 @@ func TestPublicDownloadUsesNamespaceCachePolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = download.Body.Close()
-	if download.CacheControl != "public, max-age=31536000, immutable" {
+	if download.CacheControl != "public, max-age=300, must-revalidate" {
 		t.Fatalf("weekly cache = %q", download.CacheControl)
 	}
 

@@ -280,6 +280,36 @@ func TestPublicDownloadUnsatisfiedRangeDoesNotOpenBlob(t *testing.T) {
 	}
 }
 
+func TestRestrictedDownloadRequiresOwnerAndSubjectGrant(t *testing.T) {
+	modified := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+	repository := &downloadRepository{
+		asset: assets.Asset{
+			ID: "asset-1", Namespace: "line.group.file", OwnerService: "hhc-line-function-bot",
+			ObjectKey: "original", DetectedMIMEType: "application/pdf", SizeBytes: 6, ETag: `"original"`,
+			UploadStatus: assets.UploadCompleted, ScanStatus: assets.ScanClean,
+			ProcessingStatus: assets.ProcessingNotRequired, Visibility: assets.VisibilityRestricted, UpdatedAt: modified,
+		},
+	}
+	blobs := &downloadBlobStore{objects: map[string][]byte{"original": []byte("secret")}}
+	service := assets.NewService(repository, blobs, "https://www.alive.org.tw/api/assets", func() time.Time { return modified })
+	handler := New(service, nil, map[string]bool{"hhc-line-function-bot": true}, false, "token", nil).Routes()
+
+	request := httptest.NewRequest(http.MethodGet, "/priv/assets/asset-1/download", nil)
+	request.Header.Set("Dapr-Caller-App-Id", "hhc-line-function-bot")
+	request.Header.Set("dapr-api-token", "token")
+	request.Header.Set("X-Asset-Subject-Type", "line_group")
+	request.Header.Set("X-Asset-Subject-Id", "group-1")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || response.Body.String() != "secret" {
+		t.Fatalf("status=%d body=%q", response.Code, response.Body.String())
+	}
+	if response.Header().Get("Cache-Control") != "private, no-store" {
+		t.Fatalf("cache control=%q", response.Header().Get("Cache-Control"))
+	}
+}
+
 func publicDownloadHandler(t *testing.T) (http.Handler, *downloadBlobStore) {
 	t.Helper()
 	return publicDownloadHandlerWithOriginal(t, []byte("abcdef"))

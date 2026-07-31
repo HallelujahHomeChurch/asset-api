@@ -65,6 +65,21 @@ resource allowACAtoClamAV 'Microsoft.Network/networkSecurityGroups/securityRules
   }
 }
 
+resource denyOtherVNetClamAV 'Microsoft.Network/networkSecurityGroups/securityRules@2024-05-01' = {
+  parent: clamavNetworkSecurityGroup
+  name: 'DenyOtherVNetToClamAV'
+  properties: {
+    priority: 340
+    access: 'Deny'
+    direction: 'Inbound'
+    protocol: 'Tcp'
+    sourcePortRange: '*'
+    destinationPortRange: string(clamavPort)
+    sourceAddressPrefix: 'VirtualNetwork'
+    destinationAddressPrefix: clamavHost
+  }
+}
+
 resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = {
   parent: storageAccount
   name: 'default'

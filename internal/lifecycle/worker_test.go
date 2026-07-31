@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -40,6 +41,21 @@ func TestWorkerRetriesBlobFailure(t *testing.T) {
 	}
 	if repository.retry == "" || repository.completed {
 		t.Fatalf("retry=%q completed=%v", repository.retry, repository.completed)
+	}
+}
+
+func TestWorkerReportsRetryPersistenceFailure(t *testing.T) {
+	retryErr := errors.New("database unavailable")
+	repository := &repositoryStub{
+		candidate: Candidate{AssetID: "asset-1", Keys: []string{"original"}},
+		retryErr:  retryErr,
+	}
+	worker := NewWorker(repository, &blobStub{failures: map[string]int{"original": 1}})
+
+	_, err := worker.ProcessOne(context.Background())
+
+	if !errors.Is(err, retryErr) {
+		t.Fatalf("err=%v", err)
 	}
 }
 
@@ -84,6 +100,7 @@ type repositoryStub struct {
 	retentionLimit   int
 	retentionDeleted int64
 	retentionCalls   int
+	retryErr         error
 }
 
 func (r *repositoryStub) ClaimPurge(context.Context, time.Time, time.Duration) (Candidate, bool, error) {
@@ -95,7 +112,7 @@ func (r *repositoryStub) CompletePurge(context.Context, string, time.Time) error
 }
 func (r *repositoryStub) RetryPurge(_ context.Context, _ string, details string, _, _ time.Time) error {
 	r.retry = details
-	return nil
+	return r.retryErr
 }
 func (r *repositoryStub) DeleteExpiredPurge(_ context.Context, before time.Time, limit int) (int64, error) {
 	r.retentionCalls++

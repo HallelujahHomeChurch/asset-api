@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -40,6 +41,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.Handle("POST /priv/assets/upload-sessions", h.internal(http.HandlerFunc(h.createUpload)))
 	mux.Handle("GET /priv/assets/operations", h.internal(http.HandlerFunc(h.operations)))
 	mux.Handle("GET /priv/assets/{assetID}", h.internal(http.HandlerFunc(h.getAsset)))
+	mux.Handle("GET /priv/assets/{assetID}/download", h.internal(http.HandlerFunc(h.authorizedDownload)))
 	mux.Handle("POST /priv/assets/{assetID}/complete", h.internal(http.HandlerFunc(h.completeUpload)))
 	mux.Handle("POST /priv/assets/{assetID}/grants", h.internal(http.HandlerFunc(h.createGrant)))
 	mux.Handle("DELETE /priv/assets/{assetID}/grants/{grantID}", h.internal(http.HandlerFunc(h.revokeGrant)))
@@ -177,6 +179,23 @@ func (h *Handler) publicURL(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"assetId": r.PathValue("assetID"), "downloadUrl": h.service.PublicURL(r.PathValue("assetID"))})
 }
 
+func (h *Handler) authorizedDownload(w http.ResponseWriter, r *http.Request) {
+	if !h.requireOwnedAsset(w, r) {
+		return
+	}
+	metadata, err := h.service.AuthorizedMetadata(
+		r.Context(),
+		r.PathValue("assetID"),
+		assets.SubjectType(r.Header.Get("X-Asset-Subject-Type")),
+		r.Header.Get("X-Asset-Subject-Id"),
+	)
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+	h.serveDownload(w, r, metadata)
+}
+
 func (h *Handler) deleteAsset(w http.ResponseWriter, r *http.Request) {
 	if err := h.service.SoftDelete(r.Context(), r.PathValue("assetID"), callerFromRequest(r, h.allowDevCallerHeader)); err != nil {
 		handleError(w, err)
@@ -232,6 +251,10 @@ func (h *Handler) servePublicDownload(w http.ResponseWriter, r *http.Request, va
 		handleError(w, err)
 		return
 	}
+	h.serveDownload(w, r, metadata)
+}
+
+func (h *Handler) serveDownload(w http.ResponseWriter, r *http.Request, metadata assets.PublicDownloadMetadata) {
 	if matchesETag(r.Header.Get("If-None-Match"), metadata.ETag) {
 		setPublicHeaders(w, metadata, -1)
 		w.WriteHeader(http.StatusNotModified)
@@ -276,7 +299,9 @@ func (h *Handler) servePublicDownload(w http.ResponseWriter, r *http.Request, va
 		w.Header().Set("Content-Range", contentRange)
 		w.WriteHeader(http.StatusPartialContent)
 	}
-	_, _ = io.Copy(w, download.Body)
+	if _, err := io.Copy(w, download.Body); err != nil {
+		slog.Warn("stream asset download", "asset_id", r.PathValue("assetID"), "error", err)
+	}
 }
 
 func setPublicHeaders(w http.ResponseWriter, metadata assets.PublicDownloadMetadata, contentLength int64) {

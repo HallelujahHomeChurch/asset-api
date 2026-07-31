@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -68,8 +69,8 @@ func (w *Worker) ProcessOne(ctx context.Context) (bool, error) {
 		}
 		if err := w.blobs.Delete(ctx, key); err != nil {
 			details := truncate(err.Error(), 500)
-			_ = w.repository.RetryPurge(ctx, candidate.AssetID, details, now.Add(time.Minute), now)
-			return true, fmt.Errorf("delete %s: %w", key, err)
+			retryErr := w.repository.RetryPurge(ctx, candidate.AssetID, details, now.Add(time.Minute), now)
+			return true, errors.Join(fmt.Errorf("delete %s: %w", key, err), retryErr)
 		}
 	}
 	return true, w.repository.CompletePurge(ctx, candidate.AssetID, now)

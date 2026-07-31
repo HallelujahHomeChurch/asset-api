@@ -215,7 +215,7 @@ func (s *Service) deleteUploadObjects(ctx context.Context, asset Asset, session 
 }
 
 func (s *Service) CreateGrant(ctx context.Context, assetID string, input CreateGrantInput) (Grant, error) {
-	if input.SubjectType == "" || input.SubjectID == "" || input.Permission == "" || input.IdempotencyKey == "" {
+	if !validSubjectType(input.SubjectType) || input.SubjectID == "" || (input.Permission != PermissionRead && input.Permission != PermissionDelete) || input.IdempotencyKey == "" {
 		return Grant{}, ErrInvalidInput
 	}
 	asset, err := s.repository.GetAsset(ctx, assetID)
@@ -358,6 +358,24 @@ func (s *Service) PublicMetadata(ctx context.Context, assetID, variant string) (
 	return metadata, nil
 }
 
+func (s *Service) AuthorizedMetadata(ctx context.Context, assetID string, subject SubjectType, subjectID string) (PublicDownloadMetadata, error) {
+	if subject == SubjectPublic || !validSubjectType(subject) || subjectID == "" {
+		return PublicDownloadMetadata{}, ErrInvalidInput
+	}
+	asset, err := s.repository.GetAsset(ctx, assetID)
+	if err != nil || asset.UploadStatus != UploadCompleted || asset.ScanStatus != ScanClean || !asset.DeletedAt.IsZero() || (asset.ProcessingStatus != ProcessingReady && asset.ProcessingStatus != ProcessingNotRequired) {
+		return PublicDownloadMetadata{}, ErrNotFound
+	}
+	allowed, err := s.repository.HasActiveGrant(ctx, assetID, subject, subjectID, PermissionRead, s.now().UTC())
+	if err != nil || !allowed {
+		return PublicDownloadMetadata{}, ErrNotFound
+	}
+	return PublicDownloadMetadata{
+		Size: asset.SizeBytes, ContentType: asset.DetectedMIMEType, ETag: asset.ETag,
+		LastModified: asset.UpdatedAt, CacheControl: "private, no-store", objectKey: asset.ObjectKey,
+	}, nil
+}
+
 func (s *Service) OpenPublicMetadata(ctx context.Context, metadata PublicDownloadMetadata, byteRange ByteRange) (BlobDownload, error) {
 	download, err := s.blobs.Open(ctx, metadata.objectKey, byteRange, metadata.ETag)
 	if err != nil {
@@ -372,6 +390,15 @@ func (s *Service) OpenPublicMetadata(ctx context.Context, metadata PublicDownloa
 }
 
 func (s *Service) PublicURL(assetID string) string { return s.publicBaseURL + "/public/" + assetID }
+
+func validSubjectType(value SubjectType) bool {
+	switch value {
+	case SubjectPublic, SubjectUser, SubjectRole, SubjectService, SubjectLineGroup, SubjectAppClient:
+		return true
+	default:
+		return false
+	}
+}
 
 func inspectBytes(value []byte) BlobProperties {
 	sum := sha256.Sum256(value)
