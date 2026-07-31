@@ -25,7 +25,7 @@ func TestSignedUploadTargetWritesOnlyItsObject(t *testing.T) {
 	if response.Code != http.StatusCreated {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
-	properties, err := store.Inspect(context.Background(), "assets/cms.weekly.pdf/2026/07/asset-1/original")
+	properties, err := store.Inspect(context.Background(), "assets/cms.weekly.pdf/2026/07/asset-1/original", "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestCommitMovesStagingObjectWithoutReplacingFinal(t *testing.T) {
 	if properties.ETag == "" {
 		t.Fatal("committed ETag is empty")
 	}
-	if _, err := store.Inspect(context.Background(), "assets/staging/session-1"); err == nil {
+	if _, err := store.Inspect(context.Background(), "assets/staging/session-1", "", 0); err == nil {
 		t.Fatal("staging object still exists")
 	}
 

@@ -6,13 +6,14 @@
 
 1. Create a PostgreSQL database and copy `.env.example` to `.env`.
 2. Export the variables; the binary intentionally does not load `.env` itself.
-3. Run `go run ./cmd/server`.
+3. Run `go run ./cmd/migrate`, then `go run ./cmd/server`.
 
 Local uploads use a short-lived signed `PUT /dev/uploads/{token}` target and store bytes under `.data/assets`. Production uses Azure Blob Storage with `DefaultAzureCredential` and a single-blob user-delegation SAS. Account keys are not supported.
 
 Set `ASSET_ALLOW_DEV_CALLER_HEADER=true` only for local development without
 Dapr. Production must leave it disabled, invoke the service through Dapr, and
-deploy a default-deny Dapr ACL.
+keep Container Apps ingress disabled. Azure injects `APP_API_TOKEN`; private
+routes reject requests without the matching `dapr-api-token`.
 
 ## Routes
 
@@ -23,6 +24,7 @@ deploy a default-deny Dapr ACL.
 - `POST /priv/assets/upload-sessions`
 - `GET /priv/assets/operations`
 - `GET /priv/assets/{assetId}`
+- `GET /priv/assets/{assetId}/download`
 - `POST /priv/assets/{assetId}/complete`
 - `POST /priv/assets/{assetId}/scan/requeue`
 - `POST /priv/assets/{assetId}/grants`
@@ -30,10 +32,10 @@ deploy a default-deny Dapr ACL.
 - `GET /priv/assets/{assetId}/public-url`
 - `DELETE /priv/assets/{assetId}`
 
-Private routes derive caller identity from Dapr's authenticated
-`Dapr-Caller-App-Id`. The custom `X-Internal-Caller-App-Id` fallback is accepted
-only when the development setting is enabled. Public ingress must strip all
-client-provided internal identity headers.
+Private routes first authenticate Dapr's app-channel token, then derive caller
+identity from `Dapr-Caller-App-Id`. Restricted downloads additionally require
+`X-Asset-Subject-Type` and `X-Asset-Subject-Id` to match an active grant. The
+custom caller fallback is accepted only when the development setting is enabled.
 
 ## Scan lifecycle
 
@@ -56,9 +58,8 @@ and retried independently of the database transaction.
 
 ## Azure deployment
 
-`infra/main.bicep` provisions the internal Dapr-enabled Container App and Blob
-RBAC. The GitHub Actions release workflow tests, builds an immutable ACR tag,
-and updates only the existing `asset-api` Container App. Run the one-time
-infrastructure deployment in `infra/README.md` before pushing `main`; the
-workflow intentionally does not create databases or inject first-deployment
-secrets.
+`infra/main.bicep` provisions the internal Dapr-enabled Container App, migration
+job, isolated Key Vault access, and Blob RBAC. The manual GitHub Actions release
+workflow runs DB-backed tests, builds an immutable image, applies migrations,
+and then replaces the runtime with rollback protection. Complete the reviewed
+one-time cutover in `infra/README.md` first.

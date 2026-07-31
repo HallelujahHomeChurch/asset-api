@@ -8,11 +8,12 @@ import (
 )
 
 var (
-	ErrInvalidInput  = errors.New("invalid input")
-	ErrInvalidUpload = errors.New("invalid upload")
-	ErrNotFound      = errors.New("not found")
-	ErrForbidden     = errors.New("forbidden")
-	ErrConflict      = errors.New("conflict")
+	ErrInvalidInput         = errors.New("invalid input")
+	ErrInvalidUpload        = errors.New("invalid upload")
+	ErrNotFound             = errors.New("not found")
+	ErrForbidden            = errors.New("forbidden")
+	ErrConflict             = errors.New("conflict")
+	ErrCommitOutcomeUnknown = errors.New("commit outcome unknown")
 )
 
 type Visibility string
@@ -69,29 +70,30 @@ const (
 )
 
 type Asset struct {
-	ID               string           `json:"id"`
-	Namespace        string           `json:"namespace"`
-	OwnerService     string           `json:"ownerService"`
-	OwnerType        string           `json:"ownerType"`
-	OwnerID          string           `json:"ownerId"`
-	Purpose          string           `json:"purpose"`
-	Locale           string           `json:"locale,omitempty"`
-	OriginalFileName string           `json:"originalFileName"`
-	ObjectKey        string           `json:"-"`
-	ExpectedMIMEType string           `json:"expectedMimeType"`
-	DetectedMIMEType string           `json:"detectedMimeType,omitempty"`
-	SizeBytes        int64            `json:"sizeBytes,omitempty"`
-	ChecksumSHA256   string           `json:"checksumSha256,omitempty"`
-	ETag             string           `json:"etag,omitempty"`
-	UploadStatus     UploadStatus     `json:"uploadStatus"`
-	ScanStatus       ScanStatus       `json:"scanStatus"`
-	ScanDetails      string           `json:"scanDetails,omitempty"`
-	ProcessingStatus ProcessingStatus `json:"processingStatus"`
-	Visibility       Visibility       `json:"visibility"`
-	CreatedAt        time.Time        `json:"createdAt"`
-	UpdatedAt        time.Time        `json:"updatedAt"`
-	DeletedAt        time.Time        `json:"deletedAt,omitempty"`
-	ScanAttempts     int              `json:"-"`
+	ID                 string           `json:"id"`
+	Namespace          string           `json:"namespace"`
+	OwnerService       string           `json:"ownerService"`
+	OwnerType          string           `json:"ownerType"`
+	OwnerID            string           `json:"ownerId"`
+	Purpose            string           `json:"purpose"`
+	Locale             string           `json:"locale,omitempty"`
+	OriginalFileName   string           `json:"originalFileName"`
+	ObjectKey          string           `json:"-"`
+	ExpectedMIMEType   string           `json:"expectedMimeType"`
+	DetectedMIMEType   string           `json:"detectedMimeType,omitempty"`
+	SizeBytes          int64            `json:"sizeBytes,omitempty"`
+	ChecksumSHA256     string           `json:"checksumSha256,omitempty"`
+	ETag               string           `json:"etag,omitempty"`
+	UploadStatus       UploadStatus     `json:"uploadStatus"`
+	ScanStatus         ScanStatus       `json:"scanStatus"`
+	ScanDetails        string           `json:"scanDetails,omitempty"`
+	ProcessingStatus   ProcessingStatus `json:"processingStatus"`
+	Visibility         Visibility       `json:"visibility"`
+	CreatedAt          time.Time        `json:"createdAt"`
+	UpdatedAt          time.Time        `json:"updatedAt"`
+	DeletedAt          time.Time        `json:"deletedAt,omitempty"`
+	ScanAttempts       int              `json:"-"`
+	ProcessingAttempts int              `json:"-"`
 }
 
 type Derivative struct {
@@ -164,11 +166,12 @@ type CreateGrantInput struct {
 }
 
 type ScanResult struct {
-	EventID string     `json:"eventId"`
-	AssetID string     `json:"assetId"`
-	Status  ScanStatus `json:"status"`
-	Details string     `json:"details,omitempty"`
-	ETag    string     `json:"etag,omitempty"`
+	EventID         string     `json:"eventId"`
+	AssetID         string     `json:"assetId"`
+	Status          ScanStatus `json:"status"`
+	Details         string     `json:"details,omitempty"`
+	ETag            string     `json:"etag,omitempty"`
+	ExpectedAttempt int        `json:"-"`
 }
 
 type UploadTarget struct {
@@ -191,9 +194,17 @@ type BlobProperties struct {
 	ETag             string
 }
 
+type BlobMetadata struct {
+	Size         int64
+	ContentType  string
+	ETag         string
+	LastModified time.Time
+}
+
 type ByteRange struct {
 	Offset int64
 	Count  int64
+	Suffix int64
 }
 type BlobDownload struct {
 	Body         io.ReadCloser
@@ -205,11 +216,23 @@ type BlobDownload struct {
 	CacheControl string
 }
 
+type PublicDownloadMetadata struct {
+	Size         int64
+	ContentType  string
+	ETag         string
+	LastModified time.Time
+	CacheControl string
+	objectKey    string
+}
+
 type Operations struct {
-	ScanPending       int64     `json:"scanPending"`
-	ScanFailed        int64     `json:"scanFailed"`
-	OldestScanPending time.Time `json:"oldestScanPending,omitempty"`
-	PurgePending      int64     `json:"purgePending"`
+	ScanPending             int64     `json:"scanPending"`
+	ScanFailed              int64     `json:"scanFailed"`
+	OldestScanPending       time.Time `json:"oldestScanPending,omitempty"`
+	ProcessingPending       int64     `json:"processingPending"`
+	ProcessingFailed        int64     `json:"processingFailed"`
+	OldestProcessingPending time.Time `json:"oldestProcessingPending,omitempty"`
+	PurgePending            int64     `json:"purgePending"`
 }
 
 type Repository interface {
@@ -217,17 +240,19 @@ type Repository interface {
 	GetAsset(context.Context, string) (Asset, error)
 	GetUploadSession(context.Context, string) (UploadSession, error)
 	CompleteUpload(context.Context, Asset, UploadSession) error
+	FailUpload(context.Context, string, time.Time) error
 	CreateGrant(context.Context, Grant) (Grant, error)
 	RevokeGrant(context.Context, string, string, time.Time) error
 	HasActiveGrant(context.Context, string, SubjectType, string, Permission, time.Time) (bool, error)
 	ApplyScanResult(context.Context, ScanResult, time.Time) (bool, error)
 	ClaimPendingScan(context.Context, time.Time, time.Duration) (Asset, bool, error)
-	ScheduleScanRetry(context.Context, string, string, time.Time, time.Time) error
+	ScheduleScanRetry(context.Context, string, int, string, time.Time, time.Time) error
 }
 
 type BlobStore interface {
 	CreateUploadTarget(context.Context, string, int64, time.Time) (UploadTarget, error)
-	Inspect(context.Context, string) (BlobProperties, error)
+	InspectProperties(context.Context, string) (BlobMetadata, error)
+	Inspect(context.Context, string, string, int64) (BlobProperties, error)
 	Commit(context.Context, string, string) (BlobProperties, error)
 	Open(context.Context, string, ByteRange, string) (BlobDownload, error)
 	Delete(context.Context, string) error

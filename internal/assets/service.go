@@ -99,27 +99,86 @@ func (s *Service) CompleteUpload(ctx context.Context, assetID string, input Comp
 		return Asset{}, err
 	}
 	if session.Status == UploadCompleted {
+		asset, err = s.repository.GetAsset(ctx, assetID)
+		if err != nil {
+			return Asset{}, err
+		}
 		if asset.SizeBytes == input.SizeBytes && asset.ChecksumSHA256 == strings.ToLower(input.ChecksumSHA256) && asset.DetectedMIMEType == input.MIMEType {
+			if err := s.blobs.Delete(ctx, session.StagingObjectKey); err != nil {
+				return Asset{}, fmt.Errorf("delete committed staging blob: %w", err)
+			}
 			return asset, nil
 		}
 		return Asset{}, ErrInvalidUpload
 	}
-	if s.now().After(session.ExpiresAt) {
+	if session.Status == UploadFailed {
+		if err := s.deleteUploadObjects(ctx, asset, session); err != nil {
+			return Asset{}, fmt.Errorf("delete failed upload: %w", err)
+		}
 		return Asset{}, ErrInvalidUpload
 	}
-	observed, err := s.blobs.Inspect(ctx, session.StagingObjectKey)
+	policy, ok := PolicyFor(asset.Namespace)
+	if !ok {
+		return Asset{}, ErrInvalidUpload
+	}
+	sourceKey := asset.ObjectKey
+	metadata, err := s.blobs.InspectProperties(ctx, sourceKey)
+	alreadyCommitted := err == nil
+	if errors.Is(err, ErrNotFound) {
+		sourceKey = session.StagingObjectKey
+		metadata, err = s.blobs.InspectProperties(ctx, sourceKey)
+	}
+	if errors.Is(err, ErrNotFound) {
+		if err := s.rejectUpload(ctx, asset, session); err != nil {
+			return Asset{}, err
+		}
+		return Asset{}, ErrInvalidUpload
+	}
+	if err != nil {
+		return Asset{}, fmt.Errorf("inspect blob properties: %w", err)
+	}
+	if !alreadyCommitted && s.now().After(session.ExpiresAt) {
+		if err := s.rejectUpload(ctx, asset, session); err != nil {
+			return Asset{}, err
+		}
+		return Asset{}, ErrInvalidUpload
+	}
+	if metadata.Size <= 0 || metadata.Size > session.MaxSizeBytes || metadata.Size > policy.MaxSizeBytes {
+		if err := s.rejectUpload(ctx, asset, session); err != nil {
+			return Asset{}, err
+		}
+		return Asset{}, ErrInvalidUpload
+	}
+	observed, err := s.blobs.Inspect(ctx, sourceKey, metadata.ETag, min(session.MaxSizeBytes, policy.MaxSizeBytes))
 	if err != nil {
 		return Asset{}, fmt.Errorf("inspect blob: %w", err)
 	}
-	policy, ok := PolicyFor(asset.Namespace)
-	if !ok || observed.Size <= 0 || observed.Size > session.MaxSizeBytes || observed.Size > policy.MaxSizeBytes || observed.Size != input.SizeBytes || !policy.AllowsMIME(observed.DetectedMIMEType) || observed.DetectedMIMEType != asset.ExpectedMIMEType || observed.DetectedMIMEType != input.MIMEType || !strings.EqualFold(observed.ChecksumSHA256, input.ChecksumSHA256) {
+	if observed.Size != metadata.Size || (metadata.ETag != "" && observed.ETag != metadata.ETag) || observed.Size != input.SizeBytes || !policy.AllowsMIME(observed.DetectedMIMEType) || observed.DetectedMIMEType != asset.ExpectedMIMEType || observed.DetectedMIMEType != input.MIMEType || !strings.EqualFold(observed.ChecksumSHA256, input.ChecksumSHA256) {
+		if err := s.rejectUpload(ctx, asset, session); err != nil {
+			return Asset{}, err
+		}
 		return Asset{}, ErrInvalidUpload
 	}
-	committed, err := s.blobs.Commit(ctx, session.StagingObjectKey, asset.ObjectKey)
-	if err != nil {
-		return Asset{}, fmt.Errorf("commit blob: %w", err)
+	committed := observed
+	if !alreadyCommitted {
+		committed, err = s.blobs.Commit(ctx, session.StagingObjectKey, asset.ObjectKey)
+		if errors.Is(err, ErrConflict) || errors.Is(err, ErrInvalidUpload) {
+			finalMetadata, metadataErr := s.blobs.InspectProperties(ctx, asset.ObjectKey)
+			if metadataErr == nil && finalMetadata.Size == observed.Size {
+				committed, metadataErr = s.blobs.Inspect(ctx, asset.ObjectKey, finalMetadata.ETag, min(session.MaxSizeBytes, policy.MaxSizeBytes))
+			}
+			if metadataErr == nil && committed.Size == observed.Size && committed.DetectedMIMEType == observed.DetectedMIMEType && strings.EqualFold(committed.ChecksumSHA256, observed.ChecksumSHA256) {
+				err = nil
+			}
+		}
+		if err != nil {
+			return Asset{}, fmt.Errorf("commit blob: %w", err)
+		}
 	}
 	if committed.Size != observed.Size || committed.DetectedMIMEType != observed.DetectedMIMEType || !strings.EqualFold(committed.ChecksumSHA256, observed.ChecksumSHA256) {
+		if err := s.rejectUpload(ctx, asset, session); err != nil {
+			return Asset{}, err
+		}
 		return Asset{}, ErrInvalidUpload
 	}
 	now := s.now().UTC()
@@ -135,11 +194,28 @@ func (s *Service) CompleteUpload(ctx context.Context, assetID string, input Comp
 	if err := s.repository.CompleteUpload(ctx, asset, session); err != nil {
 		return Asset{}, fmt.Errorf("complete upload: %w", err)
 	}
+	if err := s.blobs.Delete(ctx, session.StagingObjectKey); err != nil {
+		return Asset{}, fmt.Errorf("delete committed staging blob: %w", err)
+	}
 	return asset, nil
 }
 
+func (s *Service) rejectUpload(ctx context.Context, asset Asset, session UploadSession) error {
+	if err := s.repository.FailUpload(ctx, asset.ID, s.now().UTC()); err != nil {
+		return fmt.Errorf("mark upload failed: %w", err)
+	}
+	return s.deleteUploadObjects(ctx, asset, session)
+}
+
+func (s *Service) deleteUploadObjects(ctx context.Context, asset Asset, session UploadSession) error {
+	return errors.Join(
+		s.blobs.Delete(ctx, session.StagingObjectKey),
+		s.blobs.Delete(ctx, asset.ObjectKey),
+	)
+}
+
 func (s *Service) CreateGrant(ctx context.Context, assetID string, input CreateGrantInput) (Grant, error) {
-	if input.SubjectType == "" || input.SubjectID == "" || input.Permission == "" || input.IdempotencyKey == "" {
+	if !validSubjectType(input.SubjectType) || input.SubjectID == "" || (input.Permission != PermissionRead && input.Permission != PermissionDelete) || input.IdempotencyKey == "" {
 		return Grant{}, ErrInvalidInput
 	}
 	asset, err := s.repository.GetAsset(ctx, assetID)
@@ -228,59 +304,101 @@ func (s *Service) ApplyScanResult(ctx context.Context, result ScanResult) error 
 }
 
 func (s *Service) OpenPublic(ctx context.Context, assetID string, byteRange ByteRange) (BlobDownload, error) {
-	return s.openPublic(ctx, assetID, "", byteRange)
+	metadata, err := s.PublicMetadata(ctx, assetID, "")
+	if err != nil {
+		return BlobDownload{}, err
+	}
+	return s.OpenPublicMetadata(ctx, metadata, byteRange)
 }
 
 func (s *Service) OpenPublicVariant(ctx context.Context, assetID, variant string, byteRange ByteRange) (BlobDownload, error) {
-	if variant != "small" && variant != "medium" && variant != "large" {
-		return BlobDownload{}, ErrNotFound
+	metadata, err := s.PublicMetadata(ctx, assetID, variant)
+	if err != nil {
+		return BlobDownload{}, err
 	}
-	return s.openPublic(ctx, assetID, variant, byteRange)
+	return s.OpenPublicMetadata(ctx, metadata, byteRange)
 }
 
-func (s *Service) openPublic(ctx context.Context, assetID, variant string, byteRange ByteRange) (BlobDownload, error) {
+func (s *Service) PublicMetadata(ctx context.Context, assetID, variant string) (PublicDownloadMetadata, error) {
+	if variant != "" && variant != "small" && variant != "medium" && variant != "large" {
+		return PublicDownloadMetadata{}, ErrNotFound
+	}
 	asset, err := s.repository.GetAsset(ctx, assetID)
 	if err != nil {
-		return BlobDownload{}, ErrNotFound
+		return PublicDownloadMetadata{}, ErrNotFound
 	}
 	if asset.Visibility != VisibilityPublic || asset.UploadStatus != UploadCompleted || asset.ScanStatus != ScanClean || !asset.DeletedAt.IsZero() || (asset.ProcessingStatus != ProcessingReady && asset.ProcessingStatus != ProcessingNotRequired) {
-		return BlobDownload{}, ErrNotFound
+		return PublicDownloadMetadata{}, ErrNotFound
 	}
 	allowed, err := s.repository.HasActiveGrant(ctx, assetID, SubjectPublic, "*", PermissionRead, s.now().UTC())
 	if err != nil || !allowed {
-		return BlobDownload{}, ErrNotFound
+		return PublicDownloadMetadata{}, ErrNotFound
 	}
-	objectKey := asset.ObjectKey
-	contentType := asset.DetectedMIMEType
-	totalSize := asset.SizeBytes
-	expectedETag := asset.ETag
+	metadata := PublicDownloadMetadata{
+		Size: asset.SizeBytes, ContentType: asset.DetectedMIMEType, ETag: asset.ETag,
+		LastModified: asset.UpdatedAt, objectKey: asset.ObjectKey,
+	}
 	if variant != "" {
 		repository, ok := s.repository.(interface {
 			GetDerivative(context.Context, string, string) (Derivative, error)
 		})
 		if !ok {
-			return BlobDownload{}, ErrNotFound
+			return PublicDownloadMetadata{}, ErrNotFound
 		}
 		derivative, err := repository.GetDerivative(ctx, assetID, variant)
 		if err != nil {
-			return BlobDownload{}, ErrNotFound
+			return PublicDownloadMetadata{}, ErrNotFound
 		}
-		objectKey, contentType, totalSize = derivative.ObjectKey, derivative.MIMEType, derivative.SizeBytes
-		expectedETag = derivative.ETag
+		metadata.Size, metadata.ContentType, metadata.ETag = derivative.SizeBytes, derivative.MIMEType, derivative.ETag
+		metadata.LastModified, metadata.objectKey = derivative.CreatedAt, derivative.ObjectKey
 	}
-	download, err := s.blobs.Open(ctx, objectKey, byteRange, expectedETag)
+	if policy, ok := PolicyFor(asset.Namespace); ok {
+		metadata.CacheControl = policy.CacheControl
+	}
+	return metadata, nil
+}
+
+func (s *Service) AuthorizedMetadata(ctx context.Context, assetID string, subject SubjectType, subjectID string) (PublicDownloadMetadata, error) {
+	if subject == SubjectPublic || !validSubjectType(subject) || subjectID == "" {
+		return PublicDownloadMetadata{}, ErrInvalidInput
+	}
+	asset, err := s.repository.GetAsset(ctx, assetID)
+	if err != nil || asset.UploadStatus != UploadCompleted || asset.ScanStatus != ScanClean || !asset.DeletedAt.IsZero() || (asset.ProcessingStatus != ProcessingReady && asset.ProcessingStatus != ProcessingNotRequired) {
+		return PublicDownloadMetadata{}, ErrNotFound
+	}
+	allowed, err := s.repository.HasActiveGrant(ctx, assetID, subject, subjectID, PermissionRead, s.now().UTC())
+	if err != nil || !allowed {
+		return PublicDownloadMetadata{}, ErrNotFound
+	}
+	return PublicDownloadMetadata{
+		Size: asset.SizeBytes, ContentType: asset.DetectedMIMEType, ETag: asset.ETag,
+		LastModified: asset.UpdatedAt, CacheControl: "private, no-store", objectKey: asset.ObjectKey,
+	}, nil
+}
+
+func (s *Service) OpenPublicMetadata(ctx context.Context, metadata PublicDownloadMetadata, byteRange ByteRange) (BlobDownload, error) {
+	download, err := s.blobs.Open(ctx, metadata.objectKey, byteRange, metadata.ETag)
 	if err != nil {
 		return BlobDownload{}, err
 	}
-	download.ContentType = contentType
-	download.TotalSize = totalSize
-	if policy, ok := PolicyFor(asset.Namespace); ok {
-		download.CacheControl = policy.CacheControl
-	}
+	download.ContentType = metadata.ContentType
+	download.TotalSize = metadata.Size
+	download.ETag = metadata.ETag
+	download.LastModified = metadata.LastModified
+	download.CacheControl = metadata.CacheControl
 	return download, nil
 }
 
 func (s *Service) PublicURL(assetID string) string { return s.publicBaseURL + "/public/" + assetID }
+
+func validSubjectType(value SubjectType) bool {
+	switch value {
+	case SubjectPublic, SubjectUser, SubjectRole, SubjectService, SubjectLineGroup, SubjectAppClient:
+		return true
+	default:
+		return false
+	}
+}
 
 func inspectBytes(value []byte) BlobProperties {
 	sum := sha256.Sum256(value)

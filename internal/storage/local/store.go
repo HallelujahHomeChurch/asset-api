@@ -98,7 +98,34 @@ func (s *Store) PutHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 }
 
-func (s *Store) Inspect(_ context.Context, objectKey string) (assets.BlobProperties, error) {
+func (s *Store) InspectProperties(_ context.Context, objectKey string) (assets.BlobMetadata, error) {
+	filePath, err := s.safePath(objectKey)
+	if err != nil {
+		return assets.BlobMetadata{}, assets.ErrNotFound
+	}
+	info, err := os.Stat(filePath)
+	if os.IsNotExist(err) {
+		return assets.BlobMetadata{}, assets.ErrNotFound
+	}
+	if err != nil {
+		return assets.BlobMetadata{}, err
+	}
+	return assets.BlobMetadata{
+		Size:         info.Size(),
+		ContentType:  mimeFromExtension(filePath),
+		ETag:         fmt.Sprintf("%x-%x", info.Size(), info.ModTime().UnixNano()),
+		LastModified: info.ModTime(),
+	}, nil
+}
+
+func (s *Store) Inspect(ctx context.Context, objectKey, expectedETag string, maxSize int64) (assets.BlobProperties, error) {
+	metadata, err := s.InspectProperties(ctx, objectKey)
+	if err != nil {
+		return assets.BlobProperties{}, err
+	}
+	if (expectedETag != "" && metadata.ETag != expectedETag) || (maxSize > 0 && metadata.Size > maxSize) {
+		return assets.BlobProperties{}, assets.ErrInvalidUpload
+	}
 	filePath, err := s.safePath(objectKey)
 	if err != nil {
 		return assets.BlobProperties{}, assets.ErrNotFound
@@ -146,11 +173,11 @@ func (s *Store) Commit(ctx context.Context, stagingObjectKey, finalObjectKey str
 	}
 	if err := os.Link(stagingPath, finalPath); os.IsExist(err) {
 		if _, stagingErr := os.Stat(stagingPath); os.IsNotExist(stagingErr) {
-			return s.Inspect(ctx, finalObjectKey)
+			return s.Inspect(ctx, finalObjectKey, "", 0)
 		}
 		return assets.BlobProperties{}, assets.ErrConflict
 	} else if os.IsNotExist(err) {
-		if properties, inspectErr := s.Inspect(ctx, finalObjectKey); inspectErr == nil {
+		if properties, inspectErr := s.Inspect(ctx, finalObjectKey, "", 0); inspectErr == nil {
 			return properties, nil
 		}
 		return assets.BlobProperties{}, assets.ErrNotFound
@@ -160,7 +187,7 @@ func (s *Store) Commit(ctx context.Context, stagingObjectKey, finalObjectKey str
 	if err := os.Remove(stagingPath); err != nil {
 		return assets.BlobProperties{}, err
 	}
-	return s.Inspect(ctx, finalObjectKey)
+	return s.Inspect(ctx, finalObjectKey, "", 0)
 }
 
 func (s *Store) Open(_ context.Context, objectKey string, requested assets.ByteRange, expectedETag string) (assets.BlobDownload, error) {
@@ -235,7 +262,7 @@ func (s *Store) Put(_ context.Context, objectKey string, reader io.Reader, size 
 	if err := os.Rename(temporaryName, filePath); err != nil {
 		return assets.BlobProperties{}, err
 	}
-	return s.Inspect(context.Background(), objectKey)
+	return s.Inspect(context.Background(), objectKey, "", 0)
 }
 func (s *Store) sign(value string) string {
 	mac := hmac.New(sha256.New, s.signingKey)

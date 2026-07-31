@@ -55,8 +55,34 @@ func (s *Store) CreateUploadTarget(ctx context.Context, objectKey string, _ int6
 	return assets.UploadTarget{URL: blobURL + "?" + query.Encode(), Method: http.MethodPut, Headers: map[string]string{"x-ms-blob-type": "BlockBlob", "Content-Type": "application/octet-stream"}, ExpiresAt: expiresAt}, nil
 }
 
-func (s *Store) Inspect(ctx context.Context, objectKey string) (assets.BlobProperties, error) {
-	response, err := s.client.DownloadStream(ctx, s.container, objectKey, nil)
+func (s *Store) InspectProperties(ctx context.Context, objectKey string) (assets.BlobMetadata, error) {
+	response, err := s.client.ServiceClient().NewContainerClient(s.container).NewBlobClient(objectKey).GetProperties(ctx, nil)
+	if err != nil {
+		return assets.BlobMetadata{}, mapError(err)
+	}
+	metadata := assets.BlobMetadata{}
+	if response.ContentLength != nil {
+		metadata.Size = *response.ContentLength
+	}
+	if response.ContentType != nil {
+		metadata.ContentType = *response.ContentType
+	}
+	if response.ETag != nil {
+		metadata.ETag = string(*response.ETag)
+	}
+	if response.LastModified != nil {
+		metadata.LastModified = *response.LastModified
+	}
+	return metadata, nil
+}
+
+func (s *Store) Inspect(ctx context.Context, objectKey, expectedETag string, maxSize int64) (assets.BlobProperties, error) {
+	options := &azblob.DownloadStreamOptions{}
+	if expectedETag != "" {
+		match := azcore.ETag(expectedETag)
+		options.AccessConditions = &blob.AccessConditions{ModifiedAccessConditions: &blob.ModifiedAccessConditions{IfMatch: &match}}
+	}
+	response, err := s.client.DownloadStream(ctx, s.container, objectKey, options)
 	if err != nil {
 		return assets.BlobProperties{}, mapError(err)
 	}
@@ -71,11 +97,18 @@ func (s *Store) Inspect(ctx context.Context, objectKey string) (assets.BlobPrope
 		return assets.BlobProperties{}, err
 	}
 	size := int64(read)
-	written, err := io.Copy(hash, response.Body)
+	reader := io.Reader(response.Body)
+	if maxSize > 0 {
+		reader = io.LimitReader(response.Body, maxSize-int64(read)+1)
+	}
+	written, err := io.Copy(hash, reader)
 	if err != nil {
 		return assets.BlobProperties{}, err
 	}
 	size += written
+	if maxSize > 0 && size > maxSize {
+		return assets.BlobProperties{}, assets.ErrInvalidUpload
+	}
 	mime := http.DetectContentType(header[:read])
 	if strings.HasPrefix(string(header[:read]), "%PDF-") {
 		mime = "application/pdf"
@@ -90,7 +123,7 @@ func (s *Store) Inspect(ctx context.Context, objectKey string) (assets.BlobPrope
 func (s *Store) Commit(ctx context.Context, stagingObjectKey, finalObjectKey string) (assets.BlobProperties, error) {
 	response, err := s.client.DownloadStream(ctx, s.container, stagingObjectKey, nil)
 	if err != nil {
-		if properties, inspectErr := s.Inspect(ctx, finalObjectKey); inspectErr == nil {
+		if properties, inspectErr := s.Inspect(ctx, finalObjectKey, "", 0); inspectErr == nil {
 			return properties, nil
 		}
 		return assets.BlobProperties{}, mapError(err)
@@ -113,7 +146,7 @@ func (s *Store) Commit(ctx context.Context, stagingObjectKey, finalObjectKey str
 	if err := s.Delete(ctx, stagingObjectKey); err != nil {
 		return assets.BlobProperties{}, err
 	}
-	return s.Inspect(ctx, finalObjectKey)
+	return s.Inspect(ctx, finalObjectKey, "", 0)
 }
 
 func (s *Store) Open(ctx context.Context, objectKey string, requested assets.ByteRange, expectedETag string) (assets.BlobDownload, error) {
@@ -166,7 +199,7 @@ func (s *Store) Put(ctx context.Context, objectKey string, reader io.Reader, _ i
 	if err != nil {
 		return assets.BlobProperties{}, mapError(err)
 	}
-	return s.Inspect(ctx, objectKey)
+	return s.Inspect(ctx, objectKey, "", 0)
 }
 
 func (s *Store) userDelegationCredential(ctx context.Context) (*service.UserDelegationCredential, error) {
@@ -191,6 +224,19 @@ func (s *Store) userDelegationCredential(ctx context.Context) (*service.UserDele
 func mapError(err error) error {
 	if err == nil {
 		return nil
+	}
+	var responseError *azcore.ResponseError
+	if errors.As(err, &responseError) {
+		switch responseError.StatusCode {
+		case http.StatusNotFound:
+			return assets.ErrNotFound
+		case http.StatusConflict:
+			return assets.ErrConflict
+		case http.StatusPreconditionFailed:
+			return assets.ErrInvalidUpload
+		case http.StatusRequestedRangeNotSatisfiable:
+			return assets.ErrInvalidInput
+		}
 	}
 	if strings.Contains(strings.ToLower(err.Error()), "blobnotfound") || strings.Contains(strings.ToLower(err.Error()), "statuscode=404") {
 		return assets.ErrNotFound

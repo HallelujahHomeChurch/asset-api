@@ -21,6 +21,9 @@ func TestWorkerMarksCleanAsset(t *testing.T) {
 	if repo.result.Status != assets.ScanClean {
 		t.Fatalf("status = %s", repo.result.Status)
 	}
+	if repo.result.ExpectedAttempt != repo.asset.ScanAttempts {
+		t.Fatalf("expected attempt = %d, want %d", repo.result.ExpectedAttempt, repo.asset.ScanAttempts)
+	}
 }
 
 func TestWorkerMarksInfectedAssetWithSignature(t *testing.T) {
@@ -77,7 +80,12 @@ func (workerBlobs) Open(context.Context, string, assets.ByteRange, string) (asse
 func (workerBlobs) CreateUploadTarget(context.Context, string, int64, time.Time) (assets.UploadTarget, error) {
 	panic("not used")
 }
-func (workerBlobs) Inspect(context.Context, string) (assets.BlobProperties, error) { panic("not used") }
+func (workerBlobs) InspectProperties(context.Context, string) (assets.BlobMetadata, error) {
+	panic("not used")
+}
+func (workerBlobs) Inspect(context.Context, string, string, int64) (assets.BlobProperties, error) {
+	panic("not used")
+}
 func (workerBlobs) Commit(context.Context, string, string) (assets.BlobProperties, error) {
 	panic("not used")
 }
@@ -96,7 +104,7 @@ func (r *workerRepository) ApplyScanResult(_ context.Context, result assets.Scan
 	r.result = result
 	return true, nil
 }
-func (r *workerRepository) ScheduleScanRetry(_ context.Context, _ string, details string, _, _ time.Time) error {
+func (r *workerRepository) ScheduleScanRetry(_ context.Context, _ string, _ int, details string, _, _ time.Time) error {
 	r.retry = details
 	return nil
 }
@@ -110,6 +118,7 @@ func (*workerRepository) GetUploadSession(context.Context, string) (assets.Uploa
 func (*workerRepository) CompleteUpload(context.Context, assets.Asset, assets.UploadSession) error {
 	panic("not used")
 }
+func (*workerRepository) FailUpload(context.Context, string, time.Time) error { panic("not used") }
 func (*workerRepository) CreateGrant(context.Context, assets.Grant) (assets.Grant, error) {
 	panic("not used")
 }

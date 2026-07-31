@@ -22,17 +22,17 @@ var namespacePolicies = map[string]NamespacePolicy{
 	"cms.weekly.pdf": {
 		OwnerService: "hhc-web-api", MIMETypes: map[string]bool{"application/pdf": true},
 		MaxSizeBytes: 20 << 20, DefaultVisibility: VisibilityPrivate, Visibilities: map[Visibility]bool{VisibilityPrivate: true, VisibilityPublic: true}, Processing: ProcessingNotRequired,
-		CacheControl: "public, max-age=31536000, immutable",
+		CacheControl: "public, max-age=300, must-revalidate",
 	},
 	"cms.news.cover": {
 		OwnerService: "hhc-web-api", MIMETypes: map[string]bool{"image/jpeg": true, "image/png": true, "image/webp": true},
 		MaxSizeBytes: 10 << 20, DefaultVisibility: VisibilityPrivate, Visibilities: map[Visibility]bool{VisibilityPrivate: true, VisibilityPublic: true}, Processing: ProcessingPending,
-		CacheControl: "public, max-age=31536000, immutable",
+		CacheControl: "public, max-age=300, must-revalidate",
 	},
 	"cms.page.image": {
 		OwnerService: "hhc-web-api", MIMETypes: map[string]bool{"image/jpeg": true, "image/png": true, "image/webp": true},
 		MaxSizeBytes: 10 << 20, DefaultVisibility: VisibilityPrivate, Visibilities: map[Visibility]bool{VisibilityPrivate: true, VisibilityPublic: true}, Processing: ProcessingPending,
-		CacheControl: "public, max-age=31536000, immutable",
+		CacheControl: "public, max-age=300, must-revalidate",
 	},
 	"line.group.file": {
 		OwnerService: "hhc-line-function-bot",
