@@ -19,6 +19,10 @@ param embeddedScanEnabled bool = true
 param deployScanJob bool = false
 param deploySignatureRefreshJob bool = false
 param scanWorkerImage string = runtimeImage
+param workloadAuthClientId string = ''
+param workloadAuthAudience string = ''
+param lineAttachmentClientId string = ''
+param lineAttachmentObjectId string = ''
 
 param publicBaseUrl string = 'https://www.alive.org.tw/api/assets'
 param clamavHost string = '172.16.65.5'
@@ -31,6 +35,7 @@ param uploadAllowedOrigins array = [
 ]
 
 var keyVaultSecretsUserRole = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
+var workloadAuthEnabled = workloadAuthClientId != '' && workloadAuthAudience != '' && lineAttachmentClientId != '' && lineAttachmentObjectId != ''
 
 resource environment 'Microsoft.App/managedEnvironments@2024-03-01' existing = {
   name: containerAppEnvironmentName
@@ -288,6 +293,12 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = if (deployRuntime) {
         appProtocol: 'http'
         logLevel: 'warn'
       }
+      ingress: {
+        external: false
+        allowInsecure: false
+        targetPort: 8080
+        transport: 'auto'
+      }
       registries: [
         {
           server: registry.properties.loginServer
@@ -322,6 +333,12 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = if (deployRuntime) {
             { name: 'ASSET_EMBEDDED_SCAN_ENABLED', value: string(embeddedScanEnabled) }
             { name: 'ASSET_ALLOWED_CALLERS', value: 'account-api,hhc-web-api,hhc-line-function-bot' }
             { name: 'ASSET_ALLOW_DEV_CALLER_HEADER', value: 'false' }
+            { name: 'ASSET_WORKLOAD_TENANT_ID', value: workloadAuthEnabled ? subscription().tenantId : '' }
+            { name: 'ASSET_WORKLOAD_ISSUER', value: workloadAuthEnabled ? '${az.environment().authentication.loginEndpoint}${subscription().tenantId}/v2.0' : '' }
+            { name: 'ASSET_WORKLOAD_AUDIENCE', value: workloadAuthEnabled ? workloadAuthAudience : '' }
+            { name: 'ASSET_WORKLOAD_REQUIRED_ROLE', value: 'Asset.Invoke' }
+            { name: 'ASSET_LINE_WORKLOAD_CLIENT_ID', value: workloadAuthEnabled ? lineAttachmentClientId : '' }
+            { name: 'ASSET_LINE_WORKLOAD_OBJECT_ID', value: workloadAuthEnabled ? lineAttachmentObjectId : '' }
             { name: 'CLAMAV_HOST', value: clamavHost }
             { name: 'CLAMAV_PORT', value: string(clamavPort) }
             { name: 'CLAMAV_TIMEOUT_SECONDS', value: '120' }
@@ -358,6 +375,39 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = if (deployRuntime) {
     acrPull
     runtimeSecretAccess
   ]
+}
+
+resource workloadAuth 'Microsoft.App/containerApps/authConfigs@2025-01-01' = if (deployRuntime && workloadAuthEnabled) {
+  parent: app
+  name: 'current'
+  properties: {
+    platform: { enabled: true }
+    httpSettings: { requireHttps: true }
+    globalValidation: {
+      unauthenticatedClientAction: 'Return401'
+      excludedPaths: [
+        '/health'
+        '/ready'
+        '/api/assets/public/*'
+      ]
+    }
+    identityProviders: {
+      azureActiveDirectory: {
+        enabled: true
+        registration: {
+          clientId: workloadAuthClientId
+          openIdIssuer: '${az.environment().authentication.loginEndpoint}${subscription().tenantId}/v2.0'
+        }
+        validation: {
+          allowedAudiences: [workloadAuthAudience]
+          defaultAuthorizationPolicy: {
+            allowedApplications: [lineAttachmentClientId]
+            allowedPrincipals: { identities: [lineAttachmentObjectId] }
+          }
+        }
+      }
+    }
+  }
 }
 
 resource existingApp 'Microsoft.App/containerApps@2024-03-01' existing = if (!deployRuntime) {

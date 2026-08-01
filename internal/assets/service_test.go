@@ -1,6 +1,7 @@
 package assets
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -318,6 +319,56 @@ func TestCreateUploadSessionEnforcesNamespaceOwnerSizeAndVisibility(t *testing.T
 		if _, err := service.CreateUploadSession(context.Background(), input, "invalid-policy-"+string(rune('a'+index))); !errors.Is(err, ErrInvalidInput) {
 			t.Fatalf("case %d error = %v", index, err)
 		}
+	}
+}
+
+func TestCreateUploadSessionEnforcesLinePerTypeLimit(t *testing.T) {
+	service := NewService(newMemoryRepository(), newMemoryBlobStore(), "https://www.alive.org.tw/api/assets", time.Now)
+	_, err := service.CreateUploadSession(context.Background(), CreateUploadInput{
+		Namespace: "line.group.file", OwnerService: "hhc-line-function-bot", OwnerType: "line_message",
+		OwnerID: "message-1", Purpose: "resource", OriginalFileName: "notes.txt",
+		ExpectedMIMEType: "text/plain", MaxSizeBytes: (2 << 20) + 1, Visibility: VisibilityRestricted,
+	}, "line-text-too-large")
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestCompleteUploadAcceptsKnownOfficeContainer(t *testing.T) {
+	ctx := context.Background()
+	repo := newMemoryRepository()
+	blobs := newMemoryBlobStore()
+	service := NewService(repo, blobs, "https://www.alive.org.tw/api/assets", time.Now)
+	mime := "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+	created, err := service.CreateUploadSession(ctx, CreateUploadInput{
+		Namespace: "line.group.file", OwnerService: "hhc-line-function-bot", OwnerType: "line_message",
+		OwnerID: "message-1", Purpose: "resource", OriginalFileName: "slides.pptx",
+		ExpectedMIMEType: mime, MaxSizeBytes: 1024, Visibility: VisibilityRestricted,
+	}, "line-pptx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var zipped bytes.Buffer
+	writer := zip.NewWriter(&zipped)
+	part, err := writer.Create("ppt/presentation.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = part.Write([]byte("<presentation/>"))
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	payload := zipped.Bytes()
+	blobs.objects[created.Session.StagingObjectKey] = payload
+	sum := sha256.Sum256(payload)
+	asset, err := service.CompleteUpload(ctx, created.Asset.ID, CompleteUploadInput{
+		SizeBytes: int64(len(payload)), ChecksumSHA256: hex.EncodeToString(sum[:]), MIMEType: mime,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if asset.DetectedMIMEType != mime {
+		t.Fatalf("detected MIME = %q", asset.DetectedMIMEType)
 	}
 }
 

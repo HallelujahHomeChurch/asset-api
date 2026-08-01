@@ -65,7 +65,14 @@ func run() error {
 	}
 	repository := postgres.New(db)
 	service := assets.NewService(repository, blobStore, cfg.PublicBaseURL, time.Now)
-	handler := httpapi.New(service, db, cfg.AllowedCallers, cfg.AllowDevCallerHeader, cfg.AppAPIToken, localUpload)
+	workloadCallers := map[string]httpapi.WorkloadCaller{}
+	if cfg.LineWorkloadClientID != "" {
+		workloadCallers[cfg.LineWorkloadClientID] = httpapi.WorkloadCaller{ObjectID: cfg.LineWorkloadObjectID, Service: "hhc-line-function-bot"}
+	}
+	handler := httpapi.New(service, db, cfg.AllowedCallers, cfg.AllowDevCallerHeader, cfg.AppAPIToken, httpapi.WorkloadAuthConfig{
+		TenantID: cfg.WorkloadTenantID, Issuer: cfg.WorkloadIssuer, Audience: cfg.WorkloadAudience,
+		RequiredRole: cfg.WorkloadRequiredRole, Callers: workloadCallers,
+	}, localUpload)
 	server := &http.Server{Addr: ":" + cfg.Port, Handler: handler.Routes(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 2 * time.Minute, IdleTimeout: 2 * time.Minute}
 
 	derivativeBlobs, ok := blobStore.(derivatives.BlobStore)

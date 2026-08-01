@@ -8,3 +8,7 @@ param scanDispatchEnabled = false
 param embeddedScanEnabled = true
 param deployScanJob = true
 param deploySignatureRefreshJob = true
+param workloadAuthClientId = 'REPLACE_ME'
+param workloadAuthAudience = 'api://REPLACE_ME'
+param lineAttachmentClientId = 'REPLACE_ME'
+param lineAttachmentObjectId = 'REPLACE_ME'

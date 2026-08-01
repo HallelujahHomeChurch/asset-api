@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,11 +24,25 @@ type Handler struct {
 	allowedCallers       map[string]bool
 	allowDevCallerHeader bool
 	appAPIToken          string
+	workloadAuth         WorkloadAuthConfig
 	localUpload          http.HandlerFunc
 }
 
-func New(service *assets.Service, db *sql.DB, allowedCallers map[string]bool, allowDevCallerHeader bool, appAPIToken string, localUpload http.HandlerFunc) *Handler {
-	return &Handler{service: service, db: db, allowedCallers: allowedCallers, allowDevCallerHeader: allowDevCallerHeader, appAPIToken: appAPIToken, localUpload: localUpload}
+type WorkloadCaller struct {
+	ObjectID string
+	Service  string
+}
+
+type WorkloadAuthConfig struct {
+	TenantID     string
+	Issuer       string
+	Audience     string
+	RequiredRole string
+	Callers      map[string]WorkloadCaller
+}
+
+func New(service *assets.Service, db *sql.DB, allowedCallers map[string]bool, allowDevCallerHeader bool, appAPIToken string, workloadAuth WorkloadAuthConfig, localUpload http.HandlerFunc) *Handler {
+	return &Handler{service: service, db: db, allowedCallers: allowedCallers, allowDevCallerHeader: allowDevCallerHeader, appAPIToken: appAPIToken, workloadAuth: workloadAuth, localUpload: localUpload}
 }
 
 func (h *Handler) Routes() http.Handler {
@@ -73,16 +88,19 @@ func localUploadCORS(next http.Handler) http.Handler {
 
 func (h *Handler) internal(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !h.allowDevCallerHeader && !sameToken(r.Header.Get("dapr-api-token"), h.appAPIToken) {
-			writeError(w, http.StatusForbidden, "AST_FORBIDDEN", "invalid app token")
-			return
+		caller := ""
+		if h.allowDevCallerHeader {
+			caller = strings.TrimSpace(r.Header.Get("X-Internal-Caller-App-Id"))
+		} else if daprCaller := strings.TrimSpace(r.Header.Get("Dapr-Caller-App-Id")); daprCaller != "" && sameToken(r.Header.Get("dapr-api-token"), h.appAPIToken) {
+			caller = daprCaller
+		} else {
+			caller = workloadCaller(r.Header.Get("X-MS-CLIENT-PRINCIPAL"), h.workloadAuth)
 		}
-		caller := callerFromRequest(r, h.allowDevCallerHeader)
 		if !h.allowedCallers[caller] {
 			writeError(w, http.StatusForbidden, "AST_FORBIDDEN", "caller is not allowed")
 			return
 		}
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), callerContextKey{}, caller)))
 	})
 }
 
@@ -456,11 +474,62 @@ func requestID(next http.Handler) http.Handler {
 }
 
 func callerFromRequest(r *http.Request, allowDevelopmentHeader bool) string {
+	if caller, ok := r.Context().Value(callerContextKey{}).(string); ok {
+		return caller
+	}
 	if caller := strings.TrimSpace(r.Header.Get("Dapr-Caller-App-Id")); caller != "" {
 		return caller
 	}
 	if allowDevelopmentHeader {
 		return strings.TrimSpace(r.Header.Get("X-Internal-Caller-App-Id"))
+	}
+	return ""
+}
+
+type callerContextKey struct{}
+
+func workloadCaller(encoded string, config WorkloadAuthConfig) string {
+	if encoded == "" || config.TenantID == "" || config.Issuer == "" || config.Audience == "" || config.RequiredRole == "" {
+		return ""
+	}
+	raw, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return ""
+	}
+	var principal struct {
+		AuthType string `json:"auth_typ"`
+		Claims   []struct {
+			Type  string `json:"typ"`
+			Value string `json:"val"`
+		} `json:"claims"`
+	}
+	if json.Unmarshal(raw, &principal) != nil || principal.AuthType != "aad" {
+		return ""
+	}
+	claims := map[string][]string{}
+	for _, claim := range principal.Claims {
+		claims[claim.Type] = append(claims[claim.Type], claim.Value)
+	}
+	claim := func(names ...string) string {
+		for _, name := range names {
+			if len(claims[name]) > 0 {
+				return claims[name][0]
+			}
+		}
+		return ""
+	}
+	if claim("tid", "http://schemas.microsoft.com/identity/claims/tenantid") != config.TenantID || claim("iss") != config.Issuer || claim("aud") != config.Audience {
+		return ""
+	}
+	clientID := claim("appid", "azp")
+	configured, ok := config.Callers[clientID]
+	if !ok || claim("oid", "http://schemas.microsoft.com/identity/claims/objectidentifier") != configured.ObjectID {
+		return ""
+	}
+	for _, role := range append(claims["roles"], claims["http://schemas.microsoft.com/ws/2008/06/identity/claims/role"]...) {
+		if role == config.RequiredRole {
+			return configured.Service
+		}
 	}
 	return ""
 }

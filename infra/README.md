@@ -3,8 +3,9 @@
 The template creates `asset-api` in the existing `alive-env`, enables Dapr
 with app id `asset-api`, creates a private Blob container, and assigns its
 dedicated pull identity ACR pull, plus its system identity container-scoped
-Blob contributor and account-scoped Blob delegator roles. No Container Apps ingress is created;
-gateway and owner services invoke it through Dapr.
+Blob contributor and account-scoped Blob delegator roles. Owner services use
+Dapr; the dedicated LINE attachment Job uses authenticated internal ingress
+with an Entra application audience and the `Asset.Invoke` app role.
 The office clamd rule remains only as the rollback path until the Azure scan
 Job smoke gate passes.
 

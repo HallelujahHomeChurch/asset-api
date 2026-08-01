@@ -1,6 +1,7 @@
 package assets
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -9,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"path"
 	"strings"
@@ -30,7 +32,7 @@ func NewService(repository Repository, blobs BlobStore, publicBaseURL string, no
 
 func (s *Service) CreateUploadSession(ctx context.Context, input CreateUploadInput, idempotencyKey string) (CreatedUpload, error) {
 	policy, ok := PolicyFor(input.Namespace)
-	if !ok || policy.OwnerService != input.OwnerService || !policy.AllowsMIME(input.ExpectedMIMEType) || input.OwnerType == "" || input.OwnerID == "" || input.MaxSizeBytes <= 0 || input.MaxSizeBytes > policy.MaxSizeBytes || idempotencyKey == "" {
+	if !ok || policy.OwnerService != input.OwnerService || !policy.AllowsMIME(input.ExpectedMIMEType) || !matchesFileExtension(input.OriginalFileName, input.ExpectedMIMEType) || input.OwnerType == "" || input.OwnerID == "" || !policy.AllowsSize(input.ExpectedMIMEType, input.MaxSizeBytes) || idempotencyKey == "" {
 		return CreatedUpload{}, ErrInvalidInput
 	}
 	if input.Visibility == "" {
@@ -143,17 +145,24 @@ func (s *Service) CompleteUpload(ctx context.Context, assetID string, input Comp
 		}
 		return Asset{}, ErrInvalidUpload
 	}
-	if metadata.Size <= 0 || metadata.Size > session.MaxSizeBytes || metadata.Size > policy.MaxSizeBytes {
+	if metadata.Size <= 0 || metadata.Size > session.MaxSizeBytes || !policy.AllowsSize(asset.ExpectedMIMEType, metadata.Size) {
 		if err := s.rejectUpload(ctx, asset, session); err != nil {
 			return Asset{}, err
 		}
 		return Asset{}, ErrInvalidUpload
 	}
-	observed, err := s.blobs.Inspect(ctx, sourceKey, metadata.ETag, min(session.MaxSizeBytes, policy.MaxSizeBytes))
+	observed, err := s.blobs.Inspect(ctx, sourceKey, metadata.ETag, session.MaxSizeBytes)
 	if err != nil {
 		return Asset{}, fmt.Errorf("inspect blob: %w", err)
 	}
-	if observed.Size != metadata.Size || (metadata.ETag != "" && observed.ETag != metadata.ETag) || observed.Size != input.SizeBytes || !policy.AllowsMIME(observed.DetectedMIMEType) || observed.DetectedMIMEType != asset.ExpectedMIMEType || observed.DetectedMIMEType != input.MIMEType || !strings.EqualFold(observed.ChecksumSHA256, input.ChecksumSHA256) {
+	observed.DetectedMIMEType, err = s.verifyDetectedMIME(ctx, sourceKey, observed, asset.ExpectedMIMEType)
+	if err != nil {
+		if rejectErr := s.rejectUpload(ctx, asset, session); rejectErr != nil {
+			return Asset{}, rejectErr
+		}
+		return Asset{}, ErrInvalidUpload
+	}
+	if observed.Size != metadata.Size || (metadata.ETag != "" && observed.ETag != metadata.ETag) || observed.Size != input.SizeBytes || observed.DetectedMIMEType == "" || observed.DetectedMIMEType != input.MIMEType || !strings.EqualFold(observed.ChecksumSHA256, input.ChecksumSHA256) {
 		if err := s.rejectUpload(ctx, asset, session); err != nil {
 			return Asset{}, err
 		}
@@ -165,8 +174,9 @@ func (s *Service) CompleteUpload(ctx context.Context, assetID string, input Comp
 		if errors.Is(err, ErrConflict) || errors.Is(err, ErrInvalidUpload) {
 			finalMetadata, metadataErr := s.blobs.InspectProperties(ctx, asset.ObjectKey)
 			if metadataErr == nil && finalMetadata.Size == observed.Size {
-				committed, metadataErr = s.blobs.Inspect(ctx, asset.ObjectKey, finalMetadata.ETag, min(session.MaxSizeBytes, policy.MaxSizeBytes))
+				committed, metadataErr = s.blobs.Inspect(ctx, asset.ObjectKey, finalMetadata.ETag, session.MaxSizeBytes)
 			}
+			committed.DetectedMIMEType = normalizeDetectedMIME(asset.ExpectedMIMEType, committed.DetectedMIMEType)
 			if metadataErr == nil && committed.Size == observed.Size && committed.DetectedMIMEType == observed.DetectedMIMEType && strings.EqualFold(committed.ChecksumSHA256, observed.ChecksumSHA256) {
 				err = nil
 			}
@@ -175,6 +185,7 @@ func (s *Service) CompleteUpload(ctx context.Context, assetID string, input Comp
 			return Asset{}, fmt.Errorf("commit blob: %w", err)
 		}
 	}
+	committed.DetectedMIMEType = normalizeDetectedMIME(asset.ExpectedMIMEType, committed.DetectedMIMEType)
 	if committed.Size != observed.Size || committed.DetectedMIMEType != observed.DetectedMIMEType || !strings.EqualFold(committed.ChecksumSHA256, observed.ChecksumSHA256) {
 		if err := s.rejectUpload(ctx, asset, session); err != nil {
 			return Asset{}, err
@@ -410,6 +421,112 @@ func inspectBytes(value []byte) BlobProperties {
 		mime = "application/pdf"
 	}
 	return BlobProperties{Size: int64(len(value)), DetectedMIMEType: mime, ChecksumSHA256: hex.EncodeToString(sum[:])}
+}
+
+func normalizeDetectedMIME(expected, detected string) string {
+	if expected == detected {
+		return expected
+	}
+	if (expected == "text/plain" || expected == "text/markdown") && strings.HasPrefix(detected, "text/plain") {
+		return expected
+	}
+	if detected == "application/zip" {
+		switch expected {
+		case "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+			"application/vnd.apple.keynote",
+			"application/vnd.oasis.opendocument.presentation",
+			"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+			"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+			return expected
+		}
+	}
+	if detected == "application/octet-stream" {
+		switch expected {
+		case "application/vnd.ms-powerpoint", "application/msword", "application/vnd.ms-excel":
+			return expected
+		}
+	}
+	return ""
+}
+
+func (s *Service) verifyDetectedMIME(ctx context.Context, objectKey string, observed BlobProperties, expected string) (string, error) {
+	if normalized := normalizeDetectedMIME(expected, observed.DetectedMIMEType); normalized != "" && observed.DetectedMIMEType != "application/zip" && observed.DetectedMIMEType != "application/octet-stream" {
+		return normalized, nil
+	}
+	download, err := s.blobs.Open(ctx, objectKey, ByteRange{}, observed.ETag)
+	if err != nil {
+		return "", err
+	}
+	defer download.Body.Close()
+	value, err := io.ReadAll(io.LimitReader(download.Body, observed.Size+1))
+	if err != nil || int64(len(value)) != observed.Size {
+		return "", ErrInvalidUpload
+	}
+	if observed.DetectedMIMEType == "application/zip" && matchesZipFormat(value, expected) {
+		return expected, nil
+	}
+	if observed.DetectedMIMEType == "application/octet-stream" && len(value) >= 8 && bytes.Equal(value[:8], []byte{0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1}) {
+		switch expected {
+		case "application/vnd.ms-powerpoint", "application/msword", "application/vnd.ms-excel":
+			return expected, nil
+		}
+	}
+	return "", ErrInvalidUpload
+}
+
+func matchesZipFormat(value []byte, expected string) bool {
+	reader, err := zip.NewReader(bytes.NewReader(value), int64(len(value)))
+	if err != nil {
+		return false
+	}
+	for _, file := range reader.File {
+		name := strings.TrimPrefix(file.Name, "/")
+		switch expected {
+		case "application/vnd.openxmlformats-officedocument.presentationml.presentation":
+			if strings.HasPrefix(name, "ppt/") {
+				return true
+			}
+		case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+			if strings.HasPrefix(name, "word/") {
+				return true
+			}
+		case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+			if strings.HasPrefix(name, "xl/") {
+				return true
+			}
+		case "application/vnd.apple.keynote":
+			if strings.HasPrefix(name, "Index/") || name == "index.apxl" {
+				return true
+			}
+		case "application/vnd.oasis.opendocument.presentation":
+			if name == "content.xml" || name == "mimetype" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func matchesFileExtension(fileName, mime string) bool {
+	ext := strings.ToLower(path.Ext(strings.TrimSpace(fileName)))
+	for _, allowed := range map[string][]string{
+		"application/pdf": {".pdf"},
+		"image/jpeg":      {".jpg", ".jpeg"}, "image/png": {".png"}, "image/webp": {".webp"},
+		"application/vnd.ms-powerpoint":                                             {".ppt"},
+		"application/vnd.openxmlformats-officedocument.presentationml.presentation": {".pptx"},
+		"application/vnd.apple.keynote":                                             {".key"},
+		"application/vnd.oasis.opendocument.presentation":                           {".odp"},
+		"application/msword":                                                        {".doc"},
+		"application/vnd.openxmlformats-officedocument.wordprocessingml.document":   {".docx"},
+		"application/vnd.ms-excel":                                                  {".xls"},
+		"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":         {".xlsx"},
+		"text/plain": {".txt"}, "text/markdown": {".md", ".markdown"},
+	}[mime] {
+		if ext == allowed {
+			return true
+		}
+	}
+	return false
 }
 
 func newID() string {

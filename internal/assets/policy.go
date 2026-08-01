@@ -3,6 +3,7 @@ package assets
 type NamespacePolicy struct {
 	OwnerService      string
 	MIMETypes         map[string]bool
+	MIMEMaxSizeBytes  map[string]int64
 	MaxSizeBytes      int64
 	DefaultVisibility Visibility
 	Visibilities      map[Visibility]bool
@@ -12,6 +13,13 @@ type NamespacePolicy struct {
 
 func (p NamespacePolicy) AllowsMIME(value string) bool           { return p.MIMETypes[value] }
 func (p NamespacePolicy) AllowsVisibility(value Visibility) bool { return p.Visibilities[value] }
+func (p NamespacePolicy) AllowsSize(mime string, size int64) bool {
+	limit := p.MaxSizeBytes
+	if typed, ok := p.MIMEMaxSizeBytes[mime]; ok {
+		limit = typed
+	}
+	return size > 0 && size <= limit
+}
 
 var namespacePolicies = map[string]NamespacePolicy{
 	"account.avatar": {
@@ -38,6 +46,19 @@ var namespacePolicies = map[string]NamespacePolicy{
 		OwnerService: "hhc-line-function-bot",
 		MIMETypes: map[string]bool{
 			"application/pdf": true, "image/jpeg": true, "image/png": true, "image/webp": true,
+			"application/vnd.ms-powerpoint":                                             true,
+			"application/vnd.openxmlformats-officedocument.presentationml.presentation": true,
+			"application/vnd.apple.keynote":                                             true,
+			"application/vnd.oasis.opendocument.presentation":                           true,
+			"application/msword":                                                        true,
+			"application/vnd.openxmlformats-officedocument.wordprocessingml.document":   true,
+			"application/vnd.ms-excel":                                                  true,
+			"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":         true,
+			"text/plain": true, "text/markdown": true,
+		},
+		MIMEMaxSizeBytes: map[string]int64{
+			"image/jpeg": 10 << 20, "image/png": 10 << 20, "image/webp": 10 << 20,
+			"text/plain": 2 << 20, "text/markdown": 2 << 20,
 		},
 		MaxSizeBytes: 25 << 20, DefaultVisibility: VisibilityRestricted, Visibilities: map[Visibility]bool{VisibilityRestricted: true}, Processing: ProcessingNotRequired,
 		CacheControl: "private, no-store",

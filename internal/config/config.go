@@ -32,6 +32,12 @@ type Config struct {
 	AllowedCallers       map[string]bool
 	AllowDevCallerHeader bool
 	AppAPIToken          string
+	WorkloadTenantID     string
+	WorkloadIssuer       string
+	WorkloadAudience     string
+	WorkloadRequiredRole string
+	LineWorkloadClientID string
+	LineWorkloadObjectID string
 	ShutdownTimeout      time.Duration
 }
 
@@ -59,6 +65,12 @@ func Load() (Config, error) {
 		AllowedCallers:       splitSet(value("ASSET_ALLOWED_CALLERS", "account-api,hhc-web-api,hhc-line-function-bot")),
 		AllowDevCallerHeader: strings.EqualFold(value("ASSET_ALLOW_DEV_CALLER_HEADER", "false"), "true"),
 		AppAPIToken:          os.Getenv("APP_API_TOKEN"),
+		WorkloadTenantID:     strings.TrimSpace(os.Getenv("ASSET_WORKLOAD_TENANT_ID")),
+		WorkloadIssuer:       strings.TrimSpace(os.Getenv("ASSET_WORKLOAD_ISSUER")),
+		WorkloadAudience:     strings.TrimSpace(os.Getenv("ASSET_WORKLOAD_AUDIENCE")),
+		WorkloadRequiredRole: value("ASSET_WORKLOAD_REQUIRED_ROLE", "Asset.Invoke"),
+		LineWorkloadClientID: strings.TrimSpace(os.Getenv("ASSET_LINE_WORKLOAD_CLIENT_ID")),
+		LineWorkloadObjectID: strings.TrimSpace(os.Getenv("ASSET_LINE_WORKLOAD_OBJECT_ID")),
 		ShutdownTimeout:      10 * time.Second,
 	}
 	if cfg.DatabaseURL == "" {
@@ -89,6 +101,16 @@ func Load() (Config, error) {
 	}
 	if !cfg.AllowDevCallerHeader && cfg.AppAPIToken == "" {
 		return Config{}, fmt.Errorf("APP_API_TOKEN is required when development caller headers are disabled")
+	}
+	workloadValues := []string{cfg.WorkloadTenantID, cfg.WorkloadIssuer, cfg.WorkloadAudience, cfg.LineWorkloadClientID, cfg.LineWorkloadObjectID}
+	configured := 0
+	for _, value := range workloadValues {
+		if value != "" {
+			configured++
+		}
+	}
+	if configured != 0 && configured != len(workloadValues) {
+		return Config{}, fmt.Errorf("ASSET workload authentication configuration is incomplete")
 	}
 	if err := positiveInt("CLAMAV_PORT", &cfg.ClamAVPort); err != nil {
 		return Config{}, err

@@ -11,9 +11,10 @@
 Local uploads use a short-lived signed `PUT /dev/uploads/{token}` target and store bytes under `.data/assets`. Production uses Azure Blob Storage with `DefaultAzureCredential` and a single-blob user-delegation SAS. Account keys are not supported.
 
 Set `ASSET_ALLOW_DEV_CALLER_HEADER=true` only for local development without
-Dapr. Production must leave it disabled, invoke the service through Dapr, and
-keep Container Apps ingress disabled. Azure injects `APP_API_TOKEN`; private
-routes reject requests without the matching `dapr-api-token`.
+Dapr. Production leaves it disabled. Container Apps invoke through Dapr with
+the matching `APP_API_TOKEN`; the LINE attachment Job uses a dedicated managed
+identity against internal ingress. ACA authentication validates the token before
+Asset also checks tenant, issuer, audience, client, object id, and `Asset.Invoke`.
 
 ## Routes
 
