@@ -569,7 +569,7 @@ func TestPublicDownloadUsesNamespaceCachePolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = download.Body.Close()
-	if download.CacheControl != "public, max-age=300, must-revalidate" {
+	if download.CacheControl != "public, max-age=31536000, immutable" {
 		t.Fatalf("weekly cache = %q", download.CacheControl)
 	}
 
@@ -587,7 +587,7 @@ func TestPublicDownloadUsesNamespaceCachePolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = download.Body.Close()
-	if download.CacheControl != "public, max-age=300, must-revalidate" {
+	if download.CacheControl != "public, max-age=31536000, immutable" {
 		t.Fatalf("avatar cache = %q", download.CacheControl)
 	}
 }

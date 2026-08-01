@@ -25,22 +25,22 @@ var namespacePolicies = map[string]NamespacePolicy{
 	"account.avatar": {
 		OwnerService: "account-api", MIMETypes: map[string]bool{"image/jpeg": true},
 		MaxSizeBytes: 1 << 20, DefaultVisibility: VisibilityPublic, Visibilities: map[Visibility]bool{VisibilityPublic: true}, Processing: ProcessingNotRequired,
-		CacheControl: "public, max-age=300, must-revalidate",
+		CacheControl: "public, max-age=31536000, immutable",
 	},
 	"cms.weekly.pdf": {
 		OwnerService: "hhc-web-api", MIMETypes: map[string]bool{"application/pdf": true},
 		MaxSizeBytes: 20 << 20, DefaultVisibility: VisibilityPrivate, Visibilities: map[Visibility]bool{VisibilityPrivate: true, VisibilityPublic: true}, Processing: ProcessingNotRequired,
-		CacheControl: "public, max-age=300, must-revalidate",
+		CacheControl: "public, max-age=31536000, immutable",
 	},
 	"cms.news.cover": {
 		OwnerService: "hhc-web-api", MIMETypes: map[string]bool{"image/jpeg": true, "image/png": true, "image/webp": true},
 		MaxSizeBytes: 10 << 20, DefaultVisibility: VisibilityPrivate, Visibilities: map[Visibility]bool{VisibilityPrivate: true, VisibilityPublic: true}, Processing: ProcessingPending,
-		CacheControl: "public, max-age=300, must-revalidate",
+		CacheControl: "public, max-age=31536000, immutable",
 	},
 	"cms.page.image": {
 		OwnerService: "hhc-web-api", MIMETypes: map[string]bool{"image/jpeg": true, "image/png": true, "image/webp": true},
 		MaxSizeBytes: 10 << 20, DefaultVisibility: VisibilityPrivate, Visibilities: map[Visibility]bool{VisibilityPrivate: true, VisibilityPublic: true}, Processing: ProcessingPending,
-		CacheControl: "public, max-age=300, must-revalidate",
+		CacheControl: "public, max-age=31536000, immutable",
 	},
 	"line.group.file": {
 		OwnerService: "hhc-line-function-bot",

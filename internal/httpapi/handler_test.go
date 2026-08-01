@@ -353,6 +353,23 @@ func TestPublicDownloadUnsatisfiedRangeDoesNotOpenBlob(t *testing.T) {
 	}
 }
 
+func TestAssetErrorsAreNotCacheable(t *testing.T) {
+	handler, _ := publicDownloadHandler(t)
+	for _, request := range []*http.Request{
+		httptest.NewRequest(http.MethodGet, "/api/assets/public/missing", nil),
+		httptest.NewRequest(http.MethodGet, "/api/assets/public/asset-1", nil),
+	} {
+		if request.URL.Path != "/api/assets/public/missing" {
+			request.Header.Set("Range", "bytes=99-100")
+		}
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code < 400 || response.Header().Get("Cache-Control") != "private, no-store" {
+			t.Fatalf("path=%s status=%d cache=%q", request.URL.Path, response.Code, response.Header().Get("Cache-Control"))
+		}
+	}
+}
+
 func TestRestrictedDownloadRequiresOwnerAndSubjectGrant(t *testing.T) {
 	modified := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
 	repository := &downloadRepository{

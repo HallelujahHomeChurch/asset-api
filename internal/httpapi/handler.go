@@ -420,6 +420,7 @@ func handleError(w http.ResponseWriter, err error) {
 	}
 }
 func writeError(w http.ResponseWriter, status int, code, message string) {
+	w.Header().Set("Cache-Control", "private, no-store")
 	writeJSON(w, status, map[string]any{"error": map[string]string{"code": code, "message": message}})
 }
 func writeJSON(w http.ResponseWriter, status int, value any) {
