@@ -20,6 +20,13 @@ grep -q 'IMAGE_REF=.*@${digest}' "$workflow"
 grep -q 'SCAN_IMAGE_REF=.*@${scan_digest}' "$workflow"
 grep -q 'Dockerfile.scan' "$workflow"
 grep -q 'activate_queue_scanning' "$workflow"
+if grep -Eq 'scope: (scanQueue|scanPoisonQueue|assetContainer|signatureContainer)!' infra/main.bicep; then
+  echo 'conditional storage resources must use explicit nested role-assignment types' >&2
+  exit 1
+fi
+for scope in scanQueueScope scanPoisonQueueScope assetContainerScope signatureContainerScope; do
+  grep -q "scope: $scope" infra/main.bicep
+done
 grep -q 'ASSET_WORKLOAD_AUDIENCE' "$workflow"
 grep -q 'ASSET_WORKLOAD_CLIENT_ID' "$workflow"
 grep -q 'LINE_ATTACHMENT_CLIENT_ID' "$workflow"

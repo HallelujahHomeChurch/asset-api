@@ -165,6 +165,21 @@ resource scanPoisonQueue 'Microsoft.Storage/storageAccounts/queueServices/queues
   name: 'asset-scan-poison'
 }
 
+resource queueServiceScope 'Microsoft.Storage/storageAccounts/queueServices@2023-05-01' existing = {
+  parent: storageAccount
+  name: 'default'
+}
+
+resource scanQueueScope 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' existing = {
+  parent: queueServiceScope
+  name: 'asset-scan'
+}
+
+resource scanPoisonQueueScope 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' existing = {
+  parent: queueServiceScope
+  name: 'asset-scan-poison'
+}
+
 resource clamavNetworkSecurityGroup 'Microsoft.Network/networkSecurityGroups@2024-05-01' existing = {
   name: clamavNetworkSecurityGroupName
 }
@@ -250,6 +265,21 @@ resource signatureContainer 'Microsoft.Storage/storageAccounts/blobServices/cont
     defaultEncryptionScope: '$account-encryption-key'
     denyEncryptionScopeOverride: false
   }
+}
+
+resource blobServiceScope 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' existing = {
+  parent: storageAccount
+  name: 'default'
+}
+
+resource assetContainerScope 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' existing = {
+  parent: blobServiceScope
+  name: 'assets'
+}
+
+resource signatureContainerScope 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' existing = {
+  parent: blobServiceScope
+  name: 'asset-signatures'
 }
 
 resource defenderForStorageDisabled 'Microsoft.Security/defenderForStorageSettings@2025-01-01' = if (manageSharedInfrastructure) {
@@ -415,8 +445,8 @@ resource existingApp 'Microsoft.App/containerApps@2024-03-01' existing = if (!de
 }
 
 resource assetBlobContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (deployRuntime && manageSharedInfrastructure) {
-  name: guid(assetContainer!.id, app!.id, 'storage-blob-data-contributor')
-  scope: assetContainer!
+  name: guid(assetContainerScope.id, app!.id, 'storage-blob-data-contributor')
+  scope: assetContainerScope
   properties: {
     principalId: app!.identity.principalId
     principalType: 'ServicePrincipal'
@@ -435,8 +465,8 @@ resource assetBlobDelegator 'Microsoft.Authorization/roleAssignments@2022-04-01'
 }
 
 resource assetQueueSender 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (manageSharedInfrastructure) {
-  name: guid(scanQueue!.id, 'asset-api', 'storage-queue-data-message-sender')
-  scope: scanQueue!
+  name: guid(scanQueueScope.id, 'asset-api', 'storage-queue-data-message-sender')
+  scope: scanQueueScope
   properties: {
     principalId: deployRuntime ? app!.identity.principalId : existingApp!.identity.principalId
     principalType: 'ServicePrincipal'
@@ -445,8 +475,8 @@ resource assetQueueSender 'Microsoft.Authorization/roleAssignments@2022-04-01' =
 }
 
 resource scanQueueProcessor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (manageSharedInfrastructure) {
-  name: guid(scanQueue!.id, scanIdentity.id, 'storage-queue-data-message-processor')
-  scope: scanQueue!
+  name: guid(scanQueueScope.id, scanIdentity.id, 'storage-queue-data-message-processor')
+  scope: scanQueueScope
   properties: {
     principalId: scanIdentity.properties.principalId
     principalType: 'ServicePrincipal'
@@ -455,8 +485,8 @@ resource scanQueueProcessor 'Microsoft.Authorization/roleAssignments@2022-04-01'
 }
 
 resource scanPoisonQueueContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (manageSharedInfrastructure) {
-  name: guid(scanPoisonQueue!.id, scanIdentity.id, 'storage-queue-data-message-contributor')
-  scope: scanPoisonQueue!
+  name: guid(scanPoisonQueueScope.id, scanIdentity.id, 'storage-queue-data-message-contributor')
+  scope: scanPoisonQueueScope
   properties: {
     principalId: scanIdentity.properties.principalId
     principalType: 'ServicePrincipal'
@@ -465,8 +495,8 @@ resource scanPoisonQueueContributor 'Microsoft.Authorization/roleAssignments@202
 }
 
 resource scanBlobReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (manageSharedInfrastructure) {
-  name: guid(assetContainer!.id, scanIdentity.id, 'storage-blob-data-reader')
-  scope: assetContainer!
+  name: guid(assetContainerScope.id, scanIdentity.id, 'storage-blob-data-reader')
+  scope: assetContainerScope
   properties: {
     principalId: scanIdentity.properties.principalId
     principalType: 'ServicePrincipal'
@@ -475,8 +505,8 @@ resource scanBlobReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = i
 }
 
 resource scanSignatureReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (manageSharedInfrastructure) {
-  name: guid(signatureContainer!.id, scanIdentity.id, 'storage-blob-data-reader')
-  scope: signatureContainer!
+  name: guid(signatureContainerScope.id, scanIdentity.id, 'storage-blob-data-reader')
+  scope: signatureContainerScope
   properties: {
     principalId: scanIdentity.properties.principalId
     principalType: 'ServicePrincipal'
@@ -485,8 +515,8 @@ resource scanSignatureReader 'Microsoft.Authorization/roleAssignments@2022-04-01
 }
 
 resource signatureBlobContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (manageSharedInfrastructure) {
-  name: guid(signatureContainer!.id, signatureRefreshIdentity.id, 'storage-blob-data-contributor')
-  scope: signatureContainer!
+  name: guid(signatureContainerScope.id, signatureRefreshIdentity.id, 'storage-blob-data-contributor')
+  scope: signatureContainerScope
   properties: {
     principalId: signatureRefreshIdentity.properties.principalId
     principalType: 'ServicePrincipal'
