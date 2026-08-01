@@ -3,7 +3,10 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -108,6 +111,76 @@ func TestInternalAllowsExplicitDevelopmentCaller(t *testing.T) {
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusNoContent)
 	}
+}
+
+func TestInternalAllowsValidatedEntraWorkload(t *testing.T) {
+	auth := WorkloadAuthConfig{
+		TenantID: "tenant-1", Audience: "api://asset-api", Issuer: "https://login.microsoftonline.com/tenant-1/v2.0",
+		RequiredRole: "Asset.Invoke", Callers: map[string]WorkloadCaller{
+			"line-client": {ObjectID: "line-object", Service: "hhc-line-function-bot"},
+		},
+	}
+	handler := (&Handler{allowedCallers: map[string]bool{"hhc-line-function-bot": true}, workloadAuth: auth}).internal(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if callerFromRequest(r, false) != "hhc-line-function-bot" {
+			t.Fatalf("caller = %q", callerFromRequest(r, false))
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	request := httptest.NewRequest(http.MethodPost, "/priv/assets/upload-sessions", nil)
+	request.Header.Set("X-MS-CLIENT-PRINCIPAL", encodedPrincipal(t, map[string]string{
+		"tid": "tenant-1", "iss": auth.Issuer, "aud": auth.Audience, "appid": "line-client", "oid": "line-object", "roles": auth.RequiredRole,
+	}))
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status = %d", response.Code)
+	}
+}
+
+func TestInternalRejectsInvalidEntraWorkloadClaims(t *testing.T) {
+	auth := WorkloadAuthConfig{
+		TenantID: "tenant-1", Audience: "api://asset-api", Issuer: "https://login.microsoftonline.com/tenant-1/v2.0", RequiredRole: "Asset.Invoke",
+		Callers: map[string]WorkloadCaller{"line-client": {ObjectID: "line-object", Service: "hhc-line-function-bot"}},
+	}
+	base := map[string]string{"tid": auth.TenantID, "iss": auth.Issuer, "aud": auth.Audience, "appid": "line-client", "oid": "line-object", "roles": auth.RequiredRole}
+	for _, claim := range []string{"tid", "iss", "aud", "appid", "oid", "roles"} {
+		t.Run(claim, func(t *testing.T) {
+			claims := maps.Clone(base)
+			claims[claim] = "wrong"
+			handler := (&Handler{allowedCallers: map[string]bool{"hhc-line-function-bot": true}, workloadAuth: auth}).internal(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+			request := httptest.NewRequest(http.MethodPost, "/priv/assets/upload-sessions", nil)
+			request.Header.Set("X-MS-CLIENT-PRINCIPAL", encodedPrincipal(t, claims))
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusForbidden {
+				t.Fatalf("status = %d", response.Code)
+			}
+		})
+	}
+}
+
+func encodedPrincipal(t *testing.T, claims map[string]string) string {
+	t.Helper()
+	value := struct {
+		AuthType string `json:"auth_typ"`
+		Claims   []struct {
+			Type  string `json:"typ"`
+			Value string `json:"val"`
+		} `json:"claims"`
+	}{AuthType: "aad"}
+	for key, claim := range claims {
+		value.Claims = append(value.Claims, struct {
+			Type  string `json:"typ"`
+			Value string `json:"val"`
+		}{Type: key, Value: claim})
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return base64.StdEncoding.EncodeToString(encoded)
 }
 
 func TestLocalUploadCORSAllowsAdminDevelopmentOrigin(t *testing.T) {
@@ -280,6 +353,23 @@ func TestPublicDownloadUnsatisfiedRangeDoesNotOpenBlob(t *testing.T) {
 	}
 }
 
+func TestAssetErrorsAreNotCacheable(t *testing.T) {
+	handler, _ := publicDownloadHandler(t)
+	for _, request := range []*http.Request{
+		httptest.NewRequest(http.MethodGet, "/api/assets/public/missing", nil),
+		httptest.NewRequest(http.MethodGet, "/api/assets/public/asset-1", nil),
+	} {
+		if request.URL.Path != "/api/assets/public/missing" {
+			request.Header.Set("Range", "bytes=99-100")
+		}
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code < 400 || response.Header().Get("Cache-Control") != "private, no-store" {
+			t.Fatalf("path=%s status=%d cache=%q", request.URL.Path, response.Code, response.Header().Get("Cache-Control"))
+		}
+	}
+}
+
 func TestRestrictedDownloadRequiresOwnerAndSubjectGrant(t *testing.T) {
 	modified := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
 	repository := &downloadRepository{
@@ -292,7 +382,7 @@ func TestRestrictedDownloadRequiresOwnerAndSubjectGrant(t *testing.T) {
 	}
 	blobs := &downloadBlobStore{objects: map[string][]byte{"original": []byte("secret")}}
 	service := assets.NewService(repository, blobs, "https://www.alive.org.tw/api/assets", func() time.Time { return modified })
-	handler := New(service, nil, map[string]bool{"hhc-line-function-bot": true}, false, "token", nil).Routes()
+	handler := New(service, nil, map[string]bool{"hhc-line-function-bot": true}, false, "token", WorkloadAuthConfig{}, nil).Routes()
 
 	request := httptest.NewRequest(http.MethodGet, "/priv/assets/asset-1/download", nil)
 	request.Header.Set("Dapr-Caller-App-Id", "hhc-line-function-bot")
@@ -331,7 +421,7 @@ func publicDownloadHandlerWithOriginal(t *testing.T, original []byte) (http.Hand
 	}
 	blobs := &downloadBlobStore{objects: map[string][]byte{"original": original, "small": []byte("xyz")}}
 	service := assets.NewService(repository, blobs, "https://www.alive.org.tw/api/assets", func() time.Time { return modified })
-	return New(service, nil, nil, false, "", nil).Routes(), blobs
+	return New(service, nil, nil, false, "", WorkloadAuthConfig{}, nil).Routes(), blobs
 }
 
 type downloadRepository struct {

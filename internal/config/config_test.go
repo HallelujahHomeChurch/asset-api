@@ -44,6 +44,44 @@ func TestLoadUsesDatabasePoolDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadReadsOptionalScanQueueURL(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://test")
+	t.Setenv("ASSET_ALLOW_DEV_CALLER_HEADER", "true")
+	t.Setenv("ASSET_SCAN_QUEUE_URL", "https://storage.queue.core.windows.net/asset-scan")
+	t.Setenv("ASSET_SCAN_DISPATCH_ENABLED", "true")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ScanQueueURL != "https://storage.queue.core.windows.net/asset-scan" || !cfg.ScanDispatchEnabled {
+		t.Fatalf("ScanQueueURL=%q", cfg.ScanQueueURL)
+	}
+}
+
+func TestLoadRequiresQueueURLWhenScanDispatchIsEnabled(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://test")
+	t.Setenv("ASSET_ALLOW_DEV_CALLER_HEADER", "true")
+	t.Setenv("ASSET_SCAN_DISPATCH_ENABLED", "true")
+
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "ASSET_SCAN_QUEUE_URL") {
+		t.Fatalf("Load() error=%v", err)
+	}
+}
+
+func TestLoadCanDisableEmbeddedScannerForQueueCutover(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://test")
+	t.Setenv("ASSET_ALLOW_DEV_CALLER_HEADER", "true")
+	t.Setenv("ASSET_EMBEDDED_SCAN_ENABLED", "false")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.EmbeddedScanEnabled {
+		t.Fatal("embedded scanner remained enabled")
+	}
+}
+
 func TestLoadReadsDatabasePoolSettings(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://test")
 	t.Setenv("ASSET_ALLOW_DEV_CALLER_HEADER", "true")

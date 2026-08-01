@@ -196,7 +196,7 @@ func TestPurgedAssetsAreExcludedFromStateTransitions(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO upload_sessions(id,asset_id,idempotency_key,max_size_bytes,status,expires_at,created_at) VALUES('session','purged','key',1,'created',$1,$1)`, now); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.CompleteUpload(ctx, assets.Asset{ID: "purged"}, session); !errors.Is(err, assets.ErrNotFound) {
+	if err := store.CompleteUpload(ctx, assets.Asset{ID: "purged", ETag: "etag-purged"}, session, assets.ScanRequest{EventID: "purged-event", AssetID: "purged", ETag: "etag-purged", CreatedAt: now}); !errors.Is(err, assets.ErrNotFound) {
 		t.Fatalf("CompleteUpload err=%v", err)
 	}
 	if err := store.FailUpload(ctx, "purged", now); !errors.Is(err, assets.ErrNotFound) {
@@ -211,7 +211,7 @@ func TestPurgedAssetsAreExcludedFromStateTransitions(t *testing.T) {
 	if _, err := db.Exec(`UPDATE assets SET scan_status='failed' WHERE id='purged'`); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.RequeueFailedScan(ctx, "purged", "test", now); !errors.Is(err, assets.ErrInvalidInput) {
+	if err := store.RequeueFailedScan(ctx, "purged", "test", assets.ScanRequest{EventID: "requeue-purged", AssetID: "purged", ETag: "etag-purged", CreatedAt: now}, now); !errors.Is(err, assets.ErrInvalidInput) {
 		t.Fatalf("RequeueFailedScan err=%v", err)
 	}
 }
@@ -232,7 +232,7 @@ func TestScanLeaseRejectsStaleWorkerWrites(t *testing.T) {
 	}
 
 	result := assets.ScanResult{
-		EventID:         "stale-scan",
+		EventID:         claimed.ScanEventID,
 		AssetID:         claimed.ID,
 		Status:          assets.ScanClean,
 		ETag:            claimed.ETag,
@@ -251,6 +251,160 @@ func TestScanLeaseRejectsStaleWorkerWrites(t *testing.T) {
 	}
 	if current.ScanStatus != assets.ScanPending || current.ScanAttempts != 2 {
 		t.Fatalf("current asset=%+v", current)
+	}
+}
+
+func TestQueueScanClaimFencesEventAndReportsBusy(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	insertAsset(t, db, "queue-fence", assets.UploadCompleted, assets.ScanPending, assets.ProcessingPending, now, time.Time{})
+
+	if _, state, err := store.ClaimAssetScan(ctx, "stale-event", "queue-fence", "etag-queue-fence", now, time.Minute); err != nil || state != assets.ScanTerminal {
+		t.Fatalf("stale claim state=%q err=%v", state, err)
+	}
+	claimed, state, err := store.ClaimAssetScan(ctx, "event-queue-fence", "queue-fence", "etag-queue-fence", now, time.Minute)
+	if err != nil || state != assets.ScanClaimed || claimed.ScanAttempts != 1 {
+		t.Fatalf("claim=%+v state=%q err=%v", claimed, state, err)
+	}
+	if _, state, err := store.ClaimAssetScan(ctx, "event-queue-fence", "queue-fence", "etag-queue-fence", now, time.Minute); err != nil || state != assets.ScanBusy {
+		t.Fatalf("busy state=%q err=%v", state, err)
+	}
+}
+
+func TestTerminalScanAndPoisonRecordCommitTogether(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	insertAsset(t, db, "poison", assets.UploadCompleted, assets.ScanPending, assets.ProcessingPending, now, time.Time{})
+	claimed, state, err := store.ClaimAssetScan(ctx, "event-poison", "poison", "etag-poison", now, time.Minute)
+	if err != nil || state != assets.ScanClaimed {
+		t.Fatalf("claim state=%q err=%v", state, err)
+	}
+	result := assets.ScanResult{EventID: "event-poison", AssetID: "poison", ETag: "etag-poison", ExpectedAttempt: claimed.ScanAttempts, Status: assets.ScanFailed, FailureCategory: "retry_exhausted", Signature: "sig-1"}
+	poison := assets.ScanPoison{PoisonID: "message:retry", EventID: "event-poison", AssetID: "poison", ETag: "etag-poison", Reason: "retry_exhausted", DequeueCount: 5, SourceMessageID: "message", BodySHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+	shouldForward, err := store.FailScanToPoison(ctx, result, poison, now)
+	if err != nil || !shouldForward {
+		t.Fatalf("fail-to-poison forward=%v err=%v", shouldForward, err)
+	}
+	var status string
+	var count int
+	if err := db.QueryRow(`SELECT scan_status FROM assets WHERE id='poison'`).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM asset_scan_poison_events WHERE poison_id='message:retry'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if status != "failed" || count != 1 {
+		t.Fatalf("status=%q poison count=%d", status, count)
+	}
+	if err := store.MarkScanPoisonForwarded(ctx, poison.PoisonID, now); err != nil {
+		t.Fatal(err)
+	}
+	shouldForward, err = store.FailScanToPoison(ctx, result, poison, now)
+	if err != nil || shouldForward {
+		t.Fatalf("duplicate forward=%v err=%v", shouldForward, err)
+	}
+	replay := assets.ScanRequest{EventID: "event-poison-replay", AssetID: "poison", ETag: "etag-poison", CreatedAt: now.Add(time.Minute)}
+	if err := store.RequeueFailedScan(ctx, "poison", "test", replay, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	var replayEvent string
+	var replayed bool
+	if err := db.QueryRow(`SELECT replay_event_id,replayed_at IS NOT NULL FROM asset_scan_poison_events WHERE poison_id='message:retry'`).Scan(&replayEvent, &replayed); err != nil {
+		t.Fatal(err)
+	}
+	if replayEvent != replay.EventID || !replayed {
+		t.Fatalf("replay event=%q replayed=%v", replayEvent, replayed)
+	}
+}
+
+func TestCompleteUploadCommitsOneScanRequestWithAssetState(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	insertAsset(t, db, "outbox", assets.UploadCreated, assets.ScanPending, assets.ProcessingNotRequired, now, time.Time{})
+	if _, err := db.Exec(`INSERT INTO upload_sessions(id,asset_id,idempotency_key,max_size_bytes,status,expires_at,created_at) VALUES('outbox-session','outbox','outbox-key',10,'created',$1,$1)`, now); err != nil {
+		t.Fatal(err)
+	}
+	asset := assets.Asset{ID: "outbox", ETag: "etag-1", DetectedMIMEType: "application/pdf", SizeBytes: 10, ChecksumSHA256: "checksum", UploadStatus: assets.UploadCompleted, ScanStatus: assets.ScanPending, UpdatedAt: now}
+	session := assets.UploadSession{AssetID: "outbox", Status: assets.UploadCompleted, CompletedAt: now}
+	request := assets.ScanRequest{EventID: "event-1", AssetID: "outbox", ETag: "etag-1", CreatedAt: now}
+
+	if err := store.CompleteUpload(ctx, asset, session, request); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteUpload(ctx, asset, session, assets.ScanRequest{EventID: "event-2", AssetID: "outbox", ETag: "etag-1", CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	var status, eventID string
+	var count int
+	if err := db.QueryRow(`SELECT upload_status FROM assets WHERE id='outbox'`).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*),MIN(event_id) FROM asset_scan_outbox WHERE asset_id='outbox'`).Scan(&count, &eventID); err != nil {
+		t.Fatal(err)
+	}
+	if status != string(assets.UploadCompleted) || count != 1 || eventID != "event-1" {
+		t.Fatalf("status=%q count=%d eventID=%q", status, count, eventID)
+	}
+}
+
+func TestCompleteUploadRollsBackWhenScanRequestCannotBeWritten(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	insertAsset(t, db, "outbox-rollback", assets.UploadCreated, assets.ScanPending, assets.ProcessingNotRequired, now, time.Time{})
+	if _, err := db.Exec(`INSERT INTO upload_sessions(id,asset_id,idempotency_key,max_size_bytes,status,expires_at,created_at) VALUES('rollback-session','outbox-rollback','rollback-key',10,'created',$1,$1)`, now); err != nil {
+		t.Fatal(err)
+	}
+	asset := assets.Asset{ID: "outbox-rollback", ETag: "etag-1", DetectedMIMEType: "application/pdf", SizeBytes: 10, ChecksumSHA256: "checksum", UploadStatus: assets.UploadCompleted, ScanStatus: assets.ScanPending, UpdatedAt: now}
+	session := assets.UploadSession{AssetID: "outbox-rollback", Status: assets.UploadCompleted, CompletedAt: now}
+	if _, err := db.Exec(`INSERT INTO asset_scan_outbox(event_id,asset_id,asset_etag,available_at,created_at) VALUES('duplicate-event','outbox-rollback','old-etag',$1,$1)`, now); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.CompleteUpload(ctx, asset, session, assets.ScanRequest{EventID: "duplicate-event", AssetID: asset.ID, ETag: asset.ETag, CreatedAt: now}); err == nil {
+		t.Fatal("complete upload succeeded with duplicate event ID")
+	}
+	var status string
+	if err := db.QueryRow(`SELECT upload_status FROM assets WHERE id='outbox-rollback'`).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != string(assets.UploadCreated) {
+		t.Fatalf("status=%q", status)
+	}
+}
+
+func TestScanRequestLeaseFencesStalePublisher(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	insertAsset(t, db, "outbox-fence", assets.UploadCompleted, assets.ScanPending, assets.ProcessingNotRequired, now, time.Time{})
+	if _, err := db.Exec(`INSERT INTO asset_scan_outbox(event_id,asset_id,asset_etag,available_at,created_at) VALUES('fenced-event','outbox-fence','etag-outbox-fence',$1,$1)`, now); err != nil {
+		t.Fatal(err)
+	}
+	first, ok, err := store.ClaimScanRequest(ctx, now, time.Minute)
+	if err != nil || !ok || first.Attempts != 1 {
+		t.Fatalf("first claim=%+v ok=%v err=%v", first, ok, err)
+	}
+	second, ok, err := store.ClaimScanRequest(ctx, now.Add(2*time.Minute), time.Minute)
+	if err != nil || !ok || second.Attempts != 2 {
+		t.Fatalf("second claim=%+v ok=%v err=%v", second, ok, err)
+	}
+	if err := store.MarkScanRequestDelivered(ctx, first.EventID, first.Attempts, now); !errors.Is(err, assets.ErrConflict) {
+		t.Fatalf("stale mark error=%v", err)
+	}
+	if err := store.ScheduleScanRequestRetry(ctx, first.EventID, first.Attempts, "stale", now.Add(time.Minute), now); !errors.Is(err, assets.ErrConflict) {
+		t.Fatalf("stale retry error=%v", err)
+	}
+	if err := store.MarkScanRequestDelivered(ctx, second.EventID, second.Attempts, now); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -426,9 +580,9 @@ func insertAsset(t *testing.T, db *sql.DB, id string, upload assets.UploadStatus
 	_, err := db.Exec(`
 		INSERT INTO assets(
 			id,namespace,owner_service,owner_type,owner_id,object_key,expected_mime_type,
-			upload_status,scan_status,processing_status,visibility,created_at,updated_at,purged_at,etag
-		) VALUES($1,'cms.news.cover','test','item',$1,$2,'image/png',$3,$4,$5,'public',$6,$6,NULLIF($7,'0001-01-01'::timestamptz),$8)`,
-		id, "assets/"+id, upload, scan, processing, updatedAt, purgedAt, "etag-"+id)
+			upload_status,scan_status,processing_status,visibility,created_at,updated_at,purged_at,etag,scan_event_id
+		) VALUES($1,'cms.news.cover','test','item',$1,$2,'image/png',$3,$4,$5,'public',$6,$6,NULLIF($7,'0001-01-01'::timestamptz),$8,$9)`,
+		id, "assets/"+id, upload, scan, processing, updatedAt, purgedAt, "etag-"+id, "event-"+id)
 	if err != nil {
 		t.Fatal(err)
 	}

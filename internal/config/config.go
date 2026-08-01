@@ -18,6 +18,9 @@ type Config struct {
 	LocalSigningKey      string
 	AzureAccountURL      string
 	AzureContainer       string
+	ScanQueueURL         string
+	ScanDispatchEnabled  bool
+	EmbeddedScanEnabled  bool
 	ClamAVHost           string
 	ClamAVPort           int
 	ClamAVTimeout        time.Duration
@@ -29,6 +32,12 @@ type Config struct {
 	AllowedCallers       map[string]bool
 	AllowDevCallerHeader bool
 	AppAPIToken          string
+	WorkloadTenantID     string
+	WorkloadIssuer       string
+	WorkloadAudience     string
+	WorkloadRequiredRole string
+	LineWorkloadClientID string
+	LineWorkloadObjectID string
 	ShutdownTimeout      time.Duration
 }
 
@@ -43,6 +52,8 @@ func Load() (Config, error) {
 		LocalSigningKey:      value("ASSET_LOCAL_SIGNING_KEY", "local-development-only-change-me"),
 		AzureAccountURL:      os.Getenv("ASSET_AZURE_ACCOUNT_URL"),
 		AzureContainer:       value("ASSET_AZURE_CONTAINER", "assets"),
+		ScanQueueURL:         strings.TrimSpace(os.Getenv("ASSET_SCAN_QUEUE_URL")),
+		EmbeddedScanEnabled:  true,
 		ClamAVHost:           value("CLAMAV_HOST", "127.0.0.1"),
 		ClamAVPort:           3310,
 		ClamAVTimeout:        2 * time.Minute,
@@ -54,6 +65,12 @@ func Load() (Config, error) {
 		AllowedCallers:       splitSet(value("ASSET_ALLOWED_CALLERS", "account-api,hhc-web-api,hhc-line-function-bot")),
 		AllowDevCallerHeader: strings.EqualFold(value("ASSET_ALLOW_DEV_CALLER_HEADER", "false"), "true"),
 		AppAPIToken:          os.Getenv("APP_API_TOKEN"),
+		WorkloadTenantID:     strings.TrimSpace(os.Getenv("ASSET_WORKLOAD_TENANT_ID")),
+		WorkloadIssuer:       strings.TrimSpace(os.Getenv("ASSET_WORKLOAD_ISSUER")),
+		WorkloadAudience:     strings.TrimSpace(os.Getenv("ASSET_WORKLOAD_AUDIENCE")),
+		WorkloadRequiredRole: value("ASSET_WORKLOAD_REQUIRED_ROLE", "Asset.Invoke"),
+		LineWorkloadClientID: strings.TrimSpace(os.Getenv("ASSET_LINE_WORKLOAD_CLIENT_ID")),
+		LineWorkloadObjectID: strings.TrimSpace(os.Getenv("ASSET_LINE_WORKLOAD_OBJECT_ID")),
 		ShutdownTimeout:      10 * time.Second,
 	}
 	if cfg.DatabaseURL == "" {
@@ -65,8 +82,35 @@ func Load() (Config, error) {
 	if cfg.StorageBackend == "azure" && cfg.AzureAccountURL == "" {
 		return Config{}, fmt.Errorf("ASSET_AZURE_ACCOUNT_URL is required for azure storage")
 	}
+	if value := strings.TrimSpace(os.Getenv("ASSET_SCAN_DISPATCH_ENABLED")); value != "" {
+		enabled, err := strconv.ParseBool(value)
+		if err != nil {
+			return Config{}, fmt.Errorf("invalid ASSET_SCAN_DISPATCH_ENABLED")
+		}
+		cfg.ScanDispatchEnabled = enabled
+	}
+	if cfg.ScanDispatchEnabled && cfg.ScanQueueURL == "" {
+		return Config{}, fmt.Errorf("ASSET_SCAN_QUEUE_URL is required when scan dispatch is enabled")
+	}
+	if value := strings.TrimSpace(os.Getenv("ASSET_EMBEDDED_SCAN_ENABLED")); value != "" {
+		enabled, err := strconv.ParseBool(value)
+		if err != nil {
+			return Config{}, fmt.Errorf("invalid ASSET_EMBEDDED_SCAN_ENABLED")
+		}
+		cfg.EmbeddedScanEnabled = enabled
+	}
 	if !cfg.AllowDevCallerHeader && cfg.AppAPIToken == "" {
 		return Config{}, fmt.Errorf("APP_API_TOKEN is required when development caller headers are disabled")
+	}
+	workloadValues := []string{cfg.WorkloadTenantID, cfg.WorkloadIssuer, cfg.WorkloadAudience, cfg.LineWorkloadClientID, cfg.LineWorkloadObjectID}
+	configured := 0
+	for _, value := range workloadValues {
+		if value != "" {
+			configured++
+		}
+	}
+	if configured != 0 && configured != len(workloadValues) {
+		return Config{}, fmt.Errorf("ASSET workload authentication configuration is incomplete")
 	}
 	if err := positiveInt("CLAMAV_PORT", &cfg.ClamAVPort); err != nil {
 		return Config{}, err

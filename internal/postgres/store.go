@@ -34,9 +34,9 @@ func (s *Store) CreateUpload(ctx context.Context, asset assets.Asset, session as
 }
 
 func (s *Store) GetAsset(ctx context.Context, id string) (assets.Asset, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id,namespace,owner_service,owner_type,owner_id,purpose,locale,original_file_name,object_key,expected_mime_type,detected_mime_type,size_bytes,checksum_sha256,etag,upload_status,scan_status,scan_details,processing_status,visibility,created_at,updated_at,COALESCE(deleted_at,'0001-01-01'::timestamptz),scan_attempts,processing_attempts FROM assets WHERE id=$1 AND purged_at IS NULL`, id)
+	row := s.db.QueryRowContext(ctx, `SELECT id,namespace,owner_service,owner_type,owner_id,purpose,locale,original_file_name,object_key,expected_mime_type,detected_mime_type,size_bytes,checksum_sha256,etag,upload_status,scan_status,scan_details,scan_signature_version,scan_failure_category,processing_status,visibility,created_at,updated_at,COALESCE(deleted_at,'0001-01-01'::timestamptz),scan_attempts,scan_event_id,processing_attempts FROM assets WHERE id=$1 AND purged_at IS NULL`, id)
 	var value assets.Asset
-	err := row.Scan(&value.ID, &value.Namespace, &value.OwnerService, &value.OwnerType, &value.OwnerID, &value.Purpose, &value.Locale, &value.OriginalFileName, &value.ObjectKey, &value.ExpectedMIMEType, &value.DetectedMIMEType, &value.SizeBytes, &value.ChecksumSHA256, &value.ETag, &value.UploadStatus, &value.ScanStatus, &value.ScanDetails, &value.ProcessingStatus, &value.Visibility, &value.CreatedAt, &value.UpdatedAt, &value.DeletedAt, &value.ScanAttempts, &value.ProcessingAttempts)
+	err := row.Scan(&value.ID, &value.Namespace, &value.OwnerService, &value.OwnerType, &value.OwnerID, &value.Purpose, &value.Locale, &value.OriginalFileName, &value.ObjectKey, &value.ExpectedMIMEType, &value.DetectedMIMEType, &value.SizeBytes, &value.ChecksumSHA256, &value.ETag, &value.UploadStatus, &value.ScanStatus, &value.ScanDetails, &value.ScanSignature, &value.ScanFailure, &value.ProcessingStatus, &value.Visibility, &value.CreatedAt, &value.UpdatedAt, &value.DeletedAt, &value.ScanAttempts, &value.ScanEventID, &value.ProcessingAttempts)
 	if errors.Is(err, sql.ErrNoRows) {
 		return assets.Asset{}, assets.ErrNotFound
 	}
@@ -67,7 +67,10 @@ func (s *Store) FindUploadByIdempotency(ctx context.Context, caller, operation, 
 	return asset, session, err
 }
 
-func (s *Store) CompleteUpload(ctx context.Context, asset assets.Asset, session assets.UploadSession) error {
+func (s *Store) CompleteUpload(ctx context.Context, asset assets.Asset, session assets.UploadSession, request assets.ScanRequest) error {
+	if request.EventID == "" || request.AssetID != asset.ID || request.ETag == "" || request.ETag != asset.ETag || request.CreatedAt.IsZero() {
+		return assets.ErrInvalidInput
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -82,12 +85,12 @@ func (s *Store) CompleteUpload(ctx context.Context, asset assets.Asset, session 
 		return err
 	}
 	if assetStatus == string(assets.UploadCompleted) && sessionStatus == string(assets.UploadCompleted) {
-		return nil
+		return tx.Commit()
 	}
 	if assetStatus != string(assets.UploadCreated) || sessionStatus != string(assets.UploadCreated) {
 		return assets.ErrConflict
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE assets SET detected_mime_type=$2,size_bytes=$3,checksum_sha256=$4,etag=$5,upload_status=$6,scan_status=$7,updated_at=$8 WHERE id=$1`, asset.ID, asset.DetectedMIMEType, asset.SizeBytes, asset.ChecksumSHA256, asset.ETag, asset.UploadStatus, asset.ScanStatus, asset.UpdatedAt)
+	result, err := tx.ExecContext(ctx, `UPDATE assets SET detected_mime_type=$2,size_bytes=$3,checksum_sha256=$4,etag=$5,upload_status=$6,scan_status=$7,scan_event_id=$8,updated_at=$9 WHERE id=$1`, asset.ID, asset.DetectedMIMEType, asset.SizeBytes, asset.ChecksumSHA256, asset.ETag, asset.UploadStatus, asset.ScanStatus, request.EventID, asset.UpdatedAt)
 	if err != nil {
 		return err
 	}
@@ -101,7 +104,73 @@ func (s *Store) CompleteUpload(ctx context.Context, asset assets.Asset, session 
 	if affected, _ := result.RowsAffected(); affected != 1 {
 		return assets.ErrNotFound
 	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO asset_scan_outbox(event_id,asset_id,asset_etag,available_at,created_at) VALUES($1,$2,$3,$4,$4)`, request.EventID, request.AssetID, request.ETag, request.CreatedAt); err != nil {
+		return err
+	}
 	return tx.Commit()
+}
+
+func (s *Store) ClaimScanRequest(ctx context.Context, now time.Time, lease time.Duration) (assets.ScanRequest, bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return assets.ScanRequest{}, false, err
+	}
+	defer tx.Rollback()
+	var request assets.ScanRequest
+	err = tx.QueryRowContext(ctx, `
+		SELECT event_id,asset_id,asset_etag,attempts,created_at
+		FROM asset_scan_outbox
+		WHERE delivered_at IS NULL AND available_at <= $1
+		  AND (claimed_until IS NULL OR claimed_until < $1)
+		ORDER BY available_at,created_at
+		FOR UPDATE SKIP LOCKED LIMIT 1`, now).Scan(&request.EventID, &request.AssetID, &request.ETag, &request.Attempts, &request.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return assets.ScanRequest{}, false, nil
+	}
+	if err != nil {
+		return assets.ScanRequest{}, false, err
+	}
+	request.Attempts++
+	if _, err := tx.ExecContext(ctx, `UPDATE asset_scan_outbox SET attempts=$2,claimed_until=$3 WHERE event_id=$1`, request.EventID, request.Attempts, now.Add(lease)); err != nil {
+		return assets.ScanRequest{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return assets.ScanRequest{}, false, err
+	}
+	return request, true, nil
+}
+
+func (s *Store) MarkScanRequestDelivered(ctx context.Context, eventID string, expectedAttempt int, now time.Time) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE asset_scan_outbox SET delivered_at=$3,claimed_until=NULL,last_error='' WHERE event_id=$1 AND attempts=$2 AND delivered_at IS NULL`, eventID, expectedAttempt, now)
+	if err != nil {
+		return err
+	}
+	if count, _ := result.RowsAffected(); count != 1 {
+		return s.scanRequestTransitionError(ctx, eventID)
+	}
+	return nil
+}
+
+func (s *Store) ScheduleScanRequestRetry(ctx context.Context, eventID string, expectedAttempt int, details string, nextAttempt, _ time.Time) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE asset_scan_outbox SET available_at=$3,claimed_until=NULL,last_error=$4 WHERE event_id=$1 AND attempts=$2 AND delivered_at IS NULL`, eventID, expectedAttempt, nextAttempt, details)
+	if err != nil {
+		return err
+	}
+	if count, _ := result.RowsAffected(); count != 1 {
+		return s.scanRequestTransitionError(ctx, eventID)
+	}
+	return nil
+}
+
+func (s *Store) scanRequestTransitionError(ctx context.Context, eventID string) error {
+	var exists bool
+	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM asset_scan_outbox WHERE event_id=$1)`, eventID).Scan(&exists); err != nil {
+		return err
+	}
+	if exists {
+		return assets.ErrConflict
+	}
+	return assets.ErrNotFound
 }
 
 func (s *Store) FailUpload(ctx context.Context, assetID string, now time.Time) error {
@@ -177,7 +246,7 @@ func (s *Store) ApplyScanResult(ctx context.Context, result assets.ScanResult, n
 	if affected == 0 {
 		return false, nil
 	}
-	updated, err := tx.ExecContext(ctx, `UPDATE assets SET scan_status=$2,scan_details=$3,scan_claimed_until=NULL,updated_at=$6 WHERE id=$1 AND scan_status='pending' AND etag=$4 AND scan_attempts=$5 AND deleted_at IS NULL AND purged_at IS NULL`, result.AssetID, result.Status, result.Details, result.ETag, result.ExpectedAttempt, now)
+	updated, err := tx.ExecContext(ctx, `UPDATE assets SET scan_status=$2,scan_details=$3,scan_signature_version=$7,scan_failure_category=$8,scan_claimed_until=NULL,updated_at=$9 WHERE id=$1 AND scan_status='pending' AND etag=$4 AND scan_attempts=$5 AND scan_event_id=$6 AND deleted_at IS NULL AND purged_at IS NULL`, result.AssetID, result.Status, result.Details, result.ETag, result.ExpectedAttempt, result.EventID, result.Signature, result.FailureCategory, now)
 	if err != nil {
 		return false, err
 	}
@@ -188,6 +257,91 @@ func (s *Store) ApplyScanResult(ctx context.Context, result assets.ScanResult, n
 		return false, err
 	}
 	return true, nil
+}
+
+// ClaimAssetScan distinguishes terminal events from work that only needs a
+// later visibility retry, so queue delivery cannot be lost behind a DB lease.
+func (s *Store) ClaimAssetScan(ctx context.Context, eventID, assetID, etag string, now time.Time, lease time.Duration) (assets.Asset, assets.ScanClaimState, error) {
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE assets
+		SET scan_attempts=scan_attempts+1,scan_claimed_until=$4,updated_at=$3
+		WHERE id=$1 AND etag=$2 AND scan_event_id=$5 AND upload_status='completed' AND scan_status='pending'
+		  AND deleted_at IS NULL AND purged_at IS NULL
+		  AND (scan_next_attempt_at IS NULL OR scan_next_attempt_at <= $3)
+		  AND (scan_claimed_until IS NULL OR scan_claimed_until < $3)`, assetID, etag, now, now.Add(lease), eventID)
+	if err != nil {
+		return assets.Asset{}, "", err
+	}
+	if count, _ := result.RowsAffected(); count == 1 {
+		asset, err := s.GetAsset(ctx, assetID)
+		return asset, assets.ScanClaimed, err
+	}
+	asset, err := s.GetAsset(ctx, assetID)
+	if errors.Is(err, assets.ErrNotFound) {
+		return assets.Asset{}, assets.ScanTerminal, nil
+	}
+	if err != nil {
+		return assets.Asset{}, "", err
+	}
+	if asset.ScanStatus == assets.ScanPending && asset.ETag == etag && asset.ScanEventID == eventID {
+		return asset, assets.ScanBusy, nil
+	}
+	return asset, assets.ScanTerminal, nil
+}
+
+func (s *Store) ScheduleAssetScanRetry(ctx context.Context, assetID string, expectedAttempt int, details, category string, nextAttempt, now time.Time) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE assets SET scan_details=$3,scan_failure_category=$4,scan_next_attempt_at=$5,scan_claimed_until=NULL,updated_at=$6 WHERE id=$1 AND scan_attempts=$2 AND scan_status='pending' AND deleted_at IS NULL AND purged_at IS NULL`, assetID, expectedAttempt, details, category, nextAttempt, now)
+	if err != nil {
+		return err
+	}
+	if count, _ := result.RowsAffected(); count != 1 {
+		return assets.ErrConflict
+	}
+	return nil
+}
+
+func (s *Store) RecordScanPoison(ctx context.Context, poison assets.ScanPoison, now time.Time) (bool, error) {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO asset_scan_poison_events(poison_id,event_id,asset_id,asset_etag,reason,details,dequeue_count,source_message_id,body_sha256,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(poison_id) DO NOTHING`, poison.PoisonID, poison.EventID, poison.AssetID, poison.ETag, poison.Reason, poison.Details, poison.DequeueCount, poison.SourceMessageID, poison.BodySHA256, now)
+	if err != nil {
+		return false, err
+	}
+	var shouldForward bool
+	err = s.db.QueryRowContext(ctx, `SELECT forwarded_at IS NULL FROM asset_scan_poison_events WHERE poison_id=$1`, poison.PoisonID).Scan(&shouldForward)
+	return shouldForward, err
+}
+
+func (s *Store) FailScanToPoison(ctx context.Context, result assets.ScanResult, poison assets.ScanPoison, now time.Time) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	insert, err := tx.ExecContext(ctx, `INSERT INTO asset_scan_events(event_id,asset_id,status,details,etag,created_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(event_id) DO NOTHING`, result.EventID, result.AssetID, result.Status, result.Details, result.ETag, now)
+	if err != nil {
+		return false, err
+	}
+	if affected, _ := insert.RowsAffected(); affected == 1 {
+		updated, err := tx.ExecContext(ctx, `UPDATE assets SET scan_status='failed',scan_details=$2,scan_signature_version=$6,scan_failure_category=$7,scan_claimed_until=NULL,updated_at=$8 WHERE id=$1 AND scan_status='pending' AND etag=$3 AND scan_attempts=$4 AND scan_event_id=$5 AND deleted_at IS NULL AND purged_at IS NULL`, result.AssetID, result.Details, result.ETag, result.ExpectedAttempt, result.EventID, result.Signature, result.FailureCategory, now)
+		if err != nil {
+			return false, err
+		}
+		if count, _ := updated.RowsAffected(); count != 1 {
+			return false, assets.ErrConflict
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO asset_scan_poison_events(poison_id,event_id,asset_id,asset_etag,reason,details,dequeue_count,source_message_id,body_sha256,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(poison_id) DO NOTHING`, poison.PoisonID, poison.EventID, poison.AssetID, poison.ETag, poison.Reason, poison.Details, poison.DequeueCount, poison.SourceMessageID, poison.BodySHA256, now); err != nil {
+		return false, err
+	}
+	var shouldForward bool
+	if err := tx.QueryRowContext(ctx, `SELECT forwarded_at IS NULL FROM asset_scan_poison_events WHERE poison_id=$1`, poison.PoisonID).Scan(&shouldForward); err != nil {
+		return false, err
+	}
+	return shouldForward, tx.Commit()
+}
+
+func (s *Store) MarkScanPoisonForwarded(ctx context.Context, poisonID string, now time.Time) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE asset_scan_poison_events SET forwarded_at=COALESCE(forwarded_at,$2) WHERE poison_id=$1`, poisonID, now)
+	return err
 }
 
 func (s *Store) ClaimPendingScan(ctx context.Context, now time.Time, lease time.Duration) (assets.Asset, bool, error) {
@@ -248,15 +402,39 @@ func (s *Store) SoftDeleteAsset(ctx context.Context, assetID, ownerService strin
 	return nil
 }
 
-func (s *Store) RequeueFailedScan(ctx context.Context, assetID, ownerService string, now time.Time) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE assets SET scan_status='pending',scan_details='',scan_attempts=0,scan_next_attempt_at=$3,scan_claimed_until=NULL,updated_at=$3 WHERE id=$1 AND owner_service=$2 AND scan_status='failed' AND deleted_at IS NULL AND purged_at IS NULL`, assetID, ownerService, now)
+func (s *Store) RequeueFailedScan(ctx context.Context, assetID, ownerService string, request assets.ScanRequest, now time.Time) error {
+	if request.EventID == "" || request.AssetID != assetID || request.ETag == "" || request.CreatedAt.IsZero() {
+		return assets.ErrInvalidInput
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var previousEventID string
+	err = tx.QueryRowContext(ctx, `SELECT scan_event_id FROM assets WHERE id=$1 AND owner_service=$2 AND etag=$3 AND scan_status='failed' AND deleted_at IS NULL AND purged_at IS NULL FOR UPDATE`, assetID, ownerService, request.ETag).Scan(&previousEventID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return assets.ErrInvalidInput
+		}
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE assets SET scan_status='pending',scan_details='',scan_signature_version='',scan_failure_category='',scan_event_id=$2,scan_attempts=0,scan_next_attempt_at=$3,scan_claimed_until=NULL,updated_at=$3 WHERE id=$1`, assetID, request.EventID, now)
 	if err != nil {
 		return err
 	}
 	if count, _ := result.RowsAffected(); count != 1 {
-		return assets.ErrInvalidInput
+		return assets.ErrConflict
 	}
-	return nil
+	if _, err := tx.ExecContext(ctx, `INSERT INTO asset_scan_outbox(event_id,asset_id,asset_etag,available_at,created_at) VALUES($1,$2,$3,$4,$4)`, request.EventID, request.AssetID, request.ETag, request.CreatedAt); err != nil {
+		return err
+	}
+	if previousEventID != "" {
+		if _, err := tx.ExecContext(ctx, `UPDATE asset_scan_poison_events SET replayed_at=COALESCE(replayed_at,$3),replay_event_id=CASE WHEN replay_event_id='' THEN $2 ELSE replay_event_id END WHERE event_id=$1 AND replayed_at IS NULL`, previousEventID, request.EventID, now); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *Store) GetOperations(ctx context.Context, now time.Time) (assets.Operations, error) {

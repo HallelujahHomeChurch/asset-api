@@ -18,6 +18,7 @@ import (
 	"hhc/asset-api/internal/httpapi"
 	"hhc/asset-api/internal/lifecycle"
 	"hhc/asset-api/internal/postgres"
+	"hhc/asset-api/internal/scanqueue"
 	azurestorage "hhc/asset-api/internal/storage/azure"
 	localstorage "hhc/asset-api/internal/storage/local"
 
@@ -64,23 +65,45 @@ func run() error {
 	}
 	repository := postgres.New(db)
 	service := assets.NewService(repository, blobStore, cfg.PublicBaseURL, time.Now)
-	handler := httpapi.New(service, db, cfg.AllowedCallers, cfg.AllowDevCallerHeader, cfg.AppAPIToken, localUpload)
+	workloadCallers := map[string]httpapi.WorkloadCaller{}
+	if cfg.LineWorkloadClientID != "" {
+		workloadCallers[cfg.LineWorkloadClientID] = httpapi.WorkloadCaller{ObjectID: cfg.LineWorkloadObjectID, Service: "hhc-line-function-bot"}
+	}
+	handler := httpapi.New(service, db, cfg.AllowedCallers, cfg.AllowDevCallerHeader, cfg.AppAPIToken, httpapi.WorkloadAuthConfig{
+		TenantID: cfg.WorkloadTenantID, Issuer: cfg.WorkloadIssuer, Audience: cfg.WorkloadAudience,
+		RequiredRole: cfg.WorkloadRequiredRole, Callers: workloadCallers,
+	}, localUpload)
 	server := &http.Server{Addr: ":" + cfg.Port, Handler: handler.Routes(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 2 * time.Minute, IdleTimeout: 2 * time.Minute}
 
-	scanClient := clamav.NewClient(cfg.ClamAVHost, cfg.ClamAVPort, cfg.ClamAVTimeout, cfg.ClamAVMaxFileSize)
-	scanWorker := clamav.NewWorker(repository, blobStore, scanClient, cfg.ClamAVMaxRetries, cfg.ClamAVTimeout)
 	derivativeBlobs, ok := blobStore.(derivatives.BlobStore)
 	if !ok {
 		return errors.New("storage backend does not support derivative writes")
 	}
 	derivativeWorker := derivatives.NewWorker(repository, derivativeBlobs)
 	lifecycleWorker := lifecycle.NewWorker(repository, blobStore)
-	go func() {
-		if err := scanWorker.Run(ctx); err != nil && ctx.Err() == nil {
-			slog.Error("ClamAV worker stopped", "error", err)
-			stop()
+	if cfg.ScanDispatchEnabled {
+		sender, err := scanqueue.NewAzureSender(cfg.ScanQueueURL)
+		if err != nil {
+			return err
 		}
-	}()
+		dispatcher := scanqueue.NewDispatcher(repository, sender, time.Now)
+		go func() {
+			if err := dispatcher.Run(ctx); err != nil && ctx.Err() == nil {
+				slog.Error("scan outbox dispatcher stopped", "error", err)
+				stop()
+			}
+		}()
+	}
+	if cfg.EmbeddedScanEnabled {
+		scanClient := clamav.NewClient(cfg.ClamAVHost, cfg.ClamAVPort, cfg.ClamAVTimeout, cfg.ClamAVMaxFileSize)
+		scanWorker := clamav.NewWorker(repository, blobStore, scanClient, cfg.ClamAVMaxRetries, cfg.ClamAVTimeout)
+		go func() {
+			if err := scanWorker.Run(ctx); err != nil && ctx.Err() == nil {
+				slog.Error("ClamAV worker stopped", "error", err)
+				stop()
+			}
+		}()
+	}
 	go func() {
 		if err := derivativeWorker.Run(ctx); err != nil && ctx.Err() == nil {
 			slog.Error("derivative worker stopped", "error", err)

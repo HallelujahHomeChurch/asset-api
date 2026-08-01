@@ -3,3 +3,12 @@ using './main.bicep'
 param storageAccountName = 'alivestoragebb99ee6e'
 param runtimeImage = 'alive.azurecr.io/alive/asset-api@sha256:REPLACE_ME'
 param migrationImage = 'alive.azurecr.io/alive/asset-api@sha256:REPLACE_ME'
+param scanWorkerImage = 'alive.azurecr.io/alive/asset-scan@sha256:REPLACE_ME'
+param scanDispatchEnabled = false
+param embeddedScanEnabled = true
+param deployScanJob = true
+param deploySignatureRefreshJob = true
+param workloadAuthClientId = 'REPLACE_ME'
+param workloadAuthAudience = 'api://REPLACE_ME'
+param lineAttachmentClientId = 'REPLACE_ME'
+param lineAttachmentObjectId = 'REPLACE_ME'

@@ -87,12 +87,15 @@ type Asset struct {
 	UploadStatus       UploadStatus     `json:"uploadStatus"`
 	ScanStatus         ScanStatus       `json:"scanStatus"`
 	ScanDetails        string           `json:"scanDetails,omitempty"`
+	ScanSignature      string           `json:"scanSignatureVersion,omitempty"`
+	ScanFailure        string           `json:"scanFailureCategory,omitempty"`
 	ProcessingStatus   ProcessingStatus `json:"processingStatus"`
 	Visibility         Visibility       `json:"visibility"`
 	CreatedAt          time.Time        `json:"createdAt"`
 	UpdatedAt          time.Time        `json:"updatedAt"`
 	DeletedAt          time.Time        `json:"deletedAt,omitempty"`
 	ScanAttempts       int              `json:"-"`
+	ScanEventID        string           `json:"-"`
 	ProcessingAttempts int              `json:"-"`
 }
 
@@ -157,6 +160,14 @@ type CompleteUploadInput struct {
 	MIMEType       string `json:"mimeType"`
 }
 
+type ScanRequest struct {
+	EventID   string
+	AssetID   string
+	ETag      string
+	Attempts  int
+	CreatedAt time.Time
+}
+
 type CreateGrantInput struct {
 	SubjectType    SubjectType `json:"subjectType"`
 	SubjectID      string      `json:"subjectId"`
@@ -170,8 +181,30 @@ type ScanResult struct {
 	AssetID         string     `json:"assetId"`
 	Status          ScanStatus `json:"status"`
 	Details         string     `json:"details,omitempty"`
+	Signature       string     `json:"signatureVersion,omitempty"`
+	FailureCategory string     `json:"failureCategory,omitempty"`
 	ETag            string     `json:"etag,omitempty"`
 	ExpectedAttempt int        `json:"-"`
+}
+
+type ScanClaimState string
+
+const (
+	ScanClaimed  ScanClaimState = "claimed"
+	ScanBusy     ScanClaimState = "busy"
+	ScanTerminal ScanClaimState = "terminal"
+)
+
+type ScanPoison struct {
+	PoisonID        string
+	EventID         string
+	AssetID         string
+	ETag            string
+	Reason          string
+	Details         string
+	DequeueCount    int64
+	SourceMessageID string
+	BodySHA256      string
 }
 
 type UploadTarget struct {
@@ -239,7 +272,7 @@ type Repository interface {
 	CreateUpload(context.Context, Asset, UploadSession) error
 	GetAsset(context.Context, string) (Asset, error)
 	GetUploadSession(context.Context, string) (UploadSession, error)
-	CompleteUpload(context.Context, Asset, UploadSession) error
+	CompleteUpload(context.Context, Asset, UploadSession, ScanRequest) error
 	FailUpload(context.Context, string, time.Time) error
 	CreateGrant(context.Context, Grant) (Grant, error)
 	RevokeGrant(context.Context, string, string, time.Time) error

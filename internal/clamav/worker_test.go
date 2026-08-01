@@ -59,7 +59,7 @@ func TestWorkerRetriesUnavailableClamAVThenFailsClosed(t *testing.T) {
 }
 
 func pendingAsset() assets.Asset {
-	return assets.Asset{ID: "asset-1", ObjectKey: "assets/asset-1/original", SizeBytes: 5, ETag: "etag", UploadStatus: assets.UploadCompleted, ScanStatus: assets.ScanPending}
+	return assets.Asset{ID: "asset-1", ObjectKey: "assets/asset-1/original", SizeBytes: 5, ETag: "etag", ScanEventID: "event-1", UploadStatus: assets.UploadCompleted, ScanStatus: assets.ScanPending}
 }
 
 type scannerStub struct {
@@ -115,7 +115,7 @@ func (*workerRepository) GetAsset(context.Context, string) (assets.Asset, error)
 func (*workerRepository) GetUploadSession(context.Context, string) (assets.UploadSession, error) {
 	panic("not used")
 }
-func (*workerRepository) CompleteUpload(context.Context, assets.Asset, assets.UploadSession) error {
+func (*workerRepository) CompleteUpload(context.Context, assets.Asset, assets.UploadSession, assets.ScanRequest) error {
 	panic("not used")
 }
 func (*workerRepository) FailUpload(context.Context, string, time.Time) error { panic("not used") }

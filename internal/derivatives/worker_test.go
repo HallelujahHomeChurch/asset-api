@@ -204,7 +204,7 @@ func (*processingRepository) GetAsset(context.Context, string) (assets.Asset, er
 func (*processingRepository) GetUploadSession(context.Context, string) (assets.UploadSession, error) {
 	return assets.UploadSession{}, nil
 }
-func (*processingRepository) CompleteUpload(context.Context, assets.Asset, assets.UploadSession) error {
+func (*processingRepository) CompleteUpload(context.Context, assets.Asset, assets.UploadSession, assets.ScanRequest) error {
 	return nil
 }
 func (*processingRepository) FailUpload(context.Context, string, time.Time) error { return nil }
