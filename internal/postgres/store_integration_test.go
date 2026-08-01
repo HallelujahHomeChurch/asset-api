@@ -196,7 +196,7 @@ func TestPurgedAssetsAreExcludedFromStateTransitions(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO upload_sessions(id,asset_id,idempotency_key,max_size_bytes,status,expires_at,created_at) VALUES('session','purged','key',1,'created',$1,$1)`, now); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.CompleteUpload(ctx, assets.Asset{ID: "purged"}, session, assets.ScanRequest{EventID: "purged-event", AssetID: "purged", ETag: "etag-purged", CreatedAt: now}); !errors.Is(err, assets.ErrNotFound) {
+	if err := store.CompleteUpload(ctx, assets.Asset{ID: "purged", ETag: "etag-purged"}, session, assets.ScanRequest{EventID: "purged-event", AssetID: "purged", ETag: "etag-purged", CreatedAt: now}); !errors.Is(err, assets.ErrNotFound) {
 		t.Fatalf("CompleteUpload err=%v", err)
 	}
 	if err := store.FailUpload(ctx, "purged", now); !errors.Is(err, assets.ErrNotFound) {
