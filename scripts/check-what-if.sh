@@ -20,9 +20,11 @@ jq -e '
   and
   ([.changes[]
     | select(.changeType != "Ignore" and .changeType != "NoChange")
-    | select(
+      | select(
         ((.changeType == "Modify")
-          and (.resourceId | endswith("/Microsoft.App/containerApps/asset-api") or endswith("/Microsoft.App/jobs/asset-migrate") or endswith("/Microsoft.App/jobs/asset-scan") or endswith("/Microsoft.App/jobs/asset-clamav-signature-refresh")))
+          and (.resourceId | endswith("/Microsoft.App/containerApps/asset-api") or endswith("/Microsoft.App/jobs/asset-migrate")))
+        or ((.changeType == "Create" or .changeType == "Modify")
+          and (.resourceId | endswith("/Microsoft.App/jobs/asset-scan") or endswith("/Microsoft.App/jobs/asset-clamav-signature-refresh")))
         or ((.changeType == "Create" or .changeType == "Modify")
           and (.resourceId | endswith("/Microsoft.App/containerApps/asset-api/authConfigs/current")))
         | not
