@@ -187,7 +187,7 @@ func (j *ScanJob) download(ctx context.Context, asset assets.Asset) (string, str
 	if strings.HasPrefix(string(header), "%PDF-") {
 		detected = "application/pdf"
 	}
-	if asset.DetectedMIMEType != "" && detected != asset.DetectedMIMEType {
+	if asset.DetectedMIMEType != "" && assets.NormalizeDetectedMIME(asset.DetectedMIMEType, detected) == "" {
 		return "", "integrity", fmt.Errorf("asset MIME type changed: expected %s, detected %s", asset.DetectedMIMEType, detected)
 	}
 	file, err := os.CreateTemp("", "asset-scan-*")
