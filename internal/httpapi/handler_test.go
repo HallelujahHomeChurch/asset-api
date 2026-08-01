@@ -139,6 +139,24 @@ func TestInternalAllowsValidatedEntraWorkload(t *testing.T) {
 	}
 }
 
+func TestManagedIdentityV1IssuerIsLimitedToConfiguredTenant(t *testing.T) {
+	config := WorkloadAuthConfig{
+		TenantID: "tenant-1", Audience: "api://asset-api", Issuer: "https://login.microsoftonline.com/tenant-1/v2.0",
+		RequiredRole: "Asset.Invoke", Callers: map[string]WorkloadCaller{"line-client": {ObjectID: "line-object", Service: "hhc-line-function-bot"}},
+	}
+	claims := map[string]string{
+		"tid": "tenant-1", "iss": "https://sts.windows.net/tenant-1/", "aud": config.Audience,
+		"appid": "line-client", "oid": "line-object", "roles": config.RequiredRole,
+	}
+	if caller := workloadCaller(encodedPrincipal(t, claims), config); caller != "hhc-line-function-bot" {
+		t.Fatalf("caller = %q", caller)
+	}
+	claims["iss"] = "https://sts.windows.net/other-tenant/"
+	if caller := workloadCaller(encodedPrincipal(t, claims), config); caller != "" {
+		t.Fatalf("cross-tenant caller = %q", caller)
+	}
+}
+
 func TestInternalRejectsInvalidEntraWorkloadClaims(t *testing.T) {
 	auth := WorkloadAuthConfig{
 		TenantID: "tenant-1", Audience: "api://asset-api", Issuer: "https://login.microsoftonline.com/tenant-1/v2.0", RequiredRole: "Asset.Invoke",

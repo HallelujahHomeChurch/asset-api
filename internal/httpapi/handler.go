@@ -519,7 +519,7 @@ func workloadCaller(encoded string, config WorkloadAuthConfig) string {
 		}
 		return ""
 	}
-	if claim("tid", "http://schemas.microsoft.com/identity/claims/tenantid") != config.TenantID || claim("iss") != config.Issuer || claim("aud") != config.Audience {
+	if claim("tid", "http://schemas.microsoft.com/identity/claims/tenantid") != config.TenantID || !validWorkloadIssuer(claim("iss"), config) || claim("aud") != config.Audience {
 		return ""
 	}
 	clientID := claim("appid", "azp")
@@ -533,4 +533,8 @@ func workloadCaller(encoded string, config WorkloadAuthConfig) string {
 		}
 	}
 	return ""
+}
+
+func validWorkloadIssuer(issuer string, config WorkloadAuthConfig) bool {
+	return issuer == config.Issuer || issuer == "https://sts.windows.net/"+config.TenantID+"/"
 }
