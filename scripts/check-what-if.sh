@@ -12,7 +12,7 @@ jq -e '
     | objects
     | select(.propertyChangeType? == "Delete")
     | select(
-        (.path == "properties.runningStatus"
+        ((.path == "properties.runningStatus" or .path == "properties.template.revisionSuffix")
           and ($resourceId | contains("/Microsoft.App/containerApps/")))
         | not
       )
