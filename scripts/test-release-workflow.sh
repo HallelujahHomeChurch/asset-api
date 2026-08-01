@@ -20,6 +20,13 @@ grep -q 'IMAGE_REF=.*@${digest}' "$workflow"
 grep -q 'SCAN_IMAGE_REF=.*@${scan_digest}' "$workflow"
 grep -q 'Dockerfile.scan' "$workflow"
 grep -q 'activate_queue_scanning' "$workflow"
+grep -q 'true) embedded_scan_enabled=false' "$workflow"
+grep -q 'false) embedded_scan_enabled=true' "$workflow"
+test "$(grep -c 'embeddedScanEnabled="$EMBEDDED_SCAN_ENABLED"' "$workflow")" = 2
+if grep -q 'ACTIVATE_QUEUE_SCANNING/true/false' "$workflow"; then
+  echo 'queue and embedded scanners must use explicit inverse modes' >&2
+  exit 1
+fi
 if grep -Eq 'scope: (scanQueue|scanPoisonQueue|assetContainer|signatureContainer)!' infra/main.bicep; then
   echo 'conditional storage resources must use explicit nested role-assignment types' >&2
   exit 1

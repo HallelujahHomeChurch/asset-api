@@ -91,6 +91,12 @@ jobs:
         run: |
           [[ "$GITHUB_REF" == "refs/heads/main" ]]
           [[ "$RELEASE_CONFIRMATION" == "deploy-asset-api-production" ]]
+          case "$ACTIVATE_QUEUE_SCANNING" in
+            true) embedded_scan_enabled=false ;;
+            false) embedded_scan_enabled=true ;;
+            *) echo "Invalid queue scanning mode: $ACTIVATE_QUEUE_SCANNING" >&2; exit 1 ;;
+          esac
+          echo "EMBEDDED_SCAN_ENABLED=$embedded_scan_enabled" >> "$GITHUB_ENV"
           for name in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID ASSET_WORKLOAD_CLIENT_ID ASSET_WORKLOAD_AUDIENCE LINE_ATTACHMENT_CLIENT_ID LINE_ATTACHMENT_OBJECT_ID; do
             test -n "${!name:-}" || { echo "Missing repository variable: ${name}" >&2; exit 1; }
           done
@@ -163,7 +169,7 @@ jobs:
           az deployment group what-if \
             --resource-group "$RESOURCE_GROUP" \
             --template-file infra/main.bicep \
-            --parameters storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" scanWorkerImage="$SCAN_IMAGE_REF" deployRuntime=true deployMigrationJob=true deployScanJob=true deploySignatureRefreshJob=true scanDispatchEnabled="$ACTIVATE_QUEUE_SCANNING" embeddedScanEnabled="${ACTIVATE_QUEUE_SCANNING/true/false}" workloadAuthClientId="$ASSET_WORKLOAD_CLIENT_ID" workloadAuthAudience="$ASSET_WORKLOAD_AUDIENCE" lineAttachmentClientId="$LINE_ATTACHMENT_CLIENT_ID" lineAttachmentObjectId="$LINE_ATTACHMENT_OBJECT_ID" provisionPermissions=false manageSharedInfrastructure=false \
+            --parameters storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" scanWorkerImage="$SCAN_IMAGE_REF" deployRuntime=true deployMigrationJob=true deployScanJob=true deploySignatureRefreshJob=true scanDispatchEnabled="$ACTIVATE_QUEUE_SCANNING" embeddedScanEnabled="$EMBEDDED_SCAN_ENABLED" workloadAuthClientId="$ASSET_WORKLOAD_CLIENT_ID" workloadAuthAudience="$ASSET_WORKLOAD_AUDIENCE" lineAttachmentClientId="$LINE_ATTACHMENT_CLIENT_ID" lineAttachmentObjectId="$LINE_ATTACHMENT_OBJECT_ID" provisionPermissions=false manageSharedInfrastructure=false \
             --validation-level Provider --result-format FullResourcePayloads --no-pretty-print --only-show-errors \
             --output json > what-if.json
           ./scripts/check-what-if.sh what-if.json
@@ -196,7 +202,7 @@ jobs:
           az deployment group create \
             --name "asset-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --resource-group "$RESOURCE_GROUP" --template-file infra/main.bicep \
-            --parameters storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" scanWorkerImage="$SCAN_IMAGE_REF" deployRuntime=true deployMigrationJob=true deployScanJob=true deploySignatureRefreshJob=true scanDispatchEnabled="$ACTIVATE_QUEUE_SCANNING" embeddedScanEnabled="${ACTIVATE_QUEUE_SCANNING/true/false}" workloadAuthClientId="$ASSET_WORKLOAD_CLIENT_ID" workloadAuthAudience="$ASSET_WORKLOAD_AUDIENCE" lineAttachmentClientId="$LINE_ATTACHMENT_CLIENT_ID" lineAttachmentObjectId="$LINE_ATTACHMENT_OBJECT_ID" provisionPermissions=false manageSharedInfrastructure=false \
+            --parameters storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" scanWorkerImage="$SCAN_IMAGE_REF" deployRuntime=true deployMigrationJob=true deployScanJob=true deploySignatureRefreshJob=true scanDispatchEnabled="$ACTIVATE_QUEUE_SCANNING" embeddedScanEnabled="$EMBEDDED_SCAN_ENABLED" workloadAuthClientId="$ASSET_WORKLOAD_CLIENT_ID" workloadAuthAudience="$ASSET_WORKLOAD_AUDIENCE" lineAttachmentClientId="$LINE_ATTACHMENT_CLIENT_ID" lineAttachmentObjectId="$LINE_ATTACHMENT_OBJECT_ID" provisionPermissions=false manageSharedInfrastructure=false \
             --only-show-errors --output none
       - name: Wait for API revision
         run: |
