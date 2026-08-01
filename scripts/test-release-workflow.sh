@@ -34,7 +34,9 @@ fi
 for scope in scanQueueScope scanPoisonQueueScope assetContainerScope signatureContainerScope; do
   grep -q "scope: $scope" infra/main.bicep
 done
-test "$(grep -c "'scoped-v2'" infra/main.bicep)" = 6
+test "$(grep -c "'scoped-v2'" infra/main.bicep)" = 7
+grep -q "'storage-queue-data-reader'" infra/main.bicep
+grep -q "roleDefinitionName=='Storage Queue Data Reader'" "$workflow"
 grep -q 'ASSET_WORKLOAD_AUDIENCE' "$workflow"
 grep -q 'ASSET_WORKLOAD_CLIENT_ID' "$workflow"
 grep -q 'LINE_ATTACHMENT_CLIENT_ID' "$workflow"

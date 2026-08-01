@@ -492,6 +492,16 @@ resource scanQueueProcessor 'Microsoft.Authorization/roleAssignments@2022-04-01'
   }
 }
 
+resource scanQueueReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (manageSharedInfrastructure) {
+  name: guid(scanQueueScope.id, scanIdentity.id, 'storage-queue-data-reader', 'scoped-v2')
+  scope: scanQueueScope
+  properties: {
+    principalId: scanIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '19e7f393-937e-4f77-808e-94535e297925')
+  }
+}
+
 resource scanPoisonQueueContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (manageSharedInfrastructure) {
   name: guid(scanPoisonQueueScope.id, scanIdentity.id, 'storage-queue-data-message-contributor', 'scoped-v2')
   scope: scanPoisonQueueScope
@@ -601,7 +611,7 @@ resource scanJob 'Microsoft.App/jobs@2025-07-01' = if (deployScanJob) {
       ]
     }
   }
-  dependsOn: [acrPull, scanSecretAccess, scanQueueProcessor, scanPoisonQueueContributor, scanBlobReader, scanSignatureReader]
+  dependsOn: [acrPull, scanSecretAccess, scanQueueProcessor, scanQueueReader, scanPoisonQueueContributor, scanBlobReader, scanSignatureReader]
 }
 
 resource signatureRefreshJob 'Microsoft.App/jobs@2025-07-01' = if (deploySignatureRefreshJob) {

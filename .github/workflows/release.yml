@@ -128,6 +128,7 @@ jobs:
           az resource show --ids "$scan_queue_scope" --api-version 2023-05-01 --only-show-errors --output none
           [[ "$(az role assignment list --scope "$scan_queue_scope" --assignee-object-id "$app_principal" --query "[?roleDefinitionName=='Storage Queue Data Message Sender'] | length(@)" -o tsv --only-show-errors)" == "1" ]]
           [[ "$(az role assignment list --scope "$scan_queue_scope" --assignee-object-id "$scan_principal" --query "[?roleDefinitionName=='Storage Queue Data Message Processor'] | length(@)" -o tsv --only-show-errors)" == "1" ]]
+          [[ "$(az role assignment list --scope "$scan_queue_scope" --assignee-object-id "$scan_principal" --query "[?roleDefinitionName=='Storage Queue Data Reader'] | length(@)" -o tsv --only-show-errors)" == "1" ]]
           [[ "$(az role assignment list --scope "$poison_queue_scope" --assignee-object-id "$scan_principal" --query "[?roleDefinitionName=='Storage Queue Data Contributor'] | length(@)" -o tsv --only-show-errors)" == "1" ]]
           [[ "$(az role assignment list --scope "$blob_scope" --assignee-object-id "$scan_principal" --query "[?roleDefinitionName=='Storage Blob Data Reader'] | length(@)" -o tsv --only-show-errors)" == "1" ]]
           [[ "$(az role assignment list --scope "$signature_scope" --assignee-object-id "$scan_principal" --query "[?roleDefinitionName=='Storage Blob Data Reader'] | length(@)" -o tsv --only-show-errors)" == "1" ]]
