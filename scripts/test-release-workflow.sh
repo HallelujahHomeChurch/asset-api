@@ -27,6 +27,7 @@ fi
 for scope in scanQueueScope scanPoisonQueueScope assetContainerScope signatureContainerScope; do
   grep -q "scope: $scope" infra/main.bicep
 done
+test "$(grep -c "'scoped-v2'" infra/main.bicep)" = 6
 grep -q 'ASSET_WORKLOAD_AUDIENCE' "$workflow"
 grep -q 'ASSET_WORKLOAD_CLIENT_ID' "$workflow"
 grep -q 'LINE_ATTACHMENT_CLIENT_ID' "$workflow"

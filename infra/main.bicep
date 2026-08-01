@@ -465,7 +465,7 @@ resource assetBlobDelegator 'Microsoft.Authorization/roleAssignments@2022-04-01'
 }
 
 resource assetQueueSender 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (manageSharedInfrastructure) {
-  name: guid(scanQueueScope.id, 'asset-api', 'storage-queue-data-message-sender')
+  name: guid(scanQueueScope.id, 'asset-api', 'storage-queue-data-message-sender', 'scoped-v2')
   scope: scanQueueScope
   properties: {
     principalId: deployRuntime ? app!.identity.principalId : existingApp!.identity.principalId
@@ -475,7 +475,7 @@ resource assetQueueSender 'Microsoft.Authorization/roleAssignments@2022-04-01' =
 }
 
 resource scanQueueProcessor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (manageSharedInfrastructure) {
-  name: guid(scanQueueScope.id, scanIdentity.id, 'storage-queue-data-message-processor')
+  name: guid(scanQueueScope.id, scanIdentity.id, 'storage-queue-data-message-processor', 'scoped-v2')
   scope: scanQueueScope
   properties: {
     principalId: scanIdentity.properties.principalId
@@ -485,7 +485,7 @@ resource scanQueueProcessor 'Microsoft.Authorization/roleAssignments@2022-04-01'
 }
 
 resource scanPoisonQueueContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (manageSharedInfrastructure) {
-  name: guid(scanPoisonQueueScope.id, scanIdentity.id, 'storage-queue-data-message-contributor')
+  name: guid(scanPoisonQueueScope.id, scanIdentity.id, 'storage-queue-data-message-contributor', 'scoped-v2')
   scope: scanPoisonQueueScope
   properties: {
     principalId: scanIdentity.properties.principalId
@@ -495,7 +495,7 @@ resource scanPoisonQueueContributor 'Microsoft.Authorization/roleAssignments@202
 }
 
 resource scanBlobReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (manageSharedInfrastructure) {
-  name: guid(assetContainerScope.id, scanIdentity.id, 'storage-blob-data-reader')
+  name: guid(assetContainerScope.id, scanIdentity.id, 'storage-blob-data-reader', 'scoped-v2')
   scope: assetContainerScope
   properties: {
     principalId: scanIdentity.properties.principalId
@@ -505,7 +505,7 @@ resource scanBlobReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = i
 }
 
 resource scanSignatureReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (manageSharedInfrastructure) {
-  name: guid(signatureContainerScope.id, scanIdentity.id, 'storage-blob-data-reader')
+  name: guid(signatureContainerScope.id, scanIdentity.id, 'storage-blob-data-reader', 'scoped-v2')
   scope: signatureContainerScope
   properties: {
     principalId: scanIdentity.properties.principalId
@@ -515,7 +515,7 @@ resource scanSignatureReader 'Microsoft.Authorization/roleAssignments@2022-04-01
 }
 
 resource signatureBlobContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (manageSharedInfrastructure) {
-  name: guid(signatureContainerScope.id, signatureRefreshIdentity.id, 'storage-blob-data-contributor')
+  name: guid(signatureContainerScope.id, signatureRefreshIdentity.id, 'storage-blob-data-contributor', 'scoped-v2')
   scope: signatureContainerScope
   properties: {
     principalId: signatureRefreshIdentity.properties.principalId
