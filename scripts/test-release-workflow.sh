@@ -44,6 +44,9 @@ grep -q 'workloadAuthClientId="$ASSET_WORKLOAD_CLIENT_ID"' "$workflow"
 grep -q 'az deployment group what-if' "$workflow"
 grep -q './scripts/check-what-if.sh what-if.json' "$workflow"
 grep -q 'manageSharedInfrastructure=false' "$workflow"
+grep -q 'exposedPort: 0' infra/main.bicep
+grep -q 'latestRevision: true' infra/main.bicep
+grep -q 'isAutoProvisioned: false' infra/main.bicep
 grep -q 'az containerapp job start' "$workflow"
 grep -q 'PREVIOUS_IMAGE_REF=' "$workflow"
 grep -q 'az containerapp revision copy' "$workflow"

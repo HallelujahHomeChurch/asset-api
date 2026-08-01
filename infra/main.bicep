@@ -327,7 +327,14 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = if (deployRuntime) {
         external: false
         allowInsecure: false
         targetPort: 8080
+        exposedPort: 0
         transport: 'auto'
+        traffic: [
+          {
+            latestRevision: true
+            weight: 100
+          }
+        ]
       }
       registries: [
         {
@@ -424,6 +431,7 @@ resource workloadAuth 'Microsoft.App/containerApps/authConfigs@2025-01-01' = if 
     identityProviders: {
       azureActiveDirectory: {
         enabled: true
+        isAutoProvisioned: false
         registration: {
           clientId: workloadAuthClientId
           openIdIssuer: '${az.environment().authentication.loginEndpoint}${subscription().tenantId}/v2.0'
