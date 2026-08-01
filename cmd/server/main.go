@@ -18,6 +18,7 @@ import (
 	"hhc/asset-api/internal/httpapi"
 	"hhc/asset-api/internal/lifecycle"
 	"hhc/asset-api/internal/postgres"
+	"hhc/asset-api/internal/scanqueue"
 	azurestorage "hhc/asset-api/internal/storage/azure"
 	localstorage "hhc/asset-api/internal/storage/local"
 
@@ -75,6 +76,19 @@ func run() error {
 	}
 	derivativeWorker := derivatives.NewWorker(repository, derivativeBlobs)
 	lifecycleWorker := lifecycle.NewWorker(repository, blobStore)
+	if cfg.ScanDispatchEnabled {
+		sender, err := scanqueue.NewAzureSender(cfg.ScanQueueURL)
+		if err != nil {
+			return err
+		}
+		dispatcher := scanqueue.NewDispatcher(repository, sender, time.Now)
+		go func() {
+			if err := dispatcher.Run(ctx); err != nil && ctx.Err() == nil {
+				slog.Error("scan outbox dispatcher stopped", "error", err)
+				stop()
+			}
+		}()
+	}
 	go func() {
 		if err := scanWorker.Run(ctx); err != nil && ctx.Err() == nil {
 			slog.Error("ClamAV worker stopped", "error", err)

@@ -157,6 +157,14 @@ type CompleteUploadInput struct {
 	MIMEType       string `json:"mimeType"`
 }
 
+type ScanRequest struct {
+	EventID   string
+	AssetID   string
+	ETag      string
+	Attempts  int
+	CreatedAt time.Time
+}
+
 type CreateGrantInput struct {
 	SubjectType    SubjectType `json:"subjectType"`
 	SubjectID      string      `json:"subjectId"`
@@ -239,7 +247,7 @@ type Repository interface {
 	CreateUpload(context.Context, Asset, UploadSession) error
 	GetAsset(context.Context, string) (Asset, error)
 	GetUploadSession(context.Context, string) (UploadSession, error)
-	CompleteUpload(context.Context, Asset, UploadSession) error
+	CompleteUpload(context.Context, Asset, UploadSession, ScanRequest) error
 	FailUpload(context.Context, string, time.Time) error
 	CreateGrant(context.Context, Grant) (Grant, error)
 	RevokeGrant(context.Context, string, string, time.Time) error

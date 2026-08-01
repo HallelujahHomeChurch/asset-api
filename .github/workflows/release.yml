@@ -97,8 +97,13 @@ jobs:
           migration_principal="$(az identity show -g "$RESOURCE_GROUP" -n asset-migrate-identity --query principalId -o tsv --only-show-errors)"
           runtime_vault="$(az keyvault show -g "$RESOURCE_GROUP" -n alive-asset-runtime-kv --query id -o tsv --only-show-errors)"
           migration_vault="$(az keyvault show -g "$RESOURCE_GROUP" -n alive-asset-migrate-kv --query id -o tsv --only-show-errors)"
+          app_principal="$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_APP_NAME" --query identity.principalId -o tsv --only-show-errors)"
+          storage_id="$(az storage account show -g "$RESOURCE_GROUP" -n "$STORAGE_ACCOUNT_NAME" --query id -o tsv --only-show-errors)"
+          scan_queue_scope="${storage_id}/queueServices/default/queues/asset-scan"
           [[ "$(az role assignment list --scope "$runtime_vault" --assignee-object-id "$runtime_principal" --query "[?roleDefinitionName=='Key Vault Secrets User'] | length(@)" -o tsv --only-show-errors)" == "1" ]]
           [[ "$(az role assignment list --scope "$migration_vault" --assignee-object-id "$migration_principal" --query "[?roleDefinitionName=='Key Vault Secrets User'] | length(@)" -o tsv --only-show-errors)" == "1" ]]
+          az resource show --ids "$scan_queue_scope" --api-version 2023-05-01 --only-show-errors --output none
+          [[ "$(az role assignment list --scope "$scan_queue_scope" --assignee-object-id "$app_principal" --query "[?roleDefinitionName=='Storage Queue Data Message Sender'] | length(@)" -o tsv --only-show-errors)" == "1" ]]
           [[ "$(az resource show --ids "$runtime_vault/secrets/database-url" --api-version 2024-11-01 --query properties.attributes.enabled -o tsv --only-show-errors)" == "true" ]]
           [[ "$(az resource show --ids "$migration_vault/secrets/database-url" --api-version 2024-11-01 --query properties.attributes.enabled -o tsv --only-show-errors)" == "true" ]]
       - name: Capture rollback revision

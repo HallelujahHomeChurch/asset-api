@@ -191,7 +191,8 @@ func (s *Service) CompleteUpload(ctx context.Context, assetID string, input Comp
 	asset.UpdatedAt = now
 	session.Status = UploadCompleted
 	session.CompletedAt = now
-	if err := s.repository.CompleteUpload(ctx, asset, session); err != nil {
+	request := ScanRequest{EventID: newID(), AssetID: asset.ID, ETag: asset.ETag, CreatedAt: now}
+	if err := s.repository.CompleteUpload(ctx, asset, session, request); err != nil {
 		return Asset{}, fmt.Errorf("complete upload: %w", err)
 	}
 	if err := s.blobs.Delete(ctx, session.StagingObjectKey); err != nil {
@@ -270,12 +271,14 @@ func (s *Service) RequeueScan(ctx context.Context, assetID, ownerService string)
 		return ErrInvalidInput
 	}
 	repository, ok := s.repository.(interface {
-		RequeueFailedScan(context.Context, string, string, time.Time) error
+		RequeueFailedScan(context.Context, string, string, ScanRequest, time.Time) error
 	})
 	if !ok {
 		return ErrForbidden
 	}
-	return repository.RequeueFailedScan(ctx, assetID, ownerService, s.now().UTC())
+	now := s.now().UTC()
+	request := ScanRequest{EventID: newID(), AssetID: asset.ID, ETag: asset.ETag, CreatedAt: now}
+	return repository.RequeueFailedScan(ctx, assetID, ownerService, request, now)
 }
 
 func (s *Service) Operations(ctx context.Context) (Operations, error) {

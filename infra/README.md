@@ -8,6 +8,14 @@ gateway and owner services invoke it through Dapr.
 It also allows only the ACA subnet (`172.16.66.0/23`) to reach clamd at
 `172.16.65.5:3310`.
 
+Upload completion and an `asset.scan.requested.v1` outbox row commit in one
+PostgreSQL transaction. The runtime sends that event to the `asset-scan`
+Storage Queue with managed identity. Queue delivery is at-least-once; the
+message contains only version, event ID, asset ID, and immutable Blob ETag.
+The embedded scanner remains active and `ASSET_SCAN_DISPATCH_ENABLED=false`
+until the queue-triggered scan job is deployed and verified. Queue messages
+use an infinite TTL so a job outage cannot silently expire a delivered event.
+
 ## One-time production cutover
 
 The existing `asset` login becomes the DML-only runtime role. Migrations use
@@ -57,8 +65,9 @@ database URLs are stored in separate RBAC Key Vaults.
    replacing the runtime and rolls back only the runtime image on failure.
 
 6. Confirm ingress remains disabled, Dapr app id is `asset-api`, the app is
-   ready through Dapr, and ACA can reach current ClamAV signatures at
-   `172.16.65.5:3310`.
+   ready through Dapr, `asset-scan` exists, the runtime has `Storage Queue Data
+   Message Sender` on that queue, and ACA can reach current ClamAV signatures
+   at `172.16.65.5:3310`.
 
 The template explicitly disables Defender for Storage; ClamAV is the only
 malware scanner. `ASSET_ALLOW_DEV_CALLER_HEADER` remains false in Azure.

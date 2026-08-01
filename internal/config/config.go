@@ -18,6 +18,8 @@ type Config struct {
 	LocalSigningKey      string
 	AzureAccountURL      string
 	AzureContainer       string
+	ScanQueueURL         string
+	ScanDispatchEnabled  bool
 	ClamAVHost           string
 	ClamAVPort           int
 	ClamAVTimeout        time.Duration
@@ -43,6 +45,7 @@ func Load() (Config, error) {
 		LocalSigningKey:      value("ASSET_LOCAL_SIGNING_KEY", "local-development-only-change-me"),
 		AzureAccountURL:      os.Getenv("ASSET_AZURE_ACCOUNT_URL"),
 		AzureContainer:       value("ASSET_AZURE_CONTAINER", "assets"),
+		ScanQueueURL:         strings.TrimSpace(os.Getenv("ASSET_SCAN_QUEUE_URL")),
 		ClamAVHost:           value("CLAMAV_HOST", "127.0.0.1"),
 		ClamAVPort:           3310,
 		ClamAVTimeout:        2 * time.Minute,
@@ -64,6 +67,16 @@ func Load() (Config, error) {
 	}
 	if cfg.StorageBackend == "azure" && cfg.AzureAccountURL == "" {
 		return Config{}, fmt.Errorf("ASSET_AZURE_ACCOUNT_URL is required for azure storage")
+	}
+	if value := strings.TrimSpace(os.Getenv("ASSET_SCAN_DISPATCH_ENABLED")); value != "" {
+		enabled, err := strconv.ParseBool(value)
+		if err != nil {
+			return Config{}, fmt.Errorf("invalid ASSET_SCAN_DISPATCH_ENABLED")
+		}
+		cfg.ScanDispatchEnabled = enabled
+	}
+	if cfg.ScanDispatchEnabled && cfg.ScanQueueURL == "" {
+		return Config{}, fmt.Errorf("ASSET_SCAN_QUEUE_URL is required when scan dispatch is enabled")
 	}
 	if !cfg.AllowDevCallerHeader && cfg.AppAPIToken == "" {
 		return Config{}, fmt.Errorf("APP_API_TOKEN is required when development caller headers are disabled")

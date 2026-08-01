@@ -115,7 +115,7 @@ func (*workerRepository) GetAsset(context.Context, string) (assets.Asset, error)
 func (*workerRepository) GetUploadSession(context.Context, string) (assets.UploadSession, error) {
 	panic("not used")
 }
-func (*workerRepository) CompleteUpload(context.Context, assets.Asset, assets.UploadSession) error {
+func (*workerRepository) CompleteUpload(context.Context, assets.Asset, assets.UploadSession, assets.ScanRequest) error {
 	panic("not used")
 }
 func (*workerRepository) FailUpload(context.Context, string, time.Time) error { panic("not used") }

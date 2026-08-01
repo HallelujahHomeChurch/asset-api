@@ -14,6 +14,7 @@ param deployRuntime bool = true
 param deployMigrationJob bool = true
 param provisionPermissions bool = true
 param manageSharedInfrastructure bool = true
+param scanDispatchEnabled bool = false
 
 param publicBaseUrl string = 'https://www.alive.org.tw/api/assets'
 param clamavHost string = '172.16.65.5'
@@ -118,6 +119,16 @@ resource migrationSecretAccess 'Microsoft.Authorization/roleAssignments@2022-04-
 
 resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
   name: storageAccountName
+}
+
+resource queueService 'Microsoft.Storage/storageAccounts/queueServices@2023-05-01' = if (manageSharedInfrastructure) {
+  parent: storageAccount
+  name: 'default'
+}
+
+resource scanQueue 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' = if (manageSharedInfrastructure) {
+  parent: queueService
+  name: 'asset-scan'
 }
 
 resource clamavNetworkSecurityGroup 'Microsoft.Network/networkSecurityGroups@2024-05-01' existing = {
@@ -266,6 +277,8 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = if (deployRuntime) {
             { name: 'ASSET_STORAGE_BACKEND', value: 'azure' }
             { name: 'ASSET_AZURE_ACCOUNT_URL', value: 'https://${storageAccount.name}.blob.${az.environment().suffixes.storage}' }
             { name: 'ASSET_AZURE_CONTAINER', value: 'assets' }
+            { name: 'ASSET_SCAN_QUEUE_URL', value: 'https://${storageAccount.name}.queue.${az.environment().suffixes.storage}/asset-scan' }
+            { name: 'ASSET_SCAN_DISPATCH_ENABLED', value: string(scanDispatchEnabled) }
             { name: 'ASSET_ALLOWED_CALLERS', value: 'account-api,hhc-web-api,hhc-line-function-bot' }
             { name: 'ASSET_ALLOW_DEV_CALLER_HEADER', value: 'false' }
             { name: 'CLAMAV_HOST', value: clamavHost }
@@ -306,6 +319,10 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = if (deployRuntime) {
   ]
 }
 
+resource existingApp 'Microsoft.App/containerApps@2024-03-01' existing = if (!deployRuntime) {
+  name: 'asset-api'
+}
+
 resource assetBlobContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (deployRuntime && manageSharedInfrastructure) {
   name: guid(assetContainer!.id, app!.id, 'storage-blob-data-contributor')
   scope: assetContainer!
@@ -323,6 +340,16 @@ resource assetBlobDelegator 'Microsoft.Authorization/roleAssignments@2022-04-01'
     principalId: app!.identity.principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'db58b8e5-c6ad-4a2a-8342-4190687cbf4a')
+  }
+}
+
+resource assetQueueSender 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (manageSharedInfrastructure) {
+  name: guid(scanQueue!.id, 'asset-api', 'storage-queue-data-message-sender')
+  scope: scanQueue!
+  properties: {
+    principalId: deployRuntime ? app!.identity.principalId : existingApp!.identity.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'c6a89b2d-59bc-44d0-9896-0f6e12d7b80a')
   }
 }
 
@@ -387,3 +414,4 @@ resource migrate 'Microsoft.App/jobs@2024-03-01' = if (deployMigrationJob) {
 output containerAppName string = 'asset-api'
 output migrationJobName string = 'asset-migrate'
 output assetContainerName string = 'assets'
+output scanQueueName string = 'asset-scan'

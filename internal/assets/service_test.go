@@ -38,6 +38,15 @@ func TestCompleteUploadValidatesObservedBlobAndLeavesDownloadPending(t *testing.
 	if asset.ScanStatus != ScanPending {
 		t.Fatalf("scan status = %s", asset.ScanStatus)
 	}
+	var request ScanRequest
+	for _, candidate := range repo.scanRequests {
+		if candidate.AssetID == asset.ID {
+			request = candidate
+		}
+	}
+	if request.EventID == "" || request.AssetID != asset.ID || request.ETag != asset.ETag {
+		t.Fatalf("scan request = %+v", request)
+	}
 	if created.Session.StagingObjectKey == "" || created.Session.StagingObjectKey == asset.ObjectKey {
 		t.Fatalf("staging=%q final=%q", created.Session.StagingObjectKey, asset.ObjectKey)
 	}
@@ -559,14 +568,17 @@ func TestRequeueScanAllowsFailedButNotInfected(t *testing.T) {
 	ctx := context.Background()
 	repo := newMemoryRepository()
 	service := NewService(repo, newMemoryBlobStore(), "https://www.alive.org.tw/api/assets", time.Now)
-	repo.assets["failed"] = Asset{ID: "failed", OwnerService: "hhc-web-api", ScanStatus: ScanFailed}
-	repo.assets["infected"] = Asset{ID: "infected", OwnerService: "hhc-web-api", ScanStatus: ScanInfected}
+	repo.assets["failed"] = Asset{ID: "failed", OwnerService: "hhc-web-api", ETag: "etag-failed", ScanStatus: ScanFailed}
+	repo.assets["infected"] = Asset{ID: "infected", OwnerService: "hhc-web-api", ETag: "etag-infected", ScanStatus: ScanInfected}
 
 	if err := service.RequeueScan(ctx, "failed", "hhc-web-api"); err != nil {
 		t.Fatal(err)
 	}
 	if repo.assets["failed"].ScanStatus != ScanPending {
 		t.Fatalf("failed scan status = %q", repo.assets["failed"].ScanStatus)
+	}
+	if len(repo.scanRequests) != 1 {
+		t.Fatalf("scan requests=%+v", repo.scanRequests)
 	}
 	if err := service.RequeueScan(ctx, "infected", "hhc-web-api"); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("infected requeue error = %v", err)
@@ -599,13 +611,14 @@ type memoryRepository struct {
 	grants             map[string]Grant
 	events             map[string]struct{}
 	derivatives        map[string]Derivative
+	scanRequests       map[string]ScanRequest
 	completeFailures   int
 	failUploadFailures int
 	staleAssetOnce     *Asset
 }
 
 func newMemoryRepository() *memoryRepository {
-	return &memoryRepository{assets: map[string]Asset{}, sessions: map[string]UploadSession{}, grants: map[string]Grant{}, events: map[string]struct{}{}, derivatives: map[string]Derivative{}}
+	return &memoryRepository{assets: map[string]Asset{}, sessions: map[string]UploadSession{}, grants: map[string]Grant{}, events: map[string]struct{}{}, derivatives: map[string]Derivative{}, scanRequests: map[string]ScanRequest{}}
 }
 
 func (r *memoryRepository) CreateUpload(_ context.Context, asset Asset, session UploadSession) error {
@@ -640,13 +653,16 @@ func (r *memoryRepository) FindUploadByIdempotency(_ context.Context, caller, op
 	}
 	return Asset{}, UploadSession{}, ErrNotFound
 }
-func (r *memoryRepository) CompleteUpload(_ context.Context, asset Asset, session UploadSession) error {
+func (r *memoryRepository) CompleteUpload(_ context.Context, asset Asset, session UploadSession, request ScanRequest) error {
 	if r.completeFailures > 0 {
 		r.completeFailures--
 		return errors.New("database unavailable")
 	}
 	r.assets[asset.ID] = asset
 	r.sessions[asset.ID] = session
+	if _, exists := r.scanRequests[request.EventID]; !exists {
+		r.scanRequests[request.EventID] = request
+	}
 	return nil
 }
 func (r *memoryRepository) FailUpload(_ context.Context, assetID string, now time.Time) error {
@@ -747,7 +763,7 @@ func (r *memoryRepository) SoftDeleteAsset(_ context.Context, assetID, owner str
 	}
 	return nil
 }
-func (r *memoryRepository) RequeueFailedScan(_ context.Context, assetID, owner string, now time.Time) error {
+func (r *memoryRepository) RequeueFailedScan(_ context.Context, assetID, owner string, request ScanRequest, now time.Time) error {
 	asset, ok := r.assets[assetID]
 	if !ok || asset.OwnerService != owner {
 		return ErrNotFound
@@ -759,6 +775,7 @@ func (r *memoryRepository) RequeueFailedScan(_ context.Context, assetID, owner s
 	asset.ScanAttempts = 0
 	asset.UpdatedAt = now
 	r.assets[assetID] = asset
+	r.scanRequests[request.EventID] = request
 	return nil
 }
 func (r *memoryRepository) GetDerivative(_ context.Context, assetID, variant string) (Derivative, error) {
