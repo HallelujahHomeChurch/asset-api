@@ -399,7 +399,7 @@ func TestCleanScanAndPublicGrantEnableStableDownload(t *testing.T) {
 	ctx := context.Background()
 	repo := newMemoryRepository()
 	blobs := newMemoryBlobStore()
-	service := NewService(repo, blobs, "https://www.alive.org.tw/api/assets", time.Now)
+	service := NewService(repo, blobs, "https://www.alive.org.tw/assets", time.Now)
 	asset := completedAsset(t, ctx, service, blobs, VisibilityPublic)
 	if err := service.ApplyScanResult(ctx, ScanResult{EventID: "scan-1", AssetID: asset.ID, Status: ScanClean}); err != nil {
 		t.Fatal(err)
@@ -422,7 +422,7 @@ func TestCleanScanAndPublicGrantEnableStableDownload(t *testing.T) {
 	if !bytes.HasPrefix(body, []byte("%PDF")) {
 		t.Fatalf("unexpected body %q", body)
 	}
-	if got := service.PublicURL(asset.ID); got != "https://www.alive.org.tw/api/assets/public/"+asset.ID {
+	if got := service.PublicURL(asset.ID); got != "https://www.alive.org.tw/assets/"+asset.ID {
 		t.Fatalf("public url = %s", got)
 	}
 }

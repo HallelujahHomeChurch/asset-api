@@ -403,7 +403,7 @@ func (s *Service) OpenPublicMetadata(ctx context.Context, metadata PublicDownloa
 	return download, nil
 }
 
-func (s *Service) PublicURL(assetID string) string { return s.publicBaseURL + "/public/" + assetID }
+func (s *Service) PublicURL(assetID string) string { return s.publicBaseURL + "/" + assetID }
 
 func validSubjectType(value SubjectType) bool {
 	switch value {

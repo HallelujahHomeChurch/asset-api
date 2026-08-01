@@ -22,6 +22,10 @@ Asset also checks tenant, issuer, audience, client, object id, and `Asset.Invoke
 - `GET /ready`
 - `GET /api/assets/public/{assetId}`
 - `GET /api/assets/public/{assetId}/{small|medium|large}`
+
+The gateway exposes clean public assets canonically as `/assets/{assetId}` and
+`/assets/{assetId}/{small|medium|large}`. The `/api/assets/public/*` routes are
+the service contract and legacy browser compatibility path.
 - `POST /priv/assets/upload-sessions`
 - `GET /priv/assets/operations`
 - `GET /priv/assets/{assetId}`

@@ -24,7 +24,7 @@ param workloadAuthAudience string = ''
 param lineAttachmentClientId string = ''
 param lineAttachmentObjectId string = ''
 
-param publicBaseUrl string = 'https://www.alive.org.tw/api/assets'
+param publicBaseUrl string = 'https://www.alive.org.tw/assets'
 param clamavHost string = '172.16.65.5'
 param clamavPort int = 3310
 param clamavNetworkSecurityGroupName string = 'bastionnsg235'

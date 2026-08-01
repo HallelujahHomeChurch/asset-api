@@ -45,7 +45,7 @@ func Load() (Config, error) {
 	cfg := Config{
 		Port:                 value("PORT", "8080"),
 		DatabaseURL:          os.Getenv("DATABASE_URL"),
-		PublicBaseURL:        value("ASSET_PUBLIC_BASE_URL", "http://localhost:8080/api/assets"),
+		PublicBaseURL:        value("ASSET_PUBLIC_BASE_URL", "http://localhost:8080/assets"),
 		StorageBackend:       value("ASSET_STORAGE_BACKEND", "local"),
 		LocalDirectory:       value("ASSET_LOCAL_DIR", ".data/assets"),
 		LocalUploadBaseURL:   value("ASSET_LOCAL_UPLOAD_BASE_URL", "http://localhost:8080/dev/uploads"),
