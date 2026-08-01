@@ -1,6 +1,7 @@
 package scanqueue
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -13,6 +14,37 @@ import (
 	"hhc/asset-api/internal/assets"
 	"hhc/asset-api/internal/clamav"
 )
+
+func TestScanJobAcceptsVerifiedOfficeArchiveMIME(t *testing.T) {
+	var archive bytes.Buffer
+	writer := zip.NewWriter(&archive)
+	file, err := writer.Create("word/document.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Write([]byte("clean")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	payload := archive.Bytes()
+	sum := sha256.Sum256(payload)
+	asset := queuedAsset()
+	asset.SizeBytes = int64(len(payload))
+	asset.ChecksumSHA256 = hex.EncodeToString(sum[:])
+	asset.DetectedMIMEType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+	repo := &jobRepository{asset: asset}
+	queue := &jobQueue{message: scanMessage(1)}
+	scanner := &jobScanner{}
+	job := NewScanJob(repo, jobBlobs{body: payload}, scanner, queue, "sig-1", 1024, 5, time.Minute)
+	if _, err := job.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !scanner.called || repo.result.Status != assets.ScanClean {
+		t.Fatalf("scanned=%v result=%+v", scanner.called, repo.result)
+	}
+}
 
 func TestScanJobTerminalAndRetryFlows(t *testing.T) {
 	tests := []struct {

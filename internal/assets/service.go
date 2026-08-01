@@ -176,7 +176,7 @@ func (s *Service) CompleteUpload(ctx context.Context, assetID string, input Comp
 			if metadataErr == nil && finalMetadata.Size == observed.Size {
 				committed, metadataErr = s.blobs.Inspect(ctx, asset.ObjectKey, finalMetadata.ETag, session.MaxSizeBytes)
 			}
-			committed.DetectedMIMEType = normalizeDetectedMIME(asset.ExpectedMIMEType, committed.DetectedMIMEType)
+			committed.DetectedMIMEType = NormalizeDetectedMIME(asset.ExpectedMIMEType, committed.DetectedMIMEType)
 			if metadataErr == nil && committed.Size == observed.Size && committed.DetectedMIMEType == observed.DetectedMIMEType && strings.EqualFold(committed.ChecksumSHA256, observed.ChecksumSHA256) {
 				err = nil
 			}
@@ -185,7 +185,7 @@ func (s *Service) CompleteUpload(ctx context.Context, assetID string, input Comp
 			return Asset{}, fmt.Errorf("commit blob: %w", err)
 		}
 	}
-	committed.DetectedMIMEType = normalizeDetectedMIME(asset.ExpectedMIMEType, committed.DetectedMIMEType)
+	committed.DetectedMIMEType = NormalizeDetectedMIME(asset.ExpectedMIMEType, committed.DetectedMIMEType)
 	if committed.Size != observed.Size || committed.DetectedMIMEType != observed.DetectedMIMEType || !strings.EqualFold(committed.ChecksumSHA256, observed.ChecksumSHA256) {
 		if err := s.rejectUpload(ctx, asset, session); err != nil {
 			return Asset{}, err
@@ -423,7 +423,7 @@ func inspectBytes(value []byte) BlobProperties {
 	return BlobProperties{Size: int64(len(value)), DetectedMIMEType: mime, ChecksumSHA256: hex.EncodeToString(sum[:])}
 }
 
-func normalizeDetectedMIME(expected, detected string) string {
+func NormalizeDetectedMIME(expected, detected string) string {
 	if expected == detected {
 		return expected
 	}
@@ -450,7 +450,7 @@ func normalizeDetectedMIME(expected, detected string) string {
 }
 
 func (s *Service) verifyDetectedMIME(ctx context.Context, objectKey string, observed BlobProperties, expected string) (string, error) {
-	if normalized := normalizeDetectedMIME(expected, observed.DetectedMIMEType); normalized != "" && observed.DetectedMIMEType != "application/zip" && observed.DetectedMIMEType != "application/octet-stream" {
+	if normalized := NormalizeDetectedMIME(expected, observed.DetectedMIMEType); normalized != "" && observed.DetectedMIMEType != "application/zip" && observed.DetectedMIMEType != "application/octet-stream" {
 		return normalized, nil
 	}
 	download, err := s.blobs.Open(ctx, objectKey, ByteRange{}, observed.ETag)
