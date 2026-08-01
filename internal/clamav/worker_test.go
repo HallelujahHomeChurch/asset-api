@@ -59,7 +59,7 @@ func TestWorkerRetriesUnavailableClamAVThenFailsClosed(t *testing.T) {
 }
 
 func pendingAsset() assets.Asset {
-	return assets.Asset{ID: "asset-1", ObjectKey: "assets/asset-1/original", SizeBytes: 5, ETag: "etag", UploadStatus: assets.UploadCompleted, ScanStatus: assets.ScanPending}
+	return assets.Asset{ID: "asset-1", ObjectKey: "assets/asset-1/original", SizeBytes: 5, ETag: "etag", ScanEventID: "event-1", UploadStatus: assets.UploadCompleted, ScanStatus: assets.ScanPending}
 }
 
 type scannerStub struct {

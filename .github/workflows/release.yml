@@ -7,6 +7,11 @@ on:
         description: Type deploy-asset-api-production
         required: true
         type: string
+      activate_queue_scanning:
+        description: Disable the embedded scanner after the Azure Job smoke gate
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -51,6 +56,7 @@ jobs:
           go vet ./...
           ./scripts/test-release-workflow.sh
           docker build -t asset-api:verify .
+          docker build -f Dockerfile.scan -t asset-scan:verify .
 
   deploy:
     needs: verify
@@ -64,6 +70,7 @@ jobs:
       ACR_NAME: alive
       ACR_LOGIN_SERVER: alive.azurecr.io
       IMAGE_REPOSITORY: alive/asset-api
+      SCAN_IMAGE_REPOSITORY: alive/asset-scan
       RESOURCE_GROUP: alive
       STORAGE_ACCOUNT_NAME: alivestoragebb99ee6e
       MIGRATION_JOB_NAME: asset-migrate
@@ -73,6 +80,7 @@ jobs:
       AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       RELEASE_CONFIRMATION: ${{ inputs.confirmation }}
+      ACTIVATE_QUEUE_SCANNING: ${{ inputs.activate_queue_scanning }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Validate release configuration
@@ -98,12 +106,22 @@ jobs:
           runtime_vault="$(az keyvault show -g "$RESOURCE_GROUP" -n alive-asset-runtime-kv --query id -o tsv --only-show-errors)"
           migration_vault="$(az keyvault show -g "$RESOURCE_GROUP" -n alive-asset-migrate-kv --query id -o tsv --only-show-errors)"
           app_principal="$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_APP_NAME" --query identity.principalId -o tsv --only-show-errors)"
+          scan_principal="$(az identity show -g "$RESOURCE_GROUP" -n asset-scan-identity --query principalId -o tsv --only-show-errors)"
+          refresh_principal="$(az identity show -g "$RESOURCE_GROUP" -n asset-signature-refresh-identity --query principalId -o tsv --only-show-errors)"
           storage_id="$(az storage account show -g "$RESOURCE_GROUP" -n "$STORAGE_ACCOUNT_NAME" --query id -o tsv --only-show-errors)"
           scan_queue_scope="${storage_id}/queueServices/default/queues/asset-scan"
+          poison_queue_scope="${storage_id}/queueServices/default/queues/asset-scan-poison"
+          blob_scope="${storage_id}/blobServices/default/containers/assets"
+          signature_scope="${storage_id}/blobServices/default/containers/asset-signatures"
           [[ "$(az role assignment list --scope "$runtime_vault" --assignee-object-id "$runtime_principal" --query "[?roleDefinitionName=='Key Vault Secrets User'] | length(@)" -o tsv --only-show-errors)" == "1" ]]
           [[ "$(az role assignment list --scope "$migration_vault" --assignee-object-id "$migration_principal" --query "[?roleDefinitionName=='Key Vault Secrets User'] | length(@)" -o tsv --only-show-errors)" == "1" ]]
           az resource show --ids "$scan_queue_scope" --api-version 2023-05-01 --only-show-errors --output none
           [[ "$(az role assignment list --scope "$scan_queue_scope" --assignee-object-id "$app_principal" --query "[?roleDefinitionName=='Storage Queue Data Message Sender'] | length(@)" -o tsv --only-show-errors)" == "1" ]]
+          [[ "$(az role assignment list --scope "$scan_queue_scope" --assignee-object-id "$scan_principal" --query "[?roleDefinitionName=='Storage Queue Data Message Processor'] | length(@)" -o tsv --only-show-errors)" == "1" ]]
+          [[ "$(az role assignment list --scope "$poison_queue_scope" --assignee-object-id "$scan_principal" --query "[?roleDefinitionName=='Storage Queue Data Contributor'] | length(@)" -o tsv --only-show-errors)" == "1" ]]
+          [[ "$(az role assignment list --scope "$blob_scope" --assignee-object-id "$scan_principal" --query "[?roleDefinitionName=='Storage Blob Data Reader'] | length(@)" -o tsv --only-show-errors)" == "1" ]]
+          [[ "$(az role assignment list --scope "$signature_scope" --assignee-object-id "$scan_principal" --query "[?roleDefinitionName=='Storage Blob Data Reader'] | length(@)" -o tsv --only-show-errors)" == "1" ]]
+          [[ "$(az role assignment list --scope "$signature_scope" --assignee-object-id "$refresh_principal" --query "[?roleDefinitionName=='Storage Blob Data Contributor'] | length(@)" -o tsv --only-show-errors)" == "1" ]]
           [[ "$(az resource show --ids "$runtime_vault/secrets/database-url" --api-version 2024-11-01 --query properties.attributes.enabled -o tsv --only-show-errors)" == "true" ]]
           [[ "$(az resource show --ids "$migration_vault/secrets/database-url" --api-version 2024-11-01 --query properties.attributes.enabled -o tsv --only-show-errors)" == "true" ]]
       - name: Capture rollback revision
@@ -125,18 +143,23 @@ jobs:
             echo "PREVIOUS_IMAGE_REF=$(resolve_image_ref "$image")"
           } >> "$GITHUB_ENV"
       - name: Build and push image
-        run: az acr build --registry "$ACR_NAME" --image "${IMAGE_REPOSITORY}:${IMAGE_TAG}" --file Dockerfile .
+        run: |
+          az acr build --registry "$ACR_NAME" --image "${IMAGE_REPOSITORY}:${IMAGE_TAG}" --file Dockerfile .
+          az acr build --registry "$ACR_NAME" --image "${SCAN_IMAGE_REPOSITORY}:${IMAGE_TAG}" --file Dockerfile.scan .
       - name: Resolve immutable image digest
         run: |
           digest="$(az acr repository show --name "$ACR_NAME" --image "${IMAGE_REPOSITORY}:${IMAGE_TAG}" --query digest -o tsv --only-show-errors)"
           [[ "$digest" == sha256:* ]]
           echo "IMAGE_REF=${ACR_LOGIN_SERVER}/${IMAGE_REPOSITORY}@${digest}" >> "$GITHUB_ENV"
+          scan_digest="$(az acr repository show --name "$ACR_NAME" --image "${SCAN_IMAGE_REPOSITORY}:${IMAGE_TAG}" --query digest -o tsv --only-show-errors)"
+          [[ "$scan_digest" == sha256:* ]]
+          echo "SCAN_IMAGE_REF=${ACR_LOGIN_SERVER}/${SCAN_IMAGE_REPOSITORY}@${scan_digest}" >> "$GITHUB_ENV"
       - name: Reject destructive infrastructure changes
         run: |
           az deployment group what-if \
             --resource-group "$RESOURCE_GROUP" \
             --template-file infra/main.bicep \
-            --parameters storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" deployRuntime=true deployMigrationJob=true provisionPermissions=false manageSharedInfrastructure=false \
+            --parameters storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" scanWorkerImage="$SCAN_IMAGE_REF" deployRuntime=true deployMigrationJob=true deployScanJob=true deploySignatureRefreshJob=true scanDispatchEnabled="$ACTIVATE_QUEUE_SCANNING" embeddedScanEnabled="${ACTIVATE_QUEUE_SCANNING/true/false}" provisionPermissions=false manageSharedInfrastructure=false \
             --validation-level Provider --result-format FullResourcePayloads --no-pretty-print --only-show-errors \
             --output json > what-if.json
           ./scripts/check-what-if.sh what-if.json
@@ -169,7 +192,7 @@ jobs:
           az deployment group create \
             --name "asset-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --resource-group "$RESOURCE_GROUP" --template-file infra/main.bicep \
-            --parameters storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" deployRuntime=true deployMigrationJob=true provisionPermissions=false manageSharedInfrastructure=false \
+            --parameters storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" scanWorkerImage="$SCAN_IMAGE_REF" deployRuntime=true deployMigrationJob=true deployScanJob=true deploySignatureRefreshJob=true scanDispatchEnabled="$ACTIVATE_QUEUE_SCANNING" embeddedScanEnabled="${ACTIVATE_QUEUE_SCANNING/true/false}" provisionPermissions=false manageSharedInfrastructure=false \
             --only-show-errors --output none
       - name: Wait for API revision
         run: |

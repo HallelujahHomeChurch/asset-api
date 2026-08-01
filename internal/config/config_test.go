@@ -69,6 +69,19 @@ func TestLoadRequiresQueueURLWhenScanDispatchIsEnabled(t *testing.T) {
 	}
 }
 
+func TestLoadCanDisableEmbeddedScannerForQueueCutover(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://test")
+	t.Setenv("ASSET_ALLOW_DEV_CALLER_HEADER", "true")
+	t.Setenv("ASSET_EMBEDDED_SCAN_ENABLED", "false")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.EmbeddedScanEnabled {
+		t.Fatal("embedded scanner remained enabled")
+	}
+}
+
 func TestLoadReadsDatabasePoolSettings(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://test")
 	t.Setenv("ASSET_ALLOW_DEV_CALLER_HEADER", "true")

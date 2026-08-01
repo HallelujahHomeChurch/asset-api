@@ -15,6 +15,10 @@ param deployMigrationJob bool = true
 param provisionPermissions bool = true
 param manageSharedInfrastructure bool = true
 param scanDispatchEnabled bool = false
+param embeddedScanEnabled bool = true
+param deployScanJob bool = false
+param deploySignatureRefreshJob bool = false
+param scanWorkerImage string = runtimeImage
 
 param publicBaseUrl string = 'https://www.alive.org.tw/api/assets'
 param clamavHost string = '172.16.65.5'
@@ -87,6 +91,16 @@ resource migrationIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@202
   location: location
 }
 
+resource scanIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: 'asset-scan-identity'
+  location: location
+}
+
+resource signatureRefreshIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: 'asset-signature-refresh-identity'
+  location: location
+}
+
 resource acrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (provisionPermissions) {
   name: guid(registry.id, pullIdentity.id, 'acr-pull')
   scope: registry
@@ -117,6 +131,16 @@ resource migrationSecretAccess 'Microsoft.Authorization/roleAssignments@2022-04-
   }
 }
 
+resource scanSecretAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (provisionPermissions) {
+  name: guid(runtimeVault.id, scanIdentity.id, 'key-vault-secrets-user')
+  scope: runtimeVault
+  properties: {
+    principalId: scanIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: keyVaultSecretsUserRole
+  }
+}
+
 resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
   name: storageAccountName
 }
@@ -129,6 +153,11 @@ resource queueService 'Microsoft.Storage/storageAccounts/queueServices@2023-05-0
 resource scanQueue 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' = if (manageSharedInfrastructure) {
   parent: queueService
   name: 'asset-scan'
+}
+
+resource scanPoisonQueue 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' = if (manageSharedInfrastructure) {
+  parent: queueService
+  name: 'asset-scan-poison'
 }
 
 resource clamavNetworkSecurityGroup 'Microsoft.Network/networkSecurityGroups@2024-05-01' existing = {
@@ -170,7 +199,8 @@ resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01'
   name: 'default'
   properties: {
     deleteRetentionPolicy: {
-      enabled: false
+      enabled: true
+      days: 30
       allowPermanentDelete: false
     }
     cors: {
@@ -200,6 +230,16 @@ resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01'
 resource assetContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = if (manageSharedInfrastructure) {
   parent: blobService
   name: 'assets'
+  properties: {
+    publicAccess: 'None'
+    defaultEncryptionScope: '$account-encryption-key'
+    denyEncryptionScopeOverride: false
+  }
+}
+
+resource signatureContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = if (manageSharedInfrastructure) {
+  parent: blobService
+  name: 'asset-signatures'
   properties: {
     publicAccess: 'None'
     defaultEncryptionScope: '$account-encryption-key'
@@ -279,6 +319,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = if (deployRuntime) {
             { name: 'ASSET_AZURE_CONTAINER', value: 'assets' }
             { name: 'ASSET_SCAN_QUEUE_URL', value: 'https://${storageAccount.name}.queue.${az.environment().suffixes.storage}/asset-scan' }
             { name: 'ASSET_SCAN_DISPATCH_ENABLED', value: string(scanDispatchEnabled) }
+            { name: 'ASSET_EMBEDDED_SCAN_ENABLED', value: string(embeddedScanEnabled) }
             { name: 'ASSET_ALLOWED_CALLERS', value: 'account-api,hhc-web-api,hhc-line-function-bot' }
             { name: 'ASSET_ALLOW_DEV_CALLER_HEADER', value: 'false' }
             { name: 'CLAMAV_HOST', value: clamavHost }
@@ -353,6 +394,173 @@ resource assetQueueSender 'Microsoft.Authorization/roleAssignments@2022-04-01' =
   }
 }
 
+resource scanQueueProcessor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (manageSharedInfrastructure) {
+  name: guid(scanQueue!.id, scanIdentity.id, 'storage-queue-data-message-processor')
+  scope: scanQueue!
+  properties: {
+    principalId: scanIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '8a0f0c08-91a1-4084-bc3d-661d67233fed')
+  }
+}
+
+resource scanPoisonQueueContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (manageSharedInfrastructure) {
+  name: guid(scanPoisonQueue!.id, scanIdentity.id, 'storage-queue-data-message-contributor')
+  scope: scanPoisonQueue!
+  properties: {
+    principalId: scanIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '974c5e8b-45b9-4653-ba55-5f855dd0fb88')
+  }
+}
+
+resource scanBlobReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (manageSharedInfrastructure) {
+  name: guid(assetContainer!.id, scanIdentity.id, 'storage-blob-data-reader')
+  scope: assetContainer!
+  properties: {
+    principalId: scanIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1')
+  }
+}
+
+resource scanSignatureReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (manageSharedInfrastructure) {
+  name: guid(signatureContainer!.id, scanIdentity.id, 'storage-blob-data-reader')
+  scope: signatureContainer!
+  properties: {
+    principalId: scanIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1')
+  }
+}
+
+resource signatureBlobContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (manageSharedInfrastructure) {
+  name: guid(signatureContainer!.id, signatureRefreshIdentity.id, 'storage-blob-data-contributor')
+  scope: signatureContainer!
+  properties: {
+    principalId: signatureRefreshIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+  }
+}
+
+resource scanJob 'Microsoft.App/jobs@2025-07-01' = if (deployScanJob) {
+  name: 'asset-scan'
+  location: location
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${pullIdentity.id}': {}
+      '${scanIdentity.id}': {}
+    }
+  }
+  properties: {
+    environmentId: environment.id
+    workloadProfileName: 'Consumption'
+    configuration: {
+      triggerType: 'Event'
+      replicaTimeout: 600
+      replicaRetryLimit: 0
+      eventTriggerConfig: {
+        parallelism: 1
+        replicaCompletionCount: 1
+        scale: {
+          pollingInterval: 30
+          minExecutions: 0
+          maxExecutions: 5
+          rules: [
+            {
+              name: 'asset-scan-queue'
+              type: 'azure-queue'
+              metadata: {
+                accountName: storageAccount.name
+                queueName: 'asset-scan'
+                queueLength: '1'
+              }
+              identity: scanIdentity.id
+            }
+          ]
+        }
+      }
+      registries: [
+        { server: registry.properties.loginServer, identity: pullIdentity.id }
+      ]
+      secrets: [
+        { name: 'database-url', keyVaultUrl: '${runtimeVault.properties.vaultUri}secrets/database-url', identity: scanIdentity.id }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'asset-scan'
+          image: scanWorkerImage
+          command: ['/asset-scan-worker']
+          env: [
+            { name: 'DATABASE_URL', secretRef: 'database-url' }
+            { name: 'ASSET_AZURE_ACCOUNT_URL', value: 'https://${storageAccount.name}.blob.${az.environment().suffixes.storage}' }
+            { name: 'ASSET_AZURE_CONTAINER', value: 'assets' }
+            { name: 'AZURE_CLIENT_ID', value: scanIdentity.properties.clientId }
+            { name: 'ASSET_SCAN_QUEUE_URL', value: 'https://${storageAccount.name}.queue.${az.environment().suffixes.storage}/asset-scan' }
+            { name: 'ASSET_SCAN_POISON_QUEUE_URL', value: 'https://${storageAccount.name}.queue.${az.environment().suffixes.storage}/asset-scan-poison' }
+            { name: 'CLAMAV_SIGNATURE_CONTAINER', value: 'asset-signatures' }
+            { name: 'CLAMAV_SIGNATURE_MAX_AGE', value: '168h' }
+            { name: 'CLAMAV_SCAN_TIMEOUT', value: '2m' }
+            { name: 'CLAMAV_MAX_FILE_SIZE_BYTES', value: '26214400' }
+            { name: 'CLAMAV_MAX_RETRIES', value: '5' }
+          ]
+          resources: { cpu: json('2.0'), memory: '4Gi' }
+        }
+      ]
+    }
+  }
+  dependsOn: [acrPull, scanSecretAccess, scanQueueProcessor, scanPoisonQueueContributor, scanBlobReader, scanSignatureReader]
+}
+
+resource signatureRefreshJob 'Microsoft.App/jobs@2025-07-01' = if (deploySignatureRefreshJob) {
+  name: 'asset-clamav-signature-refresh'
+  location: location
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${pullIdentity.id}': {}
+      '${signatureRefreshIdentity.id}': {}
+    }
+  }
+  properties: {
+    environmentId: environment.id
+    workloadProfileName: 'Consumption'
+    configuration: {
+      triggerType: 'Schedule'
+      replicaTimeout: 900
+      replicaRetryLimit: 1
+      scheduleTriggerConfig: {
+        cronExpression: '10 2 * * *'
+        parallelism: 1
+        replicaCompletionCount: 1
+      }
+      registries: [
+        { server: registry.properties.loginServer, identity: pullIdentity.id }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'clamav-signature-refresh'
+          image: scanWorkerImage
+          command: ['/asset-signature-refresh']
+          env: [
+            { name: 'AZURE_CLIENT_ID', value: signatureRefreshIdentity.properties.clientId }
+            { name: 'ASSET_AZURE_ACCOUNT_URL', value: 'https://${storageAccount.name}.blob.${az.environment().suffixes.storage}' }
+            { name: 'CLAMAV_SIGNATURE_CONTAINER', value: 'asset-signatures' }
+          ]
+          resources: { cpu: json('0.5'), memory: '1Gi' }
+        }
+      ]
+    }
+  }
+  dependsOn: [acrPull, signatureBlobContributor]
+}
+
 resource migrate 'Microsoft.App/jobs@2024-03-01' = if (deployMigrationJob) {
   name: 'asset-migrate'
   location: location
@@ -414,4 +622,8 @@ resource migrate 'Microsoft.App/jobs@2024-03-01' = if (deployMigrationJob) {
 output containerAppName string = 'asset-api'
 output migrationJobName string = 'asset-migrate'
 output assetContainerName string = 'assets'
+output signatureContainerName string = 'asset-signatures'
 output scanQueueName string = 'asset-scan'
+output scanPoisonQueueName string = 'asset-scan-poison'
+output scanJobName string = 'asset-scan'
+output signatureRefreshJobName string = 'asset-clamav-signature-refresh'

@@ -85,6 +85,9 @@ func (w *Worker) repositoryResult(ctx context.Context, result assets.ScanResult)
 }
 
 func scanEventID(asset assets.Asset) string {
+	if asset.ScanEventID != "" {
+		return asset.ScanEventID
+	}
 	return fmt.Sprintf("clamav:%s:%s:%d", asset.ID, asset.ETag, asset.ScanAttempts)
 }
 func safeDetails(err error) string {

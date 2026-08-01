@@ -17,6 +17,9 @@ if grep -q 'az keyvault secret show' "$workflow"; then
   exit 1
 fi
 grep -q 'IMAGE_REF=.*@${digest}' "$workflow"
+grep -q 'SCAN_IMAGE_REF=.*@${scan_digest}' "$workflow"
+grep -q 'Dockerfile.scan' "$workflow"
+grep -q 'activate_queue_scanning' "$workflow"
 grep -q 'az deployment group what-if' "$workflow"
 grep -q './scripts/check-what-if.sh what-if.json' "$workflow"
 grep -q 'manageSharedInfrastructure=false' "$workflow"

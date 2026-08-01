@@ -20,6 +20,7 @@ type Config struct {
 	AzureContainer       string
 	ScanQueueURL         string
 	ScanDispatchEnabled  bool
+	EmbeddedScanEnabled  bool
 	ClamAVHost           string
 	ClamAVPort           int
 	ClamAVTimeout        time.Duration
@@ -46,6 +47,7 @@ func Load() (Config, error) {
 		AzureAccountURL:      os.Getenv("ASSET_AZURE_ACCOUNT_URL"),
 		AzureContainer:       value("ASSET_AZURE_CONTAINER", "assets"),
 		ScanQueueURL:         strings.TrimSpace(os.Getenv("ASSET_SCAN_QUEUE_URL")),
+		EmbeddedScanEnabled:  true,
 		ClamAVHost:           value("CLAMAV_HOST", "127.0.0.1"),
 		ClamAVPort:           3310,
 		ClamAVTimeout:        2 * time.Minute,
@@ -77,6 +79,13 @@ func Load() (Config, error) {
 	}
 	if cfg.ScanDispatchEnabled && cfg.ScanQueueURL == "" {
 		return Config{}, fmt.Errorf("ASSET_SCAN_QUEUE_URL is required when scan dispatch is enabled")
+	}
+	if value := strings.TrimSpace(os.Getenv("ASSET_EMBEDDED_SCAN_ENABLED")); value != "" {
+		enabled, err := strconv.ParseBool(value)
+		if err != nil {
+			return Config{}, fmt.Errorf("invalid ASSET_EMBEDDED_SCAN_ENABLED")
+		}
+		cfg.EmbeddedScanEnabled = enabled
 	}
 	if !cfg.AllowDevCallerHeader && cfg.AppAPIToken == "" {
 		return Config{}, fmt.Errorf("APP_API_TOKEN is required when development caller headers are disabled")

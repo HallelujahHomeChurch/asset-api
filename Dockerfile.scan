@@ -1,0 +1,16 @@
+FROM golang:1.24.6-bookworm AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /asset-scan-worker ./cmd/scan-worker
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /asset-signature-refresh ./cmd/signature-refresh
+
+FROM debian:bookworm-slim
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates clamav \
+ && rm -rf /var/lib/apt/lists/*
+COPY --from=build /asset-scan-worker /asset-scan-worker
+COPY --from=build /asset-signature-refresh /asset-signature-refresh
+USER 65532:65532
+ENTRYPOINT ["/asset-scan-worker"]

@@ -68,8 +68,6 @@ func run() error {
 	handler := httpapi.New(service, db, cfg.AllowedCallers, cfg.AllowDevCallerHeader, cfg.AppAPIToken, localUpload)
 	server := &http.Server{Addr: ":" + cfg.Port, Handler: handler.Routes(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 2 * time.Minute, IdleTimeout: 2 * time.Minute}
 
-	scanClient := clamav.NewClient(cfg.ClamAVHost, cfg.ClamAVPort, cfg.ClamAVTimeout, cfg.ClamAVMaxFileSize)
-	scanWorker := clamav.NewWorker(repository, blobStore, scanClient, cfg.ClamAVMaxRetries, cfg.ClamAVTimeout)
 	derivativeBlobs, ok := blobStore.(derivatives.BlobStore)
 	if !ok {
 		return errors.New("storage backend does not support derivative writes")
@@ -89,12 +87,16 @@ func run() error {
 			}
 		}()
 	}
-	go func() {
-		if err := scanWorker.Run(ctx); err != nil && ctx.Err() == nil {
-			slog.Error("ClamAV worker stopped", "error", err)
-			stop()
-		}
-	}()
+	if cfg.EmbeddedScanEnabled {
+		scanClient := clamav.NewClient(cfg.ClamAVHost, cfg.ClamAVPort, cfg.ClamAVTimeout, cfg.ClamAVMaxFileSize)
+		scanWorker := clamav.NewWorker(repository, blobStore, scanClient, cfg.ClamAVMaxRetries, cfg.ClamAVTimeout)
+		go func() {
+			if err := scanWorker.Run(ctx); err != nil && ctx.Err() == nil {
+				slog.Error("ClamAV worker stopped", "error", err)
+				stop()
+			}
+		}()
+	}
 	go func() {
 		if err := derivativeWorker.Run(ctx); err != nil && ctx.Err() == nil {
 			slog.Error("derivative worker stopped", "error", err)
