@@ -7,7 +7,8 @@ grep -q 'workflow_dispatch:' "$workflow"
 grep -q '^  push:' "$workflow"
 grep -q 'branches: \[main\]' "$workflow"
 grep -Fq "github.event_name == 'push' && 'deploy-asset-api-production' || inputs.confirmation" "$workflow"
-grep -Fq "github.event_name == 'push' && 'true' || inputs.activate_queue_scanning" "$workflow"
+grep -q 'ACTIVATE_QUEUE_SCANNING: "true"' "$workflow"
+grep -q 'EMBEDDED_SCAN_ENABLED: "false"' "$workflow"
 grep -q 'deploy-asset-api-production' "$workflow"
 grep -q 'environment: production' "$workflow"
 grep -q 'Verify isolated runtime prerequisites' "$workflow"
@@ -19,9 +20,14 @@ fi
 grep -q 'IMAGE_REF=.*@${digest}' "$workflow"
 grep -q 'SCAN_IMAGE_REF=.*@${scan_digest}' "$workflow"
 grep -q 'Dockerfile.scan' "$workflow"
-grep -q 'activate_queue_scanning' "$workflow"
-grep -q 'true) embedded_scan_enabled=false' "$workflow"
-grep -q 'false) embedded_scan_enabled=true' "$workflow"
+if grep -q 'activate_queue_scanning' "$workflow"; then
+  echo 'production releases must not expose the retired embedded scanner' >&2
+  exit 1
+fi
+if grep -Eq '172\.16\.65\.5|CLAMAV_HOST|AllowACAtoClamAV|DenyOtherVNetToClamAV' infra/main.bicep; then
+  echo 'production infrastructure must not depend on the retired office scanner' >&2
+  exit 1
+fi
 test "$(grep -c 'embeddedScanEnabled="$EMBEDDED_SCAN_ENABLED"' "$workflow")" = 2
 if grep -q 'ACTIVATE_QUEUE_SCANNING/true/false' "$workflow"; then
   echo 'queue and embedded scanners must use explicit inverse modes' >&2

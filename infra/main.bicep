@@ -14,8 +14,8 @@ param deployRuntime bool = true
 param deployMigrationJob bool = true
 param provisionPermissions bool = true
 param manageSharedInfrastructure bool = true
-param scanDispatchEnabled bool = false
-param embeddedScanEnabled bool = true
+param scanDispatchEnabled bool = true
+param embeddedScanEnabled bool = false
 param deployScanJob bool = false
 param deploySignatureRefreshJob bool = false
 param scanWorkerImage string = runtimeImage
@@ -25,10 +25,6 @@ param lineAttachmentClientId string = ''
 param lineAttachmentObjectId string = ''
 
 param publicBaseUrl string = 'https://www.alive.org.tw/assets'
-param clamavHost string = '172.16.65.5'
-param clamavPort int = 3310
-param clamavNetworkSecurityGroupName string = 'bastionnsg235'
-param acaSubnetPrefix string = '172.16.66.0/23'
 param uploadAllowedOrigins array = [
   'https://admin.alive.org.tw'
   'https://admin-test.alive.org.tw'
@@ -178,40 +174,6 @@ resource scanQueueScope 'Microsoft.Storage/storageAccounts/queueServices/queues@
 resource scanPoisonQueueScope 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' existing = {
   parent: queueServiceScope
   name: 'asset-scan-poison'
-}
-
-resource clamavNetworkSecurityGroup 'Microsoft.Network/networkSecurityGroups@2024-05-01' existing = {
-  name: clamavNetworkSecurityGroupName
-}
-
-resource allowACAtoClamAV 'Microsoft.Network/networkSecurityGroups/securityRules@2024-05-01' = if (manageSharedInfrastructure) {
-  parent: clamavNetworkSecurityGroup
-  name: 'AllowACAtoClamAV'
-  properties: {
-    priority: 330
-    access: 'Allow'
-    direction: 'Inbound'
-    protocol: 'Tcp'
-    sourcePortRange: '*'
-    destinationPortRange: string(clamavPort)
-    sourceAddressPrefix: acaSubnetPrefix
-    destinationAddressPrefix: clamavHost
-  }
-}
-
-resource denyOtherVNetClamAV 'Microsoft.Network/networkSecurityGroups/securityRules@2024-05-01' = if (manageSharedInfrastructure) {
-  parent: clamavNetworkSecurityGroup
-  name: 'DenyOtherVNetToClamAV'
-  properties: {
-    priority: 340
-    access: 'Deny'
-    direction: 'Inbound'
-    protocol: 'Tcp'
-    sourcePortRange: '*'
-    destinationPortRange: string(clamavPort)
-    sourceAddressPrefix: 'VirtualNetwork'
-    destinationAddressPrefix: clamavHost
-  }
 }
 
 resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = if (manageSharedInfrastructure) {
@@ -376,11 +338,6 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = if (deployRuntime) {
             { name: 'ASSET_WORKLOAD_REQUIRED_ROLE', value: 'Asset.Invoke' }
             { name: 'ASSET_LINE_WORKLOAD_CLIENT_ID', value: workloadAuthEnabled ? lineAttachmentClientId : '' }
             { name: 'ASSET_LINE_WORKLOAD_OBJECT_ID', value: workloadAuthEnabled ? lineAttachmentObjectId : '' }
-            { name: 'CLAMAV_HOST', value: clamavHost }
-            { name: 'CLAMAV_PORT', value: string(clamavPort) }
-            { name: 'CLAMAV_TIMEOUT_SECONDS', value: '120' }
-            { name: 'CLAMAV_MAX_FILE_SIZE_BYTES', value: '26214400' }
-            { name: 'CLAMAV_MAX_RETRIES', value: '5' }
           ]
           resources: {
             cpu: json('0.5')

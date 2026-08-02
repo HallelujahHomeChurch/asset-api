@@ -44,11 +44,14 @@ custom caller fallback is accepted only when the development setting is enabled.
 
 ## Scan lifecycle
 
-After upload completion, a database-backed worker claims the pending asset and streams its private Blob directly to `clamd` with the `INSTREAM` protocol. Clean results enable the existing grant checks; infected, pending, and failed assets remain unavailable. Transient Blob or ClamAV failures use bounded exponential backoff and become `failed` after `CLAMAV_MAX_RETRIES`.
+After upload completion, the runtime dispatches a durable queue message. The
+event-triggered Azure scan Job downloads the immutable private Blob and scans
+it with a local ClamAV process and a validated signature snapshot. Clean
+results enable the existing grant checks; infected, pending, and failed assets
+remain unavailable. Transient failures use bounded retries before becoming
+`failed`.
 
 Clean image uploads are processed into stable 480, 960, and 1440 pixel JPEG variants. Variants inherit the original asset grant and cannot be downloaded before scanning and processing complete. Upload-session idempotency keys replay the original asset/session instead of creating duplicate objects.
-
-`CLAMAV_HOST` must resolve to a private endpoint reachable by every asset-api replica. Port `3310` must not be exposed publicly. Keep clamd's `StreamMaxLength` at least as large as `CLAMAV_MAX_FILE_SIZE_BYTES`, and keep both limits at or above the largest upload accepted by asset-api.
 
 Failed scans can be requeued by the owning service. Infected scans cannot be
 requeued. `GET /priv/assets/operations` exposes scan backlog and purge backlog
