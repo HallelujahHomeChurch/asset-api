@@ -252,6 +252,7 @@ type BlobDownload struct {
 type PublicDownloadMetadata struct {
 	Size         int64
 	ContentType  string
+	FileName     string
 	ETag         string
 	LastModified time.Time
 	CacheControl string

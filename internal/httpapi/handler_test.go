@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"maps"
+	"mime"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -252,6 +253,17 @@ func TestPublicDownloadHeadMatchesGetWithoutOpeningBlob(t *testing.T) {
 	}
 }
 
+func TestPublicDownloadPreservesOriginalFileName(t *testing.T) {
+	handler, _ := publicDownloadHandler(t)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/assets/public/asset-1", nil))
+
+	disposition, params, err := mime.ParseMediaType(response.Header().Get("Content-Disposition"))
+	if err != nil || disposition != "inline" || params["filename"] != "更新1732期週報.pdf" {
+		t.Fatalf("Content-Disposition=%q parsed=%q params=%v err=%v", response.Header().Get("Content-Disposition"), disposition, params, err)
+	}
+}
+
 func TestPublicDownloadNotModifiedDoesNotOpenBlob(t *testing.T) {
 	for _, test := range []struct {
 		path  string
@@ -429,7 +441,8 @@ func publicDownloadHandlerWithOriginal(t *testing.T, original []byte) (http.Hand
 	repository := &downloadRepository{
 		asset: assets.Asset{
 			ID: "asset-1", Namespace: "cms.news.cover", ObjectKey: "original", DetectedMIMEType: "image/jpeg",
-			SizeBytes: int64(len(original)), ETag: `"original"`, UploadStatus: assets.UploadCompleted, ScanStatus: assets.ScanClean,
+			OriginalFileName: "更新1732期週報.pdf",
+			SizeBytes:        int64(len(original)), ETag: `"original"`, UploadStatus: assets.UploadCompleted, ScanStatus: assets.ScanClean,
 			ProcessingStatus: assets.ProcessingReady, Visibility: assets.VisibilityPublic, UpdatedAt: modified,
 		},
 		derivative: assets.Derivative{
