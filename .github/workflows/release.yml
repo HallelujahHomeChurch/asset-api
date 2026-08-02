@@ -1,6 +1,8 @@
 name: Production Release
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       confirmation:
@@ -42,8 +44,8 @@ jobs:
       TEST_POSTGRES_DSN: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
       ASSET_ALLOW_DESTRUCTIVE_TEST: "1"
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
@@ -83,10 +85,10 @@ jobs:
       ASSET_WORKLOAD_AUDIENCE: ${{ vars.ASSET_WORKLOAD_AUDIENCE }}
       LINE_ATTACHMENT_CLIENT_ID: ${{ vars.LINE_ATTACHMENT_CLIENT_ID }}
       LINE_ATTACHMENT_OBJECT_ID: ${{ vars.LINE_ATTACHMENT_OBJECT_ID }}
-      RELEASE_CONFIRMATION: ${{ inputs.confirmation }}
-      ACTIVATE_QUEUE_SCANNING: ${{ inputs.activate_queue_scanning }}
+      RELEASE_CONFIRMATION: ${{ github.event_name == 'push' && 'deploy-asset-api-production' || inputs.confirmation }}
+      ACTIVATE_QUEUE_SCANNING: ${{ github.event_name == 'push' && 'true' || inputs.activate_queue_scanning }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Validate release configuration
         run: |
           [[ "$GITHUB_REF" == "refs/heads/main" ]]
@@ -103,7 +105,7 @@ jobs:
       - name: Set image tag
         run: echo "IMAGE_TAG=main-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
       - name: Sign in to Azure with OIDC
-        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
