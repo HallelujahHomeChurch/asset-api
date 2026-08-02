@@ -264,6 +264,28 @@ func TestPublicDownloadPreservesOriginalFileName(t *testing.T) {
 	}
 }
 
+func TestPublicDownloadAcceptsSafeFileNameOverride(t *testing.T) {
+	handler, _ := publicDownloadHandler(t)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/assets/public/asset-1?filename=1732-%E6%9C%AC%E9%80%B1%E9%80%B1%E5%A0%B1.pdf", nil))
+
+	_, params, err := mime.ParseMediaType(response.Header().Get("Content-Disposition"))
+	if err != nil || params["filename"] != "1732-本週週報.pdf" {
+		t.Fatalf("Content-Disposition=%q params=%v err=%v", response.Header().Get("Content-Disposition"), params, err)
+	}
+}
+
+func TestPublicDownloadRejectsUnsafeFileNameOverride(t *testing.T) {
+	handler, _ := publicDownloadHandler(t)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/assets/public/asset-1?filename=weekly.exe", nil))
+
+	_, params, err := mime.ParseMediaType(response.Header().Get("Content-Disposition"))
+	if err != nil || params["filename"] != "更新1732期週報.pdf" {
+		t.Fatalf("Content-Disposition=%q params=%v err=%v", response.Header().Get("Content-Disposition"), params, err)
+	}
+}
+
 func TestPublicDownloadNotModifiedDoesNotOpenBlob(t *testing.T) {
 	for _, test := range []struct {
 		path  string
