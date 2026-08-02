@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -275,7 +276,7 @@ func (h *Handler) servePublicDownload(w http.ResponseWriter, r *http.Request, va
 
 func (h *Handler) serveDownload(w http.ResponseWriter, r *http.Request, metadata assets.PublicDownloadMetadata) {
 	if matchesETag(r.Header.Get("If-None-Match"), metadata.ETag) {
-		setPublicHeaders(w, metadata, -1)
+		setPublicHeaders(w, metadata, -1, requestedDownloadName(r, metadata.FileName))
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
@@ -300,7 +301,7 @@ func (h *Handler) serveDownload(w http.ResponseWriter, r *http.Request, metadata
 		contentRange = fmt.Sprintf("bytes %d-%d/%d", requested.Offset, end, metadata.Size)
 	}
 	if r.Method == http.MethodHead {
-		setPublicHeaders(w, metadata, contentLength)
+		setPublicHeaders(w, metadata, contentLength, requestedDownloadName(r, metadata.FileName))
 		if partial {
 			w.Header().Set("Content-Range", contentRange)
 			w.WriteHeader(http.StatusPartialContent)
@@ -313,7 +314,7 @@ func (h *Handler) serveDownload(w http.ResponseWriter, r *http.Request, metadata
 		return
 	}
 	defer download.Body.Close()
-	setPublicHeaders(w, metadata, contentLength)
+	setPublicHeaders(w, metadata, contentLength, requestedDownloadName(r, metadata.FileName))
 	if partial {
 		w.Header().Set("Content-Range", contentRange)
 		w.WriteHeader(http.StatusPartialContent)
@@ -323,10 +324,10 @@ func (h *Handler) serveDownload(w http.ResponseWriter, r *http.Request, metadata
 	}
 }
 
-func setPublicHeaders(w http.ResponseWriter, metadata assets.PublicDownloadMetadata, contentLength int64) {
+func setPublicHeaders(w http.ResponseWriter, metadata assets.PublicDownloadMetadata, contentLength int64, fileName string) {
 	w.Header().Set("Content-Type", metadata.ContentType)
-	if metadata.FileName != "" {
-		w.Header().Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": metadata.FileName}))
+	if fileName != "" {
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": fileName}))
 	}
 	w.Header().Set("Accept-Ranges", "bytes")
 	w.Header().Set("Cache-Control", metadata.CacheControl)
@@ -340,6 +341,28 @@ func setPublicHeaders(w http.ResponseWriter, metadata assets.PublicDownloadMetad
 	if !metadata.LastModified.IsZero() {
 		w.Header().Set("Last-Modified", metadata.LastModified.UTC().Format(http.TimeFormat))
 	}
+}
+
+func requestedDownloadName(r *http.Request, fallback string) string {
+	requested := strings.TrimSpace(r.URL.Query().Get("filename"))
+	if requested == "" || !strings.EqualFold(filepath.Ext(requested), filepath.Ext(fallback)) {
+		return fallback
+	}
+	requested = strings.Map(func(value rune) rune {
+		if value < 32 || strings.ContainsRune(`<>:"/\|?*`, value) {
+			return '-'
+		}
+		return value
+	}, requested)
+	requested = strings.Trim(strings.TrimSpace(requested), ".")
+	runes := []rune(requested)
+	if len(runes) > 180 {
+		requested = string(runes[:180-len([]rune(filepath.Ext(requested)))]) + filepath.Ext(requested)
+	}
+	if requested == "" || requested == filepath.Ext(requested) {
+		return fallback
+	}
+	return requested
 }
 
 func writeUnsatisfiedRange(w http.ResponseWriter, total int64) {
