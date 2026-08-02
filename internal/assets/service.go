@@ -349,7 +349,7 @@ func (s *Service) PublicMetadata(ctx context.Context, assetID, variant string) (
 		return PublicDownloadMetadata{}, ErrNotFound
 	}
 	metadata := PublicDownloadMetadata{
-		Size: asset.SizeBytes, ContentType: asset.DetectedMIMEType, ETag: asset.ETag,
+		Size: asset.SizeBytes, ContentType: asset.DetectedMIMEType, FileName: asset.OriginalFileName, ETag: asset.ETag,
 		LastModified: asset.UpdatedAt, objectKey: asset.ObjectKey,
 	}
 	if variant != "" {
@@ -364,6 +364,7 @@ func (s *Service) PublicMetadata(ctx context.Context, assetID, variant string) (
 			return PublicDownloadMetadata{}, ErrNotFound
 		}
 		metadata.Size, metadata.ContentType, metadata.ETag = derivative.SizeBytes, derivative.MIMEType, derivative.ETag
+		metadata.FileName = ""
 		metadata.LastModified, metadata.objectKey = derivative.CreatedAt, derivative.ObjectKey
 	}
 	if policy, ok := PolicyFor(asset.Namespace); ok {
@@ -385,7 +386,7 @@ func (s *Service) AuthorizedMetadata(ctx context.Context, assetID string, subjec
 		return PublicDownloadMetadata{}, ErrNotFound
 	}
 	return PublicDownloadMetadata{
-		Size: asset.SizeBytes, ContentType: asset.DetectedMIMEType, ETag: asset.ETag,
+		Size: asset.SizeBytes, ContentType: asset.DetectedMIMEType, FileName: asset.OriginalFileName, ETag: asset.ETag,
 		LastModified: asset.UpdatedAt, CacheControl: "private, no-store", objectKey: asset.ObjectKey,
 	}, nil
 }

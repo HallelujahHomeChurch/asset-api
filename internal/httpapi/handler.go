@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 	"strconv"
 	"strings"
@@ -324,6 +325,9 @@ func (h *Handler) serveDownload(w http.ResponseWriter, r *http.Request, metadata
 
 func setPublicHeaders(w http.ResponseWriter, metadata assets.PublicDownloadMetadata, contentLength int64) {
 	w.Header().Set("Content-Type", metadata.ContentType)
+	if metadata.FileName != "" {
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": metadata.FileName}))
+	}
 	w.Header().Set("Accept-Ranges", "bytes")
 	w.Header().Set("Cache-Control", metadata.CacheControl)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
