@@ -9,11 +9,6 @@ on:
         description: Type deploy-asset-api-production
         required: true
         type: string
-      activate_queue_scanning:
-        description: Disable the embedded scanner after the Azure Job smoke gate
-        required: true
-        default: false
-        type: boolean
 
 permissions:
   contents: read
@@ -86,19 +81,14 @@ jobs:
       LINE_ATTACHMENT_CLIENT_ID: ${{ vars.LINE_ATTACHMENT_CLIENT_ID }}
       LINE_ATTACHMENT_OBJECT_ID: ${{ vars.LINE_ATTACHMENT_OBJECT_ID }}
       RELEASE_CONFIRMATION: ${{ github.event_name == 'push' && 'deploy-asset-api-production' || inputs.confirmation }}
-      ACTIVATE_QUEUE_SCANNING: ${{ github.event_name == 'push' && 'true' || inputs.activate_queue_scanning }}
+      ACTIVATE_QUEUE_SCANNING: "true"
+      EMBEDDED_SCAN_ENABLED: "false"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Validate release configuration
         run: |
           [[ "$GITHUB_REF" == "refs/heads/main" ]]
           [[ "$RELEASE_CONFIRMATION" == "deploy-asset-api-production" ]]
-          case "$ACTIVATE_QUEUE_SCANNING" in
-            true) embedded_scan_enabled=false ;;
-            false) embedded_scan_enabled=true ;;
-            *) echo "Invalid queue scanning mode: $ACTIVATE_QUEUE_SCANNING" >&2; exit 1 ;;
-          esac
-          echo "EMBEDDED_SCAN_ENABLED=$embedded_scan_enabled" >> "$GITHUB_ENV"
           for name in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID ASSET_WORKLOAD_CLIENT_ID ASSET_WORKLOAD_AUDIENCE LINE_ATTACHMENT_CLIENT_ID LINE_ATTACHMENT_OBJECT_ID; do
             test -n "${!name:-}" || { echo "Missing repository variable: ${name}" >&2; exit 1; }
           done

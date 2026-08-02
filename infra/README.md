@@ -6,8 +6,7 @@ dedicated pull identity ACR pull, plus its system identity container-scoped
 Blob contributor and account-scoped Blob delegator roles. Owner services use
 Dapr; the dedicated LINE attachment Job uses authenticated internal ingress
 with an Entra application audience and the `Asset.Invoke` app role.
-The office clamd rule remains only as the rollback path until the Azure scan
-Job smoke gate passes.
+Production scanning runs only through the Azure queue-triggered scan Job.
 
 Upload completion and an `asset.scan.requested.v1` outbox row commit in one
 PostgreSQL transaction. The runtime sends that event to the `asset-scan`
@@ -39,8 +38,8 @@ database URLs are stored in separate RBAC Key Vaults.
    scan_image="alive.azurecr.io/alive/asset-scan@${scan_digest}"
    ```
 
-2. Review and create only the vaults, identities, role assignments, storage
-   policy, and ClamAV NSG rules. This does not touch the running app:
+2. Review and create only the vaults, identities, role assignments, and storage
+   policy. This does not touch the running app:
 
    ```sh
    az deployment group what-if -g alive -f infra/main.bicep \
@@ -73,16 +72,14 @@ database URLs are stored in separate RBAC Key Vaults.
    confirmation `deploy-asset-api-production`. It runs migrations before
    replacing the runtime and rolls back only the runtime image on failure.
 
-6. Run the production workflow with `activate_queue_scanning=false`. Confirm
-   both queues and Jobs exist and all images use immutable digests.
+6. Confirm both queues and Jobs exist and all images use immutable digests.
 
 7. Start the signature refresh Job, then send isolated clean and EICAR fixtures
    through the queue path. Clean must become `clean`; EICAR must become
    `infected` and remain unpublishable.
 
-8. Run the workflow again with `activate_queue_scanning=true`. This enables
-   dispatch and disables the embedded scanner. Drain legacy work before
-   deleting the office route and NSG rules.
+8. Deploy the runtime. Queue dispatch is always enabled and the embedded
+   scanner is always disabled in production.
 
 The template explicitly disables Defender for Storage; ClamAV is the only
 malware scanner. `ASSET_ALLOW_DEV_CALLER_HEADER` remains false in Azure.
