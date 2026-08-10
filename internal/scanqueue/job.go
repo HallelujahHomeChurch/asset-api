@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -66,14 +67,17 @@ func (j *ScanJob) RunOnce(ctx context.Context) (bool, error) {
 	now := j.now().UTC()
 	event, err := decodeEvent(message.Body)
 	if err != nil {
+		slog.Warn("reject asset scan message", "message_id", message.ID, "dequeue_count", message.DequeueCount, "reason", "invalid_payload")
 		poison := poisonRecord(message, nil, "invalid_payload", safeError(err))
 		return true, j.poison(ctx, message, nil, poison, now, false, assets.ScanResult{})
 	}
+	slog.Info("asset scan dequeued", "asset_id", event.AssetID, "event_id", event.EventID, "dequeue_count", message.DequeueCount)
 	asset, claim, err := j.repository.ClaimAssetScan(ctx, event.EventID, event.AssetID, event.ETag, now, j.lease)
 	if err != nil {
 		return true, err
 	}
 	if claim == assets.ScanBusy {
+		slog.Info("asset scan deferred", "asset_id", event.AssetID, "reason", "busy")
 		return true, j.queue.Retry(ctx, message, 15*time.Second)
 	}
 	if claim == assets.ScanTerminal {
@@ -85,6 +89,7 @@ func (j *ScanJob) RunOnce(ctx context.Context) (bool, error) {
 			poison := poisonRecord(message, &event, reason, asset.ScanDetails)
 			return true, j.poison(ctx, message, &event, poison, now, false, assets.ScanResult{})
 		}
+		slog.Info("asset scan already terminal", "asset_id", event.AssetID, "status", asset.ScanStatus)
 		return true, j.queue.Ack(ctx, message)
 	}
 	if int64(asset.ScanAttempts) >= j.maxAttempts {
@@ -105,6 +110,7 @@ func (j *ScanJob) RunOnce(ctx context.Context) (bool, error) {
 			if _, applyErr := j.repository.ApplyScanResult(ctx, result, now); applyErr != nil {
 				return true, applyErr
 			}
+			slog.Warn("asset scan completed", "asset_id", asset.ID, "status", assets.ScanInfected)
 			return true, j.queue.Ack(ctx, message)
 		}
 		category = "scanner_unavailable"
@@ -114,6 +120,7 @@ func (j *ScanJob) RunOnce(ctx context.Context) (bool, error) {
 		if _, err := j.repository.ApplyScanResult(ctx, result, now); err != nil {
 			return true, err
 		}
+		slog.Info("asset scan completed", "asset_id", asset.ID, "status", assets.ScanClean)
 		return true, j.queue.Ack(ctx, message)
 	}
 	details := safeError(err)
@@ -126,6 +133,7 @@ func (j *ScanJob) RunOnce(ctx context.Context) (bool, error) {
 	if err := j.repository.ScheduleAssetScanRetry(ctx, asset.ID, asset.ScanAttempts, details, category, now.Add(delay), now); err != nil {
 		return true, err
 	}
+	slog.Warn("asset scan retry scheduled", "asset_id", asset.ID, "category", category, "delay", delay)
 	return true, j.queue.Retry(ctx, message, delay)
 }
 
