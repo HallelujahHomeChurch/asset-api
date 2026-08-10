@@ -520,7 +520,7 @@ resource scanJob 'Microsoft.App/jobs@2025-07-01' = if (deployScanJob) {
         parallelism: 1
         replicaCompletionCount: 1
         scale: {
-          pollingInterval: 30
+          pollingInterval: 10
           minExecutions: 0
           maxExecutions: 5
           rules: [
