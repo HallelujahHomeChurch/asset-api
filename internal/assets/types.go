@@ -431,6 +431,7 @@ type Repository interface {
 	DeleteCollectionItem(context.Context, DeleteCollectionItemInput, time.Time) (CollectionItemMutation, error)
 	ListAuthorizedCollections(context.Context, CollectionSubject, string, int) (CollectionPage, error)
 	GetAuthorizedCollection(context.Context, string, CollectionSubject) (Collection, error)
+	GetAuthorizedCollectionItem(context.Context, string, string, CollectionSubject) (CollectionItem, error)
 	CollectionChanges(context.Context, string, string, CollectionSubject) (CollectionChangePage, error)
 	ListManagedCollections(context.Context, string, string, int) (ManagedCollectionPage, error)
 	GetManagedCollection(context.Context, string, string) (ManagedCollection, error)

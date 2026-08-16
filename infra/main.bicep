@@ -23,6 +23,7 @@ param workloadAuthClientId string = ''
 param workloadAuthAudience string = ''
 param lineAttachmentClientId string = ''
 param lineAttachmentObjectId string = ''
+param readerCallerAppId string = 'api-gateway'
 
 param publicBaseUrl string = 'https://www.alive.org.tw/assets'
 param uploadAllowedOrigins array = [
@@ -331,6 +332,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = if (deployRuntime) {
             { name: 'ASSET_SCAN_DISPATCH_ENABLED', value: string(scanDispatchEnabled) }
             { name: 'ASSET_EMBEDDED_SCAN_ENABLED', value: string(embeddedScanEnabled) }
             { name: 'ASSET_ALLOWED_CALLERS', value: 'account-api,hhc-web-api,hhc-line-function-bot' }
+            { name: 'ASSET_READER_CALLER_APP_ID', value: readerCallerAppId }
             { name: 'ASSET_ALLOW_DEV_CALLER_HEADER', value: 'false' }
             { name: 'ASSET_WORKLOAD_TENANT_ID', value: workloadAuthEnabled ? subscription().tenantId : '' }
             { name: 'ASSET_WORKLOAD_ISSUER', value: workloadAuthEnabled ? '${az.environment().authentication.loginEndpoint}${subscription().tenantId}/v2.0' : '' }
@@ -383,6 +385,12 @@ resource workloadAuth 'Microsoft.App/containerApps/authConfigs@2025-01-01' = if 
         '/health'
         '/ready'
         '/api/assets/public/*'
+        '/api/assets/collections'
+        '/api/assets/collections/*/changes'
+        '/api/assets/collections/*/items/*'
+        '/api/assets/collections/*/items/*/content-ticket'
+        '/api/assets/collections/*/items/*/content'
+        '/api/assets/content'
       ]
     }
     identityProviders: {

@@ -36,11 +36,12 @@ type WorkloadCaller struct {
 }
 
 type WorkloadAuthConfig struct {
-	TenantID     string
-	Issuer       string
-	Audience     string
-	RequiredRole string
-	Callers      map[string]WorkloadCaller
+	TenantID          string
+	Issuer            string
+	Audience          string
+	RequiredRole      string
+	ReaderCallerAppID string
+	Callers           map[string]WorkloadCaller
 }
 
 func New(service *assets.Service, db *sql.DB, allowedCallers map[string]bool, allowDevCallerHeader bool, appAPIToken string, workloadAuth WorkloadAuthConfig, localUpload http.HandlerFunc) *Handler {
@@ -55,6 +56,11 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /ready", h.ready)
 	mux.HandleFunc("GET /api/assets/public/{assetID}", h.publicDownload)
 	mux.HandleFunc("GET /api/assets/public/{assetID}/{variant}", h.publicDerivativeDownload)
+	mux.Handle("GET /api/assets/collections", h.collectionReader(http.HandlerFunc(h.listAuthorizedCollections)))
+	mux.Handle("GET /api/assets/collections/{collectionID}/changes", h.collectionReader(http.HandlerFunc(h.collectionChanges)))
+	mux.Handle("GET /api/assets/collections/{collectionID}/items/{itemID}", h.collectionReader(http.HandlerFunc(h.getAuthorizedCollectionItem)))
+	mux.Handle("POST /api/assets/collections/{collectionID}/items/{itemID}/content-ticket", h.collectionReader(http.HandlerFunc(h.collectionContentPending)))
+	mux.Handle("GET /api/assets/collections/{collectionID}/items/{itemID}/content", h.collectionReader(http.HandlerFunc(h.collectionContentPending)))
 	mux.Handle("POST /priv/assets/upload-sessions", h.internal(http.HandlerFunc(h.createUpload)))
 	mux.Handle("GET /priv/assets/operations", h.internal(http.HandlerFunc(h.operations)))
 	mux.Handle("GET /priv/assets/collections", h.internal(h.collectionCaller(http.HandlerFunc(h.listManagedCollections))))
@@ -112,7 +118,7 @@ func (h *Handler) internal(next http.Handler) http.Handler {
 		caller := ""
 		if h.allowDevCallerHeader {
 			caller = strings.TrimSpace(r.Header.Get("X-Internal-Caller-App-Id"))
-		} else if daprCaller := strings.TrimSpace(r.Header.Get("Dapr-Caller-App-Id")); daprCaller != "" && sameToken(r.Header.Get("dapr-api-token"), h.appAPIToken) {
+		} else if daprCaller := h.daprCaller(r); daprCaller != "" {
 			caller = daprCaller
 		} else {
 			caller = workloadCaller(r.Header.Get("X-MS-CLIENT-PRINCIPAL"), h.workloadAuth)
@@ -123,6 +129,28 @@ func (h *Handler) internal(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), callerContextKey{}, caller)))
 	})
+}
+
+func (h *Handler) collectionReader(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if h.daprCaller(r) != h.workloadAuth.ReaderCallerAppID || h.workloadAuth.ReaderCallerAppID == "" {
+			writeError(w, http.StatusForbidden, "AST_FORBIDDEN", "caller is not allowed")
+			return
+		}
+		identity, ok := parseCollectionReaderIdentity(r)
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "AST_UNAUTHORIZED", "authenticated user identity is required")
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), collectionReaderIdentityKey{}, identity)))
+	})
+}
+
+func (h *Handler) daprCaller(r *http.Request) string {
+	if !sameToken(r.Header.Get("dapr-api-token"), h.appAPIToken) {
+		return ""
+	}
+	return strings.TrimSpace(r.Header.Get("Dapr-Caller-App-Id"))
 }
 
 func (h *Handler) collectionCaller(next http.Handler) http.Handler {
@@ -274,14 +302,9 @@ func (h *Handler) operations(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) listManagedCollections(w http.ResponseWriter, r *http.Request) {
-	limit := 0
-	if value := r.URL.Query().Get("limit"); value != "" {
-		parsed, err := strconv.Atoi(value)
-		if err != nil || parsed <= 0 {
-			writeError(w, http.StatusBadRequest, "AST_INVALID_REQUEST", "invalid limit")
-			return
-		}
-		limit = parsed
+	limit, ok := collectionListLimit(w, r)
+	if !ok {
+		return
 	}
 	page, err := h.service.ListManagedCollections(r.Context(), authenticatedCaller(r), r.URL.Query().Get("cursor"), limit)
 	if err != nil {
@@ -289,6 +312,125 @@ func (h *Handler) listManagedCollections(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, page)
+}
+
+func (h *Handler) listAuthorizedCollections(w http.ResponseWriter, r *http.Request) {
+	limit, ok := collectionListLimit(w, r)
+	if !ok {
+		return
+	}
+	page, err := h.service.ListAuthorizedCollections(r.Context(), collectionReaderSubject(r), r.URL.Query().Get("cursor"), limit)
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page)
+}
+
+func (h *Handler) collectionChanges(w http.ResponseWriter, r *http.Request) {
+	collectionID := r.PathValue("collectionID")
+	if !requireOpaqueID(w, collectionID, "collection ID") {
+		return
+	}
+	page, err := h.service.CollectionChanges(r.Context(), collectionID, r.URL.Query().Get("cursor"), collectionReaderSubject(r))
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+	items := make([]collectionReaderItem, len(page.Items))
+	for i, item := range page.Items {
+		items[i] = readerItem(item)
+	}
+	writeJSON(w, http.StatusOK, collectionReaderChangePage{
+		Collection: page.Collection,
+		Items:      items,
+		Tombstones: page.Tombstones,
+		Cursor:     page.Cursor,
+		HasMore:    page.HasMore,
+		Reset:      page.Reset,
+	})
+}
+
+func (h *Handler) getAuthorizedCollectionItem(w http.ResponseWriter, r *http.Request) {
+	item, ok := h.authorizedCollectionItem(w, r)
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, readerItem(item))
+}
+
+func (h *Handler) collectionContentPending(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.authorizedCollectionItem(w, r); !ok {
+		return
+	}
+	writeError(w, http.StatusNotImplemented, "AST_NOT_IMPLEMENTED", "collection content is not available")
+}
+
+func (h *Handler) authorizedCollectionItem(w http.ResponseWriter, r *http.Request) (assets.CollectionItem, bool) {
+	collectionID, itemID := r.PathValue("collectionID"), r.PathValue("itemID")
+	if !requireOpaqueID(w, collectionID, "collection ID") || !requireOpaqueID(w, itemID, "item ID") {
+		return assets.CollectionItem{}, false
+	}
+	item, err := h.service.GetAuthorizedCollectionItem(r.Context(), collectionID, itemID, collectionReaderSubject(r))
+	if err != nil {
+		handleError(w, err)
+		return assets.CollectionItem{}, false
+	}
+	return item, true
+}
+
+type collectionReaderItem struct {
+	ID              string    `json:"id"`
+	CollectionID    string    `json:"collectionId"`
+	RemoteItemID    string    `json:"remoteItemId"`
+	DisplayName     string    `json:"displayName"`
+	SourceRevision  string    `json:"sourceRevision"`
+	CreatedRevision int64     `json:"createdRevision"`
+	DeletedRevision int64     `json:"deletedRevision,omitempty"`
+	MIMEType        string    `json:"mimeType,omitempty"`
+	SizeBytes       int64     `json:"sizeBytes,omitempty"`
+	ETag            string    `json:"etag,omitempty"`
+	CreatedAt       time.Time `json:"createdAt"`
+	DeletedAt       time.Time `json:"deletedAt,omitempty"`
+}
+
+type collectionReaderChangePage struct {
+	Collection assets.Collection            `json:"collection"`
+	Items      []collectionReaderItem       `json:"items"`
+	Tombstones []assets.CollectionTombstone `json:"tombstones"`
+	Cursor     string                       `json:"cursor"`
+	HasMore    bool                         `json:"hasMore"`
+	Reset      bool                         `json:"reset"`
+}
+
+func readerItem(item assets.CollectionItem) collectionReaderItem {
+	return collectionReaderItem{
+		ID:              item.ID,
+		CollectionID:    item.CollectionID,
+		RemoteItemID:    item.RemoteItemID,
+		DisplayName:     item.DisplayName,
+		SourceRevision:  item.SourceRevision,
+		CreatedRevision: item.CreatedRevision,
+		DeletedRevision: item.DeletedRevision,
+		MIMEType:        item.MIMEType,
+		SizeBytes:       item.SizeBytes,
+		ETag:            item.ETag,
+		CreatedAt:       item.CreatedAt,
+		DeletedAt:       item.DeletedAt,
+	}
+}
+
+func collectionListLimit(w http.ResponseWriter, r *http.Request) (int, bool) {
+	value := r.URL.Query().Get("limit")
+	if value == "" {
+		return 0, true
+	}
+	limit, err := strconv.Atoi(value)
+	if err != nil || limit <= 0 {
+		writeError(w, http.StatusBadRequest, "AST_INVALID_REQUEST", "invalid limit")
+		return 0, false
+	}
+	return limit, true
 }
 
 func (h *Handler) getManagedCollection(w http.ResponseWriter, r *http.Request) {
@@ -740,6 +882,43 @@ func callerFromRequest(r *http.Request, allowDevelopmentHeader bool) string {
 func authenticatedCaller(r *http.Request) string {
 	caller, _ := r.Context().Value(callerContextKey{}).(string)
 	return caller
+}
+
+type collectionReaderIdentity struct {
+	Subject        assets.CollectionSubject
+	TokenID        string
+	TokenExpiresAt time.Time
+	SessionID      string
+	AuthProvider   string
+}
+
+type collectionReaderIdentityKey struct{}
+
+func parseCollectionReaderIdentity(r *http.Request) (collectionReaderIdentity, bool) {
+	userID := strings.TrimSpace(r.Header.Get("X-HHC-User-ID"))
+	expires, err := strconv.ParseInt(strings.TrimSpace(r.Header.Get("X-HHC-Token-Expires-At")), 10, 64)
+	if userID == "" || err != nil || expires <= 0 {
+		return collectionReaderIdentity{}, false
+	}
+	roles := []string{}
+	seen := map[string]bool{}
+	for _, value := range strings.Split(r.Header.Get("X-HHC-Roles"), ",") {
+		value = strings.TrimSpace(value)
+		if value != "" && !seen[value] {
+			seen[value] = true
+			roles = append(roles, value)
+		}
+	}
+	return collectionReaderIdentity{
+		Subject: assets.CollectionSubject{UserID: userID, Roles: roles}, TokenID: strings.TrimSpace(r.Header.Get("X-HHC-Token-ID")),
+		TokenExpiresAt: time.Unix(expires, 0).UTC(), SessionID: strings.TrimSpace(r.Header.Get("X-HHC-Session-ID")),
+		AuthProvider: strings.TrimSpace(r.Header.Get("X-HHC-Auth-Provider")),
+	}, true
+}
+
+func collectionReaderSubject(r *http.Request) assets.CollectionSubject {
+	identity, _ := r.Context().Value(collectionReaderIdentityKey{}).(collectionReaderIdentity)
+	return identity.Subject
 }
 
 type callerContextKey struct{}

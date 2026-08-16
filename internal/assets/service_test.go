@@ -806,6 +806,23 @@ func TestCollectionServiceRequiresGlobalReaderRole(t *testing.T) {
 	}
 }
 
+func TestCollectionReaderServiceGetsAuthorizedItem(t *testing.T) {
+	repository := &collectionServiceRepository{}
+	service := NewService(repository, newMemoryBlobStore(), "", time.Now)
+	subject := CollectionSubject{UserID: "user", Roles: []string{CollectionReaderRole}}
+
+	item, err := service.GetAuthorizedCollectionItem(context.Background(), "collection", "item", subject)
+	if err != nil || item.ID != "item" || repository.readerItemCalls != 1 {
+		t.Fatalf("item=%+v calls=%d err=%v", item, repository.readerItemCalls, err)
+	}
+	if _, err := service.GetAuthorizedCollectionItem(context.Background(), "collection", "item", CollectionSubject{UserID: "user"}); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("missing reader role err=%v", err)
+	}
+	if repository.readerItemCalls != 1 {
+		t.Fatalf("reader item calls=%d", repository.readerItemCalls)
+	}
+}
+
 func TestCollectionServiceSeparatesManagedReads(t *testing.T) {
 	repository := &collectionServiceRepository{}
 	service := NewService(repository, newMemoryBlobStore(), "", time.Now)
@@ -830,6 +847,12 @@ type collectionServiceRepository struct {
 	readerCalls      int
 	managedListCalls int
 	managedGetCalls  int
+	readerItemCalls  int
+}
+
+func (r *collectionServiceRepository) GetAuthorizedCollectionItem(_ context.Context, _, itemID string, _ CollectionSubject) (CollectionItem, error) {
+	r.readerItemCalls++
+	return CollectionItem{ID: itemID}, nil
 }
 
 func (r *collectionServiceRepository) CreateCollection(_ context.Context, _ CreateCollectionInput, _ time.Time) (Collection, error) {

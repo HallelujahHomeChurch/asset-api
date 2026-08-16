@@ -20,6 +20,36 @@ func TestLoadEnablesDevelopmentCallerHeaderExplicitly(t *testing.T) {
 	if !cfg.AllowedCallers["account-api"] {
 		t.Fatal("account-api is missing from the default caller allowlist")
 	}
+	if cfg.AllowedCallers["api-gateway"] {
+		t.Fatal("api-gateway must not be admitted to private asset routes")
+	}
+	if cfg.ReaderCallerAppID != "api-gateway" {
+		t.Fatalf("ReaderCallerAppID=%q", cfg.ReaderCallerAppID)
+	}
+}
+
+func TestLoadReadsCollectionReaderCallerAppID(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://test")
+	t.Setenv("ASSET_ALLOW_DEV_CALLER_HEADER", "true")
+	t.Setenv("ASSET_READER_CALLER_APP_ID", " reader-gateway ")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ReaderCallerAppID != "reader-gateway" {
+		t.Fatalf("ReaderCallerAppID=%q", cfg.ReaderCallerAppID)
+	}
+}
+
+func TestLoadRejectsReaderCallerInPrivateAllowlist(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://test")
+	t.Setenv("ASSET_ALLOW_DEV_CALLER_HEADER", "true")
+	t.Setenv("ASSET_ALLOWED_CALLERS", "account-api,api-gateway")
+
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "ASSET_ALLOWED_CALLERS") {
+		t.Fatalf("Load() error=%v", err)
+	}
 }
 
 func TestLoadUsesDatabasePoolDefaults(t *testing.T) {

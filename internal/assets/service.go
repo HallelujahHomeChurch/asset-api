@@ -372,6 +372,13 @@ func (s *Service) GetAuthorizedCollection(ctx context.Context, id string, subjec
 	return s.repository.GetAuthorizedCollection(ctx, id, subject)
 }
 
+func (s *Service) GetAuthorizedCollectionItem(ctx context.Context, collectionID, itemID string, subject CollectionSubject) (CollectionItem, error) {
+	if collectionID == "" || itemID == "" || !validCollectionSubject(subject) {
+		return CollectionItem{}, ErrForbidden
+	}
+	return s.repository.GetAuthorizedCollectionItem(ctx, collectionID, itemID, subject)
+}
+
 func (s *Service) CollectionChanges(ctx context.Context, id, cursor string, subject CollectionSubject) (CollectionChangePage, error) {
 	if id == "" || !validCollectionSubject(subject) {
 		return CollectionChangePage{}, ErrForbidden

@@ -697,6 +697,51 @@ func (s *Store) GetAuthorizedCollection(ctx context.Context, id string, subject 
 	return value, nil
 }
 
+func (s *Store) GetAuthorizedCollectionItem(ctx context.Context, collectionID, itemID string, subject assets.CollectionSubject) (assets.CollectionItem, error) {
+	var allowed bool
+	var id, itemCollectionID, assetID, remoteItemID, displayName, sourceRevision, mimeType, etag sql.NullString
+	var createdRevision, sizeBytes sql.NullInt64
+	var createdAt sql.NullTime
+	err := s.db.QueryRowContext(ctx, `
+		SELECT
+		  ($4=ANY($3::text[])) AND EXISTS (
+		    SELECT 1 FROM asset_collection_acl acl
+		    WHERE acl.collection_id=c.id AND acl.permission='read' AND acl.revoked_at IS NULL
+		      AND ((acl.subject_type='user' AND acl.subject_id=$5)
+		        OR (acl.subject_type='role' AND acl.subject_id=ANY($3::text[])))
+		  ) AS allowed,
+		  i.id,i.collection_id,i.asset_id,i.remote_item_id,i.display_name,i.source_revision,i.created_revision,i.created_at,
+		  a.detected_mime_type,a.size_bytes,a.etag
+		FROM asset_collections c
+		LEFT JOIN asset_collection_items i
+		  ON i.collection_id=c.id AND i.id=$2 AND i.deleted_revision IS NULL
+		LEFT JOIN assets a
+		  ON a.id=i.asset_id AND a.deleted_at IS NULL AND a.purged_at IS NULL
+		 AND a.upload_status='completed' AND a.scan_status='clean'
+		 AND a.processing_status IN ('ready','not_required')
+		WHERE c.id=$1 AND c.deleted_at IS NULL`, collectionID, itemID, subject.Roles, assets.CollectionReaderRole, subject.UserID).Scan(
+		&allowed, &id, &itemCollectionID, &assetID, &remoteItemID, &displayName, &sourceRevision, &createdRevision, &createdAt, &mimeType, &sizeBytes, &etag,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return assets.CollectionItem{}, assets.ErrNotFound
+	}
+	if err != nil {
+		return assets.CollectionItem{}, err
+	}
+	if !allowed {
+		return assets.CollectionItem{}, assets.ErrForbidden
+	}
+	if !id.Valid || !itemCollectionID.Valid || !assetID.Valid || !remoteItemID.Valid || !displayName.Valid || !sourceRevision.Valid || !createdRevision.Valid || !createdAt.Valid || !mimeType.Valid || !sizeBytes.Valid || !etag.Valid {
+		return assets.CollectionItem{}, assets.ErrNotFound
+	}
+	return assets.CollectionItem{
+		ID: id.String, CollectionID: itemCollectionID.String, AssetID: assetID.String,
+		RemoteItemID: remoteItemID.String, DisplayName: displayName.String, SourceRevision: sourceRevision.String,
+		CreatedRevision: createdRevision.Int64, MIMEType: mimeType.String, SizeBytes: sizeBytes.Int64,
+		ETag: etag.String, CreatedAt: createdAt.Time,
+	}, nil
+}
+
 func (s *Store) ListManagedCollections(ctx context.Context, callerService, cursor string, limit int) (assets.ManagedCollectionPage, error) {
 	lastID := ""
 	if decoded, ok := decodeListCursor(cursor); ok {

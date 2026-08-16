@@ -30,6 +30,7 @@ type Config struct {
 	DBMaxIdleConns       int
 	DBConnMaxLifetime    time.Duration
 	AllowedCallers       map[string]bool
+	ReaderCallerAppID    string
 	AllowDevCallerHeader bool
 	AppAPIToken          string
 	WorkloadTenantID     string
@@ -63,6 +64,7 @@ func Load() (Config, error) {
 		DBMaxIdleConns:       5,
 		DBConnMaxLifetime:    30 * time.Minute,
 		AllowedCallers:       splitSet(value("ASSET_ALLOWED_CALLERS", "account-api,hhc-web-api,hhc-line-function-bot")),
+		ReaderCallerAppID:    strings.TrimSpace(value("ASSET_READER_CALLER_APP_ID", "api-gateway")),
 		AllowDevCallerHeader: strings.EqualFold(value("ASSET_ALLOW_DEV_CALLER_HEADER", "false"), "true"),
 		AppAPIToken:          os.Getenv("APP_API_TOKEN"),
 		WorkloadTenantID:     strings.TrimSpace(os.Getenv("ASSET_WORKLOAD_TENANT_ID")),
@@ -81,6 +83,9 @@ func Load() (Config, error) {
 	}
 	if cfg.StorageBackend == "azure" && cfg.AzureAccountURL == "" {
 		return Config{}, fmt.Errorf("ASSET_AZURE_ACCOUNT_URL is required for azure storage")
+	}
+	if cfg.AllowedCallers[cfg.ReaderCallerAppID] {
+		return Config{}, fmt.Errorf("ASSET_READER_CALLER_APP_ID must not be in ASSET_ALLOWED_CALLERS")
 	}
 	if value := strings.TrimSpace(os.Getenv("ASSET_SCAN_DISPATCH_ENABLED")); value != "" {
 		enabled, err := strconv.ParseBool(value)

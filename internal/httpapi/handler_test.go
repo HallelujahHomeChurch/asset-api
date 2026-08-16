@@ -11,6 +11,7 @@ import (
 	"mime"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -47,6 +48,181 @@ func TestCollectionCallerAuthorizationForEveryManagementRoute(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCollectionReaderAuthorizationMatrix(t *testing.T) {
+	tests := []struct {
+		name       string
+		mutate     func(*http.Request)
+		wantStatus int
+		wantCalls  int
+		wantUser   string
+		wantRoles  []string
+	}{
+		{name: "missing caller", mutate: func(r *http.Request) { r.Header.Del("Dapr-Caller-App-Id") }, wantStatus: http.StatusForbidden},
+		{name: "forged caller", mutate: func(r *http.Request) { r.Header.Set("Dapr-Caller-App-Id", "account-api") }, wantStatus: http.StatusForbidden},
+		{name: "missing app token", mutate: func(r *http.Request) { r.Header.Del("dapr-api-token") }, wantStatus: http.StatusForbidden},
+		{name: "missing user", mutate: func(r *http.Request) { r.Header.Del("X-HHC-User-ID") }, wantStatus: http.StatusUnauthorized},
+		{name: "invalid expiry", mutate: func(r *http.Request) { r.Header.Set("X-HHC-Token-Expires-At", "not-unix") }, wantStatus: http.StatusUnauthorized},
+		{name: "zero expiry", mutate: func(r *http.Request) { r.Header.Set("X-HHC-Token-Expires-At", "0") }, wantStatus: http.StatusUnauthorized},
+		{name: "missing global role", mutate: func(r *http.Request) { r.Header.Set("X-HHC-Roles", "team") }, wantStatus: http.StatusForbidden},
+		{name: "user acl", wantStatus: http.StatusOK, wantCalls: 1, wantUser: "user-acl", wantRoles: []string{assets.CollectionReaderRole, "team"}},
+		{name: "role acl", mutate: func(r *http.Request) { r.Header.Set("X-HHC-User-ID", "role-user") }, wantStatus: http.StatusOK, wantCalls: 1, wantUser: "role-user", wantRoles: []string{assets.CollectionReaderRole, "team"}},
+		{name: "manager only", mutate: func(r *http.Request) {
+			r.Header.Set("X-HHC-User-ID", "manager-only")
+			r.Header.Set("X-HHC-Roles", assets.CollectionReaderRole+",manager")
+		}, wantStatus: http.StatusForbidden, wantCalls: 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			handler, repository := newCollectionReaderHandler()
+			request := collectionReaderRequest(http.MethodGet, "/api/assets/collections")
+			if test.mutate != nil {
+				test.mutate(request)
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != test.wantStatus || repository.calls != test.wantCalls {
+				t.Fatalf("status=%d calls=%d body=%s", response.Code, repository.calls, response.Body.String())
+			}
+			if test.wantUser != "" && (repository.subject.UserID != test.wantUser || !slices.Equal(repository.subject.Roles, test.wantRoles)) {
+				t.Fatalf("subject=%+v", repository.subject)
+			}
+		})
+	}
+}
+
+func TestCollectionReaderRoutesUseLiveAuthorization(t *testing.T) {
+	tests := []struct {
+		name, method, path string
+		wantStatus         int
+	}{
+		{name: "changes", method: http.MethodGet, path: "/api/assets/collections/collection/changes?cursor=next", wantStatus: http.StatusOK},
+		{name: "revoked acl", method: http.MethodGet, path: "/api/assets/collections/revoked/changes", wantStatus: http.StatusForbidden},
+		{name: "deleted collection", method: http.MethodGet, path: "/api/assets/collections/deleted/changes", wantStatus: http.StatusNotFound},
+		{name: "item", method: http.MethodGet, path: "/api/assets/collections/collection/items/item", wantStatus: http.StatusOK},
+		{name: "inaccessible item", method: http.MethodGet, path: "/api/assets/collections/collection/items/missing", wantStatus: http.StatusNotFound},
+		{name: "item from another collection", method: http.MethodGet, path: "/api/assets/collections/other/items/item", wantStatus: http.StatusNotFound},
+		{name: "ticket wiring", method: http.MethodPost, path: "/api/assets/collections/collection/items/item/content-ticket", wantStatus: http.StatusNotImplemented},
+		{name: "bearer content wiring", method: http.MethodGet, path: "/api/assets/collections/collection/items/item/content", wantStatus: http.StatusNotImplemented},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			handler, repository := newCollectionReaderHandler()
+			request := collectionReaderRequest(test.method, test.path)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != test.wantStatus || repository.calls != 1 {
+				t.Fatalf("status=%d calls=%d body=%s", response.Code, repository.calls, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestCollectionReaderMetadataIsSyncSafe(t *testing.T) {
+	handler, _ := newCollectionReaderHandler()
+	for _, path := range []string{
+		"/api/assets/collections/collection/changes",
+		"/api/assets/collections/collection/items/item",
+	} {
+		request := collectionReaderRequest(http.MethodGet, path)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("path=%s status=%d body=%s", path, response.Code, response.Body.String())
+		}
+		body := response.Body.String()
+		for _, secret := range []string{`"assetId"`, "secret-asset", "blob-key", "owner-service", "line-group-id", "ticket-hash"} {
+			if strings.Contains(body, secret) {
+				t.Fatalf("path=%s leaked %q in %s", path, secret, body)
+			}
+		}
+		for _, metadata := range []string{`"id":"item"`, `"remoteItemId":"remote-item"`, `"displayName":"Media"`, `"sourceRevision":"source"`, `"mimeType":"video/mp4"`, `"sizeBytes":20`, `"etag":"etag"`} {
+			if !strings.Contains(body, metadata) {
+				t.Fatalf("path=%s missing %s in %s", path, metadata, body)
+			}
+		}
+	}
+}
+
+func TestCollectionReaderAcceptsPositivePastUnixExpiry(t *testing.T) {
+	handler, repository := newCollectionReaderHandler()
+	request := collectionReaderRequest(http.MethodGet, "/api/assets/collections")
+	request.Header.Set("X-HHC-Token-Expires-At", "1")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || repository.calls != 1 {
+		t.Fatalf("status=%d calls=%d body=%s", response.Code, repository.calls, response.Body.String())
+	}
+}
+
+func collectionReaderRequest(method, path string) *http.Request {
+	request := httptest.NewRequest(method, path, nil)
+	request.Header.Set("Dapr-Caller-App-Id", "api-gateway")
+	request.Header.Set("dapr-api-token", "token")
+	request.Header.Set("X-HHC-User-ID", "user-acl")
+	request.Header.Set("X-HHC-Roles", " "+assets.CollectionReaderRole+", team, "+assets.CollectionReaderRole+" ")
+	request.Header.Set("X-HHC-Token-ID", "token-id")
+	request.Header.Set("X-HHC-Token-Expires-At", "1")
+	request.Header.Set("X-HHC-Session-ID", "session-id")
+	request.Header.Set("X-HHC-Auth-Provider", "account-api")
+	return request
+}
+
+func newCollectionReaderHandler() (http.Handler, *collectionReaderRepository) {
+	repository := &collectionReaderRepository{}
+	service := assets.NewService(repository, &collectionManagementBlobStore{}, "", func() time.Time { return time.Date(2026, 8, 16, 0, 0, 0, 0, time.UTC) })
+	return New(service, nil, map[string]bool{"hhc-line-function-bot": true}, false, "token", WorkloadAuthConfig{ReaderCallerAppID: "api-gateway"}, nil).Routes(), repository
+}
+
+type collectionReaderRepository struct {
+	assets.Repository
+	calls   int
+	subject assets.CollectionSubject
+}
+
+func (r *collectionReaderRepository) ListAuthorizedCollections(_ context.Context, subject assets.CollectionSubject, _ string, _ int) (assets.CollectionPage, error) {
+	r.calls++
+	r.subject = subject
+	if !readerTestAuthorized(subject) {
+		return assets.CollectionPage{}, assets.ErrForbidden
+	}
+	return assets.CollectionPage{Collections: []assets.Collection{{ID: "collection", Namespace: "line.group.media-sync", Name: "Media", Revision: 2}}}, nil
+}
+
+func (r *collectionReaderRepository) CollectionChanges(_ context.Context, id, cursor string, subject assets.CollectionSubject) (assets.CollectionChangePage, error) {
+	r.calls++
+	r.subject = subject
+	if id == "deleted" {
+		return assets.CollectionChangePage{}, assets.ErrNotFound
+	}
+	if id == "revoked" || !readerTestAuthorized(subject) {
+		return assets.CollectionChangePage{}, assets.ErrForbidden
+	}
+	return assets.CollectionChangePage{
+		Collection: assets.Collection{ID: id, Revision: 2}, Cursor: cursor,
+		Items:      []assets.CollectionItem{{ID: "item", CollectionID: id, AssetID: "secret-asset", RemoteItemID: "remote-item", DisplayName: "Media", SourceRevision: "source", CreatedRevision: 2, MIMEType: "video/mp4", SizeBytes: 20, ETag: "etag"}},
+		Tombstones: []assets.CollectionTombstone{},
+	}, nil
+}
+
+func (r *collectionReaderRepository) GetAuthorizedCollectionItem(_ context.Context, collectionID, itemID string, subject assets.CollectionSubject) (assets.CollectionItem, error) {
+	r.calls++
+	r.subject = subject
+	if !readerTestAuthorized(subject) {
+		return assets.CollectionItem{}, assets.ErrForbidden
+	}
+	if collectionID != "collection" || itemID != "item" {
+		return assets.CollectionItem{}, assets.ErrNotFound
+	}
+	return assets.CollectionItem{ID: itemID, CollectionID: collectionID, AssetID: "secret-asset", RemoteItemID: "remote-item", DisplayName: "Media", SourceRevision: "source", CreatedRevision: 2, MIMEType: "video/mp4", SizeBytes: 20, ETag: "etag"}, nil
+}
+
+func readerTestAuthorized(subject assets.CollectionSubject) bool {
+	if subject.UserID == "user-acl" || subject.UserID == "role-user" {
+		return slices.Contains(subject.Roles, assets.CollectionReaderRole) && slices.Contains(subject.Roles, "team")
+	}
+	return false
 }
 
 func TestCollectionManagementMutationsRequireHeaderIdempotency(t *testing.T) {

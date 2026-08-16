@@ -1226,6 +1226,71 @@ func TestCollectionReaderAndManagedAuthorizationMatrix(t *testing.T) {
 	}
 }
 
+func TestCollectionReaderGetAuthorizedItemRechecksLiveAuthorizationAndOccurrence(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 16, 5, 30, 0, 0, time.UTC)
+	insertAuthorizedCollection(t, db, "reader-item-collection", 2, "user", now)
+	insertAuthorizedCollection(t, db, "other-reader-collection", 2, "other", now)
+	insertAsset(t, db, "reader-item-asset", assets.UploadCompleted, assets.ScanClean, assets.ProcessingReady, now, time.Time{})
+	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,created_at) VALUES('reader-item','reader-item-collection','reader-item-asset','remote-reader','Reader','source',2,$1)`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO asset_collection_acl(id,collection_id,subject_type,subject_id,permission,created_at) VALUES('reader-role-acl','reader-item-collection','role','team','read',$1)`, now); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, subject := range []assets.CollectionSubject{
+		{UserID: "user", Roles: []string{assets.CollectionReaderRole}},
+		{UserID: "role-user", Roles: []string{assets.CollectionReaderRole, "team"}},
+	} {
+		item, err := store.GetAuthorizedCollectionItem(ctx, "reader-item-collection", "reader-item", subject)
+		if err != nil || item.ID != "reader-item" || item.RemoteItemID != "remote-reader" || item.ETag != "etag-reader-item-asset" {
+			t.Fatalf("subject=%+v item=%+v err=%v", subject, item, err)
+		}
+	}
+	for _, subject := range []assets.CollectionSubject{
+		{UserID: "user", Roles: []string{"manager"}},
+		{UserID: "manager-only", Roles: []string{assets.CollectionReaderRole}},
+	} {
+		if _, err := store.GetAuthorizedCollectionItem(ctx, "reader-item-collection", "reader-item", subject); !errors.Is(err, assets.ErrForbidden) {
+			t.Fatalf("subject=%+v err=%v", subject, err)
+		}
+	}
+	if _, err := store.GetAuthorizedCollectionItem(ctx, "reader-item-collection", "missing", assets.CollectionSubject{UserID: "user", Roles: []string{assets.CollectionReaderRole}}); !errors.Is(err, assets.ErrNotFound) {
+		t.Fatalf("missing item err=%v", err)
+	}
+	if _, err := store.GetAuthorizedCollectionItem(ctx, "other-reader-collection", "reader-item", assets.CollectionSubject{UserID: "other", Roles: []string{assets.CollectionReaderRole}}); !errors.Is(err, assets.ErrNotFound) {
+		t.Fatalf("other collection item err=%v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,remote_item_id,display_name,source_revision,created_revision,deleted_revision,created_at,deleted_at) VALUES('deleted-reader-item','reader-item-collection','remote-deleted','Deleted','source',2,3,$1,$1)`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.GetAuthorizedCollectionItem(ctx, "reader-item-collection", "deleted-reader-item", assets.CollectionSubject{UserID: "user", Roles: []string{assets.CollectionReaderRole}}); !errors.Is(err, assets.ErrNotFound) {
+		t.Fatalf("deleted item err=%v", err)
+	}
+	insertAsset(t, db, "pending-reader-asset", assets.UploadCompleted, assets.ScanPending, assets.ProcessingReady, now, time.Time{})
+	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,created_at) VALUES('pending-reader-item','reader-item-collection','pending-reader-asset','remote-pending','Pending','source',2,$1)`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.GetAuthorizedCollectionItem(ctx, "reader-item-collection", "pending-reader-item", assets.CollectionSubject{UserID: "user", Roles: []string{assets.CollectionReaderRole}}); !errors.Is(err, assets.ErrNotFound) {
+		t.Fatalf("non-live asset item err=%v", err)
+	}
+	if _, err := db.Exec(`UPDATE asset_collection_acl SET revoked_at=$1 WHERE id='acl-reader-item-collection'`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.GetAuthorizedCollectionItem(ctx, "reader-item-collection", "reader-item", assets.CollectionSubject{UserID: "user", Roles: []string{assets.CollectionReaderRole}}); !errors.Is(err, assets.ErrForbidden) {
+		t.Fatalf("revoked ACL err=%v", err)
+	}
+	if _, err := db.Exec(`UPDATE asset_collections SET deleted_at=$1 WHERE id='reader-item-collection'`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.GetAuthorizedCollectionItem(ctx, "reader-item-collection", "reader-item", assets.CollectionSubject{UserID: "role-user", Roles: []string{assets.CollectionReaderRole, "team"}}); !errors.Is(err, assets.ErrNotFound) {
+		t.Fatalf("deleted collection err=%v", err)
+	}
+}
+
 func TestCollectionChangesResetDeltaAndCursorRecovery(t *testing.T) {
 	db := integrationDB(t)
 	store := New(db)
