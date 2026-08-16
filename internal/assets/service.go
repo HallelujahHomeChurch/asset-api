@@ -302,6 +302,106 @@ func (s *Service) Operations(ctx context.Context) (Operations, error) {
 	return repository.GetOperations(ctx, s.now().UTC())
 }
 
+func (s *Service) CreateCollection(ctx context.Context, input CreateCollectionInput) (Collection, error) {
+	if input.Namespace == "" || input.Name == "" || !validMutationIdentity(input.CallerService, input.IdempotencyKey) {
+		return Collection{}, ErrInvalidInput
+	}
+	return s.repository.CreateCollection(ctx, input, s.now().UTC())
+}
+
+func (s *Service) RenameCollection(ctx context.Context, input RenameCollectionInput) (Collection, error) {
+	if input.CollectionID == "" || input.Name == "" || !validMutationIdentity(input.CallerService, input.IdempotencyKey) {
+		return Collection{}, ErrInvalidInput
+	}
+	return s.repository.RenameCollection(ctx, input, s.now().UTC())
+}
+
+func (s *Service) DeleteCollection(ctx context.Context, input DeleteCollectionInput) (Collection, error) {
+	if input.CollectionID == "" || !validMutationIdentity(input.CallerService, input.IdempotencyKey) {
+		return Collection{}, ErrInvalidInput
+	}
+	return s.repository.DeleteCollection(ctx, input, s.now().UTC())
+}
+
+func (s *Service) AddCollectionACL(ctx context.Context, input AddCollectionACLInput) (CollectionACLMutation, error) {
+	if input.CollectionID == "" || (input.SubjectType != SubjectUser && input.SubjectType != SubjectRole) || input.SubjectID == "" || input.Permission != PermissionRead || !validMutationIdentity(input.CallerService, input.IdempotencyKey) {
+		return CollectionACLMutation{}, ErrInvalidInput
+	}
+	return s.repository.AddCollectionACL(ctx, input, s.now().UTC())
+}
+
+func (s *Service) RevokeCollectionACL(ctx context.Context, input RevokeCollectionACLInput) (CollectionACLMutation, error) {
+	if input.CollectionID == "" || input.ACLID == "" || !validMutationIdentity(input.CallerService, input.IdempotencyKey) {
+		return CollectionACLMutation{}, ErrInvalidInput
+	}
+	return s.repository.RevokeCollectionACL(ctx, input, s.now().UTC())
+}
+
+func (s *Service) AddCollectionItem(ctx context.Context, input AddCollectionItemInput) (CollectionItemMutation, error) {
+	if input.CollectionID == "" || input.AssetID == "" || input.RemoteItemID == "" || input.DisplayName == "" || input.SourceRevision == "" || !validMutationIdentity(input.CallerService, input.IdempotencyKey) {
+		return CollectionItemMutation{}, ErrInvalidInput
+	}
+	return s.repository.AddCollectionItem(ctx, input, s.now().UTC())
+}
+
+func (s *Service) DeleteCollectionItem(ctx context.Context, input DeleteCollectionItemInput) (CollectionItemMutation, error) {
+	if input.CollectionID == "" || input.ItemID == "" || !validMutationIdentity(input.CallerService, input.IdempotencyKey) {
+		return CollectionItemMutation{}, ErrInvalidInput
+	}
+	return s.repository.DeleteCollectionItem(ctx, input, s.now().UTC())
+}
+
+func (s *Service) ListAuthorizedCollections(ctx context.Context, subject CollectionSubject, cursor string, limit int) (CollectionPage, error) {
+	if !validCollectionSubject(subject) {
+		return CollectionPage{}, ErrForbidden
+	}
+	return s.repository.ListAuthorizedCollections(ctx, subject, cursor, limit)
+}
+
+func (s *Service) GetAuthorizedCollection(ctx context.Context, id string, subject CollectionSubject) (Collection, error) {
+	if id == "" || !validCollectionSubject(subject) {
+		return Collection{}, ErrForbidden
+	}
+	return s.repository.GetAuthorizedCollection(ctx, id, subject)
+}
+
+func (s *Service) CollectionChanges(ctx context.Context, id, cursor string, subject CollectionSubject) (CollectionChangePage, error) {
+	if id == "" || !validCollectionSubject(subject) {
+		return CollectionChangePage{}, ErrForbidden
+	}
+	return s.repository.CollectionChanges(ctx, id, cursor, subject)
+}
+
+func (s *Service) ListManagedCollections(ctx context.Context, callerService, cursor string, limit int) (ManagedCollectionPage, error) {
+	if callerService == "" {
+		return ManagedCollectionPage{}, ErrInvalidInput
+	}
+	return s.repository.ListManagedCollections(ctx, callerService, cursor, limit)
+}
+
+func (s *Service) GetManagedCollection(ctx context.Context, id, callerService string) (ManagedCollection, error) {
+	if id == "" || callerService == "" {
+		return ManagedCollection{}, ErrInvalidInput
+	}
+	return s.repository.GetManagedCollection(ctx, id, callerService)
+}
+
+func validMutationIdentity(callerService, idempotencyKey string) bool {
+	return callerService != "" && idempotencyKey != ""
+}
+
+func validCollectionSubject(subject CollectionSubject) bool {
+	if subject.UserID == "" {
+		return false
+	}
+	for _, role := range subject.Roles {
+		if role == CollectionReaderRole {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Service) ApplyScanResult(ctx context.Context, result ScanResult) error {
 	if result.EventID == "" || result.AssetID == "" || (result.Status != ScanClean && result.Status != ScanInfected && result.Status != ScanFailed) {
 		return ErrInvalidInput

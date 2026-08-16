@@ -269,6 +269,147 @@ type Operations struct {
 	PurgePending            int64     `json:"purgePending"`
 }
 
+const CollectionReaderRole = "media_sync_user"
+
+type CollectionSubject struct {
+	UserID string
+	Roles  []string
+}
+
+type Collection struct {
+	ID               string    `json:"id"`
+	Namespace        string    `json:"namespace"`
+	Name             string    `json:"name"`
+	Revision         int64     `json:"revision"`
+	CreatedByService string    `json:"-"`
+	CreatedAt        time.Time `json:"createdAt"`
+	UpdatedAt        time.Time `json:"updatedAt"`
+	DeletedAt        time.Time `json:"deletedAt,omitempty"`
+}
+
+type CollectionACL struct {
+	ID           string      `json:"id"`
+	CollectionID string      `json:"collectionId"`
+	SubjectType  SubjectType `json:"subjectType"`
+	SubjectID    string      `json:"subjectId"`
+	Permission   Permission  `json:"permission"`
+	CreatedAt    time.Time   `json:"createdAt"`
+	RevokedAt    time.Time   `json:"revokedAt,omitempty"`
+}
+
+type CollectionItem struct {
+	ID              string    `json:"id"`
+	CollectionID    string    `json:"collectionId"`
+	AssetID         string    `json:"assetId,omitempty"`
+	RemoteItemID    string    `json:"remoteItemId"`
+	DisplayName     string    `json:"displayName"`
+	SourceRevision  string    `json:"sourceRevision"`
+	CreatedRevision int64     `json:"createdRevision"`
+	DeletedRevision int64     `json:"deletedRevision,omitempty"`
+	MIMEType        string    `json:"mimeType,omitempty"`
+	SizeBytes       int64     `json:"sizeBytes,omitempty"`
+	ETag            string    `json:"etag,omitempty"`
+	CreatedAt       time.Time `json:"createdAt"`
+	DeletedAt       time.Time `json:"deletedAt,omitempty"`
+}
+
+type CollectionTombstone struct {
+	ID              string    `json:"id"`
+	RemoteItemID    string    `json:"remoteItemId"`
+	DeletedRevision int64     `json:"deletedRevision"`
+	DeletedAt       time.Time `json:"deletedAt"`
+}
+
+type CollectionPage struct {
+	Collections []Collection `json:"collections"`
+	Cursor      string       `json:"cursor,omitempty"`
+	HasMore     bool         `json:"hasMore"`
+}
+
+type CollectionChangePage struct {
+	Collection Collection            `json:"collection"`
+	Items      []CollectionItem      `json:"items"`
+	Tombstones []CollectionTombstone `json:"tombstones"`
+	Cursor     string                `json:"cursor"`
+	HasMore    bool                  `json:"hasMore"`
+	Reset      bool                  `json:"reset"`
+}
+
+type ManagedCollection struct {
+	Collection Collection      `json:"collection"`
+	ACLs       []CollectionACL `json:"acls"`
+}
+
+type ManagedCollectionPage struct {
+	Collections []ManagedCollection `json:"collections"`
+	Cursor      string              `json:"cursor,omitempty"`
+	HasMore     bool                `json:"hasMore"`
+}
+
+type CollectionACLMutation struct {
+	Collection Collection    `json:"collection"`
+	ACL        CollectionACL `json:"acl"`
+}
+
+type CollectionItemMutation struct {
+	Collection Collection          `json:"collection"`
+	Item       CollectionItem      `json:"item,omitempty"`
+	Tombstone  CollectionTombstone `json:"tombstone,omitempty"`
+}
+
+type CreateCollectionInput struct {
+	Namespace      string `json:"namespace"`
+	Name           string `json:"name"`
+	CallerService  string `json:"-"`
+	IdempotencyKey string `json:"-"`
+}
+
+type RenameCollectionInput struct {
+	CollectionID   string `json:"-"`
+	Name           string `json:"name"`
+	CallerService  string `json:"-"`
+	IdempotencyKey string `json:"-"`
+}
+
+type DeleteCollectionInput struct {
+	CollectionID   string `json:"-"`
+	CallerService  string `json:"-"`
+	IdempotencyKey string `json:"-"`
+}
+
+type AddCollectionACLInput struct {
+	CollectionID   string      `json:"-"`
+	SubjectType    SubjectType `json:"subjectType"`
+	SubjectID      string      `json:"subjectId"`
+	Permission     Permission  `json:"permission"`
+	CallerService  string      `json:"-"`
+	IdempotencyKey string      `json:"-"`
+}
+
+type RevokeCollectionACLInput struct {
+	CollectionID   string `json:"-"`
+	ACLID          string `json:"-"`
+	CallerService  string `json:"-"`
+	IdempotencyKey string `json:"-"`
+}
+
+type AddCollectionItemInput struct {
+	CollectionID   string `json:"-"`
+	AssetID        string `json:"assetId"`
+	RemoteItemID   string `json:"remoteItemId"`
+	DisplayName    string `json:"displayName"`
+	SourceRevision string `json:"sourceRevision"`
+	CallerService  string `json:"-"`
+	IdempotencyKey string `json:"-"`
+}
+
+type DeleteCollectionItemInput struct {
+	CollectionID   string `json:"-"`
+	ItemID         string `json:"-"`
+	CallerService  string `json:"-"`
+	IdempotencyKey string `json:"-"`
+}
+
 type Repository interface {
 	CreateUpload(context.Context, Asset, UploadSession) error
 	GetAsset(context.Context, string) (Asset, error)
@@ -281,6 +422,18 @@ type Repository interface {
 	ApplyScanResult(context.Context, ScanResult, time.Time) (bool, error)
 	ClaimPendingScan(context.Context, time.Time, time.Duration) (Asset, bool, error)
 	ScheduleScanRetry(context.Context, string, int, string, time.Time, time.Time) error
+	CreateCollection(context.Context, CreateCollectionInput, time.Time) (Collection, error)
+	RenameCollection(context.Context, RenameCollectionInput, time.Time) (Collection, error)
+	DeleteCollection(context.Context, DeleteCollectionInput, time.Time) (Collection, error)
+	AddCollectionACL(context.Context, AddCollectionACLInput, time.Time) (CollectionACLMutation, error)
+	RevokeCollectionACL(context.Context, RevokeCollectionACLInput, time.Time) (CollectionACLMutation, error)
+	AddCollectionItem(context.Context, AddCollectionItemInput, time.Time) (CollectionItemMutation, error)
+	DeleteCollectionItem(context.Context, DeleteCollectionItemInput, time.Time) (CollectionItemMutation, error)
+	ListAuthorizedCollections(context.Context, CollectionSubject, string, int) (CollectionPage, error)
+	GetAuthorizedCollection(context.Context, string, CollectionSubject) (Collection, error)
+	CollectionChanges(context.Context, string, string, CollectionSubject) (CollectionChangePage, error)
+	ListManagedCollections(context.Context, string, string, int) (ManagedCollectionPage, error)
+	GetManagedCollection(context.Context, string, string) (ManagedCollection, error)
 }
 
 type BlobStore interface {

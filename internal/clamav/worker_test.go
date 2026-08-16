@@ -108,23 +108,3 @@ func (r *workerRepository) ScheduleScanRetry(_ context.Context, _ string, _ int,
 	r.retry = details
 	return nil
 }
-func (*workerRepository) CreateUpload(context.Context, assets.Asset, assets.UploadSession) error {
-	panic("not used")
-}
-func (*workerRepository) GetAsset(context.Context, string) (assets.Asset, error) { panic("not used") }
-func (*workerRepository) GetUploadSession(context.Context, string) (assets.UploadSession, error) {
-	panic("not used")
-}
-func (*workerRepository) CompleteUpload(context.Context, assets.Asset, assets.UploadSession, assets.ScanRequest) error {
-	panic("not used")
-}
-func (*workerRepository) FailUpload(context.Context, string, time.Time) error { panic("not used") }
-func (*workerRepository) CreateGrant(context.Context, assets.Grant) (assets.Grant, error) {
-	panic("not used")
-}
-func (*workerRepository) RevokeGrant(context.Context, string, string, time.Time) error {
-	panic("not used")
-}
-func (*workerRepository) HasActiveGrant(context.Context, string, assets.SubjectType, string, assets.Permission, time.Time) (bool, error) {
-	panic("not used")
-}

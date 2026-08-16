@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"testing"
@@ -656,7 +657,118 @@ func completedAsset(t *testing.T, ctx context.Context, service *Service, blobs *
 	return asset
 }
 
+func TestCollectionServiceRequiresMutationIdentity(t *testing.T) {
+	repository := &collectionServiceRepository{}
+	service := NewService(repository, newMemoryBlobStore(), "", func() time.Time {
+		return time.Date(2026, 8, 16, 0, 0, 0, 0, time.UTC)
+	})
+
+	for _, input := range []CreateCollectionInput{
+		{Namespace: "namespace", Name: "Media", CallerService: "helper"},
+		{Namespace: "namespace", Name: "Media", IdempotencyKey: "key"},
+		{Namespace: "", Name: "Media", CallerService: "helper", IdempotencyKey: "key"},
+	} {
+		if _, err := service.CreateCollection(context.Background(), input); !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("input=%+v err=%v", input, err)
+		}
+	}
+	if repository.createCalls != 0 {
+		t.Fatalf("create calls=%d", repository.createCalls)
+	}
+
+	created, err := service.CreateCollection(context.Background(), CreateCollectionInput{
+		Namespace: "namespace", Name: "Media", CallerService: "helper", IdempotencyKey: "key",
+	})
+	if err != nil || created.ID != "collection" || repository.createCalls != 1 {
+		t.Fatalf("created=%+v calls=%d err=%v", created, repository.createCalls, err)
+	}
+}
+
+func TestCollectionMutationJSONCannotSetTrustedIdentity(t *testing.T) {
+	var input CreateCollectionInput
+	if err := json.Unmarshal([]byte(`{"namespace":"namespace","name":"Media","callerService":"attacker","idempotencyKey":"body-key"}`), &input); err != nil {
+		t.Fatal(err)
+	}
+	if input.CallerService != "" || input.IdempotencyKey != "" {
+		t.Fatalf("caller=%q key=%q", input.CallerService, input.IdempotencyKey)
+	}
+}
+
+func TestCollectionServiceRequiresGlobalReaderRole(t *testing.T) {
+	repository := &collectionServiceRepository{}
+	service := NewService(repository, newMemoryBlobStore(), "", time.Now)
+
+	for _, subject := range []CollectionSubject{
+		{},
+		{UserID: "user", Roles: []string{"admin"}},
+		{UserID: "", Roles: []string{CollectionReaderRole}},
+	} {
+		if _, err := service.ListAuthorizedCollections(context.Background(), subject, "", 10); !errors.Is(err, ErrForbidden) {
+			t.Fatalf("subject=%+v err=%v", subject, err)
+		}
+	}
+	if repository.readerCalls != 0 {
+		t.Fatalf("reader calls=%d", repository.readerCalls)
+	}
+
+	if _, err := service.ListAuthorizedCollections(context.Background(), CollectionSubject{
+		UserID: "user", Roles: []string{"role", CollectionReaderRole},
+	}, "", 10); err != nil {
+		t.Fatal(err)
+	}
+	if repository.readerCalls != 1 {
+		t.Fatalf("reader calls=%d", repository.readerCalls)
+	}
+}
+
+func TestCollectionServiceSeparatesManagedReads(t *testing.T) {
+	repository := &collectionServiceRepository{}
+	service := NewService(repository, newMemoryBlobStore(), "", time.Now)
+
+	if _, err := service.ListManagedCollections(context.Background(), "", "", 10); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("blank caller err=%v", err)
+	}
+	if _, err := service.ListManagedCollections(context.Background(), "helper", "", 10); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.GetManagedCollection(context.Background(), "collection", "helper"); err != nil {
+		t.Fatal(err)
+	}
+	if repository.managedListCalls != 1 || repository.managedGetCalls != 1 || repository.readerCalls != 0 {
+		t.Fatalf("managed list=%d get=%d reader=%d", repository.managedListCalls, repository.managedGetCalls, repository.readerCalls)
+	}
+}
+
+type collectionServiceRepository struct {
+	Repository
+	createCalls      int
+	readerCalls      int
+	managedListCalls int
+	managedGetCalls  int
+}
+
+func (r *collectionServiceRepository) CreateCollection(_ context.Context, _ CreateCollectionInput, _ time.Time) (Collection, error) {
+	r.createCalls++
+	return Collection{ID: "collection"}, nil
+}
+
+func (r *collectionServiceRepository) ListAuthorizedCollections(_ context.Context, _ CollectionSubject, _ string, _ int) (CollectionPage, error) {
+	r.readerCalls++
+	return CollectionPage{}, nil
+}
+
+func (r *collectionServiceRepository) ListManagedCollections(_ context.Context, _ string, _ string, _ int) (ManagedCollectionPage, error) {
+	r.managedListCalls++
+	return ManagedCollectionPage{}, nil
+}
+
+func (r *collectionServiceRepository) GetManagedCollection(_ context.Context, _, _ string) (ManagedCollection, error) {
+	r.managedGetCalls++
+	return ManagedCollection{}, nil
+}
+
 type memoryRepository struct {
+	Repository
 	assets             map[string]Asset
 	sessions           map[string]UploadSession
 	grants             map[string]Grant

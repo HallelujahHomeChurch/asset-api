@@ -710,6 +710,488 @@ func TestCollectionSchemaAssetRetentionPreservesItemHistory(t *testing.T) {
 	}
 }
 
+func TestCollectionMutationsReplayConflictAndRevision(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 16, 1, 0, 0, 0, time.UTC)
+	insertAsset(t, db, "collection-mutation-asset", assets.UploadCompleted, assets.ScanClean, assets.ProcessingReady, now, time.Time{})
+
+	create := assets.CreateCollectionInput{Namespace: "namespace", Name: "Media", CallerService: "helper", IdempotencyKey: "create"}
+	collection, err := store.CreateCollection(ctx, create, now)
+	if err != nil || collection.Revision != 1 || collection.CreatedByService != "helper" {
+		t.Fatalf("create=%+v err=%v", collection, err)
+	}
+	replay, err := store.CreateCollection(ctx, create, now.Add(time.Second))
+	if err != nil || replay.ID != collection.ID || replay.Revision != 1 || replay.CreatedByService != "helper" {
+		t.Fatalf("create replay=%+v err=%v", replay, err)
+	}
+	conflict := create
+	conflict.Name = "Other"
+	if _, err := store.CreateCollection(ctx, conflict, now); !errors.Is(err, assets.ErrConflict) {
+		t.Fatalf("create conflict err=%v", err)
+	}
+
+	renamed, err := store.RenameCollection(ctx, assets.RenameCollectionInput{CollectionID: collection.ID, Name: "Renamed", CallerService: "helper", IdempotencyKey: "rename"}, now)
+	if err != nil || renamed.Revision != 2 || renamed.Name != "Renamed" {
+		t.Fatalf("rename=%+v err=%v", renamed, err)
+	}
+	aclResult, err := store.AddCollectionACL(ctx, assets.AddCollectionACLInput{CollectionID: collection.ID, SubjectType: assets.SubjectUser, SubjectID: "user", Permission: assets.PermissionRead, CallerService: "helper", IdempotencyKey: "acl-add"}, now)
+	if err != nil || aclResult.Collection.Revision != 3 || aclResult.ACL.ID == "" {
+		t.Fatalf("add ACL=%+v err=%v", aclResult, err)
+	}
+	if _, err := store.AddCollectionACL(ctx, assets.AddCollectionACLInput{CollectionID: collection.ID, SubjectType: assets.SubjectUser, SubjectID: "user", Permission: assets.PermissionRead, CallerService: "helper", IdempotencyKey: "acl-duplicate"}, now); !errors.Is(err, assets.ErrConflict) {
+		t.Fatalf("duplicate active ACL err=%v", err)
+	}
+	revoked, err := store.RevokeCollectionACL(ctx, assets.RevokeCollectionACLInput{CollectionID: collection.ID, ACLID: aclResult.ACL.ID, CallerService: "helper", IdempotencyKey: "acl-revoke"}, now)
+	if err != nil || revoked.Collection.Revision != 4 || revoked.ACL.RevokedAt.IsZero() {
+		t.Fatalf("revoke ACL=%+v err=%v", revoked, err)
+	}
+	itemResult, err := store.AddCollectionItem(ctx, assets.AddCollectionItemInput{CollectionID: collection.ID, AssetID: "collection-mutation-asset", RemoteItemID: "remote", DisplayName: "Media", SourceRevision: "source-1", CallerService: "helper", IdempotencyKey: "item-add"}, now)
+	if err != nil || itemResult.Collection.Revision != 5 || itemResult.Item.CreatedRevision != 5 || itemResult.Item.ID == "" {
+		t.Fatalf("add item=%+v err=%v", itemResult, err)
+	}
+	itemReplay, err := store.AddCollectionItem(ctx, assets.AddCollectionItemInput{CollectionID: collection.ID, AssetID: "collection-mutation-asset", RemoteItemID: "remote", DisplayName: "Media", SourceRevision: "source-1", CallerService: "helper", IdempotencyKey: "item-add"}, now.Add(time.Minute))
+	if err != nil || itemReplay.Item.ID != itemResult.Item.ID || itemReplay.Collection.Revision != 5 {
+		t.Fatalf("item replay=%+v err=%v", itemReplay, err)
+	}
+	if _, err := store.AddCollectionItem(ctx, assets.AddCollectionItemInput{CollectionID: collection.ID, AssetID: "collection-mutation-asset", RemoteItemID: "other", DisplayName: "Other", SourceRevision: "source-2", CallerService: "helper", IdempotencyKey: "item-duplicate"}, now); !errors.Is(err, assets.ErrConflict) {
+		t.Fatalf("duplicate active asset err=%v", err)
+	}
+	deletedItem, err := store.DeleteCollectionItem(ctx, assets.DeleteCollectionItemInput{CollectionID: collection.ID, ItemID: itemResult.Item.ID, CallerService: "helper", IdempotencyKey: "item-delete"}, now)
+	if err != nil || deletedItem.Collection.Revision != 6 || deletedItem.Tombstone.ID != itemResult.Item.ID || deletedItem.Tombstone.DeletedRevision != 6 {
+		t.Fatalf("delete item=%+v err=%v", deletedItem, err)
+	}
+	if _, err := db.Exec(`INSERT INTO asset_content_tickets(token_hash,collection_id,collection_item_id,asset_etag,user_id,roles,expires_at,created_at) VALUES($1,$2,$3,'etag','user',ARRAY[]::text[],$4,$5)`, strings.Repeat("e", 64), collection.ID, itemResult.Item.ID, now.Add(time.Minute), now); err != nil {
+		t.Fatal(err)
+	}
+	readded, err := store.AddCollectionItem(ctx, assets.AddCollectionItemInput{CollectionID: collection.ID, AssetID: "collection-mutation-asset", RemoteItemID: "remote", DisplayName: "Media again", SourceRevision: "source-2", CallerService: "helper", IdempotencyKey: "item-readd"}, now)
+	if err != nil || readded.Collection.Revision != 7 || readded.Item.ID == itemResult.Item.ID {
+		t.Fatalf("re-add item=%+v err=%v", readded, err)
+	}
+	var ticketItem string
+	var ticketDeletedRevision int64
+	if err := db.QueryRow(`SELECT i.id,i.deleted_revision FROM asset_content_tickets t JOIN asset_collection_items i ON i.id=t.collection_item_id AND i.collection_id=t.collection_id WHERE t.token_hash=$1`, strings.Repeat("e", 64)).Scan(&ticketItem, &ticketDeletedRevision); err != nil {
+		t.Fatal(err)
+	}
+	if ticketItem != itemResult.Item.ID || ticketItem == readded.Item.ID || ticketDeletedRevision != 6 {
+		t.Fatalf("ticketItem=%q newItem=%q deletedRevision=%d", ticketItem, readded.Item.ID, ticketDeletedRevision)
+	}
+	deleted, err := store.DeleteCollection(ctx, assets.DeleteCollectionInput{CollectionID: collection.ID, CallerService: "helper", IdempotencyKey: "collection-delete"}, now)
+	if err != nil || deleted.Revision != 8 || deleted.DeletedAt.IsZero() {
+		t.Fatalf("delete collection=%+v err=%v", deleted, err)
+	}
+	if replay, err := store.DeleteCollection(ctx, assets.DeleteCollectionInput{CollectionID: collection.ID, CallerService: "helper", IdempotencyKey: "collection-delete"}, now.Add(time.Minute)); err != nil || replay.Revision != 8 {
+		t.Fatalf("delete replay=%+v err=%v", replay, err)
+	}
+}
+
+func TestCollectionMutationsRejectNonOwner(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 16, 2, 0, 0, 0, time.UTC)
+	insertAsset(t, db, "owner-asset", assets.UploadCompleted, assets.ScanClean, assets.ProcessingReady, now, time.Time{})
+	collection, err := store.CreateCollection(ctx, assets.CreateCollectionInput{Namespace: "namespace", Name: "Owned", CallerService: "owner", IdempotencyKey: "create-owned"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acl, err := store.AddCollectionACL(ctx, assets.AddCollectionACLInput{CollectionID: collection.ID, SubjectType: assets.SubjectUser, SubjectID: "user", Permission: assets.PermissionRead, CallerService: "owner", IdempotencyKey: "owner-acl"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, err := store.AddCollectionItem(ctx, assets.AddCollectionItemInput{CollectionID: collection.ID, AssetID: "owner-asset", RemoteItemID: "remote", DisplayName: "Media", SourceRevision: "source", CallerService: "owner", IdempotencyKey: "owner-item"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	checks := []func() error{
+		func() error {
+			_, err := store.RenameCollection(ctx, assets.RenameCollectionInput{CollectionID: collection.ID, Name: "No", CallerService: "other", IdempotencyKey: "wrong-rename"}, now)
+			return err
+		},
+		func() error {
+			_, err := store.DeleteCollection(ctx, assets.DeleteCollectionInput{CollectionID: collection.ID, CallerService: "other", IdempotencyKey: "wrong-delete"}, now)
+			return err
+		},
+		func() error {
+			_, err := store.AddCollectionACL(ctx, assets.AddCollectionACLInput{CollectionID: collection.ID, SubjectType: assets.SubjectRole, SubjectID: "role", Permission: assets.PermissionRead, CallerService: "other", IdempotencyKey: "wrong-add-acl"}, now)
+			return err
+		},
+		func() error {
+			_, err := store.RevokeCollectionACL(ctx, assets.RevokeCollectionACLInput{CollectionID: collection.ID, ACLID: acl.ACL.ID, CallerService: "other", IdempotencyKey: "wrong-revoke-acl"}, now)
+			return err
+		},
+		func() error {
+			_, err := store.AddCollectionItem(ctx, assets.AddCollectionItemInput{CollectionID: collection.ID, AssetID: "owner-asset", RemoteItemID: "other", DisplayName: "No", SourceRevision: "source", CallerService: "other", IdempotencyKey: "wrong-add-item"}, now)
+			return err
+		},
+		func() error {
+			_, err := store.DeleteCollectionItem(ctx, assets.DeleteCollectionItemInput{CollectionID: collection.ID, ItemID: item.Item.ID, CallerService: "other", IdempotencyKey: "wrong-delete-item"}, now)
+			return err
+		},
+	}
+	for index, check := range checks {
+		if err := check(); !errors.Is(err, assets.ErrForbidden) {
+			t.Fatalf("check %d err=%v", index, err)
+		}
+	}
+}
+
+func TestConcurrentCreateCollectionIdempotency(t *testing.T) {
+	for _, conflict := range []bool{false, true} {
+		t.Run(fmt.Sprintf("conflict=%v", conflict), func(t *testing.T) {
+			db := integrationDB(t)
+			store := New(db)
+			now := time.Date(2026, 8, 16, 3, 0, 0, 0, time.UTC)
+			start := make(chan struct{})
+			results := make(chan struct {
+				collection assets.Collection
+				err        error
+			}, 2)
+			for index := range 2 {
+				go func() {
+					input := assets.CreateCollectionInput{Namespace: "namespace", Name: "Media", CallerService: "helper", IdempotencyKey: "same-key"}
+					if conflict && index == 1 {
+						input.Name = "Other"
+					}
+					<-start
+					collection, err := store.CreateCollection(context.Background(), input, now)
+					results <- struct {
+						collection assets.Collection
+						err        error
+					}{collection, err}
+				}()
+			}
+			close(start)
+			var values []assets.Collection
+			var conflicts int
+			for range 2 {
+				result := <-results
+				if errors.Is(result.err, assets.ErrConflict) {
+					conflicts++
+				} else if result.err != nil {
+					t.Fatal(result.err)
+				} else {
+					values = append(values, result.collection)
+				}
+			}
+			wantConflicts := 0
+			if conflict {
+				wantConflicts = 1
+			}
+			if conflicts != wantConflicts || len(values) != 2-wantConflicts || (!conflict && values[0].ID != values[1].ID) {
+				t.Fatalf("values=%+v conflicts=%d", values, conflicts)
+			}
+			var collections, mutations, responses int
+			if err := db.QueryRow(`SELECT count(*) FROM asset_collections`).Scan(&collections); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.QueryRow(`SELECT count(*),count(response_json) FROM asset_collection_mutations`).Scan(&mutations, &responses); err != nil {
+				t.Fatal(err)
+			}
+			if collections != 1 || mutations != 1 || responses != 1 {
+				t.Fatalf("collections=%d mutations=%d responses=%d", collections, mutations, responses)
+			}
+		})
+	}
+}
+
+func TestConcurrentCollectionMutationsIncrementEveryRevision(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	now := time.Date(2026, 8, 16, 3, 30, 0, 0, time.UTC)
+	collection, err := store.CreateCollection(context.Background(), assets.CreateCollectionInput{Namespace: "namespace", Name: "Concurrent", CallerService: "helper", IdempotencyKey: "concurrent-create"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const mutations = 16
+	start := make(chan struct{})
+	errorsCh := make(chan error, mutations)
+	for index := range mutations {
+		go func() {
+			<-start
+			_, err := store.AddCollectionACL(context.Background(), assets.AddCollectionACLInput{CollectionID: collection.ID, SubjectType: assets.SubjectUser, SubjectID: fmt.Sprintf("user-%d", index), Permission: assets.PermissionRead, CallerService: "helper", IdempotencyKey: fmt.Sprintf("concurrent-%d", index)}, now)
+			errorsCh <- err
+		}()
+	}
+	close(start)
+	for range mutations {
+		if err := <-errorsCh; err != nil {
+			t.Fatal(err)
+		}
+	}
+	var revision int64
+	if err := db.QueryRow(`SELECT revision FROM asset_collections WHERE id=$1`, collection.ID).Scan(&revision); err != nil {
+		t.Fatal(err)
+	}
+	if revision != mutations+1 {
+		t.Fatalf("revision=%d", revision)
+	}
+}
+
+func TestCollectionAssetDeleteTombstonesMembershipsAndRacesAdd(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 16, 4, 0, 0, 0, time.UTC)
+	insertAsset(t, db, "delete-asset", assets.UploadCompleted, assets.ScanClean, assets.ProcessingReady, now, time.Time{})
+	first, err := store.CreateCollection(ctx, assets.CreateCollectionInput{Namespace: "namespace", Name: "First", CallerService: "helper", IdempotencyKey: "first"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.CreateCollection(ctx, assets.CreateCollectionInput{Namespace: "namespace", Name: "Second", CallerService: "helper", IdempotencyKey: "second"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, collection := range []assets.Collection{first, second} {
+		if _, err := store.AddCollectionItem(ctx, assets.AddCollectionItemInput{CollectionID: collection.ID, AssetID: "delete-asset", RemoteItemID: "remote-" + collection.ID, DisplayName: "Media", SourceRevision: "source", CallerService: "helper", IdempotencyKey: "add-" + collection.ID}, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.SoftDeleteAsset(ctx, "delete-asset", "test", now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SoftDeleteAsset(ctx, "delete-asset", "test", now.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	for _, collection := range []assets.Collection{first, second} {
+		var revision, deletedRevision int64
+		if err := db.QueryRow(`SELECT c.revision,i.deleted_revision FROM asset_collections c JOIN asset_collection_items i ON i.collection_id=c.id WHERE c.id=$1`, collection.ID).Scan(&revision, &deletedRevision); err != nil {
+			t.Fatal(err)
+		}
+		if revision != 3 || deletedRevision != 3 {
+			t.Fatalf("collection=%s revision=%d deletedRevision=%d", collection.ID, revision, deletedRevision)
+		}
+	}
+
+	if err := store.CompletePurge(ctx, "delete-asset", now.Add(-181*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	deleted, err := store.DeleteExpiredPurge(ctx, now.Add(-180*24*time.Hour), 10)
+	if err != nil || deleted != 1 {
+		t.Fatalf("retention deleted=%d err=%v", deleted, err)
+	}
+	var preserved, nullAssets int
+	if err := db.QueryRow(`SELECT count(*),count(*) FILTER (WHERE asset_id IS NULL) FROM asset_collection_items`).Scan(&preserved, &nullAssets); err != nil {
+		t.Fatal(err)
+	}
+	if preserved != 2 || nullAssets != 2 {
+		t.Fatalf("preserved=%d nullAssets=%d", preserved, nullAssets)
+	}
+
+	insertAsset(t, db, "race-asset", assets.UploadCompleted, assets.ScanClean, assets.ProcessingReady, now, time.Time{})
+	raceCollection, err := store.CreateCollection(ctx, assets.CreateCollectionInput{Namespace: "namespace", Name: "Race", CallerService: "helper", IdempotencyKey: "race"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	errorsCh := make(chan error, 2)
+	go func() {
+		<-start
+		_, err := store.AddCollectionItem(context.Background(), assets.AddCollectionItemInput{CollectionID: raceCollection.ID, AssetID: "race-asset", RemoteItemID: "race-remote", DisplayName: "Race", SourceRevision: "source", CallerService: "helper", IdempotencyKey: "race-add"}, now)
+		errorsCh <- err
+	}()
+	go func() {
+		<-start
+		errorsCh <- store.SoftDeleteAsset(context.Background(), "race-asset", "test", now)
+	}()
+	close(start)
+	for range 2 {
+		err := <-errorsCh
+		if err != nil && !errors.Is(err, assets.ErrNotFound) {
+			t.Fatal(err)
+		}
+	}
+	var active int
+	if err := db.QueryRow(`SELECT count(*) FROM asset_collection_items WHERE collection_id=$1 AND deleted_revision IS NULL`, raceCollection.ID).Scan(&active); err != nil {
+		t.Fatal(err)
+	}
+	if active != 0 {
+		t.Fatalf("active memberships after asset delete=%d", active)
+	}
+}
+
+func TestCollectionReaderAndManagedAuthorizationMatrix(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 16, 5, 0, 0, 0, time.UTC)
+	var owned []assets.Collection
+	for index := range 3 {
+		collection, err := store.CreateCollection(ctx, assets.CreateCollectionInput{Namespace: "namespace", Name: fmt.Sprintf("Owned %d", index), CallerService: "helper", IdempotencyKey: fmt.Sprintf("owned-%d", index)}, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		owned = append(owned, collection)
+		if _, err := store.AddCollectionACL(ctx, assets.AddCollectionACLInput{CollectionID: collection.ID, SubjectType: assets.SubjectUser, SubjectID: "user", Permission: assets.PermissionRead, CallerService: "helper", IdempotencyKey: fmt.Sprintf("user-acl-%d", index)}, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	other, err := store.CreateCollection(ctx, assets.CreateCollectionInput{Namespace: "namespace", Name: "Other", CallerService: "other-helper", IdempotencyKey: "other"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roleACL, err := store.AddCollectionACL(ctx, assets.AddCollectionACLInput{CollectionID: other.ID, SubjectType: assets.SubjectRole, SubjectID: "team", Permission: assets.PermissionRead, CallerService: "other-helper", IdempotencyKey: "role-acl"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.ListAuthorizedCollections(ctx, assets.CollectionSubject{UserID: "user", Roles: []string{"admin"}}, "", 10); !errors.Is(err, assets.ErrForbidden) {
+		t.Fatalf("missing global role err=%v", err)
+	}
+	empty, err := store.ListAuthorizedCollections(ctx, assets.CollectionSubject{UserID: "no-acl", Roles: []string{assets.CollectionReaderRole}}, "", 10)
+	if err != nil || len(empty.Collections) != 0 {
+		t.Fatalf("no ACL page=%+v err=%v", empty, err)
+	}
+	firstPage, err := store.ListAuthorizedCollections(ctx, assets.CollectionSubject{UserID: "user", Roles: []string{assets.CollectionReaderRole}}, "", 2)
+	if err != nil || len(firstPage.Collections) != 2 || !firstPage.HasMore || firstPage.Cursor == "" {
+		t.Fatalf("first reader page=%+v err=%v", firstPage, err)
+	}
+	secondPage, err := store.ListAuthorizedCollections(ctx, assets.CollectionSubject{UserID: "user", Roles: []string{assets.CollectionReaderRole}}, firstPage.Cursor, 2)
+	if err != nil || len(secondPage.Collections) != 1 || secondPage.HasMore {
+		t.Fatalf("second reader page=%+v err=%v", secondPage, err)
+	}
+	seen := map[string]bool{}
+	for _, collection := range append(firstPage.Collections, secondPage.Collections...) {
+		if seen[collection.ID] {
+			t.Fatalf("duplicate reader collection %s", collection.ID)
+		}
+		seen[collection.ID] = true
+	}
+	rolePage, err := store.ListAuthorizedCollections(ctx, assets.CollectionSubject{UserID: "role-user", Roles: []string{assets.CollectionReaderRole, "team"}}, "", 10)
+	if err != nil || len(rolePage.Collections) != 1 || rolePage.Collections[0].ID != other.ID {
+		t.Fatalf("role page=%+v err=%v", rolePage, err)
+	}
+	if _, err := store.GetAuthorizedCollection(ctx, owned[0].ID, assets.CollectionSubject{UserID: "no-acl", Roles: []string{assets.CollectionReaderRole}}); !errors.Is(err, assets.ErrForbidden) {
+		t.Fatalf("direct unauthorized err=%v", err)
+	}
+	if _, err := store.GetAuthorizedCollection(ctx, "missing", assets.CollectionSubject{UserID: "user", Roles: []string{assets.CollectionReaderRole}}); !errors.Is(err, assets.ErrNotFound) {
+		t.Fatalf("direct missing err=%v", err)
+	}
+	if _, err := store.RevokeCollectionACL(ctx, assets.RevokeCollectionACLInput{CollectionID: other.ID, ACLID: roleACL.ACL.ID, CallerService: "other-helper", IdempotencyKey: "revoke-role"}, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.GetAuthorizedCollection(ctx, other.ID, assets.CollectionSubject{UserID: "role-user", Roles: []string{assets.CollectionReaderRole, "team"}}); !errors.Is(err, assets.ErrForbidden) {
+		t.Fatalf("revoked role ACL err=%v", err)
+	}
+	if _, err := store.DeleteCollection(ctx, assets.DeleteCollectionInput{CollectionID: owned[0].ID, CallerService: "helper", IdempotencyKey: "delete-reader"}, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.GetAuthorizedCollection(ctx, owned[0].ID, assets.CollectionSubject{UserID: "user", Roles: []string{assets.CollectionReaderRole}}); !errors.Is(err, assets.ErrNotFound) {
+		t.Fatalf("deleted collection err=%v", err)
+	}
+
+	managedFirst, err := store.ListManagedCollections(ctx, "helper", "", 1)
+	if err != nil || len(managedFirst.Collections) != 1 || !managedFirst.HasMore || len(managedFirst.Collections[0].ACLs) == 0 {
+		t.Fatalf("managed first=%+v err=%v", managedFirst, err)
+	}
+	managedSecond, err := store.ListManagedCollections(ctx, "helper", managedFirst.Cursor, 10)
+	if err != nil || len(managedSecond.Collections) != 1 {
+		t.Fatalf("managed second=%+v err=%v", managedSecond, err)
+	}
+	if _, err := store.GetManagedCollection(ctx, other.ID, "helper"); !errors.Is(err, assets.ErrForbidden) {
+		t.Fatalf("managed wrong owner err=%v", err)
+	}
+	managed, err := store.GetManagedCollection(ctx, owned[1].ID, "helper")
+	if err != nil || managed.Collection.ID != owned[1].ID || len(managed.ACLs) != 1 {
+		t.Fatalf("managed=%+v err=%v", managed, err)
+	}
+}
+
+func TestCollectionChangesResetDeltaAndCursorRecovery(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 16, 6, 0, 0, 0, time.UTC)
+	collectionID := "changes-collection"
+	insertAuthorizedCollection(t, db, collectionID, 502, "user", now)
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := 1; index <= 501; index++ {
+		if _, err := tx.Exec(`INSERT INTO asset_collection_items(id,collection_id,remote_item_id,display_name,source_revision,created_revision,created_at) VALUES($1,$2,$3,$3,'source',$4,$5)`, fmt.Sprintf("item-%04d", index), collectionID, fmt.Sprintf("remote-%04d", index), index+1, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	subject := assets.CollectionSubject{UserID: "user", Roles: []string{assets.CollectionReaderRole}}
+
+	first, err := store.CollectionChanges(ctx, collectionID, "", subject)
+	if err != nil || !first.Reset || !first.HasMore || len(first.Items) != 500 || len(first.Tombstones) != 0 {
+		t.Fatalf("first reset items=%d tombstones=%d reset=%v more=%v err=%v", len(first.Items), len(first.Tombstones), first.Reset, first.HasMore, err)
+	}
+	insertAsset(t, db, "mid-reset-asset", assets.UploadCompleted, assets.ScanClean, assets.ProcessingReady, now, time.Time{})
+	mid, err := store.AddCollectionItem(ctx, assets.AddCollectionItemInput{CollectionID: collectionID, AssetID: "mid-reset-asset", RemoteItemID: "mid-reset", DisplayName: "Mid reset", SourceRevision: "source-mid", CallerService: "helper", IdempotencyKey: "mid-reset"}, now.Add(time.Minute))
+	if err != nil || mid.Collection.Revision != 503 {
+		t.Fatalf("mid reset mutation=%+v err=%v", mid, err)
+	}
+	second, err := store.CollectionChanges(ctx, collectionID, first.Cursor, subject)
+	if err != nil || !second.Reset || !second.HasMore || len(second.Items) != 1 {
+		t.Fatalf("second reset items=%d reset=%v more=%v err=%v", len(second.Items), second.Reset, second.HasMore, err)
+	}
+	delta, err := store.CollectionChanges(ctx, collectionID, second.Cursor, subject)
+	if err != nil || delta.Reset || delta.HasMore || len(delta.Items) != 1 || delta.Items[0].ID != mid.Item.ID {
+		t.Fatalf("delta=%+v err=%v", delta, err)
+	}
+	aclGap, err := store.AddCollectionACL(ctx, assets.AddCollectionACLInput{CollectionID: collectionID, SubjectType: assets.SubjectRole, SubjectID: "gap", Permission: assets.PermissionRead, CallerService: "helper", IdempotencyKey: "gap"}, now.Add(2*time.Minute))
+	if err != nil || aclGap.Collection.Revision != 504 {
+		t.Fatalf("ACL gap=%+v err=%v", aclGap, err)
+	}
+	gap, err := store.CollectionChanges(ctx, collectionID, delta.Cursor, subject)
+	if err != nil || gap.Reset || gap.HasMore || len(gap.Items) != 0 || len(gap.Tombstones) != 0 || gap.Collection.Revision != 504 {
+		t.Fatalf("gap=%+v err=%v", gap, err)
+	}
+
+	malformed, err := store.CollectionChanges(ctx, collectionID, "not-a-cursor", subject)
+	if err != nil || !malformed.Reset || len(malformed.Items) != 500 {
+		t.Fatalf("malformed reset=%v items=%d err=%v", malformed.Reset, len(malformed.Items), err)
+	}
+	insertAuthorizedCollection(t, db, "other-changes", 1, "user", now)
+	wrong, err := store.CollectionChanges(ctx, "other-changes", first.Cursor, subject)
+	if err != nil || !wrong.Reset {
+		t.Fatalf("wrong collection cursor page=%+v err=%v", wrong, err)
+	}
+	aheadCursor := encodeChangeCursor(changeCursor{Mode: changeModeDelta, CollectionID: collectionID, FromRevision: 999, ToRevision: 999})
+	ahead, err := store.CollectionChanges(ctx, collectionID, aheadCursor, subject)
+	if err != nil || !ahead.Reset || len(ahead.Items) != 500 {
+		t.Fatalf("ahead reset=%v items=%d err=%v", ahead.Reset, len(ahead.Items), err)
+	}
+}
+
+func TestCollectionChangesLimitsCombinedDeltaEvents(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	now := time.Date(2026, 8, 16, 7, 0, 0, 0, time.UTC)
+	collectionID := "delta-limit"
+	insertAuthorizedCollection(t, db, collectionID, 503, "user", now)
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := 1; index <= 251; index++ {
+		if _, err := tx.Exec(`INSERT INTO asset_collection_items(id,collection_id,remote_item_id,display_name,source_revision,created_revision,deleted_revision,created_at,deleted_at) VALUES($1,$2,$3,$3,'source',$4,$5,$6,$6)`, fmt.Sprintf("delta-%04d", index), collectionID, fmt.Sprintf("remote-%04d", index), index+1, index+252, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	subject := assets.CollectionSubject{UserID: "user", Roles: []string{assets.CollectionReaderRole}}
+	cursor := encodeChangeCursor(changeCursor{Mode: changeModeDelta, CollectionID: collectionID, FromRevision: 1, ToRevision: 503})
+	first, err := store.CollectionChanges(context.Background(), collectionID, cursor, subject)
+	if err != nil || first.Reset || !first.HasMore || len(first.Items)+len(first.Tombstones) != 500 {
+		t.Fatalf("first delta items=%d tombstones=%d reset=%v more=%v err=%v", len(first.Items), len(first.Tombstones), first.Reset, first.HasMore, err)
+	}
+	second, err := store.CollectionChanges(context.Background(), collectionID, first.Cursor, subject)
+	if err != nil || second.Reset || second.HasMore || len(second.Items)+len(second.Tombstones) != 2 {
+		t.Fatalf("second delta items=%d tombstones=%d reset=%v more=%v err=%v", len(second.Items), len(second.Tombstones), second.Reset, second.HasMore, err)
+	}
+}
+
 func integrationDB(t *testing.T) *sql.DB {
 	t.Helper()
 	url := os.Getenv("TEST_DATABASE_URL")
@@ -755,6 +1237,16 @@ func insertAsset(t *testing.T, db *sql.DB, id string, upload assets.UploadStatus
 func insertCollection(t *testing.T, db *sql.DB, id string, now time.Time) {
 	t.Helper()
 	if _, err := db.Exec(`INSERT INTO asset_collections(id,namespace,name,created_by_service,created_at,updated_at) VALUES($1,'line.group.media-sync','Media','hhc-line-function-bot',$2,$2)`, id, now); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func insertAuthorizedCollection(t *testing.T, db *sql.DB, id string, revision int64, userID string, now time.Time) {
+	t.Helper()
+	if _, err := db.Exec(`INSERT INTO asset_collections(id,namespace,name,revision,created_by_service,created_at,updated_at) VALUES($1,'namespace','Media',$2,'helper',$3,$3)`, id, revision, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO asset_collection_acl(id,collection_id,subject_type,subject_id,permission,created_at) VALUES($1,$2,'user',$3,'read',$4)`, "acl-"+id, id, userID, now); err != nil {
 		t.Fatal(err)
 	}
 }
