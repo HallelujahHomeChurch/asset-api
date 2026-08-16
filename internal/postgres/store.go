@@ -788,9 +788,9 @@ func (s *Store) collectionResetPage(ctx context.Context, collection assets.Colle
 		return assets.CollectionChangePage{}, err
 	}
 	page.Collection = current
-	page.HasMore = current.Revision > cursor.HighWater
+	page.HasMore = true
 	toRevision := cursor.HighWater
-	if page.HasMore {
+	if current.Revision > cursor.HighWater {
 		toRevision = current.Revision
 	}
 	page.Cursor = encodeChangeCursor(changeCursor{Mode: changeModeDelta, CollectionID: collection.ID, FromRevision: cursor.HighWater, ToRevision: toRevision})

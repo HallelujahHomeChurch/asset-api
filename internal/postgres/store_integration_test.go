@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"hhc/asset-api/internal/assets"
+	"hhc/asset-api/internal/lifecycle"
 	"hhc/asset-api/internal/migrations"
 
 	"github.com/jackc/pgx/v5"
@@ -965,7 +966,22 @@ func TestCollectionAssetDeleteTombstonesMembershipsAndRacesAdd(t *testing.T) {
 		}
 	}
 
-	if err := store.CompletePurge(ctx, "delete-asset", now.Add(-181*24*time.Hour)); err != nil {
+	blobs := &recordingLifecycleBlobStore{}
+	processed, err := lifecycle.NewWorker(store, blobs).ProcessOne(ctx)
+	if err != nil || !processed {
+		t.Fatalf("purge worker processed=%v err=%v", processed, err)
+	}
+	if !blobs.deleted["assets/delete-asset"] {
+		t.Fatalf("deleted blobs=%v", blobs.deleted)
+	}
+	var purgedAt sql.NullTime
+	if err := db.QueryRow(`SELECT purged_at FROM assets WHERE id='delete-asset'`).Scan(&purgedAt); err != nil {
+		t.Fatal(err)
+	}
+	if !purgedAt.Valid {
+		t.Fatal("purged_at was not written")
+	}
+	if _, err := db.Exec(`UPDATE assets SET purged_at=$2 WHERE id=$1`, "delete-asset", now.Add(-181*24*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	deleted, err := store.DeleteExpiredPurge(ctx, now.Add(-180*24*time.Hour), 10)
@@ -978,6 +994,16 @@ func TestCollectionAssetDeleteTombstonesMembershipsAndRacesAdd(t *testing.T) {
 	}
 	if preserved != 2 || nullAssets != 2 {
 		t.Fatalf("preserved=%d nullAssets=%d", preserved, nullAssets)
+	}
+	for _, collection := range []assets.Collection{first, second} {
+		var revision, deletedRevision int64
+		var assetID sql.NullString
+		if err := db.QueryRow(`SELECT c.revision,i.deleted_revision,i.asset_id FROM asset_collections c JOIN asset_collection_items i ON i.collection_id=c.id WHERE c.id=$1`, collection.ID).Scan(&revision, &deletedRevision, &assetID); err != nil {
+			t.Fatal(err)
+		}
+		if revision != 3 || deletedRevision != 3 || assetID.Valid {
+			t.Fatalf("retained collection=%s revision=%d deletedRevision=%d assetID=%v", collection.ID, revision, deletedRevision, assetID)
+		}
 	}
 
 	insertAsset(t, db, "race-asset", assets.UploadCompleted, assets.ScanClean, assets.ProcessingReady, now, time.Time{})
@@ -1162,6 +1188,27 @@ func TestCollectionChangesResetDeltaAndCursorRecovery(t *testing.T) {
 	}
 }
 
+func TestCollectionChangesFinalResetAlwaysHandsOffToDelta(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	now := time.Date(2026, 8, 16, 6, 30, 0, 0, time.UTC)
+	collectionID := "reset-handoff"
+	insertAuthorizedCollection(t, db, collectionID, 2, "user", now)
+	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,remote_item_id,display_name,source_revision,created_revision,created_at) VALUES('reset-item',$1,'remote-reset','Reset','source',2,$2)`, collectionID, now); err != nil {
+		t.Fatal(err)
+	}
+	subject := assets.CollectionSubject{UserID: "user", Roles: []string{assets.CollectionReaderRole}}
+
+	reset, err := store.CollectionChanges(context.Background(), collectionID, "", subject)
+	if err != nil || !reset.Reset || !reset.HasMore || len(reset.Items) != 1 {
+		t.Fatalf("reset=%+v err=%v", reset, err)
+	}
+	delta, err := store.CollectionChanges(context.Background(), collectionID, reset.Cursor, subject)
+	if err != nil || delta.Reset || delta.HasMore || len(delta.Items) != 0 || len(delta.Tombstones) != 0 {
+		t.Fatalf("delta=%+v err=%v", delta, err)
+	}
+}
+
 func TestCollectionChangesLimitsCombinedDeltaEvents(t *testing.T) {
 	db := integrationDB(t)
 	store := New(db)
@@ -1219,6 +1266,18 @@ func integrationDB(t *testing.T) *sql.DB {
 		t.Fatal(err)
 	}
 	return db
+}
+
+type recordingLifecycleBlobStore struct {
+	deleted map[string]bool
+}
+
+func (b *recordingLifecycleBlobStore) Delete(_ context.Context, key string) error {
+	if b.deleted == nil {
+		b.deleted = map[string]bool{}
+	}
+	b.deleted[key] = true
+	return nil
 }
 
 func insertAsset(t *testing.T, db *sql.DB, id string, upload assets.UploadStatus, scan assets.ScanStatus, processing assets.ProcessingStatus, updatedAt, purgedAt time.Time) {
