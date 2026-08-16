@@ -57,18 +57,37 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /api/assets/public/{assetID}/{variant}", h.publicDerivativeDownload)
 	mux.Handle("POST /priv/assets/upload-sessions", h.internal(http.HandlerFunc(h.createUpload)))
 	mux.Handle("GET /priv/assets/operations", h.internal(http.HandlerFunc(h.operations)))
+	mux.Handle("GET /priv/assets/collections", h.internal(h.collectionCaller(http.HandlerFunc(h.listManagedCollections))))
+	mux.Handle("GET /priv/assets/collections/{collectionID}", h.internal(h.collectionCaller(http.HandlerFunc(h.getManagedCollection))))
+	mux.Handle("POST /priv/assets/collections", h.internal(h.collectionCaller(http.HandlerFunc(h.createCollection))))
+	mux.Handle("PATCH /priv/assets/collections/{collectionID}", h.internal(h.collectionCaller(http.HandlerFunc(h.renameCollection))))
+	mux.Handle("DELETE /priv/assets/collections/{collectionID}", h.internal(h.collectionCaller(http.HandlerFunc(h.deleteCollection))))
+	mux.Handle("POST /priv/assets/collections/{collectionID}/acl", h.internal(h.collectionCaller(http.HandlerFunc(h.addCollectionACL))))
+	mux.Handle("DELETE /priv/assets/collections/{collectionID}/acl/{aclID}", h.internal(h.collectionCaller(http.HandlerFunc(h.revokeCollectionACL))))
+	mux.Handle("POST /priv/assets/collections/{collectionID}/items", h.internal(h.collectionCaller(http.HandlerFunc(h.addCollectionItem))))
+	mux.Handle("DELETE /priv/assets/collections/{collectionID}/items/{itemID}", h.internal(h.collectionCaller(http.HandlerFunc(h.deleteCollectionItem))))
 	mux.Handle("GET /priv/assets/{assetID}", h.internal(http.HandlerFunc(h.getAsset)))
-	mux.Handle("GET /priv/assets/{assetID}/download", h.internal(http.HandlerFunc(h.authorizedDownload)))
+	mux.Handle("GET /priv/assets/{assetID}/{action}", h.internal(http.HandlerFunc(h.assetAction)))
 	mux.Handle("POST /priv/assets/{assetID}/complete", h.internal(http.HandlerFunc(h.completeUpload)))
 	mux.Handle("POST /priv/assets/{assetID}/grants", h.internal(http.HandlerFunc(h.createGrant)))
 	mux.Handle("DELETE /priv/assets/{assetID}/grants/{grantID}", h.internal(http.HandlerFunc(h.revokeGrant)))
 	mux.Handle("POST /priv/assets/{assetID}/scan/requeue", h.internal(http.HandlerFunc(h.requeueScan)))
 	mux.Handle("DELETE /priv/assets/{assetID}", h.internal(http.HandlerFunc(h.deleteAsset)))
-	mux.Handle("GET /priv/assets/{assetID}/public-url", h.internal(http.HandlerFunc(h.publicURL)))
 	if h.localUpload != nil {
 		mux.Handle("/dev/uploads/{token}", localUploadCORS(http.HandlerFunc(h.localUpload)))
 	}
 	return requestID(mux)
+}
+
+func (h *Handler) assetAction(w http.ResponseWriter, r *http.Request) {
+	switch r.PathValue("action") {
+	case "download":
+		h.authorizedDownload(w, r)
+	case "public-url":
+		h.publicURL(w, r)
+	default:
+		http.NotFound(w, r)
+	}
 }
 
 func localUploadCORS(next http.Handler) http.Handler {
@@ -103,6 +122,16 @@ func (h *Handler) internal(next http.Handler) http.Handler {
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), callerContextKey{}, caller)))
+	})
+}
+
+func (h *Handler) collectionCaller(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if authenticatedCaller(r) != "hhc-line-function-bot" {
+			writeError(w, http.StatusForbidden, "AST_FORBIDDEN", "caller is not allowed")
+			return
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 
@@ -242,6 +271,196 @@ func (h *Handler) operations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, value)
+}
+
+func (h *Handler) listManagedCollections(w http.ResponseWriter, r *http.Request) {
+	limit := 0
+	if value := r.URL.Query().Get("limit"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed <= 0 {
+			writeError(w, http.StatusBadRequest, "AST_INVALID_REQUEST", "invalid limit")
+			return
+		}
+		limit = parsed
+	}
+	page, err := h.service.ListManagedCollections(r.Context(), authenticatedCaller(r), r.URL.Query().Get("cursor"), limit)
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page)
+}
+
+func (h *Handler) getManagedCollection(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("collectionID")
+	if !validOpaqueID(id) {
+		writeError(w, http.StatusBadRequest, "AST_INVALID_REQUEST", "invalid collection ID")
+		return
+	}
+	value, err := h.service.GetManagedCollection(r.Context(), id, authenticatedCaller(r))
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
+}
+
+func (h *Handler) createCollection(w http.ResponseWriter, r *http.Request) {
+	caller, key, ok := collectionMutationIdentity(w, r)
+	if !ok {
+		return
+	}
+	var input assets.CreateCollectionInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	input.Name = strings.TrimSpace(input.Name)
+	if !validBytes(input.Name, 120) {
+		writeError(w, http.StatusBadRequest, "AST_INVALID_REQUEST", "invalid collection name")
+		return
+	}
+	input.CallerService, input.IdempotencyKey = caller, key
+	value, err := h.service.CreateCollection(r.Context(), input)
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, value)
+}
+
+func (h *Handler) renameCollection(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("collectionID")
+	caller, key, ok := collectionMutationIdentity(w, r)
+	if !ok || !requireOpaqueID(w, id, "collection ID") {
+		return
+	}
+	var input assets.RenameCollectionInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	input.Name = strings.TrimSpace(input.Name)
+	if !validBytes(input.Name, 120) {
+		writeError(w, http.StatusBadRequest, "AST_INVALID_REQUEST", "invalid collection name")
+		return
+	}
+	input.CollectionID, input.CallerService, input.IdempotencyKey = id, caller, key
+	value, err := h.service.RenameCollection(r.Context(), input)
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
+}
+
+func (h *Handler) deleteCollection(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("collectionID")
+	caller, key, ok := collectionMutationIdentity(w, r)
+	if !ok || !requireOpaqueID(w, id, "collection ID") {
+		return
+	}
+	value, err := h.service.DeleteCollection(r.Context(), assets.DeleteCollectionInput{CollectionID: id, CallerService: caller, IdempotencyKey: key})
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
+}
+
+func (h *Handler) addCollectionACL(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("collectionID")
+	caller, key, ok := collectionMutationIdentity(w, r)
+	if !ok || !requireOpaqueID(w, id, "collection ID") {
+		return
+	}
+	var input assets.AddCollectionACLInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	input.CollectionID, input.CallerService, input.IdempotencyKey = id, caller, key
+	value, err := h.service.AddCollectionACL(r.Context(), input)
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, value)
+}
+
+func (h *Handler) revokeCollectionACL(w http.ResponseWriter, r *http.Request) {
+	collectionID, aclID := r.PathValue("collectionID"), r.PathValue("aclID")
+	caller, key, ok := collectionMutationIdentity(w, r)
+	if !ok || !requireOpaqueID(w, collectionID, "collection ID") || !requireOpaqueID(w, aclID, "ACL ID") {
+		return
+	}
+	value, err := h.service.RevokeCollectionACL(r.Context(), assets.RevokeCollectionACLInput{CollectionID: collectionID, ACLID: aclID, CallerService: caller, IdempotencyKey: key})
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
+}
+
+func (h *Handler) addCollectionItem(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("collectionID")
+	caller, key, ok := collectionMutationIdentity(w, r)
+	if !ok || !requireOpaqueID(w, id, "collection ID") {
+		return
+	}
+	var input assets.AddCollectionItemInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	input.DisplayName = strings.TrimSpace(input.DisplayName)
+	if !validOpaqueID(input.AssetID) || !validBytes(input.RemoteItemID, 255) || !validBytes(input.DisplayName, 255) {
+		writeError(w, http.StatusBadRequest, "AST_INVALID_REQUEST", "invalid collection item")
+		return
+	}
+	input.CollectionID, input.CallerService, input.IdempotencyKey = id, caller, key
+	value, err := h.service.AddCollectionItem(r.Context(), input)
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, value)
+}
+
+func (h *Handler) deleteCollectionItem(w http.ResponseWriter, r *http.Request) {
+	collectionID, itemID := r.PathValue("collectionID"), r.PathValue("itemID")
+	caller, key, ok := collectionMutationIdentity(w, r)
+	if !ok || !requireOpaqueID(w, collectionID, "collection ID") || !requireOpaqueID(w, itemID, "item ID") {
+		return
+	}
+	value, err := h.service.DeleteCollectionItem(r.Context(), assets.DeleteCollectionItemInput{CollectionID: collectionID, ItemID: itemID, CallerService: caller, IdempotencyKey: key})
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
+}
+
+func collectionMutationIdentity(w http.ResponseWriter, r *http.Request) (string, string, bool) {
+	rawKey := r.Header.Get("Idempotency-Key")
+	key := strings.TrimSpace(rawKey)
+	if key == "" || len(rawKey) > 128 {
+		writeError(w, http.StatusBadRequest, "AST_INVALID_REQUEST", "invalid Idempotency-Key")
+		return "", "", false
+	}
+	return authenticatedCaller(r), key, true
+}
+
+func requireOpaqueID(w http.ResponseWriter, value, name string) bool {
+	if validOpaqueID(value) {
+		return true
+	}
+	writeError(w, http.StatusBadRequest, "AST_INVALID_REQUEST", "invalid "+name)
+	return false
+}
+
+func validOpaqueID(value string) bool {
+	return strings.TrimSpace(value) != "" && len(value) <= 255
+}
+
+func validBytes(value string, limit int) bool {
+	return value != "" && len(value) <= limit
 }
 
 func (h *Handler) requireOwnedAsset(w http.ResponseWriter, r *http.Request) bool {
@@ -430,6 +649,10 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, destination any) bool {
 		writeError(w, http.StatusBadRequest, "AST_INVALID_REQUEST", "invalid request body")
 		return false
 	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		writeError(w, http.StatusBadRequest, "AST_INVALID_REQUEST", "invalid request body")
+		return false
+	}
 	return true
 }
 func handleError(w http.ResponseWriter, err error) {
@@ -502,7 +725,7 @@ func requestID(next http.Handler) http.Handler {
 }
 
 func callerFromRequest(r *http.Request, allowDevelopmentHeader bool) string {
-	if caller, ok := r.Context().Value(callerContextKey{}).(string); ok {
+	if caller := authenticatedCaller(r); caller != "" {
 		return caller
 	}
 	if caller := strings.TrimSpace(r.Header.Get("Dapr-Caller-App-Id")); caller != "" {
@@ -512,6 +735,11 @@ func callerFromRequest(r *http.Request, allowDevelopmentHeader bool) string {
 		return strings.TrimSpace(r.Header.Get("X-Internal-Caller-App-Id"))
 	}
 	return ""
+}
+
+func authenticatedCaller(r *http.Request) string {
+	caller, _ := r.Context().Value(callerContextKey{}).(string)
+	return caller
 }
 
 type callerContextKey struct{}
