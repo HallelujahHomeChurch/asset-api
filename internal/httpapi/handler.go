@@ -59,8 +59,9 @@ func (h *Handler) Routes() http.Handler {
 	mux.Handle("GET /api/assets/collections", h.collectionReader(http.HandlerFunc(h.listAuthorizedCollections)))
 	mux.Handle("GET /api/assets/collections/{collectionID}/changes", h.collectionReader(http.HandlerFunc(h.collectionChanges)))
 	mux.Handle("GET /api/assets/collections/{collectionID}/items/{itemID}", h.collectionReader(http.HandlerFunc(h.getAuthorizedCollectionItem)))
-	mux.Handle("POST /api/assets/collections/{collectionID}/items/{itemID}/content-ticket", h.collectionReader(http.HandlerFunc(h.collectionContentPending)))
-	mux.Handle("GET /api/assets/collections/{collectionID}/items/{itemID}/content", h.collectionReader(http.HandlerFunc(h.collectionContentPending)))
+	mux.Handle("POST /api/assets/collections/{collectionID}/items/{itemID}/content-ticket", h.collectionReader(http.HandlerFunc(h.issueCollectionContentTicket)))
+	mux.Handle("GET /api/assets/collections/{collectionID}/items/{itemID}/content", h.collectionReader(http.HandlerFunc(h.collectionContent)))
+	mux.Handle("GET /api/assets/content", h.collectionTicket(http.HandlerFunc(h.ticketContent)))
 	mux.Handle("POST /priv/assets/upload-sessions", h.internal(http.HandlerFunc(h.createUpload)))
 	mux.Handle("GET /priv/assets/operations", h.internal(http.HandlerFunc(h.operations)))
 	mux.Handle("GET /priv/assets/collections", h.internal(h.collectionCaller(http.HandlerFunc(h.listManagedCollections))))
@@ -143,6 +144,26 @@ func (h *Handler) collectionReader(next http.Handler) http.Handler {
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), collectionReaderIdentityKey{}, identity)))
+	})
+}
+
+func (h *Handler) collectionTicket(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "private, no-store")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		if h.daprCaller(r) != h.workloadAuth.ReaderCallerAppID || h.workloadAuth.ReaderCallerAppID == "" {
+			writeError(w, http.StatusForbidden, "AST_FORBIDDEN", "caller is not allowed")
+			return
+		}
+		ticket := r.URL.Query().Get("ticket")
+		request := r.Clone(context.WithValue(r.Context(), contentTicketKey{}, ticket))
+		request.URL.RawQuery = ""
+		request.RequestURI = request.URL.Path
+		request.Header = make(http.Header)
+		for _, name := range []string{"Accept", "Range", "If-None-Match", "If-Range"} {
+			request.Header[name] = append([]string(nil), r.Header.Values(name)...)
+		}
+		next.ServeHTTP(w, request)
 	})
 }
 
@@ -359,11 +380,49 @@ func (h *Handler) getAuthorizedCollectionItem(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, readerItem(item))
 }
 
-func (h *Handler) collectionContentPending(w http.ResponseWriter, r *http.Request) {
-	if _, ok := h.authorizedCollectionItem(w, r); !ok {
+func (h *Handler) issueCollectionContentTicket(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "private, no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	collectionID, itemID := r.PathValue("collectionID"), r.PathValue("itemID")
+	if !requireOpaqueID(w, collectionID, "collection ID") || !requireOpaqueID(w, itemID, "item ID") {
 		return
 	}
-	writeError(w, http.StatusNotImplemented, "AST_NOT_IMPLEMENTED", "collection content is not available")
+	identity, _ := r.Context().Value(collectionReaderIdentityKey{}).(collectionReaderIdentity)
+	issued, err := h.service.IssueCollectionContentTicket(r.Context(), collectionID, itemID, identity.Subject, identity.TokenExpiresAt)
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, issued)
+}
+
+func (h *Handler) collectionContent(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "private, no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	collectionID, itemID := r.PathValue("collectionID"), r.PathValue("itemID")
+	if !requireOpaqueID(w, collectionID, "collection ID") || !requireOpaqueID(w, itemID, "item ID") {
+		return
+	}
+	metadata, err := h.service.AuthorizedCollectionContentMetadata(r.Context(), collectionID, itemID, collectionReaderSubject(r))
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+	h.serveCollectionDownload(w, r, metadata)
+}
+
+func (h *Handler) ticketContent(w http.ResponseWriter, r *http.Request) {
+	ticket, _ := r.Context().Value(contentTicketKey{}).(string)
+	metadata, err := h.service.ContentTicketMetadata(r.Context(), ticket)
+	if err != nil {
+		if errors.Is(err, assets.ErrUnauthorized) || errors.Is(err, assets.ErrForbidden) || errors.Is(err, assets.ErrNotFound) || errors.Is(err, assets.ErrInvalidInput) {
+			writeError(w, http.StatusUnauthorized, "AST_INVALID_TICKET", "content ticket is invalid")
+			return
+		}
+		handleError(w, err)
+		return
+	}
+	h.serveCollectionDownload(w, r, metadata)
 }
 
 func (h *Handler) authorizedCollectionItem(w http.ResponseWriter, r *http.Request) (assets.CollectionItem, bool) {
@@ -685,6 +744,16 @@ func (h *Handler) serveDownload(w http.ResponseWriter, r *http.Request, metadata
 	}
 }
 
+func (h *Handler) serveCollectionDownload(w http.ResponseWriter, r *http.Request, metadata assets.PublicDownloadMetadata) {
+	w.Header().Set("Cache-Control", "private, no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("Accept-Ranges", "bytes")
+	if metadata.ETag != "" {
+		w.Header().Set("ETag", metadata.ETag)
+	}
+	h.serveDownload(w, r, metadata)
+}
+
 func setPublicHeaders(w http.ResponseWriter, metadata assets.PublicDownloadMetadata, contentLength int64, fileName string) {
 	w.Header().Set("Content-Type", metadata.ContentType)
 	if fileName != "" {
@@ -803,6 +872,8 @@ func handleError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusBadRequest, "AST_INVALID_REQUEST", err.Error())
 	case errors.Is(err, assets.ErrForbidden):
 		writeError(w, http.StatusForbidden, "AST_FORBIDDEN", "operation is not allowed")
+	case errors.Is(err, assets.ErrUnauthorized):
+		writeError(w, http.StatusUnauthorized, "AST_UNAUTHORIZED", "authentication is invalid")
 	case errors.Is(err, assets.ErrConflict):
 		writeError(w, http.StatusConflict, "AST_CONFLICT", "idempotency key conflicts with an existing request")
 	case errors.Is(err, assets.ErrNotFound):
@@ -893,6 +964,7 @@ type collectionReaderIdentity struct {
 }
 
 type collectionReaderIdentityKey struct{}
+type contentTicketKey struct{}
 
 func parseCollectionReaderIdentity(r *http.Request) (collectionReaderIdentity, bool) {
 	userID := strings.TrimSpace(r.Header.Get("X-HHC-User-ID"))

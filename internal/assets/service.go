@@ -5,6 +5,8 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -18,6 +20,7 @@ import (
 )
 
 const uploadTTL = 10 * time.Minute
+const contentTicketTTL = 5 * time.Minute
 
 type Service struct {
 	repository    Repository
@@ -377,6 +380,72 @@ func (s *Service) GetAuthorizedCollectionItem(ctx context.Context, collectionID,
 		return CollectionItem{}, ErrForbidden
 	}
 	return s.repository.GetAuthorizedCollectionItem(ctx, collectionID, itemID, subject)
+}
+
+func (s *Service) AuthorizedCollectionContentMetadata(ctx context.Context, collectionID, itemID string, subject CollectionSubject) (PublicDownloadMetadata, error) {
+	item, err := s.GetAuthorizedCollectionItem(ctx, collectionID, itemID, subject)
+	if err != nil {
+		return PublicDownloadMetadata{}, err
+	}
+	asset, err := s.repository.GetAsset(ctx, item.AssetID)
+	if err != nil {
+		return PublicDownloadMetadata{}, ErrNotFound
+	}
+	return collectionContentMetadata(asset, item.ETag)
+}
+
+func (s *Service) IssueCollectionContentTicket(ctx context.Context, collectionID, itemID string, subject CollectionSubject, tokenExpiresAt time.Time) (ContentTicketResponse, error) {
+	now := s.now().UTC()
+	if !tokenExpiresAt.After(now) {
+		return ContentTicketResponse{}, ErrUnauthorized
+	}
+	item, err := s.GetAuthorizedCollectionItem(ctx, collectionID, itemID, subject)
+	if err != nil {
+		return ContentTicketResponse{}, err
+	}
+	expiresAt := tokenExpiresAt.UTC()
+	if maximum := now.Add(contentTicketTTL); expiresAt.After(maximum) {
+		expiresAt = maximum
+	}
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return ContentTicketResponse{}, err
+	}
+	token := base64.RawURLEncoding.EncodeToString(raw)
+	hash := sha256.Sum256(raw)
+	ticket := ContentTicket{
+		TokenHash: hex.EncodeToString(hash[:]), CollectionID: collectionID, CollectionItemID: itemID,
+		AssetETag: item.ETag, UserID: subject.UserID, Roles: append([]string(nil), subject.Roles...),
+		ExpiresAt: expiresAt, CreatedAt: now,
+	}
+	if err := s.repository.CreateContentTicket(ctx, ticket, now); err != nil {
+		return ContentTicketResponse{}, err
+	}
+	return ContentTicketResponse{ContentURL: "/api/assets/content?ticket=" + token, ExpiresAt: expiresAt, ETag: item.ETag}, nil
+}
+
+func (s *Service) ContentTicketMetadata(ctx context.Context, token string) (PublicDownloadMetadata, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(token)
+	canonical := base64.RawURLEncoding.EncodeToString(raw)
+	if err != nil || len(raw) != 32 || subtle.ConstantTimeCompare([]byte(canonical), []byte(token)) != 1 {
+		return PublicDownloadMetadata{}, ErrUnauthorized
+	}
+	hash := sha256.Sum256(raw)
+	asset, err := s.repository.RedeemContentTicket(ctx, hex.EncodeToString(hash[:]), s.now().UTC())
+	if err != nil {
+		return PublicDownloadMetadata{}, err
+	}
+	return collectionContentMetadata(asset, asset.ETag)
+}
+
+func collectionContentMetadata(asset Asset, expectedETag string) (PublicDownloadMetadata, error) {
+	if asset.ID == "" || asset.ETag == "" || asset.ETag != expectedETag || asset.UploadStatus != UploadCompleted || asset.ScanStatus != ScanClean || !asset.DeletedAt.IsZero() || (asset.ProcessingStatus != ProcessingReady && asset.ProcessingStatus != ProcessingNotRequired) {
+		return PublicDownloadMetadata{}, ErrNotFound
+	}
+	return PublicDownloadMetadata{
+		Size: asset.SizeBytes, ContentType: asset.DetectedMIMEType, FileName: asset.OriginalFileName,
+		ETag: asset.ETag, LastModified: asset.UpdatedAt, CacheControl: "private, no-store", objectKey: asset.ObjectKey,
+	}, nil
 }
 
 func (s *Service) CollectionChanges(ctx context.Context, id, cursor string, subject CollectionSubject) (CollectionChangePage, error) {

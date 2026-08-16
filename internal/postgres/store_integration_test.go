@@ -1291,6 +1291,156 @@ func TestCollectionReaderGetAuthorizedItemRechecksLiveAuthorizationAndOccurrence
 	}
 }
 
+func TestCollectionContentTicketLifecycleAndLiveRevocation(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 16, 6, 30, 0, 0, time.UTC)
+	insertAuthorizedCollection(t, db, "ticket-live-collection", 2, "ticket-user", now)
+	insertAsset(t, db, "ticket-live-asset", assets.UploadCompleted, assets.ScanClean, assets.ProcessingReady, now, time.Time{})
+	if _, err := db.Exec(`UPDATE assets SET original_file_name='video.mp4',detected_mime_type='video/mp4',size_bytes=6 WHERE id='ticket-live-asset'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,created_at) VALUES('ticket-live-item','ticket-live-collection','ticket-live-asset','remote-ticket','Video','source',2,$1)`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO asset_collection_acl(id,collection_id,subject_type,subject_id,permission,created_at) VALUES('ticket-role-acl','ticket-live-collection','role','media-team','read',$1)`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO asset_content_tickets(token_hash,collection_id,collection_item_id,asset_etag,user_id,roles,expires_at,created_at) VALUES($1,'ticket-live-collection','ticket-live-item','etag-ticket-live-asset','ticket-user',ARRAY[$2]::text[],$3,$4)`, strings.Repeat("a", 64), assets.CollectionReaderRole, now.Add(-time.Second), now.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	newTicket := func(hash, user string, roles []string) assets.ContentTicket {
+		return assets.ContentTicket{
+			TokenHash: hash, CollectionID: "ticket-live-collection", CollectionItemID: "ticket-live-item",
+			AssetETag: "etag-ticket-live-asset", UserID: user, Roles: roles,
+			ExpiresAt: now.Add(5 * time.Minute), CreatedAt: now,
+		}
+	}
+	userTicket := newTicket(strings.Repeat("b", 64), "ticket-user", []string{assets.CollectionReaderRole})
+	if err := store.CreateContentTicket(ctx, userTicket, now); err != nil {
+		t.Fatal(err)
+	}
+	var storedHash string
+	if err := db.QueryRow(`SELECT token_hash FROM asset_content_tickets WHERE token_hash=$1`, userTicket.TokenHash).Scan(&storedHash); err != nil || storedHash != userTicket.TokenHash {
+		t.Fatalf("stored hash=%q err=%v", storedHash, err)
+	}
+	var expiredCount int
+	if err := db.QueryRow(`SELECT count(*) FROM asset_content_tickets WHERE token_hash=$1`, strings.Repeat("a", 64)).Scan(&expiredCount); err != nil || expiredCount != 0 {
+		t.Fatalf("expired count=%d err=%v", expiredCount, err)
+	}
+	asset, err := store.RedeemContentTicket(ctx, userTicket.TokenHash, now)
+	if err != nil || asset.ID != "ticket-live-asset" || asset.ETag != userTicket.AssetETag || asset.ObjectKey != "assets/ticket-live-asset" {
+		t.Fatalf("asset=%+v err=%v", asset, err)
+	}
+
+	roleTicket := newTicket(strings.Repeat("c", 64), "role-user", []string{assets.CollectionReaderRole, "media-team"})
+	if err := store.CreateContentTicket(ctx, roleTicket, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RedeemContentTicket(ctx, roleTicket.TokenHash, now); err != nil {
+		t.Fatal(err)
+	}
+	freshUserTicket := newTicket(strings.Repeat("1", 64), "ticket-user", []string{assets.CollectionReaderRole})
+	if err := store.CreateContentTicket(ctx, freshUserTicket, now); err != nil {
+		t.Fatal(err)
+	}
+	assetStateTicket := newTicket(strings.Repeat("3", 64), "ticket-user", []string{assets.CollectionReaderRole})
+	if err := store.CreateContentTicket(ctx, assetStateTicket, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE assets SET deleted_at=$1 WHERE id='ticket-live-asset'`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RedeemContentTicket(ctx, assetStateTicket.TokenHash, now); !errors.Is(err, assets.ErrNotFound) {
+		t.Fatalf("deleted asset err=%v", err)
+	}
+	if _, err := db.Exec(`UPDATE assets SET deleted_at=NULL WHERE id='ticket-live-asset'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateContentTicket(ctx, newTicket(strings.Repeat("d", 64), "ticket-user", []string{"manager"}), now); !errors.Is(err, assets.ErrNotFound) {
+		t.Fatalf("missing global role issue err=%v", err)
+	}
+	wrongVersion := newTicket(strings.Repeat("e", 64), "ticket-user", []string{assets.CollectionReaderRole})
+	wrongVersion.AssetETag = "other-etag"
+	if err := store.CreateContentTicket(ctx, wrongVersion, now); !errors.Is(err, assets.ErrNotFound) {
+		t.Fatalf("wrong version issue err=%v", err)
+	}
+	overlong := newTicket(strings.Repeat("2", 64), "ticket-user", []string{assets.CollectionReaderRole})
+	overlong.ExpiresAt = now.Add(5*time.Minute + time.Second)
+	if err := store.CreateContentTicket(ctx, overlong, now); !errors.Is(err, assets.ErrNotFound) {
+		t.Fatalf("overlong ticket err=%v", err)
+	}
+
+	if _, err := db.Exec(`UPDATE asset_content_tickets SET expires_at=$2 WHERE token_hash=$1`, userTicket.TokenHash, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RedeemContentTicket(ctx, userTicket.TokenHash, now); !errors.Is(err, assets.ErrNotFound) {
+		t.Fatalf("expired ticket err=%v", err)
+	}
+	if err := db.QueryRow(`SELECT count(*) FROM asset_content_tickets WHERE token_hash=$1`, userTicket.TokenHash).Scan(&expiredCount); err != nil || expiredCount != 0 {
+		t.Fatalf("expired lookup count=%d err=%v", expiredCount, err)
+	}
+
+	if _, err := db.Exec(`UPDATE asset_collection_acl SET revoked_at=$1 WHERE id='ticket-role-acl'`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RedeemContentTicket(ctx, roleTicket.TokenHash, now); !errors.Is(err, assets.ErrNotFound) {
+		t.Fatalf("revoked role ACL err=%v", err)
+	}
+	if _, err := db.Exec(`UPDATE asset_collection_acl SET revoked_at=$1 WHERE id='acl-ticket-live-collection'`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RedeemContentTicket(ctx, freshUserTicket.TokenHash, now); !errors.Is(err, assets.ErrNotFound) {
+		t.Fatalf("revoked user ACL err=%v", err)
+	}
+}
+
+func TestCollectionContentTicketPinsOccurrenceCollectionAndAssetVersion(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 16, 7, 0, 0, 0, time.UTC)
+	insertAuthorizedCollection(t, db, "ticket-pin-collection", 2, "user", now)
+	insertAsset(t, db, "ticket-pin-asset", assets.UploadCompleted, assets.ScanClean, assets.ProcessingReady, now, time.Time{})
+	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,created_at) VALUES('ticket-pin-item','ticket-pin-collection','ticket-pin-asset','same-remote','Pinned','source',2,$1)`, now); err != nil {
+		t.Fatal(err)
+	}
+	ticket := assets.ContentTicket{
+		TokenHash: strings.Repeat("f", 64), CollectionID: "ticket-pin-collection", CollectionItemID: "ticket-pin-item",
+		AssetETag: "etag-ticket-pin-asset", UserID: "user", Roles: []string{assets.CollectionReaderRole},
+		ExpiresAt: now.Add(5 * time.Minute), CreatedAt: now,
+	}
+	if err := store.CreateContentTicket(ctx, ticket, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE assets SET etag='replacement-etag' WHERE id='ticket-pin-asset'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RedeemContentTicket(ctx, ticket.TokenHash, now); !errors.Is(err, assets.ErrNotFound) {
+		t.Fatalf("replaced content err=%v", err)
+	}
+	if _, err := db.Exec(`UPDATE assets SET etag='etag-ticket-pin-asset' WHERE id='ticket-pin-asset'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE asset_collection_items SET deleted_revision=3,deleted_at=$1 WHERE id='ticket-pin-item'`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,created_at) VALUES('ticket-pin-item-new','ticket-pin-collection','ticket-pin-asset','same-remote','Re-added','source-2',4,$1)`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RedeemContentTicket(ctx, ticket.TokenHash, now); !errors.Is(err, assets.ErrNotFound) {
+		t.Fatalf("deleted and re-added occurrence err=%v", err)
+	}
+	if _, err := db.Exec(`UPDATE asset_collections SET deleted_at=$1 WHERE id='ticket-pin-collection'`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RedeemContentTicket(ctx, ticket.TokenHash, now); !errors.Is(err, assets.ErrNotFound) {
+		t.Fatalf("deleted collection err=%v", err)
+	}
+}
+
 func TestCollectionChangesResetDeltaAndCursorRecovery(t *testing.T) {
 	db := integrationDB(t)
 	store := New(db)

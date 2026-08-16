@@ -5,10 +5,13 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -823,6 +826,70 @@ func TestCollectionReaderServiceGetsAuthorizedItem(t *testing.T) {
 	}
 }
 
+func TestCollectionContentTicketUsesOpaqueHashAndBoundedExpiry(t *testing.T) {
+	now := time.Date(2026, 8, 16, 6, 0, 0, 0, time.UTC)
+	repository := &collectionServiceRepository{}
+	service := NewService(repository, newMemoryBlobStore(), "", func() time.Time { return now })
+	subject := CollectionSubject{UserID: "user", Roles: []string{CollectionReaderRole, "media-team"}}
+
+	issued, err := service.IssueCollectionContentTicket(context.Background(), "collection", "item", subject, now.Add(10*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issued.ExpiresAt != now.Add(5*time.Minute) || issued.ETag != `"asset-version"` {
+		t.Fatalf("issued=%+v", issued)
+	}
+	prefix := "/api/assets/content?ticket="
+	if !strings.HasPrefix(issued.ContentURL, prefix) {
+		t.Fatalf("content URL=%q", issued.ContentURL)
+	}
+	token := strings.TrimPrefix(issued.ContentURL, prefix)
+	raw, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil || len(raw) != 32 {
+		t.Fatalf("token bytes=%d err=%v", len(raw), err)
+	}
+	hash := sha256.Sum256(raw)
+	if repository.ticket.TokenHash != hex.EncodeToString(hash[:]) || strings.Contains(repository.ticket.TokenHash, token) {
+		t.Fatalf("persisted hash=%q token=%q", repository.ticket.TokenHash, token)
+	}
+	if repository.ticket.CollectionID != "collection" || repository.ticket.CollectionItemID != "item" || repository.ticket.AssetETag != issued.ETag || repository.ticket.UserID != "user" || !slices.Equal(repository.ticket.Roles, subject.Roles) {
+		t.Fatalf("ticket=%+v", repository.ticket)
+	}
+
+	short, err := service.IssueCollectionContentTicket(context.Background(), "collection", "item", subject, now.Add(2*time.Minute))
+	if err != nil || short.ExpiresAt != now.Add(2*time.Minute) || short.ContentURL == issued.ContentURL {
+		t.Fatalf("short=%+v err=%v", short, err)
+	}
+	if _, err := service.IssueCollectionContentTicket(context.Background(), "collection", "item", subject, now); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("expired token error=%v", err)
+	}
+}
+
+func TestCollectionContentTicketLookupRejectsMalformedTokensAndReturnsPinnedMetadata(t *testing.T) {
+	now := time.Date(2026, 8, 16, 6, 0, 0, 0, time.UTC)
+	repository := &collectionServiceRepository{ticketAsset: Asset{
+		ID: "asset", ObjectKey: "assets/asset", OriginalFileName: "video.mp4", DetectedMIMEType: "video/mp4",
+		SizeBytes: 6, ETag: `"asset-version"`, UpdatedAt: now, UploadStatus: UploadCompleted,
+		ScanStatus: ScanClean, ProcessingStatus: ProcessingReady,
+	}}
+	service := NewService(repository, newMemoryBlobStore(), "", func() time.Time { return now })
+	for _, token := range []string{"", "plain-text", base64.RawURLEncoding.EncodeToString(make([]byte, 31))} {
+		if _, err := service.ContentTicketMetadata(context.Background(), token); !errors.Is(err, ErrUnauthorized) {
+			t.Fatalf("token=%q err=%v", token, err)
+		}
+	}
+	raw := bytes.Repeat([]byte{7}, 32)
+	token := base64.RawURLEncoding.EncodeToString(raw)
+	metadata, err := service.ContentTicketMetadata(context.Background(), token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := sha256.Sum256(raw)
+	if repository.ticketLookupHash != hex.EncodeToString(hash[:]) || metadata.ETag != `"asset-version"` || metadata.Size != 6 || metadata.ContentType != "video/mp4" {
+		t.Fatalf("hash=%q metadata=%+v", repository.ticketLookupHash, metadata)
+	}
+}
+
 func TestCollectionServiceSeparatesManagedReads(t *testing.T) {
 	repository := &collectionServiceRepository{}
 	service := NewService(repository, newMemoryBlobStore(), "", time.Now)
@@ -848,11 +915,27 @@ type collectionServiceRepository struct {
 	managedListCalls int
 	managedGetCalls  int
 	readerItemCalls  int
+	ticket           ContentTicket
+	ticketAsset      Asset
+	ticketLookupHash string
 }
 
 func (r *collectionServiceRepository) GetAuthorizedCollectionItem(_ context.Context, _, itemID string, _ CollectionSubject) (CollectionItem, error) {
 	r.readerItemCalls++
-	return CollectionItem{ID: itemID}, nil
+	return CollectionItem{ID: itemID, CollectionID: "collection", AssetID: "asset", ETag: `"asset-version"`}, nil
+}
+
+func (r *collectionServiceRepository) CreateContentTicket(_ context.Context, ticket ContentTicket, _ time.Time) error {
+	r.ticket = ticket
+	return nil
+}
+
+func (r *collectionServiceRepository) RedeemContentTicket(_ context.Context, tokenHash string, _ time.Time) (Asset, error) {
+	r.ticketLookupHash = tokenHash
+	if r.ticketAsset.ID == "" {
+		return Asset{}, ErrNotFound
+	}
+	return r.ticketAsset, nil
 }
 
 func (r *collectionServiceRepository) CreateCollection(_ context.Context, _ CreateCollectionInput, _ time.Time) (Collection, error) {

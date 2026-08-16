@@ -3,15 +3,19 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"maps"
 	"mime"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -103,8 +107,6 @@ func TestCollectionReaderRoutesUseLiveAuthorization(t *testing.T) {
 		{name: "item", method: http.MethodGet, path: "/api/assets/collections/collection/items/item", wantStatus: http.StatusOK},
 		{name: "inaccessible item", method: http.MethodGet, path: "/api/assets/collections/collection/items/missing", wantStatus: http.StatusNotFound},
 		{name: "item from another collection", method: http.MethodGet, path: "/api/assets/collections/other/items/item", wantStatus: http.StatusNotFound},
-		{name: "ticket wiring", method: http.MethodPost, path: "/api/assets/collections/collection/items/item/content-ticket", wantStatus: http.StatusNotImplemented},
-		{name: "bearer content wiring", method: http.MethodGet, path: "/api/assets/collections/collection/items/item/content", wantStatus: http.StatusNotImplemented},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -117,6 +119,268 @@ func TestCollectionReaderRoutesUseLiveAuthorization(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCollectionContentTicketIssueRequiresVerifiedGatewayIdentity(t *testing.T) {
+	handler, repository, _ := newCollectionContentHandler()
+	request := collectionReaderRequest(http.MethodPost, "/api/assets/collections/collection/items/item/content-ticket")
+	request.Header.Set("X-HHC-Token-Expires-At", strconv.FormatInt(collectionContentNow.Add(10*time.Minute).Unix(), 10))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var issued assets.ContentTicketResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &issued); err != nil {
+		t.Fatal(err)
+	}
+	if issued.ExpiresAt != collectionContentNow.Add(5*time.Minute) || issued.ETag != `"content-version"` {
+		t.Fatalf("issued=%+v", issued)
+	}
+	token := strings.TrimPrefix(issued.ContentURL, "/api/assets/content?ticket=")
+	raw, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil || len(raw) != 32 {
+		t.Fatalf("token bytes=%d err=%v", len(raw), err)
+	}
+	hash := sha256.Sum256(raw)
+	if repository.ticket.TokenHash != hex.EncodeToString(hash[:]) || repository.ticket.UserID != "user-acl" || !slices.Equal(repository.ticket.Roles, []string{assets.CollectionReaderRole, "team"}) {
+		t.Fatalf("ticket=%+v", repository.ticket)
+	}
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*http.Request)
+	}{
+		{name: "missing caller", mutate: func(r *http.Request) { r.Header.Del("Dapr-Caller-App-Id") }},
+		{name: "forged caller", mutate: func(r *http.Request) { r.Header.Set("Dapr-Caller-App-Id", "account-api") }},
+		{name: "malformed expiry", mutate: func(r *http.Request) { r.Header.Set("X-HHC-Token-Expires-At", "invalid") }},
+		{name: "expired identity", mutate: func(r *http.Request) {
+			r.Header.Set("X-HHC-Token-Expires-At", strconv.FormatInt(collectionContentNow.Unix(), 10))
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			handler, repository, _ := newCollectionContentHandler()
+			request := collectionReaderRequest(http.MethodPost, "/api/assets/collections/collection/items/item/content-ticket")
+			request.Header.Set("X-HHC-Token-Expires-At", strconv.FormatInt(collectionContentNow.Add(time.Minute).Unix(), 10))
+			test.mutate(request)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusUnauthorized && response.Code != http.StatusForbidden {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			if repository.ticket.TokenHash != "" {
+				t.Fatalf("ticket persisted=%+v", repository.ticket)
+			}
+		})
+	}
+}
+
+func TestCollectionContentBearerAndTicketConditionalRanges(t *testing.T) {
+	validToken := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32))
+	paths := []struct {
+		name   string
+		path   string
+		bearer bool
+	}{
+		{name: "bearer", path: "/api/assets/collections/collection/items/item/content", bearer: true},
+		{name: "ticket", path: "/api/assets/content?ticket=" + validToken + "&remoteItemId=ignored&filename=evil.txt"},
+	}
+	tests := []struct {
+		name, method, rangeValue, ifNoneMatch, ifRange string
+		status                                         int
+		body, contentRange                             string
+		openCalls                                      int
+	}{
+		{name: "full", method: http.MethodGet, status: http.StatusOK, body: "abcdef", openCalls: 1},
+		{name: "head", method: http.MethodHead, status: http.StatusOK},
+		{name: "not modified", method: http.MethodGet, ifNoneMatch: `"content-version"`, status: http.StatusNotModified},
+		{name: "single range", method: http.MethodGet, rangeValue: "bytes=1-3", status: http.StatusPartialContent, body: "bcd", contentRange: "bytes 1-3/6", openCalls: 1},
+		{name: "suffix range", method: http.MethodGet, rangeValue: "bytes=-2", status: http.StatusPartialContent, body: "ef", contentRange: "bytes 4-5/6", openCalls: 1},
+		{name: "unsatisfied", method: http.MethodGet, rangeValue: "bytes=99-100", status: http.StatusRequestedRangeNotSatisfiable, contentRange: "bytes */6"},
+		{name: "resumed video", method: http.MethodGet, rangeValue: "bytes=2-", ifRange: `"content-version"`, status: http.StatusPartialContent, body: "cdef", contentRange: "bytes 2-5/6", openCalls: 1},
+		{name: "stale resume validator", method: http.MethodGet, rangeValue: "bytes=2-", ifRange: `"old-version"`, status: http.StatusOK, body: "abcdef", openCalls: 1},
+	}
+	for _, path := range paths {
+		for _, test := range tests {
+			t.Run(path.name+"/"+test.name, func(t *testing.T) {
+				handler, _, blobs := newCollectionContentHandler()
+				request := httptest.NewRequest(test.method, path.path, nil)
+				request.Header.Set("Dapr-Caller-App-Id", "api-gateway")
+				request.Header.Set("dapr-api-token", "token")
+				if path.bearer {
+					for name, values := range collectionReaderRequest(test.method, path.path).Header {
+						request.Header[name] = values
+					}
+					request.Header.Set("X-HHC-Token-Expires-At", strconv.FormatInt(collectionContentNow.Add(time.Minute).Unix(), 10))
+				} else {
+					request.Header.Set("Authorization", "Bearer forged")
+					request.Header.Set("X-HHC-User-ID", "attacker")
+					request.Header.Set("X-HHC-Roles", "admin")
+				}
+				request.Header.Set("Range", test.rangeValue)
+				request.Header.Set("If-None-Match", test.ifNoneMatch)
+				request.Header.Set("If-Range", test.ifRange)
+				response := httptest.NewRecorder()
+				handler.ServeHTTP(response, request)
+				if response.Code != test.status || (test.status != http.StatusRequestedRangeNotSatisfiable && response.Body.String() != test.body) || blobs.openCalls != test.openCalls || response.Header().Get("Content-Range") != test.contentRange {
+					t.Fatalf("status=%d body=%q open=%d range=%q", response.Code, response.Body.String(), blobs.openCalls, response.Header().Get("Content-Range"))
+				}
+				for name, value := range map[string]string{"Cache-Control": "private, no-store", "Referrer-Policy": "no-referrer", "Accept-Ranges": "bytes", "ETag": `"content-version"`} {
+					if response.Header().Get(name) != value {
+						t.Fatalf("%s=%q", name, response.Header().Get(name))
+					}
+				}
+				if path.name == "ticket" && test.name == "full" {
+					disposition := response.Header().Get("Content-Disposition")
+					if !strings.Contains(disposition, "video.mp4") || strings.Contains(disposition, "evil.txt") {
+						t.Fatalf("content disposition=%q", disposition)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestCollectionTicketRouteRequiresExactAuthenticatedGatewayCaller(t *testing.T) {
+	token := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{4}, 32))
+	for _, test := range []struct {
+		name   string
+		mutate func(*http.Request)
+	}{
+		{name: "missing caller", mutate: func(r *http.Request) { r.Header.Del("Dapr-Caller-App-Id") }},
+		{name: "forged caller", mutate: func(r *http.Request) { r.Header.Set("Dapr-Caller-App-Id", "account-api") }},
+		{name: "missing app token", mutate: func(r *http.Request) { r.Header.Del("dapr-api-token") }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			handler, repository, blobs := newCollectionContentHandler()
+			request := httptest.NewRequest(http.MethodGet, "/api/assets/content?ticket="+token, nil)
+			request.Header.Set("Dapr-Caller-App-Id", "api-gateway")
+			request.Header.Set("dapr-api-token", "token")
+			request.Header.Set("X-HHC-User-ID", "forged-user")
+			test.mutate(request)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusForbidden || repository.ticketHash != "" || blobs.openCalls != 0 {
+				t.Fatalf("status=%d lookup=%q opens=%d body=%s", response.Code, repository.ticketHash, blobs.openCalls, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestCollectionTicketMiddlewareClearsExternalIdentityAndNonTicketQuery(t *testing.T) {
+	handler := &Handler{appAPIToken: "token", workloadAuth: WorkloadAuthConfig{ReaderCallerAppID: "api-gateway"}}
+	called := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		if ticket, _ := r.Context().Value(contentTicketKey{}).(string); ticket != "opaque-ticket" {
+			t.Fatalf("ticket=%q", ticket)
+		}
+		if r.URL.RawQuery != "" || r.RequestURI != "/api/assets/content" {
+			t.Fatalf("query=%q requestURI=%q", r.URL.RawQuery, r.RequestURI)
+		}
+		for _, name := range []string{"Authorization", "Cookie", "X-HHC-User-ID", "X-HHC-Roles", "X-MS-CLIENT-PRINCIPAL", "X-Asset-Subject-Id", "X-Internal-Caller-App-Id", "Dapr-Caller-App-Id", "dapr-api-token"} {
+			if r.Header.Get(name) != "" {
+				t.Fatalf("%s was forwarded", name)
+			}
+		}
+		if r.Header.Get("Range") != "bytes=1-" || r.Header.Get("If-Range") != `"etag"` {
+			t.Fatalf("range headers=%v", r.Header)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	request := httptest.NewRequest(http.MethodGet, "/api/assets/content?ticket=opaque-ticket&remoteItemId=ignore", nil)
+	request.Header.Set("Dapr-Caller-App-Id", "api-gateway")
+	request.Header.Set("dapr-api-token", "token")
+	request.Header.Set("Authorization", "Bearer forged")
+	request.Header.Set("Cookie", "session=forged")
+	request.Header.Set("X-HHC-User-ID", "forged")
+	request.Header.Set("X-HHC-Roles", "admin")
+	request.Header.Set("X-MS-CLIENT-PRINCIPAL", "forged")
+	request.Header.Set("X-Asset-Subject-Id", "forged")
+	request.Header.Set("X-Internal-Caller-App-Id", "forged")
+	request.Header.Set("Range", "bytes=1-")
+	request.Header.Set("If-Range", `"etag"`)
+	response := httptest.NewRecorder()
+	handler.collectionTicket(next).ServeHTTP(response, request)
+	if !called || response.Code != http.StatusNoContent {
+		t.Fatalf("called=%v status=%d", called, response.Code)
+	}
+}
+
+func TestCollectionTicketRouteRejectsMissingInvalidAndRevokedWithoutTelemetryLeak(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	for _, ticket := range []string{"", "secret-invalid-ticket"} {
+		handler, repository, blobs := newCollectionContentHandler()
+		repository.rejectTicket = true
+		request := httptest.NewRequest(http.MethodGet, "/api/assets/content?ticket="+ticket+"&remoteItemId=must-ignore", nil)
+		request.Header.Set("Dapr-Caller-App-Id", "api-gateway")
+		request.Header.Set("dapr-api-token", "token")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusUnauthorized || blobs.openCalls != 0 || !strings.Contains(response.Body.String(), "AST_INVALID_TICKET") {
+			t.Fatalf("ticket=%q status=%d opens=%d body=%s", ticket, response.Code, blobs.openCalls, response.Body.String())
+		}
+		if ticket != "" && (strings.Contains(response.Body.String(), ticket) || strings.Contains(logs.String(), ticket)) {
+			t.Fatalf("ticket leaked body=%s logs=%s", response.Body.String(), logs.String())
+		}
+	}
+}
+
+var collectionContentNow = time.Date(2026, 8, 16, 8, 0, 0, 0, time.UTC)
+
+func newCollectionContentHandler() (http.Handler, *collectionContentRepository, *downloadBlobStore) {
+	repository := &collectionContentRepository{asset: assets.Asset{
+		ID: "asset", ObjectKey: "content", OriginalFileName: "video.mp4", DetectedMIMEType: "video/mp4",
+		SizeBytes: 6, ETag: `"content-version"`, UploadStatus: assets.UploadCompleted, ScanStatus: assets.ScanClean,
+		ProcessingStatus: assets.ProcessingReady, UpdatedAt: collectionContentNow,
+	}}
+	blobs := &downloadBlobStore{objects: map[string][]byte{"content": []byte("abcdef")}}
+	service := assets.NewService(repository, blobs, "", func() time.Time { return collectionContentNow })
+	handler := New(service, nil, nil, false, "token", WorkloadAuthConfig{ReaderCallerAppID: "api-gateway"}, nil).Routes()
+	return handler, repository, blobs
+}
+
+type collectionContentRepository struct {
+	assets.Repository
+	asset          assets.Asset
+	ticket         assets.ContentTicket
+	ticketHash     string
+	rejectTicket   bool
+	readerItemCall int
+}
+
+func (r *collectionContentRepository) GetAuthorizedCollectionItem(_ context.Context, collectionID, itemID string, subject assets.CollectionSubject) (assets.CollectionItem, error) {
+	r.readerItemCall++
+	if collectionID != "collection" || itemID != "item" {
+		return assets.CollectionItem{}, assets.ErrNotFound
+	}
+	if !readerTestAuthorized(subject) {
+		return assets.CollectionItem{}, assets.ErrForbidden
+	}
+	return assets.CollectionItem{ID: itemID, CollectionID: collectionID, AssetID: r.asset.ID, ETag: r.asset.ETag}, nil
+}
+
+func (r *collectionContentRepository) GetAsset(_ context.Context, id string) (assets.Asset, error) {
+	if id != r.asset.ID {
+		return assets.Asset{}, assets.ErrNotFound
+	}
+	return r.asset, nil
+}
+
+func (r *collectionContentRepository) CreateContentTicket(_ context.Context, ticket assets.ContentTicket, _ time.Time) error {
+	r.ticket = ticket
+	return nil
+}
+
+func (r *collectionContentRepository) RedeemContentTicket(_ context.Context, tokenHash string, _ time.Time) (assets.Asset, error) {
+	r.ticketHash = tokenHash
+	if r.rejectTicket {
+		return assets.Asset{}, assets.ErrNotFound
+	}
+	return r.asset, nil
 }
 
 func TestCollectionReaderMetadataIsSyncSafe(t *testing.T) {

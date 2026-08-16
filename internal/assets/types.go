@@ -12,6 +12,7 @@ var (
 	ErrInvalidUpload        = errors.New("invalid upload")
 	ErrNotFound             = errors.New("not found")
 	ErrForbidden            = errors.New("forbidden")
+	ErrUnauthorized         = errors.New("unauthorized")
 	ErrConflict             = errors.New("conflict")
 	ErrCommitOutcomeUnknown = errors.New("commit outcome unknown")
 )
@@ -320,6 +321,23 @@ type CollectionTombstone struct {
 	DeletedAt       time.Time `json:"deletedAt"`
 }
 
+type ContentTicket struct {
+	TokenHash        string
+	CollectionID     string
+	CollectionItemID string
+	AssetETag        string
+	UserID           string
+	Roles            []string
+	ExpiresAt        time.Time
+	CreatedAt        time.Time
+}
+
+type ContentTicketResponse struct {
+	ContentURL string    `json:"contentUrl"`
+	ExpiresAt  time.Time `json:"expiresAt"`
+	ETag       string    `json:"etag"`
+}
+
 type CollectionPage struct {
 	Collections []Collection `json:"collections"`
 	Cursor      string       `json:"cursor,omitempty"`
@@ -433,6 +451,8 @@ type Repository interface {
 	GetAuthorizedCollection(context.Context, string, CollectionSubject) (Collection, error)
 	GetAuthorizedCollectionItem(context.Context, string, string, CollectionSubject) (CollectionItem, error)
 	CollectionChanges(context.Context, string, string, CollectionSubject) (CollectionChangePage, error)
+	CreateContentTicket(context.Context, ContentTicket, time.Time) error
+	RedeemContentTicket(context.Context, string, time.Time) (Asset, error)
 	ListManagedCollections(context.Context, string, string, int) (ManagedCollectionPage, error)
 	GetManagedCollection(context.Context, string, string) (ManagedCollection, error)
 }
