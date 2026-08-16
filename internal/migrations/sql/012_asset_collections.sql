@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS asset_collection_items (
   deleted_revision bigint,
   created_at timestamptz NOT NULL,
   deleted_at timestamptz,
-  CHECK (deleted_revision IS NULL OR deleted_revision >= created_revision)
+  CHECK (deleted_revision IS NULL OR deleted_revision >= created_revision),
+  UNIQUE (id, collection_id)
 );
 
 CREATE UNIQUE INDEX asset_collection_items_active_asset_idx
@@ -62,12 +63,14 @@ CREATE TABLE IF NOT EXISTS asset_collection_mutations (
 CREATE TABLE IF NOT EXISTS asset_content_tickets (
   token_hash text PRIMARY KEY CHECK (token_hash ~ '^[0-9a-f]{64}$'),
   collection_id text NOT NULL REFERENCES asset_collections(id),
-  collection_item_id text NOT NULL REFERENCES asset_collection_items(id),
+  collection_item_id text NOT NULL,
   asset_etag text NOT NULL CHECK (asset_etag <> ''),
   user_id text NOT NULL CHECK (user_id <> ''),
   roles text[] NOT NULL,
   expires_at timestamptz NOT NULL,
-  created_at timestamptz NOT NULL
+  created_at timestamptz NOT NULL,
+  FOREIGN KEY (collection_item_id, collection_id)
+    REFERENCES asset_collection_items(id, collection_id)
 );
 
 CREATE INDEX asset_content_tickets_expiry_idx

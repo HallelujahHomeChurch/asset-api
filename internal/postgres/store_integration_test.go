@@ -674,6 +674,10 @@ func TestCollectionSchemaMutationClaimsAndTicketScope(t *testing.T) {
 	if rolesType != "text[]" {
 		t.Fatalf("roles type=%q", rolesType)
 	}
+	insertCollection(t, db, "other-collection", now)
+	if _, err := db.Exec(`INSERT INTO asset_content_tickets(token_hash,collection_id,collection_item_id,asset_etag,user_id,roles,expires_at,created_at) VALUES($1,'other-collection','ticket-item','etag-ticket','user',ARRAY[]::text[],$2,$3)`, strings.Repeat("d", 64), now.Add(time.Minute), now); err == nil {
+		t.Fatal("ticket referencing an item from another collection was accepted")
+	}
 	for _, tokenHash := range []string{strings.Repeat("A", 64), strings.Repeat("a", 63), strings.Repeat("g", 64)} {
 		if _, err := db.Exec(`INSERT INTO asset_content_tickets(token_hash,collection_id,collection_item_id,asset_etag,user_id,roles,expires_at,created_at) VALUES($1,'collection','ticket-item','etag-ticket','user',ARRAY[]::text[],$2,$3)`, tokenHash, now.Add(time.Minute), now); err == nil {
 			t.Fatalf("invalid token hash was accepted: %q", tokenHash)
