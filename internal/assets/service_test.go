@@ -385,6 +385,8 @@ func TestCompleteUploadUsesCanonicalMediaValidation(t *testing.T) {
 		wantErr              bool
 	}{
 		{name: "LPDeck", fileName: "service.lpdeck", mime: "application/vnd.librepresenter.presentation+json", payload: []byte(" \n{\"slides\":[]}")},
+		{name: "LPDeck malformed", fileName: "service.lpdeck", mime: "application/vnd.librepresenter.presentation+json", payload: []byte("{not-json"), wantErr: true},
+		{name: "LPDeck trailing", fileName: "service.lpdeck", mime: "application/vnd.librepresenter.presentation+json", payload: []byte("{\"slides\":[]} {\"second\":true}"), wantErr: true},
 		{name: "MP4", fileName: "service.mp4", mime: "video/mp4", payload: bmff("isom")},
 		{name: "HEIC spoof", fileName: "service.mp4", mime: "video/mp4", payload: bmff("heic"), wantErr: true},
 	}
@@ -405,6 +407,12 @@ func TestCompleteUploadUsesCanonicalMediaValidation(t *testing.T) {
 			blobs.objects[created.Session.StagingObjectKey] = test.payload
 			sum := sha256.Sum256(test.payload)
 			asset, err := service.CompleteUpload(ctx, created.Asset.ID, CompleteUploadInput{SizeBytes: int64(len(test.payload)), ChecksumSHA256: hex.EncodeToString(sum[:]), MIMEType: test.mime})
+			if test.mime == "video/mp4" && blobs.lastOpenRange.Count == 0 {
+				t.Fatal("exact media validation did not use a bounded header range")
+			}
+			if test.mime == "application/vnd.librepresenter.presentation+json" && blobs.lastOpenRange.Count != 0 {
+				t.Fatal("LPDeck validation did not request the bounded full stream")
+			}
 			if test.wantErr {
 				if !errors.Is(err, ErrInvalidUpload) {
 					t.Fatalf("error = %v", err)
@@ -1032,6 +1040,7 @@ type memoryBlobStore struct {
 	deleteFailures             int
 	commitLeavesStaging        bool
 	commitConflictCreatesFinal bool
+	lastOpenRange              ByteRange
 }
 
 func newMemoryBlobStore() *memoryBlobStore { return &memoryBlobStore{objects: map[string][]byte{}} }
@@ -1079,7 +1088,8 @@ func (b *memoryBlobStore) Commit(ctx context.Context, stagingObjectKey, finalObj
 	}
 	return b.Inspect(ctx, finalObjectKey, "", 0)
 }
-func (b *memoryBlobStore) Open(ctx context.Context, objectKey string, _ ByteRange, expectedETag string) (BlobDownload, error) {
+func (b *memoryBlobStore) Open(ctx context.Context, objectKey string, requested ByteRange, expectedETag string) (BlobDownload, error) {
+	b.lastOpenRange = requested
 	value, ok := b.objects[objectKey]
 	if !ok {
 		return BlobDownload{}, ErrNotFound

@@ -598,20 +598,6 @@ func (s *Service) verifyDetectedMIME(ctx context.Context, objectKey string, obse
 	return ValidateMedia(ctx, fileName, expected, header[:read], file, observed.Size)
 }
 
-type contextReader struct {
-	ctx    context.Context
-	reader io.Reader
-}
-
-func (r *contextReader) Read(value []byte) (int, error) {
-	select {
-	case <-r.ctx.Done():
-		return 0, r.ctx.Err()
-	default:
-		return r.reader.Read(value)
-	}
-}
-
 func matchesFileExtension(fileName, mime string) bool {
 	return extensionAllowed(fileName, mime)
 }

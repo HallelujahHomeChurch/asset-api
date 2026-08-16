@@ -89,22 +89,33 @@ func TestScanJobRevalidatesCanonicalMediaAndCleansTemporaryFile(t *testing.T) {
 }
 
 func TestScanJobPoisonsCanonicalMediaMismatchWithoutScanning(t *testing.T) {
-	payload := bmffScan("heic")
-	asset := queuedAsset()
-	asset.OriginalFileName = "spoof.mp4"
-	asset.DetectedMIMEType = "video/mp4"
-	asset.SizeBytes = int64(len(payload))
-	sum := sha256.Sum256(payload)
-	asset.ChecksumSHA256 = hex.EncodeToString(sum[:])
-	repo := &jobRepository{asset: asset}
-	queue := &jobQueue{message: scanMessage(1)}
-	scanner := &jobScanner{}
-	job := NewScanJob(repo, jobBlobs{body: payload}, scanner, queue, "sig-1", 200<<20, 5, time.Minute)
-	if _, err := job.RunOnce(context.Background()); err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name, fileName, mime string
+		payload              []byte
+	}{
+		{name: "HEIC as MP4", fileName: "spoof.mp4", mime: "video/mp4", payload: bmffScan("heic")},
+		{name: "LPDeck malformed", fileName: "spoof.lpdeck", mime: "application/vnd.librepresenter.presentation+json", payload: []byte("{not-json")},
+		{name: "LPDeck trailing", fileName: "spoof.lpdeck", mime: "application/vnd.librepresenter.presentation+json", payload: []byte("{\"slides\":[]} {\"second\":true}")},
 	}
-	if scanner.called || !queue.poisoned || repo.result.FailureCategory != "integrity" {
-		t.Fatalf("scanner=%v queue=%+v result=%+v", scanner.called, queue, repo.result)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			asset := queuedAsset()
+			asset.OriginalFileName = test.fileName
+			asset.DetectedMIMEType = test.mime
+			asset.SizeBytes = int64(len(test.payload))
+			sum := sha256.Sum256(test.payload)
+			asset.ChecksumSHA256 = hex.EncodeToString(sum[:])
+			repo := &jobRepository{asset: asset}
+			queue := &jobQueue{message: scanMessage(1)}
+			scanner := &jobScanner{}
+			job := NewScanJob(repo, jobBlobs{body: test.payload}, scanner, queue, "sig-1", 200<<20, 5, time.Minute)
+			if _, err := job.RunOnce(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if scanner.called || !queue.poisoned || repo.result.FailureCategory != "integrity" {
+				t.Fatalf("scanner=%v queue=%+v result=%+v", scanner.called, queue, repo.result)
+			}
+		})
 	}
 }
 

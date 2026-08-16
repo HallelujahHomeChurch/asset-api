@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"path"
 	"strings"
@@ -75,7 +76,7 @@ func ValidateMedia(ctx context.Context, fileName, expectedMIME string, header []
 	case "application/pdf":
 		valid = bytes.HasPrefix(header, []byte("%PDF-"))
 	case "application/vnd.librepresenter.presentation+json":
-		valid = bytes.HasPrefix(bytes.TrimSpace(header), []byte("{"))
+		valid = validJSONObject(ctx, content, size)
 	case "application/vnd.openxmlformats-officedocument.presentationml.presentation":
 		valid = validZIP(ctx, content, size, "[Content_Types].xml", "ppt/presentation.xml")
 	case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
@@ -106,10 +107,60 @@ func requiresContentReader(mime string) bool {
 		"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 		"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 		"application/vnd.apple.keynote",
-		"application/vnd.oasis.opendocument.presentation":
+		"application/vnd.oasis.opendocument.presentation",
+		"application/vnd.librepresenter.presentation+json":
 		return true
 	default:
 		return false
+	}
+}
+
+func validJSONObject(ctx context.Context, content io.ReaderAt, size int64) bool {
+	if content == nil || size <= 0 {
+		return false
+	}
+	decoder := json.NewDecoder(&contextReader{ctx: ctx, reader: io.NewSectionReader(content, 0, size)})
+	token, err := decoder.Token()
+	delim, ok := token.(json.Delim)
+	if err != nil || !ok || delim != '{' {
+		return false
+	}
+	depth := 1
+	for depth > 0 {
+		if ctx.Err() != nil {
+			return false
+		}
+		token, err = decoder.Token()
+		if err != nil {
+			return false
+		}
+		if delim, ok := token.(json.Delim); ok {
+			switch delim {
+			case '{', '[':
+				depth++
+			case '}', ']':
+				depth--
+			}
+		}
+	}
+	if ctx.Err() != nil {
+		return false
+	}
+	_, err = decoder.Token()
+	return err == io.EOF
+}
+
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r *contextReader) Read(value []byte) (int, error) {
+	select {
+	case <-r.ctx.Done():
+		return 0, r.ctx.Err()
+	default:
+		return r.reader.Read(value)
 	}
 }
 

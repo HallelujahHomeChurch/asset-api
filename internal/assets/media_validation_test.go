@@ -71,6 +71,11 @@ func TestValidateMediaRejectsAliasesSpoofsAndUnsupportedFormats(t *testing.T) {
 		{"EBML text is not DocType", "movie.webm", "video/webm", []byte("\x1a\x45\xdf\xa3xxxxwebm")},
 		{"pptx missing content types", "slides.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation", testZIP(t, "ppt/presentation.xml")},
 		{"lpdeck zip", "slides.lpdeck", "application/vnd.librepresenter.presentation+json", testZIP(t, "deck.json")},
+		{"lpdeck malformed", "slides.lpdeck", "application/vnd.librepresenter.presentation+json", []byte("{not-json")},
+		{"lpdeck trailing value", "slides.lpdeck", "application/vnd.librepresenter.presentation+json", []byte("{\"slides\":[]} {\"second\":true}")},
+		{"lpdeck trailing garbage", "slides.lpdeck", "application/vnd.librepresenter.presentation+json", []byte("{\"slides\":[]} garbage")},
+		{"lpdeck array", "slides.lpdeck", "application/vnd.librepresenter.presentation+json", []byte("[{\"slides\":[]}]")},
+		{"lpdeck scalar", "slides.lpdeck", "application/vnd.librepresenter.presentation+json", []byte("\"slides\"")},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -112,6 +117,23 @@ func TestValidateMediaPPTXIsBoundedCancelableAndDoesNotOwnCleanup(t *testing.T) 
 	}
 }
 
+func TestValidateMediaLPDeckIsBoundedAndCancelable(t *testing.T) {
+	payload := []byte("{\"slides\":[{\"name\":\"one\"}]}")
+	limited := &boundedReaderAt{value: append(payload, []byte(" {\"second\":true}")...), maxEnd: int64(len(payload))}
+	got, err := ValidateMedia(context.Background(), "slides.lpdeck", "application/vnd.librepresenter.presentation+json", payload, limited, int64(len(payload)))
+	if err != nil || got != "application/vnd.librepresenter.presentation+json" {
+		t.Fatalf("ValidateMedia() = %q, %v", got, err)
+	}
+	if limited.exceeded {
+		t.Fatal("LPDeck validation read past declared size")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	canceling := &cancelingReaderAt{value: payload, cancel: cancel}
+	if _, err := ValidateMedia(ctx, "slides.lpdeck", "application/vnd.librepresenter.presentation+json", payload, canceling, int64(len(payload))); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled error = %v", err)
+	}
+}
+
 func testZIP(t *testing.T, names ...string) []byte {
 	t.Helper()
 	var value bytes.Buffer
@@ -142,6 +164,23 @@ type boundedReaderAt struct {
 	value    []byte
 	maxEnd   int64
 	exceeded bool
+}
+
+type cancelingReaderAt struct {
+	value  []byte
+	cancel context.CancelFunc
+}
+
+func (r *cancelingReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	if off >= int64(len(r.value)) {
+		return 0, io.EOF
+	}
+	n := copy(p, r.value[off:])
+	r.cancel()
+	if n < len(p) {
+		return n, io.EOF
+	}
+	return n, nil
 }
 
 func (r *boundedReaderAt) ReadAt(p []byte, off int64) (int, error) {
