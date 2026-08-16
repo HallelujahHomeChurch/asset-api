@@ -71,7 +71,7 @@ func run() error {
 	}
 	handler := httpapi.New(service, db, cfg.AllowedCallers, cfg.AllowDevCallerHeader, cfg.AppAPIToken, httpapi.WorkloadAuthConfig{
 		TenantID: cfg.WorkloadTenantID, Issuer: cfg.WorkloadIssuer, Audience: cfg.WorkloadAudience,
-		RequiredRole: cfg.WorkloadRequiredRole, Callers: workloadCallers,
+		RequiredRole: cfg.WorkloadRequiredRole, ReaderCallerAppID: cfg.ReaderCallerAppID, Callers: workloadCallers,
 	}, localUpload)
 	server := &http.Server{Addr: ":" + cfg.Port, Handler: handler.Routes(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 2 * time.Minute, IdleTimeout: 2 * time.Minute}
 

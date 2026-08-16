@@ -20,6 +20,17 @@ fi
 grep -q 'IMAGE_REF=.*@${digest}' "$workflow"
 grep -q 'SCAN_IMAGE_REF=.*@${scan_digest}' "$workflow"
 grep -q 'Dockerfile.scan' "$workflow"
+grep -Fq 'docker run --rm --entrypoint clamscan asset-scan:verify --help' "$workflow"
+for flag in --max-filesize --max-scansize --max-files --max-recursion --alert-exceeds-max --alert-encrypted; do
+  grep -Fq -- "$flag" "$workflow"
+done
+grep -q "replicaTimeout: 720" infra/main.bicep
+grep -q "CLAMAV_SCAN_TIMEOUT', value: '10m'" infra/main.bicep
+grep -q "ASSET_SCAN_MAX_FILE_SIZE_BYTES', value: '209715200'" infra/main.bicep
+grep -q "CLAMAV_MAX_FILE_SIZE_BYTES', value: '209715200'" infra/main.bicep
+grep -q "CLAMAV_MAX_SCAN_SIZE_BYTES', value: '1073741824'" infra/main.bicep
+grep -q "CLAMAV_MAX_FILES', value: '10000'" infra/main.bicep
+grep -q "CLAMAV_MAX_RECURSION', value: '32'" infra/main.bicep
 if grep -q 'activate_queue_scanning' "$workflow"; then
   echo 'production releases must not expose the retired embedded scanner' >&2
   exit 1
@@ -49,6 +60,27 @@ grep -q 'LINE_ATTACHMENT_CLIENT_ID' "$workflow"
 grep -q 'LINE_ATTACHMENT_OBJECT_ID' "$workflow"
 grep -q 'workloadAuthAudience="$ASSET_WORKLOAD_AUDIENCE"' "$workflow"
 grep -q 'workloadAuthClientId="$ASSET_WORKLOAD_CLIENT_ID"' "$workflow"
+grep -q 'ASSET_READER_CALLER_APP_ID: api-gateway' "$workflow"
+test "$(grep -c 'readerCallerAppId="$ASSET_READER_CALLER_APP_ID"' "$workflow")" = 2
+grep -q "param readerCallerAppId string = 'api-gateway'" infra/main.bicep
+grep -q "name: 'ASSET_READER_CALLER_APP_ID', value: readerCallerAppId" infra/main.bicep
+if grep -q "ASSET_ALLOWED_CALLERS.*api-gateway" infra/main.bicep; then
+  echo 'api-gateway must not be admitted to private asset routes' >&2
+  exit 1
+fi
+for path in \
+  "'/api/assets/collections'" \
+  "'/api/assets/collections/*/changes'" \
+  "'/api/assets/collections/*/items/*'" \
+  "'/api/assets/collections/*/items/*/content-ticket'" \
+  "'/api/assets/collections/*/items/*/content'" \
+  "'/api/assets/content'"; do
+  grep -Fq "$path" infra/main.bicep
+done
+if grep -Fq "'/api/assets/collections/*'" infra/main.bicep; then
+  echo 'collection reader exclusion must not cover the whole prefix' >&2
+  exit 1
+fi
 grep -q 'az deployment group what-if' "$workflow"
 grep -q './scripts/check-what-if.sh what-if.json' "$workflow"
 grep -q 'manageSharedInfrastructure=false' "$workflow"

@@ -1,23 +1,26 @@
 package assets
 
 import (
-	"archive/zip"
 	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path"
 	"strings"
 	"time"
 )
 
 const uploadTTL = 10 * time.Minute
+const contentTicketTTL = 5 * time.Minute
 
 type Service struct {
 	repository    Repository
@@ -155,8 +158,11 @@ func (s *Service) CompleteUpload(ctx context.Context, assetID string, input Comp
 	if err != nil {
 		return Asset{}, fmt.Errorf("inspect blob: %w", err)
 	}
-	observed.DetectedMIMEType, err = s.verifyDetectedMIME(ctx, sourceKey, observed, asset.ExpectedMIMEType)
+	observed.DetectedMIMEType, err = s.verifyDetectedMIME(ctx, sourceKey, observed, asset.OriginalFileName, asset.ExpectedMIMEType)
 	if err != nil {
+		if !errors.Is(err, ErrInvalidUpload) {
+			return Asset{}, fmt.Errorf("validate media: %w", err)
+		}
 		if rejectErr := s.rejectUpload(ctx, asset, session); rejectErr != nil {
 			return Asset{}, rejectErr
 		}
@@ -176,7 +182,9 @@ func (s *Service) CompleteUpload(ctx context.Context, assetID string, input Comp
 			if metadataErr == nil && finalMetadata.Size == observed.Size {
 				committed, metadataErr = s.blobs.Inspect(ctx, asset.ObjectKey, finalMetadata.ETag, session.MaxSizeBytes)
 			}
-			committed.DetectedMIMEType = NormalizeDetectedMIME(asset.ExpectedMIMEType, committed.DetectedMIMEType)
+			if committed.Size == observed.Size && strings.EqualFold(committed.ChecksumSHA256, observed.ChecksumSHA256) {
+				committed.DetectedMIMEType = observed.DetectedMIMEType
+			}
 			if metadataErr == nil && committed.Size == observed.Size && committed.DetectedMIMEType == observed.DetectedMIMEType && strings.EqualFold(committed.ChecksumSHA256, observed.ChecksumSHA256) {
 				err = nil
 			}
@@ -185,7 +193,9 @@ func (s *Service) CompleteUpload(ctx context.Context, assetID string, input Comp
 			return Asset{}, fmt.Errorf("commit blob: %w", err)
 		}
 	}
-	committed.DetectedMIMEType = NormalizeDetectedMIME(asset.ExpectedMIMEType, committed.DetectedMIMEType)
+	if committed.Size == observed.Size && strings.EqualFold(committed.ChecksumSHA256, observed.ChecksumSHA256) {
+		committed.DetectedMIMEType = observed.DetectedMIMEType
+	}
 	if committed.Size != observed.Size || committed.DetectedMIMEType != observed.DetectedMIMEType || !strings.EqualFold(committed.ChecksumSHA256, observed.ChecksumSHA256) {
 		if err := s.rejectUpload(ctx, asset, session); err != nil {
 			return Asset{}, err
@@ -300,6 +310,179 @@ func (s *Service) Operations(ctx context.Context) (Operations, error) {
 		return Operations{}, ErrForbidden
 	}
 	return repository.GetOperations(ctx, s.now().UTC())
+}
+
+func (s *Service) CreateCollection(ctx context.Context, input CreateCollectionInput) (Collection, error) {
+	if input.Namespace == "" || input.Name == "" || !validMutationIdentity(input.CallerService, input.IdempotencyKey) {
+		return Collection{}, ErrInvalidInput
+	}
+	return s.repository.CreateCollection(ctx, input, s.now().UTC())
+}
+
+func (s *Service) RenameCollection(ctx context.Context, input RenameCollectionInput) (Collection, error) {
+	if input.CollectionID == "" || input.Name == "" || !validMutationIdentity(input.CallerService, input.IdempotencyKey) {
+		return Collection{}, ErrInvalidInput
+	}
+	return s.repository.RenameCollection(ctx, input, s.now().UTC())
+}
+
+func (s *Service) DeleteCollection(ctx context.Context, input DeleteCollectionInput) (Collection, error) {
+	if input.CollectionID == "" || !validMutationIdentity(input.CallerService, input.IdempotencyKey) {
+		return Collection{}, ErrInvalidInput
+	}
+	return s.repository.DeleteCollection(ctx, input, s.now().UTC())
+}
+
+func (s *Service) AddCollectionACL(ctx context.Context, input AddCollectionACLInput) (CollectionACLMutation, error) {
+	if input.CollectionID == "" || (input.SubjectType != SubjectUser && input.SubjectType != SubjectRole) || input.SubjectID == "" || input.Permission != PermissionRead || !validMutationIdentity(input.CallerService, input.IdempotencyKey) {
+		return CollectionACLMutation{}, ErrInvalidInput
+	}
+	return s.repository.AddCollectionACL(ctx, input, s.now().UTC())
+}
+
+func (s *Service) RevokeCollectionACL(ctx context.Context, input RevokeCollectionACLInput) (CollectionACLMutation, error) {
+	if input.CollectionID == "" || input.ACLID == "" || !validMutationIdentity(input.CallerService, input.IdempotencyKey) {
+		return CollectionACLMutation{}, ErrInvalidInput
+	}
+	return s.repository.RevokeCollectionACL(ctx, input, s.now().UTC())
+}
+
+func (s *Service) AddCollectionItem(ctx context.Context, input AddCollectionItemInput) (CollectionItemMutation, error) {
+	if input.CollectionID == "" || input.AssetID == "" || input.RemoteItemID == "" || input.DisplayName == "" || input.SourceRevision == "" || !validMutationIdentity(input.CallerService, input.IdempotencyKey) {
+		return CollectionItemMutation{}, ErrInvalidInput
+	}
+	return s.repository.AddCollectionItem(ctx, input, s.now().UTC())
+}
+
+func (s *Service) DeleteCollectionItem(ctx context.Context, input DeleteCollectionItemInput) (CollectionItemMutation, error) {
+	if input.CollectionID == "" || input.ItemID == "" || !validMutationIdentity(input.CallerService, input.IdempotencyKey) {
+		return CollectionItemMutation{}, ErrInvalidInput
+	}
+	return s.repository.DeleteCollectionItem(ctx, input, s.now().UTC())
+}
+
+func (s *Service) ListAuthorizedCollections(ctx context.Context, subject CollectionSubject, cursor string, limit int) (CollectionPage, error) {
+	if !validCollectionSubject(subject) {
+		return CollectionPage{}, ErrForbidden
+	}
+	return s.repository.ListAuthorizedCollections(ctx, subject, cursor, limit)
+}
+
+func (s *Service) GetAuthorizedCollection(ctx context.Context, id string, subject CollectionSubject) (Collection, error) {
+	if id == "" || !validCollectionSubject(subject) {
+		return Collection{}, ErrForbidden
+	}
+	return s.repository.GetAuthorizedCollection(ctx, id, subject)
+}
+
+func (s *Service) GetAuthorizedCollectionItem(ctx context.Context, collectionID, itemID string, subject CollectionSubject) (CollectionItem, error) {
+	if collectionID == "" || itemID == "" || !validCollectionSubject(subject) {
+		return CollectionItem{}, ErrForbidden
+	}
+	return s.repository.GetAuthorizedCollectionItem(ctx, collectionID, itemID, subject)
+}
+
+func (s *Service) AuthorizedCollectionContentMetadata(ctx context.Context, collectionID, itemID string, subject CollectionSubject) (PublicDownloadMetadata, error) {
+	item, err := s.GetAuthorizedCollectionItem(ctx, collectionID, itemID, subject)
+	if err != nil {
+		return PublicDownloadMetadata{}, err
+	}
+	asset, err := s.repository.GetAsset(ctx, item.AssetID)
+	if err != nil {
+		return PublicDownloadMetadata{}, ErrNotFound
+	}
+	return collectionContentMetadata(asset, item.ETag)
+}
+
+func (s *Service) IssueCollectionContentTicket(ctx context.Context, collectionID, itemID string, subject CollectionSubject, tokenExpiresAt time.Time) (ContentTicketResponse, error) {
+	now := s.now().UTC()
+	if !tokenExpiresAt.After(now) {
+		return ContentTicketResponse{}, ErrUnauthorized
+	}
+	item, err := s.GetAuthorizedCollectionItem(ctx, collectionID, itemID, subject)
+	if err != nil {
+		return ContentTicketResponse{}, err
+	}
+	expiresAt := tokenExpiresAt.UTC()
+	if maximum := now.Add(contentTicketTTL); expiresAt.After(maximum) {
+		expiresAt = maximum
+	}
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return ContentTicketResponse{}, err
+	}
+	token := base64.RawURLEncoding.EncodeToString(raw)
+	hash := sha256.Sum256(raw)
+	ticket := ContentTicket{
+		TokenHash: hex.EncodeToString(hash[:]), CollectionID: collectionID, CollectionItemID: itemID,
+		AssetETag: item.ETag, UserID: subject.UserID, Roles: append([]string(nil), subject.Roles...),
+		ExpiresAt: expiresAt, CreatedAt: now,
+	}
+	if err := s.repository.CreateContentTicket(ctx, ticket, now); err != nil {
+		return ContentTicketResponse{}, err
+	}
+	return ContentTicketResponse{ContentURL: "/api/assets/content?ticket=" + token, ExpiresAt: expiresAt, ETag: item.ETag}, nil
+}
+
+func (s *Service) ContentTicketMetadata(ctx context.Context, token string) (PublicDownloadMetadata, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(token)
+	canonical := base64.RawURLEncoding.EncodeToString(raw)
+	if err != nil || len(raw) != 32 || subtle.ConstantTimeCompare([]byte(canonical), []byte(token)) != 1 {
+		return PublicDownloadMetadata{}, ErrUnauthorized
+	}
+	hash := sha256.Sum256(raw)
+	asset, err := s.repository.RedeemContentTicket(ctx, hex.EncodeToString(hash[:]), s.now().UTC())
+	if err != nil {
+		return PublicDownloadMetadata{}, err
+	}
+	return collectionContentMetadata(asset, asset.ETag)
+}
+
+func collectionContentMetadata(asset Asset, expectedETag string) (PublicDownloadMetadata, error) {
+	if asset.ID == "" || asset.ETag == "" || asset.ETag != expectedETag || asset.UploadStatus != UploadCompleted || asset.ScanStatus != ScanClean || !asset.DeletedAt.IsZero() || (asset.ProcessingStatus != ProcessingReady && asset.ProcessingStatus != ProcessingNotRequired) {
+		return PublicDownloadMetadata{}, ErrNotFound
+	}
+	return PublicDownloadMetadata{
+		Size: asset.SizeBytes, ContentType: asset.DetectedMIMEType, FileName: asset.OriginalFileName,
+		ETag: asset.ETag, LastModified: asset.UpdatedAt, CacheControl: "private, no-store", objectKey: asset.ObjectKey,
+	}, nil
+}
+
+func (s *Service) CollectionChanges(ctx context.Context, id, cursor string, subject CollectionSubject) (CollectionChangePage, error) {
+	if id == "" || !validCollectionSubject(subject) {
+		return CollectionChangePage{}, ErrForbidden
+	}
+	return s.repository.CollectionChanges(ctx, id, cursor, subject)
+}
+
+func (s *Service) ListManagedCollections(ctx context.Context, callerService, cursor string, limit int) (ManagedCollectionPage, error) {
+	if callerService == "" {
+		return ManagedCollectionPage{}, ErrInvalidInput
+	}
+	return s.repository.ListManagedCollections(ctx, callerService, cursor, limit)
+}
+
+func (s *Service) GetManagedCollection(ctx context.Context, id, callerService string) (ManagedCollection, error) {
+	if id == "" || callerService == "" {
+		return ManagedCollection{}, ErrInvalidInput
+	}
+	return s.repository.GetManagedCollection(ctx, id, callerService)
+}
+
+func validMutationIdentity(callerService, idempotencyKey string) bool {
+	return callerService != "" && idempotencyKey != ""
+}
+
+func validCollectionSubject(subject CollectionSubject) bool {
+	if subject.UserID == "" {
+		return false
+	}
+	for _, role := range subject.Roles {
+		if role == CollectionReaderRole {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) ApplyScanResult(ctx context.Context, result ScanResult) error {
@@ -450,84 +633,49 @@ func NormalizeDetectedMIME(expected, detected string) string {
 	return ""
 }
 
-func (s *Service) verifyDetectedMIME(ctx context.Context, objectKey string, observed BlobProperties, expected string) (string, error) {
-	if normalized := NormalizeDetectedMIME(expected, observed.DetectedMIMEType); normalized != "" && observed.DetectedMIMEType != "application/zip" && observed.DetectedMIMEType != "application/octet-stream" {
-		return normalized, nil
+func (s *Service) verifyDetectedMIME(ctx context.Context, objectKey string, observed BlobProperties, fileName, expected string) (string, error) {
+	rangeRequest := ByteRange{Offset: 0, Count: min(observed.Size, 512)}
+	if requiresContentReader(expected) {
+		rangeRequest = ByteRange{}
 	}
-	download, err := s.blobs.Open(ctx, objectKey, ByteRange{}, observed.ETag)
+	download, err := s.blobs.Open(ctx, objectKey, rangeRequest, observed.ETag)
 	if err != nil {
 		return "", err
 	}
 	defer download.Body.Close()
-	value, err := io.ReadAll(io.LimitReader(download.Body, observed.Size+1))
-	if err != nil || int64(len(value)) != observed.Size {
+	if !requiresContentReader(expected) {
+		header, err := io.ReadAll(io.LimitReader(download.Body, 512))
+		if err != nil {
+			return "", err
+		}
+		return ValidateMedia(ctx, fileName, expected, header, nil, observed.Size)
+	}
+	file, err := os.CreateTemp("", "asset-media-validation-*")
+	if err != nil {
+		return "", err
+	}
+	name := file.Name()
+	defer func() {
+		file.Close()
+		os.Remove(name)
+	}()
+	written, err := io.Copy(file, io.LimitReader(&contextReader{ctx: ctx, reader: download.Body}, observed.Size+1))
+	if err != nil {
+		return "", err
+	}
+	if written != observed.Size {
 		return "", ErrInvalidUpload
 	}
-	if observed.DetectedMIMEType == "application/zip" && matchesZipFormat(value, expected) {
-		return expected, nil
+	header := make([]byte, min(observed.Size, 512))
+	read, err := file.ReadAt(header, 0)
+	if err != nil && err != io.EOF {
+		return "", err
 	}
-	if observed.DetectedMIMEType == "application/octet-stream" && len(value) >= 8 && bytes.Equal(value[:8], []byte{0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1}) {
-		switch expected {
-		case "application/vnd.ms-powerpoint", "application/msword", "application/vnd.ms-excel":
-			return expected, nil
-		}
-	}
-	return "", ErrInvalidUpload
-}
-
-func matchesZipFormat(value []byte, expected string) bool {
-	reader, err := zip.NewReader(bytes.NewReader(value), int64(len(value)))
-	if err != nil {
-		return false
-	}
-	for _, file := range reader.File {
-		name := strings.TrimPrefix(file.Name, "/")
-		switch expected {
-		case "application/vnd.openxmlformats-officedocument.presentationml.presentation":
-			if strings.HasPrefix(name, "ppt/") {
-				return true
-			}
-		case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-			if strings.HasPrefix(name, "word/") {
-				return true
-			}
-		case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
-			if strings.HasPrefix(name, "xl/") {
-				return true
-			}
-		case "application/vnd.apple.keynote":
-			if strings.HasPrefix(name, "Index/") || name == "index.apxl" {
-				return true
-			}
-		case "application/vnd.oasis.opendocument.presentation":
-			if name == "content.xml" || name == "mimetype" {
-				return true
-			}
-		}
-	}
-	return false
+	return ValidateMedia(ctx, fileName, expected, header[:read], file, observed.Size)
 }
 
 func matchesFileExtension(fileName, mime string) bool {
-	ext := strings.ToLower(path.Ext(strings.TrimSpace(fileName)))
-	for _, allowed := range map[string][]string{
-		"application/pdf": {".pdf"},
-		"image/jpeg":      {".jpg", ".jpeg"}, "image/png": {".png"}, "image/webp": {".webp"},
-		"application/vnd.ms-powerpoint":                                             {".ppt"},
-		"application/vnd.openxmlformats-officedocument.presentationml.presentation": {".pptx"},
-		"application/vnd.apple.keynote":                                             {".key"},
-		"application/vnd.oasis.opendocument.presentation":                           {".odp"},
-		"application/msword":                                                        {".doc"},
-		"application/vnd.openxmlformats-officedocument.wordprocessingml.document":   {".docx"},
-		"application/vnd.ms-excel":                                                  {".xls"},
-		"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":         {".xlsx"},
-		"text/plain": {".txt"}, "text/markdown": {".md", ".markdown"},
-	}[mime] {
-		if ext == allowed {
-			return true
-		}
-	}
-	return false
+	return extensionAllowed(fileName, mime)
 }
 
 func newID() string {

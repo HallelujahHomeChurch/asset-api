@@ -12,7 +12,7 @@ import (
 )
 
 type Worker struct {
-	repository assets.Repository
+	repository Repository
 	blobs      assets.BlobStore
 	scanner    Scanner
 	maxRetries int
@@ -20,11 +20,17 @@ type Worker struct {
 	now        func() time.Time
 }
 
+type Repository interface {
+	ClaimPendingScan(context.Context, time.Time, time.Duration) (assets.Asset, bool, error)
+	ApplyScanResult(context.Context, assets.ScanResult, time.Time) (bool, error)
+	ScheduleScanRetry(context.Context, string, int, string, time.Time, time.Time) error
+}
+
 type Scanner interface {
 	Scan(context.Context, io.Reader, int64) (string, error)
 }
 
-func NewWorker(repository assets.Repository, blobs assets.BlobStore, scanner Scanner, maxRetries int, scanTimeout time.Duration) *Worker {
+func NewWorker(repository Repository, blobs assets.BlobStore, scanner Scanner, maxRetries int, scanTimeout time.Duration) *Worker {
 	return &Worker{repository: repository, blobs: blobs, scanner: scanner, maxRetries: maxRetries, lease: scanTimeout + 30*time.Second, now: time.Now}
 }
 

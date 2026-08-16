@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"os"
 	"testing"
 	"time"
 
@@ -18,6 +19,13 @@ import (
 func TestScanJobAcceptsVerifiedOfficeArchiveMIME(t *testing.T) {
 	var archive bytes.Buffer
 	writer := zip.NewWriter(&archive)
+	contentTypes, err := writer.Create("[Content_Types].xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := contentTypes.Write([]byte("clean")); err != nil {
+		t.Fatal(err)
+	}
 	file, err := writer.Create("word/document.xml")
 	if err != nil {
 		t.Fatal(err)
@@ -34,6 +42,7 @@ func TestScanJobAcceptsVerifiedOfficeArchiveMIME(t *testing.T) {
 	asset.SizeBytes = int64(len(payload))
 	asset.ChecksumSHA256 = hex.EncodeToString(sum[:])
 	asset.DetectedMIMEType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+	asset.OriginalFileName = "document.docx"
 	repo := &jobRepository{asset: asset}
 	queue := &jobQueue{message: scanMessage(1)}
 	scanner := &jobScanner{}
@@ -43,6 +52,70 @@ func TestScanJobAcceptsVerifiedOfficeArchiveMIME(t *testing.T) {
 	}
 	if !scanner.called || repo.result.Status != assets.ScanClean {
 		t.Fatalf("scanned=%v result=%+v", scanner.called, repo.result)
+	}
+}
+
+func TestScanJobRevalidatesCanonicalMediaAndCleansTemporaryFile(t *testing.T) {
+	tests := []struct {
+		name, fileName, mime string
+		payload              []byte
+	}{
+		{name: "LPDeck", fileName: "deck.lpdeck", mime: "application/vnd.librepresenter.presentation+json", payload: []byte(`{"slides":[]}`)},
+		{name: "PPTX", fileName: "deck.pptx", mime: "application/vnd.openxmlformats-officedocument.presentationml.presentation", payload: testScanZIP(t, "[Content_Types].xml", "ppt/presentation.xml")},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			asset := queuedAsset()
+			asset.OriginalFileName = test.fileName
+			asset.DetectedMIMEType = test.mime
+			asset.SizeBytes = int64(len(test.payload))
+			sum := sha256.Sum256(test.payload)
+			asset.ChecksumSHA256 = hex.EncodeToString(sum[:])
+			repo := &jobRepository{asset: asset}
+			queue := &jobQueue{message: scanMessage(1)}
+			scanner := &jobScanner{}
+			job := NewScanJob(repo, jobBlobs{body: test.payload}, scanner, queue, "sig-1", 200<<20, 5, time.Minute)
+			if _, err := job.RunOnce(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if repo.result.Status != assets.ScanClean {
+				t.Fatalf("result = %+v", repo.result)
+			}
+			if _, err := os.Stat(scanner.path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("temporary file remains at %q: %v", scanner.path, err)
+			}
+		})
+	}
+}
+
+func TestScanJobPoisonsCanonicalMediaMismatchWithoutScanning(t *testing.T) {
+	tests := []struct {
+		name, fileName, mime string
+		payload              []byte
+	}{
+		{name: "HEIC as MP4", fileName: "spoof.mp4", mime: "video/mp4", payload: bmffScan("heic")},
+		{name: "LPDeck malformed", fileName: "spoof.lpdeck", mime: "application/vnd.librepresenter.presentation+json", payload: []byte("{not-json")},
+		{name: "LPDeck trailing", fileName: "spoof.lpdeck", mime: "application/vnd.librepresenter.presentation+json", payload: []byte("{\"slides\":[]} {\"second\":true}")},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			asset := queuedAsset()
+			asset.OriginalFileName = test.fileName
+			asset.DetectedMIMEType = test.mime
+			asset.SizeBytes = int64(len(test.payload))
+			sum := sha256.Sum256(test.payload)
+			asset.ChecksumSHA256 = hex.EncodeToString(sum[:])
+			repo := &jobRepository{asset: asset}
+			queue := &jobQueue{message: scanMessage(1)}
+			scanner := &jobScanner{}
+			job := NewScanJob(repo, jobBlobs{body: test.payload}, scanner, queue, "sig-1", 200<<20, 5, time.Minute)
+			if _, err := job.RunOnce(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if scanner.called || !queue.poisoned || repo.result.FailureCategory != "integrity" {
+				t.Fatalf("scanner=%v queue=%+v result=%+v", scanner.called, queue, repo.result)
+			}
+		})
 	}
 }
 
@@ -58,6 +131,8 @@ func TestScanJobTerminalAndRetryFlows(t *testing.T) {
 	}{
 		{name: "clean", message: scanMessage(1), asset: queuedAsset(), wantStatus: assets.ScanClean, wantAck: true},
 		{name: "infected", message: scanMessage(1), asset: queuedAsset(), scanErr: clamav.ErrInfected, scanName: "Eicar-Signature", wantStatus: assets.ScanInfected, wantAck: true},
+		{name: "limit", message: scanMessage(1), asset: queuedAsset(), scanErr: clamav.ErrLimitExceeded, scanName: "Heuristics.Limits.Exceeded.MaxFiles", wantStatus: assets.ScanFailed, wantAck: true, wantPoison: true},
+		{name: "encrypted", message: scanMessage(1), asset: queuedAsset(), scanErr: clamav.ErrEncrypted, scanName: "Heuristics.Encrypted.PDF", wantStatus: assets.ScanFailed, wantAck: true, wantPoison: true},
 		{name: "transient", message: scanMessage(1), asset: queuedAsset(), scanErr: errors.New("scanner down"), wantRetry: true},
 		{name: "fifth delivery", message: scanMessage(5), asset: attemptedAsset(5), wantStatus: assets.ScanFailed, wantAck: true, wantPoison: true},
 	}
@@ -137,7 +212,7 @@ func TestScanJobPoisonsInvalidPayloadAndIntegrityFailure(t *testing.T) {
 func queuedAsset() assets.Asset {
 	payload := []byte("clean")
 	sum := sha256.Sum256(payload)
-	return assets.Asset{ID: "asset-1", ObjectKey: "asset-1", SizeBytes: int64(len(payload)), ChecksumSHA256: hex.EncodeToString(sum[:]), ETag: "etag-1", DetectedMIMEType: "text/plain; charset=utf-8", UploadStatus: assets.UploadCompleted, ScanStatus: assets.ScanPending, ScanAttempts: 1}
+	return assets.Asset{ID: "asset-1", ObjectKey: "asset-1", OriginalFileName: "clean.txt", SizeBytes: int64(len(payload)), ChecksumSHA256: hex.EncodeToString(sum[:]), ETag: "etag-1", DetectedMIMEType: "text/plain", UploadStatus: assets.UploadCompleted, ScanStatus: assets.ScanPending, ScanAttempts: 1}
 }
 
 func attemptedAsset(attempt int) assets.Asset {
@@ -191,10 +266,12 @@ type jobScanner struct {
 	called bool
 	name   string
 	err    error
+	path   string
 }
 
-func (s *jobScanner) ScanFile(context.Context, string) (string, error) {
+func (s *jobScanner) ScanFile(_ context.Context, path string) (string, error) {
 	s.called = true
+	s.path = path
 	return s.name, s.err
 }
 
@@ -218,4 +295,27 @@ func (q *jobQueue) Retry(context.Context, Message, time.Duration) error { q.retr
 func (q *jobQueue) ForwardPoison(context.Context, Message, *Event, string, time.Time) error {
 	q.poisoned = true
 	return nil
+}
+
+func testScanZIP(t *testing.T, names ...string) []byte {
+	t.Helper()
+	var value bytes.Buffer
+	w := zip.NewWriter(&value)
+	for _, name := range names {
+		file, err := w.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := file.Write([]byte("value")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return value.Bytes()
+}
+
+func bmffScan(brand string) []byte {
+	return append([]byte{0, 0, 0, 20}, append([]byte("ftyp"+brand), make([]byte, 8)...)...)
 }

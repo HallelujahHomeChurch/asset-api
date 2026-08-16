@@ -23,6 +23,7 @@ param workloadAuthClientId string = ''
 param workloadAuthAudience string = ''
 param lineAttachmentClientId string = ''
 param lineAttachmentObjectId string = ''
+param readerCallerAppId string = 'api-gateway'
 
 param publicBaseUrl string = 'https://www.alive.org.tw/assets'
 param uploadAllowedOrigins array = [
@@ -331,6 +332,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = if (deployRuntime) {
             { name: 'ASSET_SCAN_DISPATCH_ENABLED', value: string(scanDispatchEnabled) }
             { name: 'ASSET_EMBEDDED_SCAN_ENABLED', value: string(embeddedScanEnabled) }
             { name: 'ASSET_ALLOWED_CALLERS', value: 'account-api,hhc-web-api,hhc-line-function-bot' }
+            { name: 'ASSET_READER_CALLER_APP_ID', value: readerCallerAppId }
             { name: 'ASSET_ALLOW_DEV_CALLER_HEADER', value: 'false' }
             { name: 'ASSET_WORKLOAD_TENANT_ID', value: workloadAuthEnabled ? subscription().tenantId : '' }
             { name: 'ASSET_WORKLOAD_ISSUER', value: workloadAuthEnabled ? '${az.environment().authentication.loginEndpoint}${subscription().tenantId}/v2.0' : '' }
@@ -383,6 +385,12 @@ resource workloadAuth 'Microsoft.App/containerApps/authConfigs@2025-01-01' = if 
         '/health'
         '/ready'
         '/api/assets/public/*'
+        '/api/assets/collections'
+        '/api/assets/collections/*/changes'
+        '/api/assets/collections/*/items/*'
+        '/api/assets/collections/*/items/*/content-ticket'
+        '/api/assets/collections/*/items/*/content'
+        '/api/assets/content'
       ]
     }
     identityProviders: {
@@ -514,7 +522,7 @@ resource scanJob 'Microsoft.App/jobs@2025-07-01' = if (deployScanJob) {
     workloadProfileName: 'Consumption'
     configuration: {
       triggerType: 'Event'
-      replicaTimeout: 600
+      replicaTimeout: 720
       replicaRetryLimit: 0
       eventTriggerConfig: {
         parallelism: 1
@@ -559,8 +567,12 @@ resource scanJob 'Microsoft.App/jobs@2025-07-01' = if (deployScanJob) {
             { name: 'ASSET_SCAN_POISON_QUEUE_URL', value: 'https://${storageAccount.name}.queue.${az.environment().suffixes.storage}/asset-scan-poison' }
             { name: 'CLAMAV_SIGNATURE_CONTAINER', value: 'asset-signatures' }
             { name: 'CLAMAV_SIGNATURE_MAX_AGE', value: '168h' }
-            { name: 'CLAMAV_SCAN_TIMEOUT', value: '2m' }
-            { name: 'CLAMAV_MAX_FILE_SIZE_BYTES', value: '26214400' }
+            { name: 'CLAMAV_SCAN_TIMEOUT', value: '10m' }
+            { name: 'ASSET_SCAN_MAX_FILE_SIZE_BYTES', value: '209715200' }
+            { name: 'CLAMAV_MAX_FILE_SIZE_BYTES', value: '209715200' }
+            { name: 'CLAMAV_MAX_SCAN_SIZE_BYTES', value: '1073741824' }
+            { name: 'CLAMAV_MAX_FILES', value: '10000' }
+            { name: 'CLAMAV_MAX_RECURSION', value: '32' }
             { name: 'CLAMAV_MAX_RETRIES', value: '5' }
           ]
           resources: { cpu: json('2.0'), memory: '4Gi' }

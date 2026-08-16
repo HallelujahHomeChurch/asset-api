@@ -58,3 +58,35 @@ func TestLineGroupFilePolicyMatchesSupportedAttachmentFormats(t *testing.T) {
 		t.Fatal("PDF should allow the existing 25 MiB limit")
 	}
 }
+
+func TestLineGroupMediaSyncPolicy(t *testing.T) {
+	policy, ok := PolicyFor("line.group.media-sync")
+	if !ok {
+		t.Fatal("line.group.media-sync policy is missing")
+	}
+	if policy.OwnerService != "hhc-line-function-bot" || policy.DefaultVisibility != VisibilityRestricted || policy.Processing != ProcessingNotRequired {
+		t.Fatalf("unexpected policy: %+v", policy)
+	}
+	allowed := []string{
+		"image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp",
+		"video/mp4", "video/quicktime", "video/webm", "video/ogg", "video/x-msvideo", "video/x-matroska", "video/x-ms-wmv",
+		"audio/mpeg", "audio/wav", "audio/mp4", "audio/aac", "audio/ogg",
+		"application/pdf", "application/vnd.openxmlformats-officedocument.presentationml.presentation", "application/vnd.librepresenter.presentation+json",
+	}
+	for _, mime := range allowed {
+		if !policy.AllowsMIME(mime) {
+			t.Errorf("MIME %q is not allowed", mime)
+		}
+		if !policy.AllowsSize(mime, 200<<20) || policy.AllowsSize(mime, (200<<20)+1) {
+			t.Errorf("MIME %q does not enforce the 200 MiB boundary", mime)
+		}
+	}
+	for _, mime := range []string{
+		"image/svg+xml", "application/vnd.ms-powerpoint", "application/vnd.apple.keynote",
+		"application/vnd.oasis.opendocument.presentation", "video/mpeg", "image/tiff", "image/heic", "image/heif",
+	} {
+		if policy.AllowsMIME(mime) {
+			t.Errorf("MIME %q must be rejected", mime)
+		}
+	}
+}

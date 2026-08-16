@@ -2,7 +2,12 @@ package postgres
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"path"
 	"strconv"
@@ -10,6 +15,8 @@ import (
 
 	"hhc/asset-api/internal/assets"
 	"hhc/asset-api/internal/lifecycle"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 type Store struct{ db *sql.DB }
@@ -232,6 +239,897 @@ func (s *Store) HasActiveGrant(ctx context.Context, assetID string, subject asse
 	return exists, err
 }
 
+const (
+	createCollectionOperation     = "create_collection"
+	renameCollectionOperation     = "rename_collection"
+	deleteCollectionOperation     = "delete_collection"
+	addCollectionACLOperation     = "add_collection_acl"
+	revokeCollectionACLOperation  = "revoke_collection_acl"
+	addCollectionItemOperation    = "add_collection_item"
+	deleteCollectionItemOperation = "delete_collection_item"
+)
+
+func (s *Store) CreateCollection(ctx context.Context, input assets.CreateCollectionInput, now time.Time) (assets.Collection, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return assets.Collection{}, err
+	}
+	defer tx.Rollback()
+	fingerprint := mutationFingerprint(struct{ Namespace, Name string }{input.Namespace, input.Name})
+	replay, claimed, err := claimMutation(ctx, tx, input.CallerService, createCollectionOperation, input.IdempotencyKey, fingerprint, now)
+	if err != nil {
+		return assets.Collection{}, err
+	}
+	if !claimed {
+		var value assets.Collection
+		if err := json.Unmarshal(replay, &value); err != nil {
+			return assets.Collection{}, err
+		}
+		value.CreatedByService = input.CallerService
+		return value, nil
+	}
+	value := assets.Collection{ID: newStoreID(), Namespace: input.Namespace, Name: input.Name, Revision: 1, CreatedByService: input.CallerService, CreatedAt: now, UpdatedAt: now}
+	_, err = tx.ExecContext(ctx, `INSERT INTO asset_collections(id,namespace,name,revision,created_by_service,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$6)`, value.ID, value.Namespace, value.Name, value.Revision, value.CreatedByService, now)
+	if err != nil {
+		return assets.Collection{}, mapCollectionError(err)
+	}
+	if err := finishMutation(ctx, tx, input.CallerService, createCollectionOperation, input.IdempotencyKey, value); err != nil {
+		return assets.Collection{}, err
+	}
+	return value, nil
+}
+
+func (s *Store) RenameCollection(ctx context.Context, input assets.RenameCollectionInput, now time.Time) (assets.Collection, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return assets.Collection{}, err
+	}
+	defer tx.Rollback()
+	fingerprint := mutationFingerprint(struct{ CollectionID, Name string }{input.CollectionID, input.Name})
+	replay, claimed, err := claimMutation(ctx, tx, input.CallerService, renameCollectionOperation, input.IdempotencyKey, fingerprint, now)
+	if err != nil {
+		return assets.Collection{}, err
+	}
+	if !claimed {
+		var value assets.Collection
+		if err := json.Unmarshal(replay, &value); err != nil {
+			return assets.Collection{}, err
+		}
+		value.CreatedByService = input.CallerService
+		return value, nil
+	}
+	value, err := lockManagedCollection(ctx, tx, input.CollectionID, input.CallerService)
+	if err != nil {
+		return assets.Collection{}, err
+	}
+	value.Name, value.Revision, value.UpdatedAt = input.Name, value.Revision+1, now
+	if _, err := tx.ExecContext(ctx, `UPDATE asset_collections SET name=$2,revision=$3,updated_at=$4 WHERE id=$1`, value.ID, value.Name, value.Revision, now); err != nil {
+		return assets.Collection{}, err
+	}
+	if err := finishMutation(ctx, tx, input.CallerService, renameCollectionOperation, input.IdempotencyKey, value); err != nil {
+		return assets.Collection{}, err
+	}
+	return value, nil
+}
+
+func (s *Store) DeleteCollection(ctx context.Context, input assets.DeleteCollectionInput, now time.Time) (assets.Collection, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return assets.Collection{}, err
+	}
+	defer tx.Rollback()
+	fingerprint := mutationFingerprint(struct{ CollectionID string }{input.CollectionID})
+	replay, claimed, err := claimMutation(ctx, tx, input.CallerService, deleteCollectionOperation, input.IdempotencyKey, fingerprint, now)
+	if err != nil {
+		return assets.Collection{}, err
+	}
+	if !claimed {
+		var value assets.Collection
+		if err := json.Unmarshal(replay, &value); err != nil {
+			return assets.Collection{}, err
+		}
+		value.CreatedByService = input.CallerService
+		return value, nil
+	}
+	value, err := lockManagedCollection(ctx, tx, input.CollectionID, input.CallerService)
+	if err != nil {
+		return assets.Collection{}, err
+	}
+	value.Revision, value.UpdatedAt, value.DeletedAt = value.Revision+1, now, now
+	if _, err := tx.ExecContext(ctx, `UPDATE asset_collections SET revision=$2,updated_at=$3,deleted_at=$3 WHERE id=$1`, value.ID, value.Revision, now); err != nil {
+		return assets.Collection{}, err
+	}
+	if err := finishMutation(ctx, tx, input.CallerService, deleteCollectionOperation, input.IdempotencyKey, value); err != nil {
+		return assets.Collection{}, err
+	}
+	return value, nil
+}
+
+func (s *Store) AddCollectionACL(ctx context.Context, input assets.AddCollectionACLInput, now time.Time) (assets.CollectionACLMutation, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return assets.CollectionACLMutation{}, err
+	}
+	defer tx.Rollback()
+	fingerprint := mutationFingerprint(struct {
+		CollectionID string
+		SubjectType  assets.SubjectType
+		SubjectID    string
+		Permission   assets.Permission
+	}{input.CollectionID, input.SubjectType, input.SubjectID, input.Permission})
+	replay, claimed, err := claimMutation(ctx, tx, input.CallerService, addCollectionACLOperation, input.IdempotencyKey, fingerprint, now)
+	if err != nil {
+		return assets.CollectionACLMutation{}, err
+	}
+	if !claimed {
+		var value assets.CollectionACLMutation
+		if err := json.Unmarshal(replay, &value); err != nil {
+			return assets.CollectionACLMutation{}, err
+		}
+		value.Collection.CreatedByService = input.CallerService
+		return value, nil
+	}
+	collection, err := lockManagedCollection(ctx, tx, input.CollectionID, input.CallerService)
+	if err != nil {
+		return assets.CollectionACLMutation{}, err
+	}
+	collection.Revision, collection.UpdatedAt = collection.Revision+1, now
+	acl := assets.CollectionACL{ID: newStoreID(), CollectionID: collection.ID, SubjectType: input.SubjectType, SubjectID: input.SubjectID, Permission: input.Permission, CreatedAt: now}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO asset_collection_acl(id,collection_id,subject_type,subject_id,permission,created_at) VALUES($1,$2,$3,$4,$5,$6)`, acl.ID, acl.CollectionID, acl.SubjectType, acl.SubjectID, acl.Permission, now); err != nil {
+		return assets.CollectionACLMutation{}, mapCollectionError(err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE asset_collections SET revision=$2,updated_at=$3 WHERE id=$1`, collection.ID, collection.Revision, now); err != nil {
+		return assets.CollectionACLMutation{}, err
+	}
+	value := assets.CollectionACLMutation{Collection: collection, ACL: acl}
+	if err := finishMutation(ctx, tx, input.CallerService, addCollectionACLOperation, input.IdempotencyKey, value); err != nil {
+		return assets.CollectionACLMutation{}, err
+	}
+	return value, nil
+}
+
+func (s *Store) RevokeCollectionACL(ctx context.Context, input assets.RevokeCollectionACLInput, now time.Time) (assets.CollectionACLMutation, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return assets.CollectionACLMutation{}, err
+	}
+	defer tx.Rollback()
+	fingerprint := mutationFingerprint(struct{ CollectionID, ACLID string }{input.CollectionID, input.ACLID})
+	replay, claimed, err := claimMutation(ctx, tx, input.CallerService, revokeCollectionACLOperation, input.IdempotencyKey, fingerprint, now)
+	if err != nil {
+		return assets.CollectionACLMutation{}, err
+	}
+	if !claimed {
+		var value assets.CollectionACLMutation
+		if err := json.Unmarshal(replay, &value); err != nil {
+			return assets.CollectionACLMutation{}, err
+		}
+		value.Collection.CreatedByService = input.CallerService
+		return value, nil
+	}
+	collection, err := lockManagedCollection(ctx, tx, input.CollectionID, input.CallerService)
+	if err != nil {
+		return assets.CollectionACLMutation{}, err
+	}
+	var acl assets.CollectionACL
+	err = tx.QueryRowContext(ctx, `SELECT id,collection_id,subject_type,subject_id,permission,created_at FROM asset_collection_acl WHERE id=$1 AND collection_id=$2 AND revoked_at IS NULL FOR UPDATE`, input.ACLID, input.CollectionID).Scan(&acl.ID, &acl.CollectionID, &acl.SubjectType, &acl.SubjectID, &acl.Permission, &acl.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return assets.CollectionACLMutation{}, assets.ErrNotFound
+	}
+	if err != nil {
+		return assets.CollectionACLMutation{}, err
+	}
+	collection.Revision, collection.UpdatedAt, acl.RevokedAt = collection.Revision+1, now, now
+	if _, err := tx.ExecContext(ctx, `UPDATE asset_collection_acl SET revoked_at=$2 WHERE id=$1`, acl.ID, now); err != nil {
+		return assets.CollectionACLMutation{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE asset_collections SET revision=$2,updated_at=$3 WHERE id=$1`, collection.ID, collection.Revision, now); err != nil {
+		return assets.CollectionACLMutation{}, err
+	}
+	value := assets.CollectionACLMutation{Collection: collection, ACL: acl}
+	if err := finishMutation(ctx, tx, input.CallerService, revokeCollectionACLOperation, input.IdempotencyKey, value); err != nil {
+		return assets.CollectionACLMutation{}, err
+	}
+	return value, nil
+}
+
+func (s *Store) AddCollectionItem(ctx context.Context, input assets.AddCollectionItemInput, now time.Time) (assets.CollectionItemMutation, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return assets.CollectionItemMutation{}, err
+	}
+	defer tx.Rollback()
+	fingerprint := mutationFingerprint(struct{ CollectionID, AssetID, RemoteItemID, DisplayName, SourceRevision string }{input.CollectionID, input.AssetID, input.RemoteItemID, input.DisplayName, input.SourceRevision})
+	replay, claimed, err := claimMutation(ctx, tx, input.CallerService, addCollectionItemOperation, input.IdempotencyKey, fingerprint, now)
+	if err != nil {
+		return assets.CollectionItemMutation{}, err
+	}
+	if !claimed {
+		var value assets.CollectionItemMutation
+		if err := json.Unmarshal(replay, &value); err != nil {
+			return assets.CollectionItemMutation{}, err
+		}
+		value.Collection.CreatedByService = input.CallerService
+		return value, nil
+	}
+	var namespace, ownerService, mimeType, etag string
+	var uploadStatus assets.UploadStatus
+	var scanStatus assets.ScanStatus
+	var processingStatus assets.ProcessingStatus
+	var sizeBytes int64
+	err = tx.QueryRowContext(ctx, `SELECT namespace,owner_service,upload_status,scan_status,processing_status,detected_mime_type,size_bytes,etag FROM assets WHERE id=$1 AND deleted_at IS NULL AND purged_at IS NULL FOR UPDATE`, input.AssetID).Scan(&namespace, &ownerService, &uploadStatus, &scanStatus, &processingStatus, &mimeType, &sizeBytes, &etag)
+	if errors.Is(err, sql.ErrNoRows) {
+		return assets.CollectionItemMutation{}, assets.ErrNotFound
+	}
+	if err != nil {
+		return assets.CollectionItemMutation{}, err
+	}
+	if ownerService != input.CallerService {
+		return assets.CollectionItemMutation{}, assets.ErrForbidden
+	}
+	if uploadStatus != assets.UploadCompleted || scanStatus != assets.ScanClean || (processingStatus != assets.ProcessingReady && processingStatus != assets.ProcessingNotRequired) {
+		return assets.CollectionItemMutation{}, assets.ErrConflict
+	}
+	collection, err := lockManagedCollection(ctx, tx, input.CollectionID, input.CallerService)
+	if err != nil {
+		return assets.CollectionItemMutation{}, err
+	}
+	if namespace != collection.Namespace {
+		return assets.CollectionItemMutation{}, assets.ErrConflict
+	}
+	collection.Revision, collection.UpdatedAt = collection.Revision+1, now
+	item := assets.CollectionItem{ID: newStoreID(), CollectionID: collection.ID, AssetID: input.AssetID, RemoteItemID: input.RemoteItemID, DisplayName: input.DisplayName, SourceRevision: input.SourceRevision, CreatedRevision: collection.Revision, MIMEType: mimeType, SizeBytes: sizeBytes, ETag: etag, CreatedAt: now}
+	_, err = tx.ExecContext(ctx, `INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, item.ID, item.CollectionID, item.AssetID, item.RemoteItemID, item.DisplayName, item.SourceRevision, item.CreatedRevision, now)
+	if err != nil {
+		return assets.CollectionItemMutation{}, mapCollectionError(err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE asset_collections SET revision=$2,updated_at=$3 WHERE id=$1`, collection.ID, collection.Revision, now); err != nil {
+		return assets.CollectionItemMutation{}, err
+	}
+	value := assets.CollectionItemMutation{Collection: collection, Item: item}
+	if err := finishMutation(ctx, tx, input.CallerService, addCollectionItemOperation, input.IdempotencyKey, value); err != nil {
+		return assets.CollectionItemMutation{}, err
+	}
+	return value, nil
+}
+
+func (s *Store) DeleteCollectionItem(ctx context.Context, input assets.DeleteCollectionItemInput, now time.Time) (assets.CollectionItemMutation, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return assets.CollectionItemMutation{}, err
+	}
+	defer tx.Rollback()
+	fingerprint := mutationFingerprint(struct{ CollectionID, ItemID string }{input.CollectionID, input.ItemID})
+	replay, claimed, err := claimMutation(ctx, tx, input.CallerService, deleteCollectionItemOperation, input.IdempotencyKey, fingerprint, now)
+	if err != nil {
+		return assets.CollectionItemMutation{}, err
+	}
+	if !claimed {
+		var value assets.CollectionItemMutation
+		if err := json.Unmarshal(replay, &value); err != nil {
+			return assets.CollectionItemMutation{}, err
+		}
+		value.Collection.CreatedByService = input.CallerService
+		return value, nil
+	}
+	collection, err := lockManagedCollection(ctx, tx, input.CollectionID, input.CallerService)
+	if err != nil {
+		return assets.CollectionItemMutation{}, err
+	}
+	var item assets.CollectionItem
+	err = tx.QueryRowContext(ctx, `SELECT id,collection_id,COALESCE(asset_id,''),remote_item_id,display_name,source_revision,created_revision,created_at FROM asset_collection_items WHERE id=$1 AND collection_id=$2 AND deleted_revision IS NULL FOR UPDATE`, input.ItemID, input.CollectionID).Scan(&item.ID, &item.CollectionID, &item.AssetID, &item.RemoteItemID, &item.DisplayName, &item.SourceRevision, &item.CreatedRevision, &item.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return assets.CollectionItemMutation{}, assets.ErrNotFound
+	}
+	if err != nil {
+		return assets.CollectionItemMutation{}, err
+	}
+	collection.Revision, collection.UpdatedAt = collection.Revision+1, now
+	item.DeletedRevision, item.DeletedAt = collection.Revision, now
+	if _, err := tx.ExecContext(ctx, `UPDATE asset_collection_items SET deleted_revision=$2,deleted_at=$3 WHERE id=$1`, item.ID, item.DeletedRevision, now); err != nil {
+		return assets.CollectionItemMutation{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE asset_collections SET revision=$2,updated_at=$3 WHERE id=$1`, collection.ID, collection.Revision, now); err != nil {
+		return assets.CollectionItemMutation{}, err
+	}
+	value := assets.CollectionItemMutation{Collection: collection, Item: item, Tombstone: assets.CollectionTombstone{ID: item.ID, RemoteItemID: item.RemoteItemID, DeletedRevision: item.DeletedRevision, DeletedAt: now}}
+	if err := finishMutation(ctx, tx, input.CallerService, deleteCollectionItemOperation, input.IdempotencyKey, value); err != nil {
+		return assets.CollectionItemMutation{}, err
+	}
+	return value, nil
+}
+
+func claimMutation(ctx context.Context, tx *sql.Tx, caller, operation, key, fingerprint string, now time.Time) ([]byte, bool, error) {
+	result, err := tx.ExecContext(ctx, `INSERT INTO asset_collection_mutations(caller_service,operation,idempotency_key,request_fingerprint,created_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`, caller, operation, key, fingerprint, now)
+	if err != nil {
+		return nil, false, err
+	}
+	if count, _ := result.RowsAffected(); count == 1 {
+		return nil, true, nil
+	}
+	var storedFingerprint string
+	var response []byte
+	if err := tx.QueryRowContext(ctx, `SELECT request_fingerprint,response_json FROM asset_collection_mutations WHERE caller_service=$1 AND operation=$2 AND idempotency_key=$3 FOR UPDATE`, caller, operation, key).Scan(&storedFingerprint, &response); err != nil {
+		return nil, false, err
+	}
+	if storedFingerprint != fingerprint || response == nil {
+		return nil, false, assets.ErrConflict
+	}
+	return response, false, nil
+}
+
+func finishMutation(ctx context.Context, tx *sql.Tx, caller, operation, key string, value any) error {
+	response, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE asset_collection_mutations SET response_json=$4::jsonb WHERE caller_service=$1 AND operation=$2 AND idempotency_key=$3 AND response_json IS NULL`, caller, operation, key, response)
+	if err != nil {
+		return err
+	}
+	if count, _ := result.RowsAffected(); count != 1 {
+		return assets.ErrConflict
+	}
+	return tx.Commit()
+}
+
+func lockManagedCollection(ctx context.Context, tx *sql.Tx, id, caller string) (assets.Collection, error) {
+	var value assets.Collection
+	err := tx.QueryRowContext(ctx, `SELECT id,namespace,name,revision,created_by_service,created_at,updated_at,COALESCE(deleted_at,'0001-01-01'::timestamptz) FROM asset_collections WHERE id=$1 FOR UPDATE`, id).Scan(&value.ID, &value.Namespace, &value.Name, &value.Revision, &value.CreatedByService, &value.CreatedAt, &value.UpdatedAt, &value.DeletedAt)
+	if errors.Is(err, sql.ErrNoRows) || (!value.DeletedAt.IsZero() && err == nil) {
+		return assets.Collection{}, assets.ErrNotFound
+	}
+	if err != nil {
+		return assets.Collection{}, err
+	}
+	if value.CreatedByService != caller {
+		return assets.Collection{}, assets.ErrForbidden
+	}
+	return value, nil
+}
+
+func mutationFingerprint(value any) string {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
+	sum := sha256.Sum256(encoded)
+	return hex.EncodeToString(sum[:])
+}
+
+func newStoreID() string {
+	value := make([]byte, 16)
+	if _, err := rand.Read(value); err != nil {
+		panic(err)
+	}
+	return hex.EncodeToString(value)
+}
+
+func mapCollectionError(err error) error {
+	var pgError *pgconn.PgError
+	if errors.As(err, &pgError) && pgError.Code == "23505" {
+		return assets.ErrConflict
+	}
+	return err
+}
+
+const (
+	collectionListLimit  = 100
+	collectionEventLimit = 500
+	changeModeReset      = "reset"
+	changeModeDelta      = "delta"
+)
+
+type listCursor struct {
+	LastID string `json:"i"`
+}
+
+type changeCursor struct {
+	Mode          string `json:"m"`
+	CollectionID  string `json:"c"`
+	HighWater     int64  `json:"h,omitempty"`
+	LastItemID    string `json:"i,omitempty"`
+	FromRevision  int64  `json:"f,omitempty"`
+	ToRevision    int64  `json:"t,omitempty"`
+	AfterRevision int64  `json:"r,omitempty"`
+	AfterKind     int    `json:"k,omitempty"`
+	AfterID       string `json:"a,omitempty"`
+}
+
+func (s *Store) ListAuthorizedCollections(ctx context.Context, subject assets.CollectionSubject, cursor string, limit int) (assets.CollectionPage, error) {
+	if !validReaderSubject(subject) {
+		return assets.CollectionPage{}, assets.ErrForbidden
+	}
+	lastID := ""
+	if decoded, ok := decodeListCursor(cursor); ok {
+		lastID = decoded.LastID
+	}
+	limit = boundedCollectionLimit(limit)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT c.id,c.namespace,c.name,c.revision,c.created_by_service,c.created_at,c.updated_at
+		FROM asset_collections c
+		WHERE c.deleted_at IS NULL AND c.id>$3
+		  AND EXISTS (
+		    SELECT 1 FROM asset_collection_acl acl
+		    WHERE acl.collection_id=c.id AND acl.permission='read' AND acl.revoked_at IS NULL
+		      AND ((acl.subject_type='user' AND acl.subject_id=$1)
+		        OR (acl.subject_type='role' AND acl.subject_id=ANY($2::text[])))
+		  )
+		ORDER BY c.id LIMIT $4`, subject.UserID, subject.Roles, lastID, limit+1)
+	if err != nil {
+		return assets.CollectionPage{}, err
+	}
+	defer rows.Close()
+	page := assets.CollectionPage{Collections: []assets.Collection{}}
+	for rows.Next() {
+		var value assets.Collection
+		if err := rows.Scan(&value.ID, &value.Namespace, &value.Name, &value.Revision, &value.CreatedByService, &value.CreatedAt, &value.UpdatedAt); err != nil {
+			return assets.CollectionPage{}, err
+		}
+		page.Collections = append(page.Collections, value)
+	}
+	if err := rows.Err(); err != nil {
+		return assets.CollectionPage{}, err
+	}
+	if len(page.Collections) > limit {
+		page.Collections = page.Collections[:limit]
+		page.HasMore = true
+		page.Cursor = encodeListCursor(listCursor{LastID: page.Collections[len(page.Collections)-1].ID})
+	}
+	return page, nil
+}
+
+func (s *Store) GetAuthorizedCollection(ctx context.Context, id string, subject assets.CollectionSubject) (assets.Collection, error) {
+	value, err := s.getLiveCollection(ctx, id)
+	if err != nil {
+		return assets.Collection{}, err
+	}
+	if !validReaderSubject(subject) {
+		return assets.Collection{}, assets.ErrForbidden
+	}
+	allowed, err := s.hasCollectionACL(ctx, id, subject)
+	if err != nil {
+		return assets.Collection{}, err
+	}
+	if !allowed {
+		return assets.Collection{}, assets.ErrForbidden
+	}
+	return value, nil
+}
+
+func (s *Store) GetAuthorizedCollectionItem(ctx context.Context, collectionID, itemID string, subject assets.CollectionSubject) (assets.CollectionItem, error) {
+	var allowed bool
+	var id, itemCollectionID, assetID, remoteItemID, displayName, sourceRevision, mimeType, etag sql.NullString
+	var createdRevision, sizeBytes sql.NullInt64
+	var createdAt sql.NullTime
+	err := s.db.QueryRowContext(ctx, `
+		SELECT
+		  ($4=ANY($3::text[])) AND EXISTS (
+		    SELECT 1 FROM asset_collection_acl acl
+		    WHERE acl.collection_id=c.id AND acl.permission='read' AND acl.revoked_at IS NULL
+		      AND ((acl.subject_type='user' AND acl.subject_id=$5)
+		        OR (acl.subject_type='role' AND acl.subject_id=ANY($3::text[])))
+		  ) AS allowed,
+		  i.id,i.collection_id,i.asset_id,i.remote_item_id,i.display_name,i.source_revision,i.created_revision,i.created_at,
+		  a.detected_mime_type,a.size_bytes,a.etag
+		FROM asset_collections c
+		LEFT JOIN asset_collection_items i
+		  ON i.collection_id=c.id AND i.id=$2 AND i.deleted_revision IS NULL
+		LEFT JOIN assets a
+		  ON a.id=i.asset_id AND a.deleted_at IS NULL AND a.purged_at IS NULL
+		 AND a.upload_status='completed' AND a.scan_status='clean'
+		 AND a.processing_status IN ('ready','not_required')
+		WHERE c.id=$1 AND c.deleted_at IS NULL`, collectionID, itemID, subject.Roles, assets.CollectionReaderRole, subject.UserID).Scan(
+		&allowed, &id, &itemCollectionID, &assetID, &remoteItemID, &displayName, &sourceRevision, &createdRevision, &createdAt, &mimeType, &sizeBytes, &etag,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return assets.CollectionItem{}, assets.ErrNotFound
+	}
+	if err != nil {
+		return assets.CollectionItem{}, err
+	}
+	if !allowed {
+		return assets.CollectionItem{}, assets.ErrForbidden
+	}
+	if !id.Valid || !itemCollectionID.Valid || !assetID.Valid || !remoteItemID.Valid || !displayName.Valid || !sourceRevision.Valid || !createdRevision.Valid || !createdAt.Valid || !mimeType.Valid || !sizeBytes.Valid || !etag.Valid {
+		return assets.CollectionItem{}, assets.ErrNotFound
+	}
+	return assets.CollectionItem{
+		ID: id.String, CollectionID: itemCollectionID.String, AssetID: assetID.String,
+		RemoteItemID: remoteItemID.String, DisplayName: displayName.String, SourceRevision: sourceRevision.String,
+		CreatedRevision: createdRevision.Int64, MIMEType: mimeType.String, SizeBytes: sizeBytes.Int64,
+		ETag: etag.String, CreatedAt: createdAt.Time,
+	}, nil
+}
+
+func (s *Store) CreateContentTicket(ctx context.Context, ticket assets.ContentTicket, now time.Time) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM asset_content_tickets WHERE expires_at <= $1`, now); err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `
+		INSERT INTO asset_content_tickets(
+		  token_hash,collection_id,collection_item_id,asset_etag,user_id,roles,expires_at,created_at
+		)
+		SELECT $1,c.id,i.id,a.etag,$5,$6::text[],$7::timestamptz,$8::timestamptz
+		FROM asset_collections c
+		JOIN asset_collection_items i
+		  ON i.collection_id=c.id AND i.id=$3 AND i.deleted_revision IS NULL
+		JOIN assets a
+		  ON a.id=i.asset_id AND a.deleted_at IS NULL AND a.purged_at IS NULL
+		 AND a.upload_status='completed' AND a.scan_status='clean'
+		 AND a.processing_status IN ('ready','not_required') AND a.etag=$4
+		WHERE c.id=$2 AND c.deleted_at IS NULL
+		  AND $7::timestamptz>$9::timestamptz AND $7::timestamptz<=$9::timestamptz+interval '5 minutes'
+		  AND $10=ANY($6::text[])
+		  AND EXISTS (
+		    SELECT 1 FROM asset_collection_acl acl
+		    WHERE acl.collection_id=c.id AND acl.permission='read' AND acl.revoked_at IS NULL
+		      AND ((acl.subject_type='user' AND acl.subject_id=$5)
+		        OR (acl.subject_type='role' AND acl.subject_id=ANY($6::text[])))
+		  )`, ticket.TokenHash, ticket.CollectionID, ticket.CollectionItemID, ticket.AssetETag,
+		ticket.UserID, ticket.Roles, ticket.ExpiresAt, ticket.CreatedAt, now, assets.CollectionReaderRole)
+	if err != nil {
+		return err
+	}
+	if count, _ := result.RowsAffected(); count != 1 {
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		return assets.ErrNotFound
+	}
+	return tx.Commit()
+}
+
+func (s *Store) RedeemContentTicket(ctx context.Context, tokenHash string, now time.Time) (assets.Asset, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return assets.Asset{}, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM asset_content_tickets WHERE expires_at <= $1`, now); err != nil {
+		return assets.Asset{}, err
+	}
+	var asset assets.Asset
+	err = tx.QueryRowContext(ctx, `
+		SELECT a.id,a.namespace,a.object_key,a.original_file_name,a.detected_mime_type,
+		       a.size_bytes,a.etag,a.upload_status,a.scan_status,a.processing_status,
+		       a.visibility,a.updated_at
+		FROM asset_content_tickets t
+		JOIN asset_collections c ON c.id=t.collection_id AND c.deleted_at IS NULL
+		JOIN asset_collection_items i
+		  ON i.id=t.collection_item_id AND i.collection_id=t.collection_id AND i.deleted_revision IS NULL
+		JOIN assets a
+		  ON a.id=i.asset_id AND a.deleted_at IS NULL AND a.purged_at IS NULL
+		 AND a.upload_status='completed' AND a.scan_status='clean'
+		 AND a.processing_status IN ('ready','not_required') AND a.etag=t.asset_etag
+		WHERE t.token_hash=$1 AND t.expires_at>$2 AND $3=ANY(t.roles)
+		  AND EXISTS (
+		    SELECT 1 FROM asset_collection_acl acl
+		    WHERE acl.collection_id=c.id AND acl.permission='read' AND acl.revoked_at IS NULL
+		      AND ((acl.subject_type='user' AND acl.subject_id=t.user_id)
+		        OR (acl.subject_type='role' AND acl.subject_id=ANY(t.roles)))
+		  )`, tokenHash, now, assets.CollectionReaderRole).Scan(
+		&asset.ID, &asset.Namespace, &asset.ObjectKey, &asset.OriginalFileName, &asset.DetectedMIMEType,
+		&asset.SizeBytes, &asset.ETag, &asset.UploadStatus, &asset.ScanStatus, &asset.ProcessingStatus,
+		&asset.Visibility, &asset.UpdatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		if err := tx.Commit(); err != nil {
+			return assets.Asset{}, err
+		}
+		return assets.Asset{}, assets.ErrNotFound
+	}
+	if err != nil {
+		return assets.Asset{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return assets.Asset{}, err
+	}
+	return asset, nil
+}
+
+func (s *Store) ListManagedCollections(ctx context.Context, callerService, cursor string, limit int) (assets.ManagedCollectionPage, error) {
+	lastID := ""
+	if decoded, ok := decodeListCursor(cursor); ok {
+		lastID = decoded.LastID
+	}
+	limit = boundedCollectionLimit(limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,namespace,name,revision,created_by_service,created_at,updated_at FROM asset_collections WHERE created_by_service=$1 AND deleted_at IS NULL AND id>$2 ORDER BY id LIMIT $3`, callerService, lastID, limit+1)
+	if err != nil {
+		return assets.ManagedCollectionPage{}, err
+	}
+	var collections []assets.Collection
+	for rows.Next() {
+		var value assets.Collection
+		if err := rows.Scan(&value.ID, &value.Namespace, &value.Name, &value.Revision, &value.CreatedByService, &value.CreatedAt, &value.UpdatedAt); err != nil {
+			rows.Close()
+			return assets.ManagedCollectionPage{}, err
+		}
+		collections = append(collections, value)
+	}
+	if err := rows.Close(); err != nil {
+		return assets.ManagedCollectionPage{}, err
+	}
+	page := assets.ManagedCollectionPage{Collections: []assets.ManagedCollection{}}
+	if len(collections) > limit {
+		collections = collections[:limit]
+		page.HasMore = true
+		page.Cursor = encodeListCursor(listCursor{LastID: collections[len(collections)-1].ID})
+	}
+	for _, collection := range collections {
+		acls, err := s.collectionACLs(ctx, collection.ID)
+		if err != nil {
+			return assets.ManagedCollectionPage{}, err
+		}
+		page.Collections = append(page.Collections, assets.ManagedCollection{Collection: collection, ACLs: acls})
+	}
+	return page, nil
+}
+
+func (s *Store) GetManagedCollection(ctx context.Context, id, callerService string) (assets.ManagedCollection, error) {
+	value, err := s.getLiveCollection(ctx, id)
+	if err != nil {
+		return assets.ManagedCollection{}, err
+	}
+	if value.CreatedByService != callerService {
+		return assets.ManagedCollection{}, assets.ErrForbidden
+	}
+	acls, err := s.collectionACLs(ctx, id)
+	if err != nil {
+		return assets.ManagedCollection{}, err
+	}
+	return assets.ManagedCollection{Collection: value, ACLs: acls}, nil
+}
+
+func (s *Store) CollectionChanges(ctx context.Context, id, cursor string, subject assets.CollectionSubject) (assets.CollectionChangePage, error) {
+	collection, err := s.GetAuthorizedCollection(ctx, id, subject)
+	if err != nil {
+		return assets.CollectionChangePage{}, err
+	}
+	decoded, valid := decodeChangeCursor(cursor)
+	if !valid || !validChangeCursor(decoded, id, collection.Revision) {
+		decoded = changeCursor{Mode: changeModeReset, CollectionID: id, HighWater: collection.Revision}
+	}
+	if decoded.Mode == changeModeReset {
+		return s.collectionResetPage(ctx, collection, decoded, subject)
+	}
+	return s.collectionDeltaPage(ctx, collection, decoded, subject)
+}
+
+func (s *Store) collectionResetPage(ctx context.Context, collection assets.Collection, cursor changeCursor, subject assets.CollectionSubject) (assets.CollectionChangePage, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT i.id,i.collection_id,COALESCE(i.asset_id,''),i.remote_item_id,i.display_name,i.source_revision,
+		       i.created_revision,i.created_at,COALESCE(a.detected_mime_type,''),COALESCE(a.size_bytes,0),COALESCE(a.etag,'')
+		FROM asset_collection_items i
+		LEFT JOIN assets a ON a.id=i.asset_id
+		WHERE i.collection_id=$1 AND i.id>$2 AND i.created_revision<=$3
+		  AND (i.deleted_revision IS NULL OR i.deleted_revision>$3)
+		ORDER BY i.id LIMIT $4`, collection.ID, cursor.LastItemID, cursor.HighWater, collectionEventLimit+1)
+	if err != nil {
+		return assets.CollectionChangePage{}, err
+	}
+	defer rows.Close()
+	page := assets.CollectionChangePage{Collection: collection, Items: []assets.CollectionItem{}, Tombstones: []assets.CollectionTombstone{}, Reset: true}
+	for rows.Next() {
+		var item assets.CollectionItem
+		if err := rows.Scan(&item.ID, &item.CollectionID, &item.AssetID, &item.RemoteItemID, &item.DisplayName, &item.SourceRevision, &item.CreatedRevision, &item.CreatedAt, &item.MIMEType, &item.SizeBytes, &item.ETag); err != nil {
+			return assets.CollectionChangePage{}, err
+		}
+		page.Items = append(page.Items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return assets.CollectionChangePage{}, err
+	}
+	if len(page.Items) > collectionEventLimit {
+		page.Items = page.Items[:collectionEventLimit]
+		page.HasMore = true
+		page.Cursor = encodeChangeCursor(changeCursor{Mode: changeModeReset, CollectionID: collection.ID, HighWater: cursor.HighWater, LastItemID: page.Items[len(page.Items)-1].ID})
+		return page, nil
+	}
+	current, err := s.GetAuthorizedCollection(ctx, collection.ID, subject)
+	if err != nil {
+		return assets.CollectionChangePage{}, err
+	}
+	page.Collection = current
+	page.HasMore = true
+	toRevision := cursor.HighWater
+	if current.Revision > cursor.HighWater {
+		toRevision = current.Revision
+	}
+	page.Cursor = encodeChangeCursor(changeCursor{Mode: changeModeDelta, CollectionID: collection.ID, FromRevision: cursor.HighWater, ToRevision: toRevision})
+	return page, nil
+}
+
+func (s *Store) collectionDeltaPage(ctx context.Context, collection assets.Collection, cursor changeCursor, subject assets.CollectionSubject) (assets.CollectionChangePage, error) {
+	if cursor.ToRevision <= cursor.FromRevision && cursor.AfterRevision == 0 {
+		cursor.ToRevision = collection.Revision
+	}
+	afterRevision, afterKind := cursor.AfterRevision, cursor.AfterKind
+	if afterRevision == 0 {
+		afterRevision, afterKind = cursor.FromRevision, -1
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT kind,id,remote_item_id,display_name,source_revision,event_revision,asset_id,mime_type,size_bytes,etag,event_at
+		FROM (
+		  SELECT 0 AS kind,i.id,i.remote_item_id,i.display_name,i.source_revision,i.created_revision AS event_revision,
+		         COALESCE(i.asset_id,'') AS asset_id,COALESCE(a.detected_mime_type,'') AS mime_type,
+		         COALESCE(a.size_bytes,0) AS size_bytes,COALESCE(a.etag,'') AS etag,i.created_at AS event_at
+		  FROM asset_collection_items i LEFT JOIN assets a ON a.id=i.asset_id
+		  WHERE i.collection_id=$1 AND i.created_revision>$2 AND i.created_revision<=$3
+		  UNION ALL
+		  SELECT 1 AS kind,i.id,i.remote_item_id,'' AS display_name,'' AS source_revision,i.deleted_revision AS event_revision,
+		         '' AS asset_id,'' AS mime_type,0::bigint AS size_bytes,'' AS etag,i.deleted_at AS event_at
+		  FROM asset_collection_items i
+		  WHERE i.collection_id=$1 AND i.deleted_revision>$2 AND i.deleted_revision<=$3
+		) events
+		WHERE event_revision>$4 OR (event_revision=$4 AND (kind>$5 OR (kind=$5 AND id>$6)))
+		ORDER BY event_revision,kind,id LIMIT $7`, collection.ID, cursor.FromRevision, cursor.ToRevision, afterRevision, afterKind, cursor.AfterID, collectionEventLimit+1)
+	if err != nil {
+		return assets.CollectionChangePage{}, err
+	}
+	type changeEvent struct {
+		kind                                                                   int
+		revision                                                               int64
+		id, remoteItemID, displayName, sourceRevision, assetID, mimeType, etag string
+		sizeBytes                                                              int64
+		at                                                                     time.Time
+	}
+	var events []changeEvent
+	for rows.Next() {
+		var event changeEvent
+		if err := rows.Scan(&event.kind, &event.id, &event.remoteItemID, &event.displayName, &event.sourceRevision, &event.revision, &event.assetID, &event.mimeType, &event.sizeBytes, &event.etag, &event.at); err != nil {
+			rows.Close()
+			return assets.CollectionChangePage{}, err
+		}
+		events = append(events, event)
+	}
+	if err := rows.Close(); err != nil {
+		return assets.CollectionChangePage{}, err
+	}
+	page := assets.CollectionChangePage{Collection: collection, Items: []assets.CollectionItem{}, Tombstones: []assets.CollectionTombstone{}}
+	moreEvents := len(events) > collectionEventLimit
+	if moreEvents {
+		events = events[:collectionEventLimit]
+	}
+	for _, event := range events {
+		if event.kind == 0 {
+			page.Items = append(page.Items, assets.CollectionItem{ID: event.id, CollectionID: collection.ID, AssetID: event.assetID, RemoteItemID: event.remoteItemID, DisplayName: event.displayName, SourceRevision: event.sourceRevision, CreatedRevision: event.revision, MIMEType: event.mimeType, SizeBytes: event.sizeBytes, ETag: event.etag, CreatedAt: event.at})
+		} else {
+			page.Tombstones = append(page.Tombstones, assets.CollectionTombstone{ID: event.id, RemoteItemID: event.remoteItemID, DeletedRevision: event.revision, DeletedAt: event.at})
+		}
+	}
+	if moreEvents {
+		last := events[len(events)-1]
+		page.HasMore = true
+		page.Cursor = encodeChangeCursor(changeCursor{Mode: changeModeDelta, CollectionID: collection.ID, FromRevision: cursor.FromRevision, ToRevision: cursor.ToRevision, AfterRevision: last.revision, AfterKind: last.kind, AfterID: last.id})
+		return page, nil
+	}
+	current, err := s.GetAuthorizedCollection(ctx, collection.ID, subject)
+	if err != nil {
+		return assets.CollectionChangePage{}, err
+	}
+	page.Collection = current
+	page.HasMore = current.Revision > cursor.ToRevision
+	nextTo := cursor.ToRevision
+	if page.HasMore {
+		nextTo = current.Revision
+	}
+	page.Cursor = encodeChangeCursor(changeCursor{Mode: changeModeDelta, CollectionID: collection.ID, FromRevision: cursor.ToRevision, ToRevision: nextTo})
+	return page, nil
+}
+
+func (s *Store) getLiveCollection(ctx context.Context, id string) (assets.Collection, error) {
+	var value assets.Collection
+	err := s.db.QueryRowContext(ctx, `SELECT id,namespace,name,revision,created_by_service,created_at,updated_at FROM asset_collections WHERE id=$1 AND deleted_at IS NULL`, id).Scan(&value.ID, &value.Namespace, &value.Name, &value.Revision, &value.CreatedByService, &value.CreatedAt, &value.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return assets.Collection{}, assets.ErrNotFound
+	}
+	return value, err
+}
+
+func (s *Store) hasCollectionACL(ctx context.Context, id string, subject assets.CollectionSubject) (bool, error) {
+	var allowed bool
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM asset_collection_acl WHERE collection_id=$1 AND permission='read' AND revoked_at IS NULL AND ((subject_type='user' AND subject_id=$2) OR (subject_type='role' AND subject_id=ANY($3::text[]))))`, id, subject.UserID, subject.Roles).Scan(&allowed)
+	return allowed, err
+}
+
+func (s *Store) collectionACLs(ctx context.Context, id string) ([]assets.CollectionACL, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,collection_id,subject_type,subject_id,permission,created_at,COALESCE(revoked_at,'0001-01-01'::timestamptz) FROM asset_collection_acl WHERE collection_id=$1 ORDER BY created_at,id`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	values := []assets.CollectionACL{}
+	for rows.Next() {
+		var value assets.CollectionACL
+		if err := rows.Scan(&value.ID, &value.CollectionID, &value.SubjectType, &value.SubjectID, &value.Permission, &value.CreatedAt, &value.RevokedAt); err != nil {
+			return nil, err
+		}
+		values = append(values, value)
+	}
+	return values, rows.Err()
+}
+
+func validReaderSubject(subject assets.CollectionSubject) bool {
+	if subject.UserID == "" {
+		return false
+	}
+	for _, role := range subject.Roles {
+		if role == assets.CollectionReaderRole {
+			return true
+		}
+	}
+	return false
+}
+
+func boundedCollectionLimit(limit int) int {
+	if limit <= 0 || limit > collectionListLimit {
+		return collectionListLimit
+	}
+	return limit
+}
+
+func encodeListCursor(cursor listCursor) string {
+	value, _ := json.Marshal(cursor)
+	return base64.RawURLEncoding.EncodeToString(value)
+}
+
+func decodeListCursor(value string) (listCursor, bool) {
+	if value == "" {
+		return listCursor{}, true
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil {
+		return listCursor{}, false
+	}
+	var cursor listCursor
+	if err := json.Unmarshal(decoded, &cursor); err != nil {
+		return listCursor{}, false
+	}
+	return cursor, cursor.LastID != ""
+}
+
+func encodeChangeCursor(cursor changeCursor) string {
+	value, _ := json.Marshal(cursor)
+	return base64.RawURLEncoding.EncodeToString(value)
+}
+
+func decodeChangeCursor(value string) (changeCursor, bool) {
+	if value == "" {
+		return changeCursor{}, false
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil {
+		return changeCursor{}, false
+	}
+	var cursor changeCursor
+	if err := json.Unmarshal(decoded, &cursor); err != nil || cursor.CollectionID == "" {
+		return changeCursor{}, false
+	}
+	return cursor, true
+}
+
+func validChangeCursor(cursor changeCursor, collectionID string, revision int64) bool {
+	if cursor.CollectionID != collectionID {
+		return false
+	}
+	if cursor.Mode == changeModeReset {
+		return cursor.HighWater > 0 && cursor.HighWater <= revision
+	}
+	if cursor.Mode != changeModeDelta || cursor.FromRevision < 1 || cursor.ToRevision < cursor.FromRevision || cursor.ToRevision > revision {
+		return false
+	}
+	if cursor.AfterRevision == 0 {
+		return cursor.AfterKind == 0 && cursor.AfterID == ""
+	}
+	return cursor.AfterRevision >= cursor.FromRevision && cursor.AfterRevision <= cursor.ToRevision && (cursor.AfterKind == 0 || cursor.AfterKind == 1) && cursor.AfterID != ""
+}
+
 func (s *Store) ApplyScanResult(ctx context.Context, result assets.ScanResult, now time.Time) (bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -392,14 +1290,74 @@ func (s *Store) ScheduleScanRetry(ctx context.Context, assetID string, expectedA
 }
 
 func (s *Store) SoftDeleteAsset(ctx context.Context, assetID, ownerService string, now time.Time) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE assets SET deleted_at=COALESCE(deleted_at,$3),updated_at=$3 WHERE id=$1 AND owner_service=$2 AND purged_at IS NULL`, assetID, ownerService, now)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	if count, _ := result.RowsAffected(); count != 1 {
+	defer tx.Rollback()
+	var deletedAt sql.NullTime
+	err = tx.QueryRowContext(ctx, `SELECT deleted_at FROM assets WHERE id=$1 AND owner_service=$2 AND purged_at IS NULL FOR UPDATE`, assetID, ownerService).Scan(&deletedAt)
+	if errors.Is(err, sql.ErrNoRows) {
 		return assets.ErrNotFound
 	}
-	return nil
+	if err != nil {
+		return err
+	}
+	if deletedAt.Valid {
+		return tx.Commit()
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT collection_id FROM asset_collection_items WHERE asset_id=$1 AND deleted_revision IS NULL ORDER BY collection_id`, assetID)
+	if err != nil {
+		return err
+	}
+	var collectionIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		collectionIDs = append(collectionIDs, id)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if len(collectionIDs) > 0 {
+		locked, err := tx.QueryContext(ctx, `SELECT id,revision FROM asset_collections WHERE id=ANY($1::text[]) ORDER BY id FOR UPDATE`, collectionIDs)
+		if err != nil {
+			return err
+		}
+		revisions := make(map[string]int64, len(collectionIDs))
+		for locked.Next() {
+			var id string
+			var revision int64
+			if err := locked.Scan(&id, &revision); err != nil {
+				locked.Close()
+				return err
+			}
+			revisions[id] = revision
+		}
+		if err := locked.Close(); err != nil {
+			return err
+		}
+		for _, collectionID := range collectionIDs {
+			nextRevision := revisions[collectionID] + 1
+			result, err := tx.ExecContext(ctx, `UPDATE asset_collection_items SET deleted_revision=$3,deleted_at=$4 WHERE collection_id=$1 AND asset_id=$2 AND deleted_revision IS NULL`, collectionID, assetID, nextRevision, now)
+			if err != nil {
+				return err
+			}
+			if count, _ := result.RowsAffected(); count == 0 {
+				continue
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE asset_collections SET revision=$2,updated_at=$3 WHERE id=$1`, collectionID, nextRevision, now); err != nil {
+				return err
+			}
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE assets SET deleted_at=$2,updated_at=$2 WHERE id=$1`, assetID, now); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) RequeueFailedScan(ctx context.Context, assetID, ownerService string, request assets.ScanRequest, now time.Time) error {

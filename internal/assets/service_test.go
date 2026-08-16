@@ -5,9 +5,13 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -350,6 +354,11 @@ func TestCompleteUploadAcceptsKnownOfficeContainer(t *testing.T) {
 	}
 	var zipped bytes.Buffer
 	writer := zip.NewWriter(&zipped)
+	contentTypes, err := writer.Create("[Content_Types].xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = contentTypes.Write([]byte("<Types/>"))
 	part, err := writer.Create("ppt/presentation.xml")
 	if err != nil {
 		t.Fatal(err)
@@ -369,6 +378,86 @@ func TestCompleteUploadAcceptsKnownOfficeContainer(t *testing.T) {
 	}
 	if asset.DetectedMIMEType != mime {
 		t.Fatalf("detected MIME = %q", asset.DetectedMIMEType)
+	}
+}
+
+func TestCompleteUploadUsesCanonicalMediaValidation(t *testing.T) {
+	tests := []struct {
+		name, fileName, mime string
+		payload              []byte
+		wantErr              bool
+	}{
+		{name: "LPDeck", fileName: "service.lpdeck", mime: "application/vnd.librepresenter.presentation+json", payload: []byte(" \n{\"slides\":[]}")},
+		{name: "LPDeck malformed", fileName: "service.lpdeck", mime: "application/vnd.librepresenter.presentation+json", payload: []byte("{not-json"), wantErr: true},
+		{name: "LPDeck trailing", fileName: "service.lpdeck", mime: "application/vnd.librepresenter.presentation+json", payload: []byte("{\"slides\":[]} {\"second\":true}"), wantErr: true},
+		{name: "MP4", fileName: "service.mp4", mime: "video/mp4", payload: bmff("isom")},
+		{name: "HEIC spoof", fileName: "service.mp4", mime: "video/mp4", payload: bmff("heic"), wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			repo := newMemoryRepository()
+			blobs := newMemoryBlobStore()
+			service := NewService(repo, blobs, "https://www.alive.org.tw/api/assets", time.Now)
+			created, err := service.CreateUploadSession(ctx, CreateUploadInput{
+				Namespace: "line.group.media-sync", OwnerService: "hhc-line-function-bot", OwnerType: "line_group",
+				OwnerID: "group-1", Purpose: "media-sync", OriginalFileName: test.fileName,
+				ExpectedMIMEType: test.mime, MaxSizeBytes: int64(len(test.payload)), Visibility: VisibilityRestricted,
+			}, "media-"+test.name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			blobs.objects[created.Session.StagingObjectKey] = test.payload
+			sum := sha256.Sum256(test.payload)
+			asset, err := service.CompleteUpload(ctx, created.Asset.ID, CompleteUploadInput{SizeBytes: int64(len(test.payload)), ChecksumSHA256: hex.EncodeToString(sum[:]), MIMEType: test.mime})
+			if test.mime == "video/mp4" && blobs.lastOpenRange.Count == 0 {
+				t.Fatal("exact media validation did not use a bounded header range")
+			}
+			if test.mime == "application/vnd.librepresenter.presentation+json" && blobs.lastOpenRange.Count != 0 {
+				t.Fatal("LPDeck validation did not request the bounded full stream")
+			}
+			if test.wantErr {
+				if !errors.Is(err, ErrInvalidUpload) {
+					t.Fatalf("error = %v", err)
+				}
+				return
+			}
+			if err != nil || asset.DetectedMIMEType != test.mime {
+				t.Fatalf("asset=%+v err=%v", asset, err)
+			}
+		})
+	}
+}
+
+func TestCompleteUploadCancellationDoesNotFailOrDeleteUpload(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	repo := newMemoryRepository()
+	blobs := newMemoryBlobStore()
+	service := NewService(repo, blobs, "https://www.alive.org.tw/api/assets", time.Now)
+	payload := testZIP(t, "[Content_Types].xml", "ppt/presentation.xml")
+	mime := "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+	created, err := service.CreateUploadSession(ctx, CreateUploadInput{
+		Namespace: "line.group.media-sync", OwnerService: "hhc-line-function-bot", OwnerType: "line_group",
+		OwnerID: "group-1", Purpose: "media-sync", OriginalFileName: "cancel.pptx",
+		ExpectedMIMEType: mime, MaxSizeBytes: int64(len(payload)), Visibility: VisibilityRestricted,
+	}, "media-cancel")
+	if err != nil {
+		t.Fatal(err)
+	}
+	blobs.objects[created.Session.StagingObjectKey] = payload
+	sum := sha256.Sum256(payload)
+	cancel()
+	_, err = service.CompleteUpload(ctx, created.Asset.ID, CompleteUploadInput{
+		SizeBytes: int64(len(payload)), ChecksumSHA256: hex.EncodeToString(sum[:]), MIMEType: mime,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v", err)
+	}
+	if repo.assets[created.Asset.ID].UploadStatus != UploadCreated || repo.sessions[created.Asset.ID].Status != UploadCreated {
+		t.Fatal("cancellation permanently failed the upload")
+	}
+	if _, ok := blobs.objects[created.Session.StagingObjectKey]; !ok {
+		t.Fatal("cancellation deleted the staging object")
 	}
 }
 
@@ -656,7 +745,221 @@ func completedAsset(t *testing.T, ctx context.Context, service *Service, blobs *
 	return asset
 }
 
+func TestCollectionServiceRequiresMutationIdentity(t *testing.T) {
+	repository := &collectionServiceRepository{}
+	service := NewService(repository, newMemoryBlobStore(), "", func() time.Time {
+		return time.Date(2026, 8, 16, 0, 0, 0, 0, time.UTC)
+	})
+
+	for _, input := range []CreateCollectionInput{
+		{Namespace: "namespace", Name: "Media", CallerService: "helper"},
+		{Namespace: "namespace", Name: "Media", IdempotencyKey: "key"},
+		{Namespace: "", Name: "Media", CallerService: "helper", IdempotencyKey: "key"},
+	} {
+		if _, err := service.CreateCollection(context.Background(), input); !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("input=%+v err=%v", input, err)
+		}
+	}
+	if repository.createCalls != 0 {
+		t.Fatalf("create calls=%d", repository.createCalls)
+	}
+
+	created, err := service.CreateCollection(context.Background(), CreateCollectionInput{
+		Namespace: "namespace", Name: "Media", CallerService: "helper", IdempotencyKey: "key",
+	})
+	if err != nil || created.ID != "collection" || repository.createCalls != 1 {
+		t.Fatalf("created=%+v calls=%d err=%v", created, repository.createCalls, err)
+	}
+}
+
+func TestCollectionMutationJSONCannotSetTrustedIdentity(t *testing.T) {
+	var input CreateCollectionInput
+	if err := json.Unmarshal([]byte(`{"namespace":"namespace","name":"Media","callerService":"attacker","idempotencyKey":"body-key"}`), &input); err != nil {
+		t.Fatal(err)
+	}
+	if input.CallerService != "" || input.IdempotencyKey != "" {
+		t.Fatalf("caller=%q key=%q", input.CallerService, input.IdempotencyKey)
+	}
+}
+
+func TestCollectionServiceRequiresGlobalReaderRole(t *testing.T) {
+	repository := &collectionServiceRepository{}
+	service := NewService(repository, newMemoryBlobStore(), "", time.Now)
+
+	for _, subject := range []CollectionSubject{
+		{},
+		{UserID: "user", Roles: []string{"admin"}},
+		{UserID: "", Roles: []string{CollectionReaderRole}},
+	} {
+		if _, err := service.ListAuthorizedCollections(context.Background(), subject, "", 10); !errors.Is(err, ErrForbidden) {
+			t.Fatalf("subject=%+v err=%v", subject, err)
+		}
+	}
+	if repository.readerCalls != 0 {
+		t.Fatalf("reader calls=%d", repository.readerCalls)
+	}
+
+	if _, err := service.ListAuthorizedCollections(context.Background(), CollectionSubject{
+		UserID: "user", Roles: []string{"role", CollectionReaderRole},
+	}, "", 10); err != nil {
+		t.Fatal(err)
+	}
+	if repository.readerCalls != 1 {
+		t.Fatalf("reader calls=%d", repository.readerCalls)
+	}
+}
+
+func TestCollectionReaderServiceGetsAuthorizedItem(t *testing.T) {
+	repository := &collectionServiceRepository{}
+	service := NewService(repository, newMemoryBlobStore(), "", time.Now)
+	subject := CollectionSubject{UserID: "user", Roles: []string{CollectionReaderRole}}
+
+	item, err := service.GetAuthorizedCollectionItem(context.Background(), "collection", "item", subject)
+	if err != nil || item.ID != "item" || repository.readerItemCalls != 1 {
+		t.Fatalf("item=%+v calls=%d err=%v", item, repository.readerItemCalls, err)
+	}
+	if _, err := service.GetAuthorizedCollectionItem(context.Background(), "collection", "item", CollectionSubject{UserID: "user"}); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("missing reader role err=%v", err)
+	}
+	if repository.readerItemCalls != 1 {
+		t.Fatalf("reader item calls=%d", repository.readerItemCalls)
+	}
+}
+
+func TestCollectionContentTicketUsesOpaqueHashAndBoundedExpiry(t *testing.T) {
+	now := time.Date(2026, 8, 16, 6, 0, 0, 0, time.UTC)
+	repository := &collectionServiceRepository{}
+	service := NewService(repository, newMemoryBlobStore(), "", func() time.Time { return now })
+	subject := CollectionSubject{UserID: "user", Roles: []string{CollectionReaderRole, "media-team"}}
+
+	issued, err := service.IssueCollectionContentTicket(context.Background(), "collection", "item", subject, now.Add(10*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issued.ExpiresAt != now.Add(5*time.Minute) || issued.ETag != `"asset-version"` {
+		t.Fatalf("issued=%+v", issued)
+	}
+	prefix := "/api/assets/content?ticket="
+	if !strings.HasPrefix(issued.ContentURL, prefix) {
+		t.Fatalf("content URL=%q", issued.ContentURL)
+	}
+	token := strings.TrimPrefix(issued.ContentURL, prefix)
+	raw, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil || len(raw) != 32 {
+		t.Fatalf("token bytes=%d err=%v", len(raw), err)
+	}
+	hash := sha256.Sum256(raw)
+	if repository.ticket.TokenHash != hex.EncodeToString(hash[:]) || strings.Contains(repository.ticket.TokenHash, token) {
+		t.Fatalf("persisted hash=%q token=%q", repository.ticket.TokenHash, token)
+	}
+	if repository.ticket.CollectionID != "collection" || repository.ticket.CollectionItemID != "item" || repository.ticket.AssetETag != issued.ETag || repository.ticket.UserID != "user" || !slices.Equal(repository.ticket.Roles, subject.Roles) {
+		t.Fatalf("ticket=%+v", repository.ticket)
+	}
+
+	short, err := service.IssueCollectionContentTicket(context.Background(), "collection", "item", subject, now.Add(2*time.Minute))
+	if err != nil || short.ExpiresAt != now.Add(2*time.Minute) || short.ContentURL == issued.ContentURL {
+		t.Fatalf("short=%+v err=%v", short, err)
+	}
+	if _, err := service.IssueCollectionContentTicket(context.Background(), "collection", "item", subject, now); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("expired token error=%v", err)
+	}
+}
+
+func TestCollectionContentTicketLookupRejectsMalformedTokensAndReturnsPinnedMetadata(t *testing.T) {
+	now := time.Date(2026, 8, 16, 6, 0, 0, 0, time.UTC)
+	repository := &collectionServiceRepository{ticketAsset: Asset{
+		ID: "asset", ObjectKey: "assets/asset", OriginalFileName: "video.mp4", DetectedMIMEType: "video/mp4",
+		SizeBytes: 6, ETag: `"asset-version"`, UpdatedAt: now, UploadStatus: UploadCompleted,
+		ScanStatus: ScanClean, ProcessingStatus: ProcessingReady,
+	}}
+	service := NewService(repository, newMemoryBlobStore(), "", func() time.Time { return now })
+	for _, token := range []string{"", "plain-text", base64.RawURLEncoding.EncodeToString(make([]byte, 31))} {
+		if _, err := service.ContentTicketMetadata(context.Background(), token); !errors.Is(err, ErrUnauthorized) {
+			t.Fatalf("token=%q err=%v", token, err)
+		}
+	}
+	raw := bytes.Repeat([]byte{7}, 32)
+	token := base64.RawURLEncoding.EncodeToString(raw)
+	metadata, err := service.ContentTicketMetadata(context.Background(), token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := sha256.Sum256(raw)
+	if repository.ticketLookupHash != hex.EncodeToString(hash[:]) || metadata.ETag != `"asset-version"` || metadata.Size != 6 || metadata.ContentType != "video/mp4" {
+		t.Fatalf("hash=%q metadata=%+v", repository.ticketLookupHash, metadata)
+	}
+}
+
+func TestCollectionServiceSeparatesManagedReads(t *testing.T) {
+	repository := &collectionServiceRepository{}
+	service := NewService(repository, newMemoryBlobStore(), "", time.Now)
+
+	if _, err := service.ListManagedCollections(context.Background(), "", "", 10); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("blank caller err=%v", err)
+	}
+	if _, err := service.ListManagedCollections(context.Background(), "helper", "", 10); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.GetManagedCollection(context.Background(), "collection", "helper"); err != nil {
+		t.Fatal(err)
+	}
+	if repository.managedListCalls != 1 || repository.managedGetCalls != 1 || repository.readerCalls != 0 {
+		t.Fatalf("managed list=%d get=%d reader=%d", repository.managedListCalls, repository.managedGetCalls, repository.readerCalls)
+	}
+}
+
+type collectionServiceRepository struct {
+	Repository
+	createCalls      int
+	readerCalls      int
+	managedListCalls int
+	managedGetCalls  int
+	readerItemCalls  int
+	ticket           ContentTicket
+	ticketAsset      Asset
+	ticketLookupHash string
+}
+
+func (r *collectionServiceRepository) GetAuthorizedCollectionItem(_ context.Context, _, itemID string, _ CollectionSubject) (CollectionItem, error) {
+	r.readerItemCalls++
+	return CollectionItem{ID: itemID, CollectionID: "collection", AssetID: "asset", ETag: `"asset-version"`}, nil
+}
+
+func (r *collectionServiceRepository) CreateContentTicket(_ context.Context, ticket ContentTicket, _ time.Time) error {
+	r.ticket = ticket
+	return nil
+}
+
+func (r *collectionServiceRepository) RedeemContentTicket(_ context.Context, tokenHash string, _ time.Time) (Asset, error) {
+	r.ticketLookupHash = tokenHash
+	if r.ticketAsset.ID == "" {
+		return Asset{}, ErrNotFound
+	}
+	return r.ticketAsset, nil
+}
+
+func (r *collectionServiceRepository) CreateCollection(_ context.Context, _ CreateCollectionInput, _ time.Time) (Collection, error) {
+	r.createCalls++
+	return Collection{ID: "collection"}, nil
+}
+
+func (r *collectionServiceRepository) ListAuthorizedCollections(_ context.Context, _ CollectionSubject, _ string, _ int) (CollectionPage, error) {
+	r.readerCalls++
+	return CollectionPage{}, nil
+}
+
+func (r *collectionServiceRepository) ListManagedCollections(_ context.Context, _ string, _ string, _ int) (ManagedCollectionPage, error) {
+	r.managedListCalls++
+	return ManagedCollectionPage{}, nil
+}
+
+func (r *collectionServiceRepository) GetManagedCollection(_ context.Context, _, _ string) (ManagedCollection, error) {
+	r.managedGetCalls++
+	return ManagedCollection{}, nil
+}
+
 type memoryRepository struct {
+	Repository
 	assets             map[string]Asset
 	sessions           map[string]UploadSession
 	grants             map[string]Grant
@@ -843,6 +1146,7 @@ type memoryBlobStore struct {
 	deleteFailures             int
 	commitLeavesStaging        bool
 	commitConflictCreatesFinal bool
+	lastOpenRange              ByteRange
 }
 
 func newMemoryBlobStore() *memoryBlobStore { return &memoryBlobStore{objects: map[string][]byte{}} }
@@ -890,7 +1194,8 @@ func (b *memoryBlobStore) Commit(ctx context.Context, stagingObjectKey, finalObj
 	}
 	return b.Inspect(ctx, finalObjectKey, "", 0)
 }
-func (b *memoryBlobStore) Open(ctx context.Context, objectKey string, _ ByteRange, expectedETag string) (BlobDownload, error) {
+func (b *memoryBlobStore) Open(ctx context.Context, objectKey string, requested ByteRange, expectedETag string) (BlobDownload, error) {
+	b.lastOpenRange = requested
 	value, ok := b.objects[objectKey]
 	if !ok {
 		return BlobDownload{}, ErrNotFound

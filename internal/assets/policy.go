@@ -63,6 +63,23 @@ var namespacePolicies = map[string]NamespacePolicy{
 		MaxSizeBytes: 25 << 20, DefaultVisibility: VisibilityRestricted, Visibilities: map[Visibility]bool{VisibilityRestricted: true}, Processing: ProcessingNotRequired,
 		CacheControl: "private, no-store",
 	},
+	"line.group.media-sync": {
+		OwnerService: "hhc-line-function-bot",
+		MIMETypes: map[string]bool{
+			"image/jpeg": true, "image/png": true, "image/gif": true, "image/webp": true, "image/bmp": true,
+			"video/mp4": true, "video/quicktime": true, "video/webm": true, "video/ogg": true,
+			"video/x-msvideo": true, "video/x-matroska": true, "video/x-ms-wmv": true,
+			"audio/mpeg": true, "audio/wav": true, "audio/mp4": true, "audio/aac": true, "audio/ogg": true,
+			"application/pdf": true,
+			"application/vnd.openxmlformats-officedocument.presentationml.presentation": true,
+			"application/vnd.librepresenter.presentation+json":                          true,
+		},
+		MaxSizeBytes:      200 << 20,
+		DefaultVisibility: VisibilityRestricted,
+		Visibilities:      map[Visibility]bool{VisibilityRestricted: true},
+		Processing:        ProcessingNotRequired,
+		CacheControl:      "private, no-store",
+	},
 }
 
 func PolicyFor(namespace string) (NamespacePolicy, bool) {
