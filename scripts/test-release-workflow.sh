@@ -20,6 +20,17 @@ fi
 grep -q 'IMAGE_REF=.*@${digest}' "$workflow"
 grep -q 'SCAN_IMAGE_REF=.*@${scan_digest}' "$workflow"
 grep -q 'Dockerfile.scan' "$workflow"
+grep -Fq 'docker run --rm --entrypoint clamscan asset-scan:verify --help' "$workflow"
+for flag in --max-filesize --max-scansize --max-files --max-recursion --alert-exceeds-max --alert-encrypted; do
+  grep -Fq -- "$flag" "$workflow"
+done
+grep -q "replicaTimeout: 720" infra/main.bicep
+grep -q "CLAMAV_SCAN_TIMEOUT', value: '10m'" infra/main.bicep
+grep -q "ASSET_SCAN_MAX_FILE_SIZE_BYTES', value: '209715200'" infra/main.bicep
+grep -q "CLAMAV_MAX_FILE_SIZE_BYTES', value: '209715200'" infra/main.bicep
+grep -q "CLAMAV_MAX_SCAN_SIZE_BYTES', value: '1073741824'" infra/main.bicep
+grep -q "CLAMAV_MAX_FILES', value: '10000'" infra/main.bicep
+grep -q "CLAMAV_MAX_RECURSION', value: '32'" infra/main.bicep
 if grep -q 'activate_queue_scanning' "$workflow"; then
   echo 'production releases must not expose the retired embedded scanner' >&2
   exit 1

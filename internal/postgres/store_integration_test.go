@@ -717,6 +717,9 @@ func TestCollectionMutationsReplayConflictAndRevision(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 8, 16, 1, 0, 0, 0, time.UTC)
 	insertAsset(t, db, "collection-mutation-asset", assets.UploadCompleted, assets.ScanClean, assets.ProcessingReady, now, time.Time{})
+	if _, err := db.Exec("UPDATE assets SET namespace='namespace',owner_service='helper' WHERE id='collection-mutation-asset'"); err != nil {
+		t.Fatal(err)
+	}
 
 	create := assets.CreateCollectionInput{Namespace: "namespace", Name: "Media", CallerService: "helper", IdempotencyKey: "create"}
 	collection, err := store.CreateCollection(ctx, create, now)
@@ -793,6 +796,9 @@ func TestCollectionMutationsRejectNonOwner(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 8, 16, 2, 0, 0, 0, time.UTC)
 	insertAsset(t, db, "owner-asset", assets.UploadCompleted, assets.ScanClean, assets.ProcessingReady, now, time.Time{})
+	if _, err := db.Exec("UPDATE assets SET namespace='namespace',owner_service='owner' WHERE id='owner-asset'"); err != nil {
+		t.Fatal(err)
+	}
 	collection, err := store.CreateCollection(ctx, assets.CreateCollectionInput{Namespace: "namespace", Name: "Owned", CallerService: "owner", IdempotencyKey: "create-owned"}, now)
 	if err != nil {
 		t.Fatal(err)
@@ -836,6 +842,95 @@ func TestCollectionMutationsRejectNonOwner(t *testing.T) {
 		if err := check(); !errors.Is(err, assets.ErrForbidden) {
 			t.Fatalf("check %d err=%v", index, err)
 		}
+	}
+}
+
+func TestAddCollectionItemRejectsInvalidAssetMembershipStates(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 16, 2, 30, 0, 0, time.UTC)
+	insertCollection(t, db, "media-state-collection", now)
+	tests := []struct {
+		name                     string
+		upload, scan, processing string
+		namespace, owner         string
+		deletedAt, purgedAt      time.Time
+		want                     error
+	}{
+		{name: "upload incomplete", upload: string(assets.UploadCreated), scan: string(assets.ScanClean), processing: string(assets.ProcessingReady), want: assets.ErrConflict},
+		{name: "scan pending", upload: string(assets.UploadCompleted), scan: string(assets.ScanPending), processing: string(assets.ProcessingReady), want: assets.ErrConflict},
+		{name: "scan infected", upload: string(assets.UploadCompleted), scan: string(assets.ScanInfected), processing: string(assets.ProcessingReady), want: assets.ErrConflict},
+		{name: "scan failed", upload: string(assets.UploadCompleted), scan: string(assets.ScanFailed), processing: string(assets.ProcessingReady), want: assets.ErrConflict},
+		{name: "processing pending", upload: string(assets.UploadCompleted), scan: string(assets.ScanClean), processing: string(assets.ProcessingPending), want: assets.ErrConflict},
+		{name: "processing failed", upload: string(assets.UploadCompleted), scan: string(assets.ScanClean), processing: string(assets.ProcessingFailed), want: assets.ErrConflict},
+		{name: "namespace mismatch", upload: string(assets.UploadCompleted), scan: string(assets.ScanClean), processing: string(assets.ProcessingReady), namespace: "other", want: assets.ErrConflict},
+		{name: "owner mismatch", upload: string(assets.UploadCompleted), scan: string(assets.ScanClean), processing: string(assets.ProcessingReady), owner: "other", want: assets.ErrForbidden},
+		{name: "deleted", upload: string(assets.UploadCompleted), scan: string(assets.ScanClean), processing: string(assets.ProcessingReady), deletedAt: now, want: assets.ErrNotFound},
+		{name: "purged", upload: string(assets.UploadCompleted), scan: string(assets.ScanClean), processing: string(assets.ProcessingReady), purgedAt: now, want: assets.ErrNotFound},
+	}
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			id := fmt.Sprintf("membership-state-%d", index)
+			namespace := test.namespace
+			if namespace == "" {
+				namespace = "line.group.media-sync"
+			}
+			owner := test.owner
+			if owner == "" {
+				owner = "hhc-line-function-bot"
+			}
+			query := "INSERT INTO assets(id,namespace,owner_service,owner_type,owner_id,object_key,expected_mime_type,upload_status,scan_status,processing_status,visibility,created_at,updated_at,deleted_at,purged_at,detected_mime_type,size_bytes,etag,scan_event_id) VALUES($1,$2,$3,'line_group','group',$4,'video/mp4',$5,$6,$7,'restricted',$8,$8,NULLIF($9,'0001-01-01'::timestamptz),NULLIF($10,'0001-01-01'::timestamptz),'video/mp4',20,'etag','event')"
+			if _, err := db.Exec(query, id, namespace, owner, "assets/"+id, test.upload, test.scan, test.processing, now, test.deletedAt, test.purgedAt); err != nil {
+				t.Fatal(err)
+			}
+			_, err := store.AddCollectionItem(ctx, assets.AddCollectionItemInput{
+				CollectionID: "media-state-collection", AssetID: id, RemoteItemID: id,
+				DisplayName: "Media", SourceRevision: "source", CallerService: "hhc-line-function-bot",
+				IdempotencyKey: "membership-" + id,
+			}, now)
+			if !errors.Is(err, test.want) {
+				t.Fatalf("error = %v, want %v", err, test.want)
+			}
+		})
+	}
+}
+
+func TestAddCollectionItemRechecksAssetStateAfterWaitingForAssetLock(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	now := time.Date(2026, 8, 16, 2, 45, 0, 0, time.UTC)
+	insertCollection(t, db, "media-race-collection", now)
+	insertAsset(t, db, "media-race-asset", assets.UploadCompleted, assets.ScanClean, assets.ProcessingReady, now, time.Time{})
+	if _, err := db.Exec("UPDATE assets SET namespace='line.group.media-sync',owner_service='hhc-line-function-bot' WHERE id='media-race-asset'"); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec("UPDATE assets SET scan_status='pending' WHERE id='media-race-asset'"); err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, err := store.AddCollectionItem(context.Background(), assets.AddCollectionItemInput{
+			CollectionID: "media-race-collection", AssetID: "media-race-asset", RemoteItemID: "race",
+			DisplayName: "Race", SourceRevision: "source", CallerService: "hhc-line-function-bot",
+			IdempotencyKey: "membership-race",
+		}, now)
+		result <- err
+	}()
+	select {
+	case err := <-result:
+		t.Fatalf("add did not wait for asset lock: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-result; !errors.Is(err, assets.ErrConflict) {
+		t.Fatalf("error after state transition = %v", err)
 	}
 }
 
@@ -937,6 +1032,9 @@ func TestCollectionAssetDeleteTombstonesMembershipsAndRacesAdd(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 8, 16, 4, 0, 0, 0, time.UTC)
 	insertAsset(t, db, "delete-asset", assets.UploadCompleted, assets.ScanClean, assets.ProcessingReady, now, time.Time{})
+	if _, err := db.Exec("UPDATE assets SET namespace='namespace',owner_service='helper' WHERE id='delete-asset'"); err != nil {
+		t.Fatal(err)
+	}
 	first, err := store.CreateCollection(ctx, assets.CreateCollectionInput{Namespace: "namespace", Name: "First", CallerService: "helper", IdempotencyKey: "first"}, now)
 	if err != nil {
 		t.Fatal(err)
@@ -950,10 +1048,10 @@ func TestCollectionAssetDeleteTombstonesMembershipsAndRacesAdd(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := store.SoftDeleteAsset(ctx, "delete-asset", "test", now.Add(time.Minute)); err != nil {
+	if err := store.SoftDeleteAsset(ctx, "delete-asset", "helper", now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SoftDeleteAsset(ctx, "delete-asset", "test", now.Add(2*time.Minute)); err != nil {
+	if err := store.SoftDeleteAsset(ctx, "delete-asset", "helper", now.Add(2*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	for _, collection := range []assets.Collection{first, second} {
@@ -1007,6 +1105,9 @@ func TestCollectionAssetDeleteTombstonesMembershipsAndRacesAdd(t *testing.T) {
 	}
 
 	insertAsset(t, db, "race-asset", assets.UploadCompleted, assets.ScanClean, assets.ProcessingReady, now, time.Time{})
+	if _, err := db.Exec("UPDATE assets SET namespace='namespace',owner_service='helper' WHERE id='race-asset'"); err != nil {
+		t.Fatal(err)
+	}
 	raceCollection, err := store.CreateCollection(ctx, assets.CreateCollectionInput{Namespace: "namespace", Name: "Race", CallerService: "helper", IdempotencyKey: "race"}, now)
 	if err != nil {
 		t.Fatal(err)
@@ -1020,7 +1121,7 @@ func TestCollectionAssetDeleteTombstonesMembershipsAndRacesAdd(t *testing.T) {
 	}()
 	go func() {
 		<-start
-		errorsCh <- store.SoftDeleteAsset(context.Background(), "race-asset", "test", now)
+		errorsCh <- store.SoftDeleteAsset(context.Background(), "race-asset", "helper", now)
 	}()
 	close(start)
 	for range 2 {
@@ -1151,6 +1252,9 @@ func TestCollectionChangesResetDeltaAndCursorRecovery(t *testing.T) {
 		t.Fatalf("first reset items=%d tombstones=%d reset=%v more=%v err=%v", len(first.Items), len(first.Tombstones), first.Reset, first.HasMore, err)
 	}
 	insertAsset(t, db, "mid-reset-asset", assets.UploadCompleted, assets.ScanClean, assets.ProcessingReady, now, time.Time{})
+	if _, err := db.Exec("UPDATE assets SET namespace='namespace',owner_service='helper' WHERE id='mid-reset-asset'"); err != nil {
+		t.Fatal(err)
+	}
 	mid, err := store.AddCollectionItem(ctx, assets.AddCollectionItemInput{CollectionID: collectionID, AssetID: "mid-reset-asset", RemoteItemID: "mid-reset", DisplayName: "Mid reset", SourceRevision: "source-mid", CallerService: "helper", IdempotencyKey: "mid-reset"}, now.Add(time.Minute))
 	if err != nil || mid.Collection.Revision != 503 {
 		t.Fatalf("mid reset mutation=%+v err=%v", mid, err)

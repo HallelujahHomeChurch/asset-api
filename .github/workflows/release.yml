@@ -54,6 +54,10 @@ jobs:
           ./scripts/test-release-workflow.sh
           docker build -t asset-api:verify .
           docker build -f Dockerfile.scan -t asset-scan:verify .
+          clam_help="$(docker run --rm --entrypoint clamscan asset-scan:verify --help)"
+          for flag in --max-filesize --max-scansize --max-files --max-recursion --alert-exceeds-max --alert-encrypted; do
+            grep -Fq -- "$flag" <<<"$clam_help"
+          done
 
   deploy:
     needs: verify

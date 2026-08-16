@@ -1,7 +1,6 @@
 package assets
 
 import (
-	"archive/zip"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -12,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path"
 	"strings"
 	"time"
@@ -155,8 +155,11 @@ func (s *Service) CompleteUpload(ctx context.Context, assetID string, input Comp
 	if err != nil {
 		return Asset{}, fmt.Errorf("inspect blob: %w", err)
 	}
-	observed.DetectedMIMEType, err = s.verifyDetectedMIME(ctx, sourceKey, observed, asset.ExpectedMIMEType)
+	observed.DetectedMIMEType, err = s.verifyDetectedMIME(ctx, sourceKey, observed, asset.OriginalFileName, asset.ExpectedMIMEType)
 	if err != nil {
+		if !errors.Is(err, ErrInvalidUpload) {
+			return Asset{}, fmt.Errorf("validate media: %w", err)
+		}
 		if rejectErr := s.rejectUpload(ctx, asset, session); rejectErr != nil {
 			return Asset{}, rejectErr
 		}
@@ -176,7 +179,9 @@ func (s *Service) CompleteUpload(ctx context.Context, assetID string, input Comp
 			if metadataErr == nil && finalMetadata.Size == observed.Size {
 				committed, metadataErr = s.blobs.Inspect(ctx, asset.ObjectKey, finalMetadata.ETag, session.MaxSizeBytes)
 			}
-			committed.DetectedMIMEType = NormalizeDetectedMIME(asset.ExpectedMIMEType, committed.DetectedMIMEType)
+			if committed.Size == observed.Size && strings.EqualFold(committed.ChecksumSHA256, observed.ChecksumSHA256) {
+				committed.DetectedMIMEType = observed.DetectedMIMEType
+			}
 			if metadataErr == nil && committed.Size == observed.Size && committed.DetectedMIMEType == observed.DetectedMIMEType && strings.EqualFold(committed.ChecksumSHA256, observed.ChecksumSHA256) {
 				err = nil
 			}
@@ -185,7 +190,9 @@ func (s *Service) CompleteUpload(ctx context.Context, assetID string, input Comp
 			return Asset{}, fmt.Errorf("commit blob: %w", err)
 		}
 	}
-	committed.DetectedMIMEType = NormalizeDetectedMIME(asset.ExpectedMIMEType, committed.DetectedMIMEType)
+	if committed.Size == observed.Size && strings.EqualFold(committed.ChecksumSHA256, observed.ChecksumSHA256) {
+		committed.DetectedMIMEType = observed.DetectedMIMEType
+	}
 	if committed.Size != observed.Size || committed.DetectedMIMEType != observed.DetectedMIMEType || !strings.EqualFold(committed.ChecksumSHA256, observed.ChecksumSHA256) {
 		if err := s.rejectUpload(ctx, asset, session); err != nil {
 			return Asset{}, err
@@ -550,84 +557,63 @@ func NormalizeDetectedMIME(expected, detected string) string {
 	return ""
 }
 
-func (s *Service) verifyDetectedMIME(ctx context.Context, objectKey string, observed BlobProperties, expected string) (string, error) {
-	if normalized := NormalizeDetectedMIME(expected, observed.DetectedMIMEType); normalized != "" && observed.DetectedMIMEType != "application/zip" && observed.DetectedMIMEType != "application/octet-stream" {
-		return normalized, nil
+func (s *Service) verifyDetectedMIME(ctx context.Context, objectKey string, observed BlobProperties, fileName, expected string) (string, error) {
+	rangeRequest := ByteRange{Offset: 0, Count: min(observed.Size, 512)}
+	if requiresContentReader(expected) {
+		rangeRequest = ByteRange{}
 	}
-	download, err := s.blobs.Open(ctx, objectKey, ByteRange{}, observed.ETag)
+	download, err := s.blobs.Open(ctx, objectKey, rangeRequest, observed.ETag)
 	if err != nil {
 		return "", err
 	}
 	defer download.Body.Close()
-	value, err := io.ReadAll(io.LimitReader(download.Body, observed.Size+1))
-	if err != nil || int64(len(value)) != observed.Size {
+	if !requiresContentReader(expected) {
+		header, err := io.ReadAll(io.LimitReader(download.Body, 512))
+		if err != nil {
+			return "", err
+		}
+		return ValidateMedia(ctx, fileName, expected, header, nil, observed.Size)
+	}
+	file, err := os.CreateTemp("", "asset-media-validation-*")
+	if err != nil {
+		return "", err
+	}
+	name := file.Name()
+	defer func() {
+		file.Close()
+		os.Remove(name)
+	}()
+	written, err := io.Copy(file, io.LimitReader(&contextReader{ctx: ctx, reader: download.Body}, observed.Size+1))
+	if err != nil {
+		return "", err
+	}
+	if written != observed.Size {
 		return "", ErrInvalidUpload
 	}
-	if observed.DetectedMIMEType == "application/zip" && matchesZipFormat(value, expected) {
-		return expected, nil
+	header := make([]byte, min(observed.Size, 512))
+	read, err := file.ReadAt(header, 0)
+	if err != nil && err != io.EOF {
+		return "", err
 	}
-	if observed.DetectedMIMEType == "application/octet-stream" && len(value) >= 8 && bytes.Equal(value[:8], []byte{0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1}) {
-		switch expected {
-		case "application/vnd.ms-powerpoint", "application/msword", "application/vnd.ms-excel":
-			return expected, nil
-		}
-	}
-	return "", ErrInvalidUpload
+	return ValidateMedia(ctx, fileName, expected, header[:read], file, observed.Size)
 }
 
-func matchesZipFormat(value []byte, expected string) bool {
-	reader, err := zip.NewReader(bytes.NewReader(value), int64(len(value)))
-	if err != nil {
-		return false
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r *contextReader) Read(value []byte) (int, error) {
+	select {
+	case <-r.ctx.Done():
+		return 0, r.ctx.Err()
+	default:
+		return r.reader.Read(value)
 	}
-	for _, file := range reader.File {
-		name := strings.TrimPrefix(file.Name, "/")
-		switch expected {
-		case "application/vnd.openxmlformats-officedocument.presentationml.presentation":
-			if strings.HasPrefix(name, "ppt/") {
-				return true
-			}
-		case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-			if strings.HasPrefix(name, "word/") {
-				return true
-			}
-		case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
-			if strings.HasPrefix(name, "xl/") {
-				return true
-			}
-		case "application/vnd.apple.keynote":
-			if strings.HasPrefix(name, "Index/") || name == "index.apxl" {
-				return true
-			}
-		case "application/vnd.oasis.opendocument.presentation":
-			if name == "content.xml" || name == "mimetype" {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func matchesFileExtension(fileName, mime string) bool {
-	ext := strings.ToLower(path.Ext(strings.TrimSpace(fileName)))
-	for _, allowed := range map[string][]string{
-		"application/pdf": {".pdf"},
-		"image/jpeg":      {".jpg", ".jpeg"}, "image/png": {".png"}, "image/webp": {".webp"},
-		"application/vnd.ms-powerpoint":                                             {".ppt"},
-		"application/vnd.openxmlformats-officedocument.presentationml.presentation": {".pptx"},
-		"application/vnd.apple.keynote":                                             {".key"},
-		"application/vnd.oasis.opendocument.presentation":                           {".odp"},
-		"application/msword":                                                        {".doc"},
-		"application/vnd.openxmlformats-officedocument.wordprocessingml.document":   {".docx"},
-		"application/vnd.ms-excel":                                                  {".xls"},
-		"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":         {".xlsx"},
-		"text/plain": {".txt"}, "text/markdown": {".md", ".markdown"},
-	}[mime] {
-		if ext == allowed {
-			return true
-		}
-	}
-	return false
+	return extensionAllowed(fileName, mime)
 }
 
 func newID() string {

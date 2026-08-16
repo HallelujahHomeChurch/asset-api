@@ -43,7 +43,7 @@ func run(ctx context.Context) error {
 		return err
 	}
 	signatureContainer := value("CLAMAV_SIGNATURE_CONTAINER", "asset-signatures")
-	timeout, err := positiveDuration("CLAMAV_SCAN_TIMEOUT", 2*time.Minute)
+	timeout, err := positiveDuration("CLAMAV_SCAN_TIMEOUT", 10*time.Minute)
 	if err != nil {
 		return err
 	}
@@ -51,7 +51,23 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	maxSize, err := positiveInt64("CLAMAV_MAX_FILE_SIZE_BYTES", 25<<20)
+	maxSize, err := positiveInt64("ASSET_SCAN_MAX_FILE_SIZE_BYTES", 200<<20)
+	if err != nil {
+		return err
+	}
+	maxFileSize, err := positiveInt64("CLAMAV_MAX_FILE_SIZE_BYTES", 200<<20)
+	if err != nil {
+		return err
+	}
+	maxScanSize, err := positiveInt64("CLAMAV_MAX_SCAN_SIZE_BYTES", 1<<30)
+	if err != nil {
+		return err
+	}
+	maxFiles, err := positiveInt("CLAMAV_MAX_FILES", 10000)
+	if err != nil {
+		return err
+	}
+	maxRecursion, err := positiveInt("CLAMAV_MAX_RECURSION", 32)
 	if err != nil {
 		return err
 	}
@@ -84,7 +100,8 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	job := scanqueue.NewScanJob(postgres.New(db), blobs, clamav.NewLocalScanner(signatureDirectory, timeout), queue, manifest.SignatureVersion, maxSize, maxAttempts, timeout)
+	scanner := clamav.NewLocalScanner(signatureDirectory, timeout, maxFileSize, maxScanSize, maxFiles, maxRecursion)
+	job := scanqueue.NewScanJob(postgres.New(db), blobs, scanner, queue, manifest.SignatureVersion, maxSize, maxAttempts, timeout)
 	processed, err := job.RunOnce(ctx)
 	if err == nil {
 		slog.Info("asset scan worker finished", "processed", processed)

@@ -514,7 +514,7 @@ resource scanJob 'Microsoft.App/jobs@2025-07-01' = if (deployScanJob) {
     workloadProfileName: 'Consumption'
     configuration: {
       triggerType: 'Event'
-      replicaTimeout: 600
+      replicaTimeout: 720
       replicaRetryLimit: 0
       eventTriggerConfig: {
         parallelism: 1
@@ -559,8 +559,12 @@ resource scanJob 'Microsoft.App/jobs@2025-07-01' = if (deployScanJob) {
             { name: 'ASSET_SCAN_POISON_QUEUE_URL', value: 'https://${storageAccount.name}.queue.${az.environment().suffixes.storage}/asset-scan-poison' }
             { name: 'CLAMAV_SIGNATURE_CONTAINER', value: 'asset-signatures' }
             { name: 'CLAMAV_SIGNATURE_MAX_AGE', value: '168h' }
-            { name: 'CLAMAV_SCAN_TIMEOUT', value: '2m' }
-            { name: 'CLAMAV_MAX_FILE_SIZE_BYTES', value: '26214400' }
+            { name: 'CLAMAV_SCAN_TIMEOUT', value: '10m' }
+            { name: 'ASSET_SCAN_MAX_FILE_SIZE_BYTES', value: '209715200' }
+            { name: 'CLAMAV_MAX_FILE_SIZE_BYTES', value: '209715200' }
+            { name: 'CLAMAV_MAX_SCAN_SIZE_BYTES', value: '1073741824' }
+            { name: 'CLAMAV_MAX_FILES', value: '10000' }
+            { name: 'CLAMAV_MAX_RECURSION', value: '32' }
             { name: 'CLAMAV_MAX_RETRIES', value: '5' }
           ]
           resources: { cpu: json('2.0'), memory: '4Gi' }

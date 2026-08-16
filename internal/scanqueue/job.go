@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -113,6 +112,15 @@ func (j *ScanJob) RunOnce(ctx context.Context) (bool, error) {
 			slog.Warn("asset scan completed", "asset_id", asset.ID, "status", assets.ScanInfected)
 			return true, j.queue.Ack(ctx, message)
 		}
+		if errors.Is(err, clamav.ErrLimitExceeded) || errors.Is(err, clamav.ErrEncrypted) {
+			category := "scan_limit"
+			if errors.Is(err, clamav.ErrEncrypted) {
+				category = "encrypted"
+			}
+			result := j.result(event, asset, assets.ScanFailed, name, category)
+			poison := poisonRecord(message, &event, category, name)
+			return true, j.poison(ctx, message, &event, poison, now, true, result)
+		}
 		category = "scanner_unavailable"
 	}
 	if err == nil {
@@ -191,13 +199,6 @@ func (j *ScanJob) download(ctx context.Context, asset assets.Asset) (string, str
 	if _, err := io.ReadFull(download.Body, header); err != nil {
 		return "", "blob_unavailable", err
 	}
-	detected := http.DetectContentType(header)
-	if strings.HasPrefix(string(header), "%PDF-") {
-		detected = "application/pdf"
-	}
-	if asset.DetectedMIMEType != "" && assets.NormalizeDetectedMIME(asset.DetectedMIMEType, detected) == "" {
-		return "", "integrity", fmt.Errorf("asset MIME type changed: expected %s, detected %s", asset.DetectedMIMEType, detected)
-	}
 	file, err := os.CreateTemp("", "asset-scan-*")
 	if err != nil {
 		return "", "temporary_storage", err
@@ -213,9 +214,6 @@ func (j *ScanJob) download(ctx context.Context, asset assets.Asset) (string, str
 	hash := sha256.New()
 	source := io.MultiReader(bytes.NewReader(header), download.Body)
 	written, copyErr := io.Copy(io.MultiWriter(file, hash), io.LimitReader(source, asset.SizeBytes+1))
-	if closeErr := file.Close(); copyErr == nil {
-		copyErr = closeErr
-	}
 	if copyErr != nil {
 		return "", "blob_unavailable", copyErr
 	}
@@ -224,6 +222,15 @@ func (j *ScanJob) download(ctx context.Context, asset assets.Asset) (string, str
 	}
 	if asset.ChecksumSHA256 != "" && !strings.EqualFold(hex.EncodeToString(hash.Sum(nil)), asset.ChecksumSHA256) {
 		return "", "integrity", errors.New("asset checksum changed")
+	}
+	if _, err := assets.ValidateMedia(ctx, asset.OriginalFileName, asset.DetectedMIMEType, header, file, asset.SizeBytes); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return "", "blob_unavailable", err
+		}
+		return "", "integrity", fmt.Errorf("asset MIME validation failed: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return "", "temporary_storage", err
 	}
 	ok = true
 	return path, "", nil

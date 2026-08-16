@@ -351,6 +351,11 @@ func TestCompleteUploadAcceptsKnownOfficeContainer(t *testing.T) {
 	}
 	var zipped bytes.Buffer
 	writer := zip.NewWriter(&zipped)
+	contentTypes, err := writer.Create("[Content_Types].xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = contentTypes.Write([]byte("<Types/>"))
 	part, err := writer.Create("ppt/presentation.xml")
 	if err != nil {
 		t.Fatal(err)
@@ -370,6 +375,78 @@ func TestCompleteUploadAcceptsKnownOfficeContainer(t *testing.T) {
 	}
 	if asset.DetectedMIMEType != mime {
 		t.Fatalf("detected MIME = %q", asset.DetectedMIMEType)
+	}
+}
+
+func TestCompleteUploadUsesCanonicalMediaValidation(t *testing.T) {
+	tests := []struct {
+		name, fileName, mime string
+		payload              []byte
+		wantErr              bool
+	}{
+		{name: "LPDeck", fileName: "service.lpdeck", mime: "application/vnd.librepresenter.presentation+json", payload: []byte(" \n{\"slides\":[]}")},
+		{name: "MP4", fileName: "service.mp4", mime: "video/mp4", payload: bmff("isom")},
+		{name: "HEIC spoof", fileName: "service.mp4", mime: "video/mp4", payload: bmff("heic"), wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			repo := newMemoryRepository()
+			blobs := newMemoryBlobStore()
+			service := NewService(repo, blobs, "https://www.alive.org.tw/api/assets", time.Now)
+			created, err := service.CreateUploadSession(ctx, CreateUploadInput{
+				Namespace: "line.group.media-sync", OwnerService: "hhc-line-function-bot", OwnerType: "line_group",
+				OwnerID: "group-1", Purpose: "media-sync", OriginalFileName: test.fileName,
+				ExpectedMIMEType: test.mime, MaxSizeBytes: int64(len(test.payload)), Visibility: VisibilityRestricted,
+			}, "media-"+test.name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			blobs.objects[created.Session.StagingObjectKey] = test.payload
+			sum := sha256.Sum256(test.payload)
+			asset, err := service.CompleteUpload(ctx, created.Asset.ID, CompleteUploadInput{SizeBytes: int64(len(test.payload)), ChecksumSHA256: hex.EncodeToString(sum[:]), MIMEType: test.mime})
+			if test.wantErr {
+				if !errors.Is(err, ErrInvalidUpload) {
+					t.Fatalf("error = %v", err)
+				}
+				return
+			}
+			if err != nil || asset.DetectedMIMEType != test.mime {
+				t.Fatalf("asset=%+v err=%v", asset, err)
+			}
+		})
+	}
+}
+
+func TestCompleteUploadCancellationDoesNotFailOrDeleteUpload(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	repo := newMemoryRepository()
+	blobs := newMemoryBlobStore()
+	service := NewService(repo, blobs, "https://www.alive.org.tw/api/assets", time.Now)
+	payload := testZIP(t, "[Content_Types].xml", "ppt/presentation.xml")
+	mime := "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+	created, err := service.CreateUploadSession(ctx, CreateUploadInput{
+		Namespace: "line.group.media-sync", OwnerService: "hhc-line-function-bot", OwnerType: "line_group",
+		OwnerID: "group-1", Purpose: "media-sync", OriginalFileName: "cancel.pptx",
+		ExpectedMIMEType: mime, MaxSizeBytes: int64(len(payload)), Visibility: VisibilityRestricted,
+	}, "media-cancel")
+	if err != nil {
+		t.Fatal(err)
+	}
+	blobs.objects[created.Session.StagingObjectKey] = payload
+	sum := sha256.Sum256(payload)
+	cancel()
+	_, err = service.CompleteUpload(ctx, created.Asset.ID, CompleteUploadInput{
+		SizeBytes: int64(len(payload)), ChecksumSHA256: hex.EncodeToString(sum[:]), MIMEType: mime,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v", err)
+	}
+	if repo.assets[created.Asset.ID].UploadStatus != UploadCreated || repo.sessions[created.Asset.ID].Status != UploadCreated {
+		t.Fatal("cancellation permanently failed the upload")
+	}
+	if _, ok := blobs.objects[created.Session.StagingObjectKey]; !ok {
+		t.Fatal("cancellation deleted the staging object")
 	}
 }
 

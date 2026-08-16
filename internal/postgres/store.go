@@ -452,18 +452,30 @@ func (s *Store) AddCollectionItem(ctx context.Context, input assets.AddCollectio
 		value.Collection.CreatedByService = input.CallerService
 		return value, nil
 	}
-	var mimeType, etag string
+	var namespace, ownerService, mimeType, etag string
+	var uploadStatus assets.UploadStatus
+	var scanStatus assets.ScanStatus
+	var processingStatus assets.ProcessingStatus
 	var sizeBytes int64
-	err = tx.QueryRowContext(ctx, `SELECT detected_mime_type,size_bytes,etag FROM assets WHERE id=$1 AND deleted_at IS NULL AND purged_at IS NULL FOR UPDATE`, input.AssetID).Scan(&mimeType, &sizeBytes, &etag)
+	err = tx.QueryRowContext(ctx, `SELECT namespace,owner_service,upload_status,scan_status,processing_status,detected_mime_type,size_bytes,etag FROM assets WHERE id=$1 AND deleted_at IS NULL AND purged_at IS NULL FOR UPDATE`, input.AssetID).Scan(&namespace, &ownerService, &uploadStatus, &scanStatus, &processingStatus, &mimeType, &sizeBytes, &etag)
 	if errors.Is(err, sql.ErrNoRows) {
 		return assets.CollectionItemMutation{}, assets.ErrNotFound
 	}
 	if err != nil {
 		return assets.CollectionItemMutation{}, err
 	}
+	if ownerService != input.CallerService {
+		return assets.CollectionItemMutation{}, assets.ErrForbidden
+	}
+	if uploadStatus != assets.UploadCompleted || scanStatus != assets.ScanClean || (processingStatus != assets.ProcessingReady && processingStatus != assets.ProcessingNotRequired) {
+		return assets.CollectionItemMutation{}, assets.ErrConflict
+	}
 	collection, err := lockManagedCollection(ctx, tx, input.CollectionID, input.CallerService)
 	if err != nil {
 		return assets.CollectionItemMutation{}, err
+	}
+	if namespace != collection.Namespace {
+		return assets.CollectionItemMutation{}, assets.ErrConflict
 	}
 	collection.Revision, collection.UpdatedAt = collection.Revision+1, now
 	item := assets.CollectionItem{ID: newStoreID(), CollectionID: collection.ID, AssetID: input.AssetID, RemoteItemID: input.RemoteItemID, DisplayName: input.DisplayName, SourceRevision: input.SourceRevision, CreatedRevision: collection.Revision, MIMEType: mimeType, SizeBytes: sizeBytes, ETag: etag, CreatedAt: now}
