@@ -448,6 +448,14 @@ type DeleteCollectionItemInput struct {
 	IdempotencyKey string `json:"-"`
 }
 
+type RenameCollectionItemInput struct {
+	CollectionID   string `json:"-"`
+	ItemID         string `json:"-"`
+	DisplayName    string `json:"displayName"`
+	CallerService  string `json:"-"`
+	IdempotencyKey string `json:"-"`
+}
+
 type UpdateCollectionRetentionInput struct {
 	CollectionID   string `json:"-"`
 	RetentionDays  int    `json:"retentionDays"`
@@ -474,6 +482,7 @@ type Repository interface {
 	RevokeCollectionACL(context.Context, RevokeCollectionACLInput, time.Time) (CollectionACLMutation, error)
 	AddCollectionItem(context.Context, AddCollectionItemInput, time.Time) (CollectionItemMutation, error)
 	DeleteCollectionItem(context.Context, DeleteCollectionItemInput, time.Time) (CollectionItemMutation, error)
+	RenameCollectionItem(context.Context, RenameCollectionItemInput, time.Time) (ManagedCollectionItem, error)
 	ListAuthorizedCollections(context.Context, CollectionSubject, string, int) (CollectionPage, error)
 	GetAuthorizedCollection(context.Context, string, CollectionSubject) (Collection, error)
 	GetAuthorizedCollectionItem(context.Context, string, string, CollectionSubject) (CollectionItem, error)

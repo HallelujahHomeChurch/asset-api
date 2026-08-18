@@ -363,6 +363,14 @@ func (s *Service) DeleteCollectionItem(ctx context.Context, input DeleteCollecti
 	return s.repository.DeleteCollectionItem(ctx, input, s.now().UTC())
 }
 
+func (s *Service) RenameCollectionItem(ctx context.Context, input RenameCollectionItemInput) (ManagedCollectionItem, error) {
+	input.DisplayName = strings.TrimSpace(input.DisplayName)
+	if input.CollectionID == "" || input.ItemID == "" || !validCollectionItemDisplayName(input.DisplayName) || !validMutationIdentity(input.CallerService, input.IdempotencyKey) {
+		return ManagedCollectionItem{}, ErrInvalidInput
+	}
+	return s.repository.RenameCollectionItem(ctx, input, s.now().UTC())
+}
+
 func (s *Service) ListAuthorizedCollections(ctx context.Context, subject CollectionSubject, cursor string, limit int) (CollectionPage, error) {
 	if !validCollectionSubject(subject) {
 		return CollectionPage{}, ErrForbidden
@@ -491,6 +499,10 @@ func validManagedCollectionItemQuery(query string) bool {
 		}
 	}
 	return true
+}
+
+func validCollectionItemDisplayName(value string) bool {
+	return value != "" && len(value) <= 255 && !strings.ContainsAny(value, "/\\\\") && !strings.ContainsFunc(value, unicode.IsControl)
 }
 
 func (s *Service) UpdateCollectionRetention(ctx context.Context, input UpdateCollectionRetentionInput) (Collection, error) {

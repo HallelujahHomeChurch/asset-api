@@ -947,6 +947,27 @@ func TestManagedCollectionItemsAndRetentionServiceValidation(t *testing.T) {
 	}
 }
 
+func TestRenameCollectionItemServiceValidation(t *testing.T) {
+	repository := &collectionServiceRepository{}
+	service := NewService(repository, newMemoryBlobStore(), "", time.Now)
+	input := RenameCollectionItemInput{CollectionID: "collection", ItemID: "item", DisplayName: "  renamed.mp4  ", CallerService: "helper", IdempotencyKey: "rename"}
+
+	item, err := service.RenameCollectionItem(context.Background(), input)
+	if err != nil || item.DisplayName != "renamed.mp4" || repository.renameItem.DisplayName != "renamed.mp4" {
+		t.Fatalf("item=%+v input=%+v err=%v", item, repository.renameItem, err)
+	}
+	input.DisplayName = strings.Repeat("a", 255)
+	if _, err := service.RenameCollectionItem(context.Background(), input); err != nil || repository.renameItem.DisplayName != input.DisplayName {
+		t.Fatalf("255-byte display name err=%v input=%+v", err, repository.renameItem)
+	}
+	for _, displayName := range []string{"", "folder/file.mp4", `folder\\file.mp4`, "bad\x00.mp4", "bad\n.mp4", strings.Repeat("a", 256)} {
+		input.DisplayName = displayName
+		if _, err := service.RenameCollectionItem(context.Background(), input); !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("displayName=%q err=%v", displayName, err)
+		}
+	}
+}
+
 type collectionServiceRepository struct {
 	Repository
 	createCalls                                                  int
@@ -958,9 +979,15 @@ type collectionServiceRepository struct {
 	managedItemCollectionID, managedItemQuery, managedItemCursor string
 	managedItemLimit                                             int
 	managedItemCalls                                             int
+	renameItem                                                   RenameCollectionItemInput
 	ticket                                                       ContentTicket
 	ticketAsset                                                  Asset
 	ticketLookupHash                                             string
+}
+
+func (r *collectionServiceRepository) RenameCollectionItem(_ context.Context, input RenameCollectionItemInput, _ time.Time) (ManagedCollectionItem, error) {
+	r.renameItem = input
+	return ManagedCollectionItem{ID: input.ItemID, DisplayName: input.DisplayName}, nil
 }
 
 func (r *collectionServiceRepository) GetAuthorizedCollectionItem(_ context.Context, _, itemID string, _ CollectionSubject) (CollectionItem, error) {

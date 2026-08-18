@@ -909,6 +909,80 @@ func TestCollectionMutationsReplayConflictAndRevision(t *testing.T) {
 	}
 }
 
+func TestRenameCollectionItemUpdatesRevisionWithoutChangingContentIdentity(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 19, 2, 0, 0, 0, time.UTC)
+	insertAsset(t, db, "rename-item-asset", assets.UploadCompleted, assets.ScanClean, assets.ProcessingReady, now, time.Time{})
+	if _, err := db.Exec("UPDATE assets SET namespace='namespace',owner_service='helper' WHERE id='rename-item-asset'"); err != nil {
+		t.Fatal(err)
+	}
+	collection, err := store.CreateCollection(ctx, assets.CreateCollectionInput{Namespace: "namespace", Name: "Media", CallerService: "helper", IdempotencyKey: "rename-create"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AddCollectionACL(ctx, assets.AddCollectionACLInput{CollectionID: collection.ID, SubjectType: assets.SubjectUser, SubjectID: "user", Permission: assets.PermissionRead, CallerService: "helper", IdempotencyKey: "rename-acl"}, now); err != nil {
+		t.Fatal(err)
+	}
+	added, err := store.AddCollectionItem(ctx, assets.AddCollectionItemInput{CollectionID: collection.ID, AssetID: "rename-item-asset", RemoteItemID: "remote", DisplayName: "Original.MP4", SourceRevision: "source-1", CallerService: "helper", IdempotencyKey: "rename-add"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	subject := assets.CollectionSubject{UserID: "user", Roles: []string{assets.CollectionReaderRole}}
+	before, err := store.GetAuthorizedCollectionItem(ctx, collection.ID, added.Item.ID, subject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	renamed, err := store.RenameCollectionItem(ctx, assets.RenameCollectionItemInput{CollectionID: collection.ID, ItemID: added.Item.ID, DisplayName: "  Renamed.mp4  ", CallerService: "helper", IdempotencyKey: "rename-item"}, now.Add(time.Minute))
+	if err != nil || renamed.DisplayName != "Renamed.mp4" {
+		t.Fatalf("rename=%+v err=%v", renamed, err)
+	}
+	after, err := store.GetAuthorizedCollectionItem(ctx, collection.ID, added.Item.ID, subject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.UpdatedRevision != added.Collection.Revision+1 || after.DisplayName != "Renamed.mp4" || before.ETag != after.ETag || before.SizeBytes != after.SizeBytes || before.MIMEType != after.MIMEType || before.SourceRevision != after.SourceRevision || !before.CreatedAt.Equal(after.CreatedAt) {
+		t.Fatalf("before=%+v after=%+v", before, after)
+	}
+	changes, err := store.CollectionChanges(ctx, collection.ID, encodeChangeCursor(changeCursor{Mode: changeModeDelta, CollectionID: collection.ID, FromRevision: added.Collection.Revision, ToRevision: after.UpdatedRevision}), subject)
+	if err != nil || len(changes.Items) != 1 || len(changes.Tombstones) != 0 || changes.Items[0].ID != added.Item.ID || changes.Items[0].DisplayName != "Renamed.mp4" || changes.Items[0].CreatedRevision != added.Item.CreatedRevision || changes.Items[0].UpdatedRevision != after.UpdatedRevision {
+		t.Fatalf("changes=%+v err=%v", changes, err)
+	}
+	if _, err := store.RenameCollectionItem(ctx, assets.RenameCollectionItemInput{CollectionID: collection.ID, ItemID: added.Item.ID, DisplayName: "Renamed.mp4", CallerService: "helper", IdempotencyKey: "rename-same"}, now.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	current, err := store.GetAuthorizedCollection(ctx, collection.ID, subject)
+	if err != nil || current.Revision != after.UpdatedRevision {
+		t.Fatalf("collection=%+v err=%v", current, err)
+	}
+	if _, err := store.RenameCollectionItem(ctx, assets.RenameCollectionItemInput{CollectionID: collection.ID, ItemID: added.Item.ID, DisplayName: "Renamed.mp4", CallerService: "helper", IdempotencyKey: "rename-same"}, now.Add(3*time.Minute)); err != nil {
+		t.Fatalf("same-name replay err=%v", err)
+	}
+	if _, err := store.RenameCollectionItem(ctx, assets.RenameCollectionItemInput{CollectionID: collection.ID, ItemID: "missing", DisplayName: "Missing.mp4", CallerService: "helper", IdempotencyKey: "rename-missing"}, now); !errors.Is(err, assets.ErrNotFound) {
+		t.Fatalf("missing err=%v", err)
+	}
+	for _, displayName := range []string{"Renamed.avi", "bad/name.mp4", `bad\\name.mp4`, "bad\x00.mp4", strings.Repeat("a", 256)} {
+		if _, err := store.RenameCollectionItem(ctx, assets.RenameCollectionItemInput{CollectionID: collection.ID, ItemID: added.Item.ID, DisplayName: displayName, CallerService: "helper", IdempotencyKey: "rename-invalid-" + strings.ReplaceAll(displayName, "/", "-")}, now); !errors.Is(err, assets.ErrInvalidInput) {
+			t.Fatalf("displayName=%q err=%v", displayName, err)
+		}
+	}
+	insertAsset(t, db, "rename-item-duplicate", assets.UploadCompleted, assets.ScanClean, assets.ProcessingReady, now, time.Time{})
+	if _, err := db.Exec("UPDATE assets SET namespace='namespace',owner_service='helper' WHERE id='rename-item-duplicate'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AddCollectionItem(ctx, assets.AddCollectionItemInput{CollectionID: collection.ID, AssetID: "rename-item-duplicate", RemoteItemID: "duplicate", DisplayName: "Renamed.mp4", SourceRevision: "source-2", CallerService: "helper", IdempotencyKey: "rename-duplicate"}, now); err != nil {
+		t.Fatalf("duplicate display name err=%v", err)
+	}
+	deleted, err := store.DeleteCollectionItem(ctx, assets.DeleteCollectionItemInput{CollectionID: collection.ID, ItemID: added.Item.ID, CallerService: "helper", IdempotencyKey: "rename-delete"}, now.Add(4*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RenameCollectionItem(ctx, assets.RenameCollectionItemInput{CollectionID: collection.ID, ItemID: added.Item.ID, DisplayName: "Deleted.mp4", CallerService: "helper", IdempotencyKey: "rename-deleted"}, now); !errors.Is(err, assets.ErrNotFound) || deleted.Item.DeletedRevision == 0 {
+		t.Fatalf("deleted=%+v err=%v", deleted, err)
+	}
+}
+
 func TestCollectionMutationsRejectNonOwner(t *testing.T) {
 	db := integrationDB(t)
 	store := New(db)

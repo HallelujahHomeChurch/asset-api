@@ -587,6 +587,28 @@ func TestCollectionManagementTrimsNamesAndUsesAuthenticatedCaller(t *testing.T) 
 	}
 }
 
+func TestRenameCollectionItemRouteUsesBasenameOnly(t *testing.T) {
+	handler, repository := newCollectionManagementHandler()
+	request := httptest.NewRequest(http.MethodPatch, "/priv/assets/collections/collection/items/item", bytes.NewBufferString(`{"displayName":"  Renamed.MP4  "}`))
+	request.Header.Set("X-Internal-Caller-App-Id", "hhc-line-function-bot")
+	request.Header.Set("Idempotency-Key", "rename-item")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || repository.renameItem.CollectionID != "collection" || repository.renameItem.ItemID != "item" || repository.renameItem.DisplayName != "Renamed.MP4" || repository.renameItem.CallerService != "hhc-line-function-bot" {
+		t.Fatalf("status=%d input=%+v body=%s", response.Code, repository.renameItem, response.Body.String())
+	}
+	for _, displayName := range []string{"bad/name.mp4", `bad\\name.mp4`, "bad\n.mp4", strings.Repeat("a", 256)} {
+		request := httptest.NewRequest(http.MethodPatch, "/priv/assets/collections/collection/items/item", bytes.NewBufferString(`{"displayName":`+strconv.Quote(displayName)+`}`))
+		request.Header.Set("X-Internal-Caller-App-Id", "hhc-line-function-bot")
+		request.Header.Set("Idempotency-Key", "rename-invalid")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("displayName=%q status=%d body=%s", displayName, response.Code, response.Body.String())
+		}
+	}
+}
+
 func TestCollectionManagementAcceptsInclusiveByteLimits(t *testing.T) {
 	for _, test := range []struct {
 		name, path, body, key string
@@ -711,6 +733,7 @@ func collectionManagementRequests() []collectionManagementRequest {
 		{name: "add acl", method: http.MethodPost, wantStatus: http.StatusCreated, request: request(http.MethodPost, "/priv/assets/collections/collection/acl", `{"subjectType":"user","subjectId":"user","permission":"read"}`, true)},
 		{name: "revoke acl", method: http.MethodDelete, wantStatus: http.StatusOK, request: request(http.MethodDelete, "/priv/assets/collections/collection/acl/acl", "", true)},
 		{name: "add item", method: http.MethodPost, wantStatus: http.StatusCreated, request: request(http.MethodPost, "/priv/assets/collections/collection/items", `{"assetId":"asset","remoteItemId":"remote","displayName":"Media","sourceRevision":"source"}`, true)},
+		{name: "rename item", method: http.MethodPatch, wantStatus: http.StatusOK, request: request(http.MethodPatch, "/priv/assets/collections/collection/items/item", `{"displayName":"Media.mp4"}`, true)},
 		{name: "delete item", method: http.MethodDelete, wantStatus: http.StatusOK, request: request(http.MethodDelete, "/priv/assets/collections/collection/items/item", "", true)},
 	}
 }
@@ -731,6 +754,7 @@ type collectionManagementRepository struct {
 	managedItemCollectionID, managedItemQuery, managedItemCursor string
 	managedItemLimit                                             int
 	retention                                                    assets.UpdateCollectionRetentionInput
+	renameItem                                                   assets.RenameCollectionItemInput
 }
 
 func (r *collectionManagementRepository) GetAsset(context.Context, string) (assets.Asset, error) {
@@ -765,6 +789,11 @@ func (r *collectionManagementRepository) AddCollectionItem(_ context.Context, in
 func (r *collectionManagementRepository) DeleteCollectionItem(_ context.Context, input assets.DeleteCollectionItemInput, _ time.Time) (assets.CollectionItemMutation, error) {
 	r.calls++
 	return assets.CollectionItemMutation{Collection: assets.Collection{ID: input.CollectionID}, Item: assets.CollectionItem{ID: input.ItemID}}, nil
+}
+func (r *collectionManagementRepository) RenameCollectionItem(_ context.Context, input assets.RenameCollectionItemInput, _ time.Time) (assets.ManagedCollectionItem, error) {
+	r.calls++
+	r.renameItem = input
+	return assets.ManagedCollectionItem{ID: input.ItemID, DisplayName: input.DisplayName}, nil
 }
 func (r *collectionManagementRepository) ListManagedCollections(_ context.Context, caller, cursor string, limit int) (assets.ManagedCollectionPage, error) {
 	r.calls++

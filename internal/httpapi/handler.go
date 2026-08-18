@@ -74,6 +74,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.Handle("POST /priv/assets/collections/{collectionID}/acl", h.internal(h.collectionCaller(http.HandlerFunc(h.addCollectionACL))))
 	mux.Handle("DELETE /priv/assets/collections/{collectionID}/acl/{aclID}", h.internal(h.collectionCaller(http.HandlerFunc(h.revokeCollectionACL))))
 	mux.Handle("POST /priv/assets/collections/{collectionID}/items", h.internal(h.collectionCaller(http.HandlerFunc(h.addCollectionItem))))
+	mux.Handle("PATCH /priv/assets/collections/{collectionID}/items/{itemID}", h.internal(h.collectionCaller(http.HandlerFunc(h.renameCollectionItem))))
 	mux.Handle("DELETE /priv/assets/collections/{collectionID}/items/{itemID}", h.internal(h.collectionCaller(http.HandlerFunc(h.deleteCollectionItem))))
 	mux.Handle("GET /priv/assets/{assetID}", h.internal(http.HandlerFunc(h.getAsset)))
 	mux.Handle("GET /priv/assets/{assetID}/{action}", h.internal(http.HandlerFunc(h.assetAction)))
@@ -669,6 +670,25 @@ func (h *Handler) deleteCollectionItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	value, err := h.service.DeleteCollectionItem(r.Context(), assets.DeleteCollectionItemInput{CollectionID: collectionID, ItemID: itemID, CallerService: caller, IdempotencyKey: key})
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
+}
+
+func (h *Handler) renameCollectionItem(w http.ResponseWriter, r *http.Request) {
+	collectionID, itemID := r.PathValue("collectionID"), r.PathValue("itemID")
+	caller, key, ok := collectionMutationIdentity(w, r)
+	if !ok || !requireOpaqueID(w, collectionID, "collection ID") || !requireOpaqueID(w, itemID, "item ID") {
+		return
+	}
+	var input assets.RenameCollectionItemInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	input.CollectionID, input.ItemID, input.CallerService, input.IdempotencyKey = collectionID, itemID, caller, key
+	value, err := h.service.RenameCollectionItem(r.Context(), input)
 	if err != nil {
 		handleError(w, err)
 		return
