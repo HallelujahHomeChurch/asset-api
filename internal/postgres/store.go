@@ -18,6 +18,7 @@ import (
 
 	"hhc/asset-api/internal/assets"
 	"hhc/asset-api/internal/lifecycle"
+	"hhc/asset-api/internal/retention"
 
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -582,11 +583,11 @@ func (s *Store) deleteCollectionItems(ctx context.Context, tx *sql.Tx, collectio
 		SELECT id,collection_id,COALESCE(asset_id,''),remote_item_id,display_name,source_revision,created_revision,retention_exempt,updated_revision,created_at,updated_at
 		FROM asset_collection_items
 		WHERE collection_id=$1 AND id=ANY($2::text[]) AND deleted_revision IS NULL
-		  AND (NOT $3 OR retention_exempt=false)
-		ORDER BY id FOR UPDATE`, collectionID, itemIDs, respectRetentionExempt)
+		ORDER BY id FOR UPDATE`, collectionID, itemIDs)
 	if err != nil {
 		return collectionItemsDeletion{}, err
 	}
+	deletion := collectionItemsDeletion{collection: collection}
 	var items []assets.CollectionItem
 	for rows.Next() {
 		var item assets.CollectionItem
@@ -594,16 +595,22 @@ func (s *Store) deleteCollectionItems(ctx context.Context, tx *sql.Tx, collectio
 			rows.Close()
 			return collectionItemsDeletion{}, err
 		}
+		if respectRetentionExempt && item.RetentionExempt {
+			deletion.result.ExemptSkipped++
+			continue
+		}
+		if respectRetentionExempt && item.CreatedAt.Add(time.Duration(collection.RetentionDays)*24*time.Hour).After(now) {
+			continue
+		}
 		items = append(items, item)
 	}
 	if err := finishRows(rows); err != nil {
 		return collectionItemsDeletion{}, err
 	}
-	deletion := collectionItemsDeletion{
-		collection: collection,
-		items:      items,
-		result:     assets.DeleteCollectionItemsResult{Deleted: len(items), AlreadyRemoved: len(itemIDs) - len(items)},
-	}
+	deletion.collection = collection
+	deletion.items = items
+	deletion.result.Deleted = len(items)
+	deletion.result.AlreadyRemoved = len(itemIDs) - len(items) - deletion.result.ExemptSkipped
 	if len(items) == 0 {
 		return deletion, nil
 	}
@@ -1843,6 +1850,15 @@ func (s *Store) GetOperations(ctx context.Context, now time.Time) (assets.Operat
 		&value.ProcessingPending, &value.ProcessingFailed, &oldestProcessing,
 		&value.PurgePending,
 	)
+	if err == nil {
+		err = s.db.QueryRowContext(ctx, `
+			SELECT COUNT(*)
+			FROM asset_collection_items i
+			JOIN asset_collections c ON c.id=i.collection_id
+			WHERE c.deleted_at IS NULL AND c.namespace='line.group.media-sync' AND c.created_by_service='hhc-line-function-bot'
+			  AND i.deleted_revision IS NULL AND i.retention_exempt=false
+			  AND i.created_at + c.retention_days * interval '1 day' <= $1`, now).Scan(&value.ExpiredCollectionItems)
+	}
 	if oldestScan.Valid {
 		value.OldestScanPending = oldestScan.Time
 	}
@@ -1850,6 +1866,75 @@ func (s *Store) GetOperations(ctx context.Context, now time.Time) (assets.Operat
 		value.OldestProcessingPending = oldestProcessing.Time
 	}
 	return value, err
+}
+
+func (s *Store) ListExpiredCollectionItems(ctx context.Context, now time.Time, limit int) ([]retention.Candidate, error) {
+	if limit < 1 || limit > retention.BatchSize {
+		limit = retention.BatchSize
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT i.collection_id,i.id
+		FROM asset_collection_items i
+		JOIN asset_collections c ON c.id=i.collection_id
+		WHERE c.deleted_at IS NULL AND c.namespace='line.group.media-sync' AND c.created_by_service='hhc-line-function-bot'
+		  AND i.deleted_revision IS NULL AND i.retention_exempt=false
+		  AND i.created_at + c.retention_days * interval '1 day' <= $1
+		ORDER BY i.created_at,i.id
+		LIMIT $2`, now, limit)
+	if err != nil {
+		return nil, err
+	}
+	var candidates []retention.Candidate
+	for rows.Next() {
+		var candidate retention.Candidate
+		if err := rows.Scan(&candidate.CollectionID, &candidate.ItemID); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		candidates = append(candidates, candidate)
+	}
+	return candidates, finishRows(rows)
+}
+
+func (s *Store) PreviewExpiredCollectionItems(ctx context.Context, now time.Time) ([]retention.Preview, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT c.id,COUNT(*),COALESCE(SUM(a.size_bytes),0)
+		FROM asset_collection_items i
+		JOIN asset_collections c ON c.id=i.collection_id
+		LEFT JOIN assets a ON a.id=i.asset_id
+		WHERE c.deleted_at IS NULL AND c.namespace='line.group.media-sync' AND c.created_by_service='hhc-line-function-bot'
+		  AND i.deleted_revision IS NULL AND i.retention_exempt=false
+		  AND i.created_at + c.retention_days * interval '1 day' <= $1
+		GROUP BY c.id ORDER BY c.id`, now)
+	if err != nil {
+		return nil, err
+	}
+	var preview []retention.Preview
+	for rows.Next() {
+		var value retention.Preview
+		if err := rows.Scan(&value.CollectionID, &value.CandidateCount, &value.TotalBytes); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		preview = append(preview, value)
+	}
+	return preview, finishRows(rows)
+}
+
+func (s *Store) DeleteExpiredCollectionItems(ctx context.Context, collectionID string, itemIDs []string, now time.Time) (retention.DeleteResult, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return retention.DeleteResult{}, err
+	}
+	defer tx.Rollback()
+	deleted, err := s.deleteCollectionItems(ctx, tx, collectionID, "hhc-line-function-bot", itemIDs, now, true)
+	if err != nil {
+		return retention.DeleteResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return retention.DeleteResult{}, err
+	}
+	return retention.DeleteResult{Deleted: deleted.result.Deleted, ExemptSkipped: deleted.result.ExemptSkipped, AlreadyRemoved: deleted.result.AlreadyRemoved}, nil
 }
 
 func (s *Store) ClaimPurge(ctx context.Context, now time.Time, lease time.Duration) (lifecycle.Candidate, bool, error) {

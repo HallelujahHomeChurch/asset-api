@@ -55,6 +55,26 @@ func TestCollectionCallerAuthorizationForEveryManagementRoute(t *testing.T) {
 	}
 }
 
+func TestOperationsIncludesExpiredCollectionItemsWithoutChangingPurgePending(t *testing.T) {
+	handler, _ := newCollectionManagementHandler()
+	request := httptest.NewRequest(http.MethodGet, "/priv/assets/operations", nil)
+	request.Header.Set("X-Internal-Caller-App-Id", "hhc-line-function-bot")
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var operations assets.Operations
+	if err := json.Unmarshal(response.Body.Bytes(), &operations); err != nil {
+		t.Fatal(err)
+	}
+	if operations.ExpiredCollectionItems != 7 || operations.PurgePending != 3 {
+		t.Fatalf("operations=%+v", operations)
+	}
+}
+
 func TestCollectionReaderAuthorizationMatrix(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -855,6 +875,10 @@ type collectionManagementRepository struct {
 	batchRetention                                               assets.SetCollectionItemsRetentionInput
 	batchDelete                                                  assets.DeleteCollectionItemsInput
 	ticket                                                       assets.ContentTicket
+}
+
+func (r *collectionManagementRepository) GetOperations(context.Context, time.Time) (assets.Operations, error) {
+	return assets.Operations{ExpiredCollectionItems: 7, PurgePending: 3}, nil
 }
 
 func (r *collectionManagementRepository) GetAsset(context.Context, string) (assets.Asset, error) {

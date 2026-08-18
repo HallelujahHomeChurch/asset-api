@@ -268,6 +268,7 @@ type Operations struct {
 	ProcessingFailed        int64     `json:"processingFailed"`
 	OldestProcessingPending time.Time `json:"oldestProcessingPending,omitempty"`
 	PurgePending            int64     `json:"purgePending"`
+	ExpiredCollectionItems  int64     `json:"expiredCollectionItems"`
 }
 
 const CollectionReaderRole = "media_sync_user"
@@ -478,6 +479,7 @@ type DeleteCollectionItemsInput struct {
 type DeleteCollectionItemsResult struct {
 	Deleted        int `json:"deleted"`
 	AlreadyRemoved int `json:"alreadyRemoved"`
+	ExemptSkipped  int `json:"-"`
 }
 
 type RenameCollectionItemInput struct {

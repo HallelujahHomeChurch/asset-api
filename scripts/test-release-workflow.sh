@@ -9,6 +9,8 @@ grep -q 'branches: \[main\]' "$workflow"
 grep -Fq "github.event_name == 'push' && 'deploy-asset-api-production' || inputs.confirmation" "$workflow"
 grep -q 'ACTIVATE_QUEUE_SCANNING: "true"' "$workflow"
 grep -q 'EMBEDDED_SCAN_ENABLED: "false"' "$workflow"
+grep -q 'DEPLOY_RETENTION_JOB: "false"' "$workflow"
+grep -q 'RETENTION_APPLY_ENABLED: "false"' "$workflow"
 grep -q 'deploy-asset-api-production' "$workflow"
 grep -q 'environment: production' "$workflow"
 grep -q 'Verify isolated runtime prerequisites' "$workflow"
@@ -40,6 +42,8 @@ if grep -Eq '172\.16\.65\.5|CLAMAV_HOST|AllowACAtoClamAV|DenyOtherVNetToClamAV' 
   exit 1
 fi
 test "$(grep -c 'embeddedScanEnabled="$EMBEDDED_SCAN_ENABLED"' "$workflow")" = 2
+test "$(grep -c 'deployRetentionJob="$DEPLOY_RETENTION_JOB"' "$workflow")" = 2
+test "$(grep -c 'retentionApplyEnabled="$RETENTION_APPLY_ENABLED"' "$workflow")" = 2
 if grep -q 'ACTIVATE_QUEUE_SCANNING/true/false' "$workflow"; then
   echo 'queue and embedded scanners must use explicit inverse modes' >&2
   exit 1
@@ -95,6 +99,12 @@ grep -q "runtimeKeyVaultName string = 'alive-asset-runtime-kv'" infra/main.bicep
 grep -q "migrationKeyVaultName string = 'alive-asset-migrate-kv'" infra/main.bicep
 grep -q "name: 'asset-migrate'" infra/main.bicep
 grep -q "command: \\['/asset-migrate'\\]" infra/main.bicep
+grep -q 'param deployRetentionJob bool = false' infra/main.bicep
+grep -q 'param retentionApplyEnabled bool = false' infra/main.bicep
+grep -q "name: 'asset-retention'" infra/main.bicep
+grep -q "cronExpression: '0 19 \* \* \*'" infra/main.bicep
+grep -q "command: \\['/asset-retention-worker'\\]" infra/main.bicep
+grep -q "name: 'ASSET_RETENTION_APPLY_ENABLED', value: string(retentionApplyEnabled)" infra/main.bicep
 grep -q 'enableRbacAuthorization: true' infra/main.bicep
 grep -q 'test-migration-policy-test.sh' .github/workflows/ci.yml
 grep -q 'test-what-if-policy.sh' .github/workflows/ci.yml

@@ -26,6 +26,8 @@ jq -e '
         or ((.changeType == "Create" or .changeType == "Modify")
           and (.resourceId | endswith("/Microsoft.App/jobs/asset-scan") or endswith("/Microsoft.App/jobs/asset-clamav-signature-refresh")))
         or ((.changeType == "Create" or .changeType == "Modify")
+          and (.resourceId | endswith("/Microsoft.App/jobs/asset-retention")))
+        or ((.changeType == "Create" or .changeType == "Modify")
           and (.resourceId | endswith("/Microsoft.App/containerApps/asset-api/authConfigs/current")))
         | not
       )

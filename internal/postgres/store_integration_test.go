@@ -1972,7 +1972,7 @@ func TestDeleteRaceRetentionExemptionWinsBeforeWorkerLock(t *testing.T) {
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	if deletion.result.Deleted != 0 || deletion.result.AlreadyRemoved != 1 {
+	if deletion.result.Deleted != 0 || deletion.result.ExemptSkipped != 1 || deletion.result.AlreadyRemoved != 0 {
 		t.Fatalf("deletion=%+v", deletion)
 	}
 	var deletedRevision sql.NullInt64
@@ -1981,6 +1981,58 @@ func TestDeleteRaceRetentionExemptionWinsBeforeWorkerLock(t *testing.T) {
 	}
 	if deletedRevision.Valid {
 		t.Fatalf("deleted revision=%d", deletedRevision.Int64)
+	}
+}
+
+func TestExpiredCollectionItemsUseCurrentPolicyAndExactBoundary(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 19, 19, 0, 0, 0, time.UTC)
+	insertCollection(t, db, "expired-items", now.Add(-48*time.Hour))
+	if _, err := db.Exec(`UPDATE asset_collections SET retention_days=2 WHERE id='expired-items'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,remote_item_id,display_name,source_revision,created_revision,retention_exempt,updated_revision,created_at,updated_at,deleted_revision,deleted_at) VALUES
+		('exact','expired-items','exact','Exact','source',1,false,1,$1,$1,NULL,NULL),
+		('active','expired-items','active','Active','source',1,false,1,$2,$2,NULL,NULL),
+		('exempt','expired-items','exempt','Exempt','source',1,true,1,$3,$3,NULL,NULL),
+		('removed','expired-items','removed','Removed','source',1,false,1,$3,$3,2,$4)`, now.Add(-48*time.Hour), now.Add(-48*time.Hour+time.Nanosecond), now.Add(-72*time.Hour), now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO asset_collections(id,namespace,name,retention_days,created_by_service,created_at,updated_at) VALUES('other-namespace','other','Other',1,'hhc-line-function-bot',$1,$1)`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,remote_item_id,display_name,source_revision,created_revision,retention_exempt,updated_revision,created_at,updated_at) VALUES('other-item','other-namespace','other','Other','source',1,false,1,$1,$1)`, now.Add(-72*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	candidates, err := store.ListExpiredCollectionItems(ctx, now, 100)
+	if err != nil || len(candidates) != 1 || candidates[0].ItemID != "exact" {
+		t.Fatalf("candidates=%+v err=%v", candidates, err)
+	}
+	preview, err := store.PreviewExpiredCollectionItems(ctx, now)
+	if err != nil || len(preview) != 1 || preview[0].CollectionID != "expired-items" || preview[0].CandidateCount != 1 {
+		t.Fatalf("preview=%+v err=%v", preview, err)
+	}
+	operations, err := store.GetOperations(ctx, now)
+	if err != nil || operations.ExpiredCollectionItems != 1 {
+		t.Fatalf("operations=%+v err=%v", operations, err)
+	}
+
+	if _, err := db.Exec(`UPDATE asset_collections SET retention_days=1 WHERE id='expired-items'`); err != nil {
+		t.Fatal(err)
+	}
+	candidates, err = store.ListExpiredCollectionItems(ctx, now, 100)
+	if err != nil || len(candidates) != 2 {
+		t.Fatalf("retroactive candidates=%+v err=%v", candidates, err)
+	}
+	if _, err := db.Exec(`UPDATE asset_collections SET retention_days=3 WHERE id='expired-items'`); err != nil {
+		t.Fatal(err)
+	}
+	deleted, err := store.DeleteExpiredCollectionItems(ctx, "expired-items", []string{"exact"}, now)
+	if err != nil || deleted.Deleted != 0 || deleted.AlreadyRemoved != 1 {
+		t.Fatalf("policy-race deletion=%+v err=%v", deleted, err)
 	}
 }
 
