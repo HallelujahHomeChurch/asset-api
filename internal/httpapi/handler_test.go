@@ -216,7 +216,7 @@ func TestManagedContentTicketsRequireInternalCallerAndReturnSafeBatch(t *testing
 	handler, repository := newCollectionManagementHandler()
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request("hhc-line-function-bot"))
-	if response.Code != http.StatusCreated || repository.ticket.AccessMode != "manager" || repository.ticket.UserID != "manager" || len(repository.ticket.Roles) != 0 {
+	if response.Code != http.StatusCreated || repository.managedItemCaller != "hhc-line-function-bot" || repository.ticket.AccessMode != "manager" || repository.ticket.UserID != "manager" || len(repository.ticket.Roles) != 0 {
 		t.Fatalf("status=%d ticket=%+v body=%s", response.Code, repository.ticket, response.Body.String())
 	}
 	var batch assets.ManagedContentTicketBatch
@@ -442,6 +442,7 @@ func TestCollectionReaderMetadataIsSyncSafe(t *testing.T) {
 	handler, _ := newCollectionReaderHandler()
 	for _, path := range []string{
 		"/api/assets/collections/collection/changes",
+		"/api/assets/collections/collection/changes?cursor=delta",
 		"/api/assets/collections/collection/items/item",
 	} {
 		request := collectionReaderRequest(http.MethodGet, path)
@@ -456,11 +457,35 @@ func TestCollectionReaderMetadataIsSyncSafe(t *testing.T) {
 				t.Fatalf("path=%s leaked %q in %s", path, secret, body)
 			}
 		}
-		for _, metadata := range []string{`"id":"item"`, `"remoteItemId":"remote-item"`, `"displayName":"Media"`, `"sourceRevision":"source"`, `"mimeType":"video/mp4"`, `"sizeBytes":20`, `"etag":"etag"`} {
+		for _, metadata := range []string{`"id":"item"`, `"remoteItemId":"remote-item"`, `"displayName":"Media"`, `"sourceRevision":"source"`, `"mimeType":"video/mp4"`, `"sizeBytes":20`, `"etag":"etag"`, `"updatedRevision":3`, `"updatedAt":"2026-08-16T01:00:00Z"`} {
 			if !strings.Contains(body, metadata) {
 				t.Fatalf("path=%s missing %s in %s", path, metadata, body)
 			}
 		}
+	}
+}
+
+func TestCollectionReaderCollectionDTOExcludesManagementMetadata(t *testing.T) {
+	handler, _ := newCollectionReaderHandler()
+	for _, path := range []string{"/api/assets/collections", "/api/assets/collections/collection/changes"} {
+		request := collectionReaderRequest(http.MethodGet, path)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("path=%s status=%d body=%s", path, response.Code, response.Body.String())
+		}
+		if strings.Contains(response.Body.String(), `"retentionDays"`) || strings.Contains(response.Body.String(), `"createdByService"`) {
+			t.Fatalf("path=%s leaked management metadata: %s", path, response.Body.String())
+		}
+	}
+
+	managed, _ := newCollectionManagementHandler()
+	request := httptest.NewRequest(http.MethodGet, "/priv/assets/collections/collection", nil)
+	request.Header.Set("X-Internal-Caller-App-Id", "hhc-line-function-bot")
+	response := httptest.NewRecorder()
+	managed.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"retentionDays":14`) {
+		t.Fatalf("managed status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 
@@ -506,7 +531,7 @@ func (r *collectionReaderRepository) ListAuthorizedCollections(_ context.Context
 	if !readerTestAuthorized(subject) {
 		return assets.CollectionPage{}, assets.ErrForbidden
 	}
-	return assets.CollectionPage{Collections: []assets.Collection{{ID: "collection", Namespace: "line.group.media-sync", Name: "Media", Revision: 2}}}, nil
+	return assets.CollectionPage{Collections: []assets.Collection{{ID: "collection", Namespace: "line.group.media-sync", Name: "Media", Revision: 2, RetentionDays: 14, CreatedByService: "owner-service"}}}, nil
 }
 
 func (r *collectionReaderRepository) CollectionChanges(_ context.Context, id, cursor string, subject assets.CollectionSubject) (assets.CollectionChangePage, error) {
@@ -519,8 +544,8 @@ func (r *collectionReaderRepository) CollectionChanges(_ context.Context, id, cu
 		return assets.CollectionChangePage{}, assets.ErrForbidden
 	}
 	return assets.CollectionChangePage{
-		Collection: assets.Collection{ID: id, Revision: 2}, Cursor: cursor,
-		Items:      []assets.CollectionItem{{ID: "item", CollectionID: id, AssetID: "secret-asset", RemoteItemID: "remote-item", DisplayName: "Media", SourceRevision: "source", CreatedRevision: 2, MIMEType: "video/mp4", SizeBytes: 20, ETag: "etag"}},
+		Collection: assets.Collection{ID: id, Revision: 2, RetentionDays: 14, CreatedByService: "owner-service"}, Cursor: cursor,
+		Items:      []assets.CollectionItem{{ID: "item", CollectionID: id, AssetID: "secret-asset", RemoteItemID: "remote-item", DisplayName: "Media", SourceRevision: "source", CreatedRevision: 2, UpdatedRevision: 3, MIMEType: "video/mp4", SizeBytes: 20, ETag: "etag", UpdatedAt: time.Date(2026, 8, 16, 1, 0, 0, 0, time.UTC)}},
 		Tombstones: []assets.CollectionTombstone{},
 	}, nil
 }
@@ -534,7 +559,7 @@ func (r *collectionReaderRepository) GetAuthorizedCollectionItem(_ context.Conte
 	if collectionID != "collection" || itemID != "item" {
 		return assets.CollectionItem{}, assets.ErrNotFound
 	}
-	return assets.CollectionItem{ID: itemID, CollectionID: collectionID, AssetID: "secret-asset", RemoteItemID: "remote-item", DisplayName: "Media", SourceRevision: "source", CreatedRevision: 2, MIMEType: "video/mp4", SizeBytes: 20, ETag: "etag"}, nil
+	return assets.CollectionItem{ID: itemID, CollectionID: collectionID, AssetID: "secret-asset", RemoteItemID: "remote-item", DisplayName: "Media", SourceRevision: "source", CreatedRevision: 2, UpdatedRevision: 3, MIMEType: "video/mp4", SizeBytes: 20, ETag: "etag", UpdatedAt: time.Date(2026, 8, 16, 1, 0, 0, 0, time.UTC)}, nil
 }
 
 func readerTestAuthorized(subject assets.CollectionSubject) bool {
@@ -691,7 +716,7 @@ func TestManagedCollectionItemsAndRetentionRoutes(t *testing.T) {
 	list.Header.Set("X-Internal-Caller-App-Id", "hhc-line-function-bot")
 	listResponse := httptest.NewRecorder()
 	handler.ServeHTTP(listResponse, list)
-	if listResponse.Code != http.StatusOK || repository.managedItemCollectionID != "collection" || repository.managedItemQuery != "SUNday" || repository.managedItemCursor != "next" || repository.managedItemLimit != 25 {
+	if listResponse.Code != http.StatusOK || repository.managedItemCollectionID != "collection" || repository.managedItemCaller != "hhc-line-function-bot" || repository.managedItemQuery != "SUNday" || repository.managedItemCursor != "next" || repository.managedItemLimit != 25 {
 		t.Fatalf("status=%d input=%+v body=%s", listResponse.Code, repository, listResponse.Body.String())
 	}
 	for _, forbidden := range []string{"assetId", "blob", "remoteItemId", "ownerService"} {
@@ -864,17 +889,17 @@ func newCollectionManagementHandler() (http.Handler, *collectionManagementReposi
 
 type collectionManagementRepository struct {
 	assets.Repository
-	calls, managedListCalls, managedGetCalls, readerCalls        int
-	caller, listCursor                                           string
-	listLimit                                                    int
-	create                                                       assets.CreateCollectionInput
-	managedItemCollectionID, managedItemQuery, managedItemCursor string
-	managedItemLimit                                             int
-	retention                                                    assets.UpdateCollectionRetentionInput
-	renameItem                                                   assets.RenameCollectionItemInput
-	batchRetention                                               assets.SetCollectionItemsRetentionInput
-	batchDelete                                                  assets.DeleteCollectionItemsInput
-	ticket                                                       assets.ContentTicket
+	calls, managedListCalls, managedGetCalls, readerCalls                           int
+	caller, listCursor                                                              string
+	listLimit                                                                       int
+	create                                                                          assets.CreateCollectionInput
+	managedItemCollectionID, managedItemCaller, managedItemQuery, managedItemCursor string
+	managedItemLimit                                                                int
+	retention                                                                       assets.UpdateCollectionRetentionInput
+	renameItem                                                                      assets.RenameCollectionItemInput
+	batchRetention                                                                  assets.SetCollectionItemsRetentionInput
+	batchDelete                                                                     assets.DeleteCollectionItemsInput
+	ticket                                                                          assets.ContentTicket
 }
 
 func (r *collectionManagementRepository) GetOperations(context.Context, time.Time) (assets.Operations, error) {
@@ -929,17 +954,18 @@ func (r *collectionManagementRepository) GetManagedCollection(_ context.Context,
 	r.calls++
 	r.managedGetCalls++
 	r.caller = caller
-	return assets.ManagedCollection{Collection: assets.Collection{ID: id}}, nil
+	return assets.ManagedCollection{Collection: assets.Collection{ID: id, Namespace: "line.group.media-sync", RetentionDays: 14}}, nil
 }
-func (r *collectionManagementRepository) ListManagedCollectionItems(_ context.Context, collectionID, query, cursor string, limit int) (assets.ManagedCollectionItemPage, error) {
+func (r *collectionManagementRepository) ListManagedCollectionItems(_ context.Context, collectionID, callerService, query, cursor string, limit int) (assets.ManagedCollectionItemPage, error) {
 	r.calls++
-	r.managedItemCollectionID, r.managedItemQuery, r.managedItemCursor, r.managedItemLimit = collectionID, query, cursor, limit
+	r.managedItemCollectionID, r.managedItemCaller, r.managedItemQuery, r.managedItemCursor, r.managedItemLimit = collectionID, callerService, query, cursor, limit
 	if cursor == "not-a-cursor" {
 		return assets.ManagedCollectionItemPage{}, assets.ErrInvalidInput
 	}
 	return assets.ManagedCollectionItemPage{Items: []assets.ManagedCollectionItem{{ID: "item", DisplayName: "Sunday.mp4", MIMEType: "video/mp4", SizeBytes: 12}}}, nil
 }
-func (r *collectionManagementRepository) GetManagedCollectionItem(_ context.Context, collectionID, itemID string) (assets.CollectionItem, error) {
+func (r *collectionManagementRepository) GetManagedCollectionItem(_ context.Context, collectionID, itemID, callerService string) (assets.CollectionItem, error) {
+	r.managedItemCaller = callerService
 	return assets.CollectionItem{ID: itemID, CollectionID: collectionID, AssetID: "asset", ETag: `"content-version"`}, nil
 }
 func (r *collectionManagementRepository) UpdateCollectionRetention(_ context.Context, input assets.UpdateCollectionRetentionInput, _ time.Time) (assets.Collection, error) {

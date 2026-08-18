@@ -351,7 +351,11 @@ func (h *Handler) listAuthorizedCollections(w http.ResponseWriter, r *http.Reque
 		handleError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, page)
+	collections := make([]collectionReaderCollection, len(page.Collections))
+	for i, collection := range page.Collections {
+		collections[i] = readerCollection(collection)
+	}
+	writeJSON(w, http.StatusOK, collectionReaderPage{Collections: collections, Cursor: page.Cursor, HasMore: page.HasMore})
 }
 
 func (h *Handler) collectionChanges(w http.ResponseWriter, r *http.Request) {
@@ -369,7 +373,7 @@ func (h *Handler) collectionChanges(w http.ResponseWriter, r *http.Request) {
 		items[i] = readerItem(item)
 	}
 	writeJSON(w, http.StatusOK, collectionReaderChangePage{
-		Collection: page.Collection,
+		Collection: readerCollection(page.Collection),
 		Items:      items,
 		Tombstones: page.Tombstones,
 		Cursor:     page.Cursor,
@@ -451,21 +455,45 @@ type collectionReaderItem struct {
 	DisplayName     string    `json:"displayName"`
 	SourceRevision  string    `json:"sourceRevision"`
 	CreatedRevision int64     `json:"createdRevision"`
+	UpdatedRevision int64     `json:"updatedRevision"`
 	DeletedRevision int64     `json:"deletedRevision,omitempty"`
 	MIMEType        string    `json:"mimeType,omitempty"`
 	SizeBytes       int64     `json:"sizeBytes,omitempty"`
 	ETag            string    `json:"etag,omitempty"`
 	CreatedAt       time.Time `json:"createdAt"`
+	UpdatedAt       time.Time `json:"updatedAt"`
 	DeletedAt       time.Time `json:"deletedAt,omitempty"`
 }
 
+type collectionReaderCollection struct {
+	ID        string    `json:"id"`
+	Namespace string    `json:"namespace"`
+	Name      string    `json:"name"`
+	Revision  int64     `json:"revision"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+type collectionReaderPage struct {
+	Collections []collectionReaderCollection `json:"collections"`
+	Cursor      string                       `json:"cursor,omitempty"`
+	HasMore     bool                         `json:"hasMore"`
+}
+
 type collectionReaderChangePage struct {
-	Collection assets.Collection            `json:"collection"`
+	Collection collectionReaderCollection   `json:"collection"`
 	Items      []collectionReaderItem       `json:"items"`
 	Tombstones []assets.CollectionTombstone `json:"tombstones"`
 	Cursor     string                       `json:"cursor"`
 	HasMore    bool                         `json:"hasMore"`
 	Reset      bool                         `json:"reset"`
+}
+
+func readerCollection(collection assets.Collection) collectionReaderCollection {
+	return collectionReaderCollection{
+		ID: collection.ID, Namespace: collection.Namespace, Name: collection.Name, Revision: collection.Revision,
+		CreatedAt: collection.CreatedAt, UpdatedAt: collection.UpdatedAt,
+	}
 }
 
 func readerItem(item assets.CollectionItem) collectionReaderItem {
@@ -476,11 +504,13 @@ func readerItem(item assets.CollectionItem) collectionReaderItem {
 		DisplayName:     item.DisplayName,
 		SourceRevision:  item.SourceRevision,
 		CreatedRevision: item.CreatedRevision,
+		UpdatedRevision: item.UpdatedRevision,
 		DeletedRevision: item.DeletedRevision,
 		MIMEType:        item.MIMEType,
 		SizeBytes:       item.SizeBytes,
 		ETag:            item.ETag,
 		CreatedAt:       item.CreatedAt,
+		UpdatedAt:       item.UpdatedAt,
 		DeletedAt:       item.DeletedAt,
 	}
 }
@@ -521,7 +551,7 @@ func (h *Handler) listManagedCollectionItems(w http.ResponseWriter, r *http.Requ
 	if !ok {
 		return
 	}
-	page, err := h.service.ListManagedCollectionItems(r.Context(), collectionID, r.URL.Query().Get("q"), r.URL.Query().Get("cursor"), limit)
+	page, err := h.service.ListManagedCollectionItems(r.Context(), collectionID, authenticatedCaller(r), r.URL.Query().Get("q"), r.URL.Query().Get("cursor"), limit)
 	if err != nil {
 		handleError(w, err)
 		return
@@ -542,7 +572,7 @@ func (h *Handler) issueManagedContentTickets(w http.ResponseWriter, r *http.Requ
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	batch, err := h.service.IssueManagedContentTickets(r.Context(), collectionID, input.ItemIDs, 5*time.Minute)
+	batch, err := h.service.IssueManagedContentTickets(r.Context(), collectionID, authenticatedCaller(r), input.ItemIDs, 5*time.Minute)
 	if err != nil {
 		handleError(w, err)
 		return

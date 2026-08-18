@@ -797,7 +797,7 @@ func TestManagedCollectionItemsAndCollectionRetention(t *testing.T) {
 		}
 	}
 
-	page, err := store.ListManagedCollectionItems(ctx, "managed-items", "SUNday", "", 1)
+	page, err := store.ListManagedCollectionItems(ctx, "managed-items", "hhc-line-function-bot", "SUNday", "", 1)
 	if err != nil || len(page.Items) != 1 || page.Items[0].ID != "same-b" || !page.HasMore || page.Cursor == "" {
 		t.Fatalf("first page=%+v err=%v", page, err)
 	}
@@ -810,16 +810,25 @@ func TestManagedCollectionItemsAndCollectionRetention(t *testing.T) {
 			t.Fatalf("managed response contains %q", forbidden)
 		}
 	}
-	second, err := store.ListManagedCollectionItems(ctx, "managed-items", "sunday", page.Cursor, 1)
+	second, err := store.ListManagedCollectionItems(ctx, "managed-items", "hhc-line-function-bot", "sunday", page.Cursor, 1)
 	if err != nil || len(second.Items) != 1 || second.Items[0].ID != "same-a" || second.HasMore {
 		t.Fatalf("second page=%+v err=%v", second, err)
 	}
-	if _, err := store.ListManagedCollectionItems(ctx, "managed-items", "", "not-a-cursor", 100); !errors.Is(err, assets.ErrInvalidInput) {
+	if _, err := store.ListManagedCollectionItems(ctx, "managed-items", "hhc-line-function-bot", "", "not-a-cursor", 100); !errors.Is(err, assets.ErrInvalidInput) {
 		t.Fatalf("malformed cursor err=%v", err)
 	}
-	bounded, err := store.ListManagedCollectionItems(ctx, "managed-items", "", "", 100)
+	bounded, err := store.ListManagedCollectionItems(ctx, "managed-items", "hhc-line-function-bot", "", "", 100)
 	if err != nil || len(bounded.Items) != 100 || !bounded.HasMore || bounded.Items[0].ID != "same-b" {
 		t.Fatalf("bounded page=%+v err=%v", bounded, err)
+	}
+	if _, err := store.ListManagedCollectionItems(ctx, "managed-items", "other-service", "", "", 100); !errors.Is(err, assets.ErrNotFound) {
+		t.Fatalf("cross-owner list err=%v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO asset_collections(id,namespace,name,created_by_service,created_at,updated_at) VALUES('managed-other-namespace','other','Other','hhc-line-function-bot',$1,$1)`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ListManagedCollectionItems(ctx, "managed-other-namespace", "hhc-line-function-bot", "", "", 100); !errors.Is(err, assets.ErrNotFound) {
+		t.Fatalf("cross-namespace list err=%v", err)
 	}
 
 	for _, retentionDays := range []int{1, 365} {
@@ -1606,9 +1615,32 @@ func TestManagedContentTicketBypassesReaderACLButTracksCurrentItemAndAsset(t *te
 	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,retention_exempt,updated_revision,created_at,updated_at) VALUES($1,$2,$3,'remote','Original.mp4','source',1,false,1,$4,$4)`, itemID, collectionID, assetID, now); err != nil {
 		t.Fatal(err)
 	}
-	item, err := store.GetManagedCollectionItem(ctx, collectionID, itemID)
+	item, err := store.GetManagedCollectionItem(ctx, collectionID, itemID, "hhc-line-function-bot")
 	if err != nil || item.ETag != "etag-"+assetID {
 		t.Fatalf("item=%+v err=%v", item, err)
+	}
+	service := assets.NewService(store, nil, "", func() time.Time { return now })
+	issued, err := service.IssueManagedContentTickets(ctx, collectionID, "hhc-line-function-bot", []string{itemID}, time.Minute)
+	if err != nil || len(issued.Tickets) != 1 {
+		t.Fatalf("owned ticket=%+v err=%v", issued, err)
+	}
+	if _, err := service.IssueManagedContentTickets(ctx, collectionID, "other-service", []string{itemID}, time.Minute); !errors.Is(err, assets.ErrNotFound) {
+		t.Fatalf("cross-owner ticket err=%v", err)
+	}
+	if _, err := store.GetManagedCollectionItem(ctx, collectionID, itemID, "other-service"); !errors.Is(err, assets.ErrNotFound) {
+		t.Fatalf("cross-owner item err=%v", err)
+	}
+	if _, err := db.Exec(`UPDATE asset_collections SET namespace='other' WHERE id=$1`, collectionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.GetManagedCollectionItem(ctx, collectionID, itemID, "hhc-line-function-bot"); !errors.Is(err, assets.ErrNotFound) {
+		t.Fatalf("cross-namespace item err=%v", err)
+	}
+	if _, err := service.IssueManagedContentTickets(ctx, collectionID, "hhc-line-function-bot", []string{itemID}, time.Minute); !errors.Is(err, assets.ErrNotFound) {
+		t.Fatalf("cross-namespace ticket err=%v", err)
+	}
+	if _, err := db.Exec(`UPDATE asset_collections SET namespace='line.group.media-sync' WHERE id=$1`, collectionID); err != nil {
+		t.Fatal(err)
 	}
 	newTicket := func(hash string) assets.ContentTicket {
 		return assets.ContentTicket{TokenHash: hash, CollectionID: collectionID, CollectionItemID: itemID, AssetETag: item.ETag, UserID: "manager", AccessMode: "manager", ExpiresAt: now.Add(5 * time.Minute), CreatedAt: now}

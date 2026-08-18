@@ -950,7 +950,7 @@ func (s *Store) GetAuthorizedCollectionItem(ctx context.Context, collectionID, i
 	}, nil
 }
 
-func (s *Store) GetManagedCollectionItem(ctx context.Context, collectionID, itemID string) (assets.CollectionItem, error) {
+func (s *Store) GetManagedCollectionItem(ctx context.Context, collectionID, itemID, callerService string) (assets.CollectionItem, error) {
 	var item assets.CollectionItem
 	err := s.db.QueryRowContext(ctx, `
 		SELECT i.id,i.collection_id,i.asset_id,i.remote_item_id,i.display_name,i.source_revision,i.created_revision,i.retention_exempt,i.updated_revision,i.created_at,i.updated_at,
@@ -959,7 +959,7 @@ func (s *Store) GetManagedCollectionItem(ctx context.Context, collectionID, item
 		JOIN asset_collection_items i ON i.collection_id=c.id AND i.id=$2 AND i.deleted_revision IS NULL
 		JOIN assets a ON a.id=i.asset_id AND a.deleted_at IS NULL AND a.purged_at IS NULL
 		 AND a.upload_status='completed' AND a.scan_status='clean' AND a.processing_status IN ('ready','not_required')
-		WHERE c.id=$1 AND c.deleted_at IS NULL`, collectionID, itemID).Scan(
+		WHERE c.id=$1 AND c.namespace='line.group.media-sync' AND c.created_by_service=$3 AND c.deleted_at IS NULL`, collectionID, itemID, callerService).Scan(
 		&item.ID, &item.CollectionID, &item.AssetID, &item.RemoteItemID, &item.DisplayName, &item.SourceRevision, &item.CreatedRevision,
 		&item.RetentionExempt, &item.UpdatedRevision, &item.CreatedAt, &item.UpdatedAt, &item.MIMEType, &item.SizeBytes, &item.ETag,
 	)
@@ -1122,24 +1122,30 @@ func (s *Store) GetManagedCollection(ctx context.Context, id, callerService stri
 	return assets.ManagedCollection{Collection: value, ACLs: acls}, nil
 }
 
-func (s *Store) ListManagedCollectionItems(ctx context.Context, collectionID, query, cursor string, limit int) (assets.ManagedCollectionItemPage, error) {
+func (s *Store) ListManagedCollectionItems(ctx context.Context, collectionID, callerService, query, cursor string, limit int) (assets.ManagedCollectionItemPage, error) {
 	last, ok := decodeManagedItemCursor(cursor)
 	if !ok {
 		return assets.ManagedCollectionItemPage{}, assets.ErrInvalidInput
 	}
-	if _, err := s.getLiveCollection(ctx, collectionID); err != nil {
+	var owned bool
+	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM asset_collections WHERE id=$1 AND namespace='line.group.media-sync' AND created_by_service=$2 AND deleted_at IS NULL)`, collectionID, callerService).Scan(&owned); err != nil {
 		return assets.ManagedCollectionItemPage{}, err
+	}
+	if !owned {
+		return assets.ManagedCollectionItemPage{}, assets.ErrNotFound
 	}
 	limit = boundedCollectionLimit(limit)
 	query = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(query)
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT i.id,i.display_name,COALESCE(a.detected_mime_type,''),COALESCE(a.size_bytes,0),i.created_at,i.retention_exempt
-		FROM asset_collection_items i
+		FROM asset_collections c
+		JOIN asset_collection_items i ON i.collection_id=c.id
 		LEFT JOIN assets a ON a.id=i.asset_id
-		WHERE i.collection_id=$1 AND i.deleted_revision IS NULL
-		  AND i.display_name ILIKE '%' || $2 || '%' ESCAPE '\'
-		  AND ($3::timestamptz='0001-01-01'::timestamptz OR i.created_at<$3 OR (i.created_at=$3 AND i.id<$4))
-		ORDER BY i.created_at DESC,i.id DESC LIMIT $5`, collectionID, query, last.CreatedAt, last.LastID, limit+1)
+		WHERE c.id=$1 AND c.namespace='line.group.media-sync' AND c.created_by_service=$2 AND c.deleted_at IS NULL
+		  AND i.deleted_revision IS NULL
+		  AND i.display_name ILIKE '%' || $3 || '%' ESCAPE '\'
+		  AND ($4::timestamptz='0001-01-01'::timestamptz OR i.created_at<$4 OR (i.created_at=$4 AND i.id<$5))
+		ORDER BY i.created_at DESC,i.id DESC LIMIT $6`, collectionID, callerService, query, last.CreatedAt, last.LastID, limit+1)
 	if err != nil {
 		return assets.ManagedCollectionItemPage{}, err
 	}

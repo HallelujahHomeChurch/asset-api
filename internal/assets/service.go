@@ -485,10 +485,20 @@ func (s *Service) IssueCollectionContentTicket(ctx context.Context, collectionID
 	return ContentTicketResponse{ContentURL: "/api/assets/content?ticket=" + token, ExpiresAt: expiresAt, ETag: item.ETag}, nil
 }
 
-func (s *Service) IssueManagedContentTickets(ctx context.Context, collectionID string, itemIDs []string, ttl time.Duration) (ManagedContentTicketBatch, error) {
+func (s *Service) IssueManagedContentTickets(ctx context.Context, collectionID, callerService string, itemIDs []string, ttl time.Duration) (ManagedContentTicketBatch, error) {
 	itemIDs, ok := normalizeCollectionItemIDs(itemIDs)
-	if collectionID == "" || !ok || ttl <= 0 {
+	if collectionID == "" || callerService == "" || !ok || ttl <= 0 {
 		return ManagedContentTicketBatch{}, ErrInvalidInput
+	}
+	collection, err := s.repository.GetManagedCollection(ctx, collectionID, callerService)
+	if errors.Is(err, ErrForbidden) || errors.Is(err, ErrNotFound) {
+		return ManagedContentTicketBatch{}, ErrNotFound
+	}
+	if err != nil {
+		return ManagedContentTicketBatch{}, err
+	}
+	if collection.Collection.Namespace != "line.group.media-sync" {
+		return ManagedContentTicketBatch{}, ErrNotFound
 	}
 	now := s.now().UTC()
 	expiresAt := now.Add(ttl)
@@ -497,7 +507,7 @@ func (s *Service) IssueManagedContentTickets(ctx context.Context, collectionID s
 	}
 	batch := ManagedContentTicketBatch{Tickets: []ManagedContentTicket{}, UnavailableItemIDs: []string{}}
 	for _, itemID := range itemIDs {
-		item, err := s.repository.GetManagedCollectionItem(ctx, collectionID, itemID)
+		item, err := s.repository.GetManagedCollectionItem(ctx, collectionID, itemID, callerService)
 		if errors.Is(err, ErrNotFound) {
 			batch.UnavailableItemIDs = append(batch.UnavailableItemIDs, itemID)
 			continue
@@ -571,11 +581,11 @@ func (s *Service) GetManagedCollection(ctx context.Context, id, callerService st
 	return s.repository.GetManagedCollection(ctx, id, callerService)
 }
 
-func (s *Service) ListManagedCollectionItems(ctx context.Context, collectionID, query, cursor string, limit int) (ManagedCollectionItemPage, error) {
-	if collectionID == "" || !validManagedCollectionItemQuery(query) {
+func (s *Service) ListManagedCollectionItems(ctx context.Context, collectionID, callerService, query, cursor string, limit int) (ManagedCollectionItemPage, error) {
+	if collectionID == "" || callerService == "" || !validManagedCollectionItemQuery(query) {
 		return ManagedCollectionItemPage{}, ErrInvalidInput
 	}
-	return s.repository.ListManagedCollectionItems(ctx, collectionID, query, cursor, limit)
+	return s.repository.ListManagedCollectionItems(ctx, collectionID, callerService, query, cursor, limit)
 }
 
 func validManagedCollectionItemQuery(query string) bool {

@@ -522,13 +522,13 @@ type Repository interface {
 	ListAuthorizedCollections(context.Context, CollectionSubject, string, int) (CollectionPage, error)
 	GetAuthorizedCollection(context.Context, string, CollectionSubject) (Collection, error)
 	GetAuthorizedCollectionItem(context.Context, string, string, CollectionSubject) (CollectionItem, error)
-	GetManagedCollectionItem(context.Context, string, string) (CollectionItem, error)
+	GetManagedCollectionItem(context.Context, string, string, string) (CollectionItem, error)
 	CollectionChanges(context.Context, string, string, CollectionSubject) (CollectionChangePage, error)
 	CreateContentTicket(context.Context, ContentTicket, time.Time) error
 	RedeemContentTicket(context.Context, string, time.Time) (Asset, error)
 	ListManagedCollections(context.Context, string, string, int) (ManagedCollectionPage, error)
 	GetManagedCollection(context.Context, string, string) (ManagedCollection, error)
-	ListManagedCollectionItems(context.Context, string, string, string, int) (ManagedCollectionItemPage, error)
+	ListManagedCollectionItems(context.Context, string, string, string, string, int) (ManagedCollectionItemPage, error)
 	UpdateCollectionRetention(context.Context, UpdateCollectionRetentionInput, time.Time) (Collection, error)
 }
 
