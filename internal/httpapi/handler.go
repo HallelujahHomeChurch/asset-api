@@ -74,6 +74,8 @@ func (h *Handler) Routes() http.Handler {
 	mux.Handle("POST /priv/assets/collections/{collectionID}/acl", h.internal(h.collectionCaller(http.HandlerFunc(h.addCollectionACL))))
 	mux.Handle("DELETE /priv/assets/collections/{collectionID}/acl/{aclID}", h.internal(h.collectionCaller(http.HandlerFunc(h.revokeCollectionACL))))
 	mux.Handle("POST /priv/assets/collections/{collectionID}/items", h.internal(h.collectionCaller(http.HandlerFunc(h.addCollectionItem))))
+	mux.Handle("POST /priv/assets/collections/{collectionID}/items/retention", h.internal(h.collectionCaller(http.HandlerFunc(h.setCollectionItemsRetention))))
+	mux.Handle("POST /priv/assets/collections/{collectionID}/items/delete", h.internal(h.collectionCaller(http.HandlerFunc(h.deleteCollectionItems))))
 	mux.Handle("PATCH /priv/assets/collections/{collectionID}/items/{itemID}", h.internal(h.collectionCaller(http.HandlerFunc(h.renameCollectionItem))))
 	mux.Handle("DELETE /priv/assets/collections/{collectionID}/items/{itemID}", h.internal(h.collectionCaller(http.HandlerFunc(h.deleteCollectionItem))))
 	mux.Handle("GET /priv/assets/{assetID}", h.internal(http.HandlerFunc(h.getAsset)))
@@ -670,6 +672,43 @@ func (h *Handler) deleteCollectionItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	value, err := h.service.DeleteCollectionItem(r.Context(), assets.DeleteCollectionItemInput{CollectionID: collectionID, ItemID: itemID, CallerService: caller, IdempotencyKey: key})
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
+}
+
+func (h *Handler) setCollectionItemsRetention(w http.ResponseWriter, r *http.Request) {
+	collectionID := r.PathValue("collectionID")
+	caller, key, ok := collectionMutationIdentity(w, r)
+	if !ok || !requireOpaqueID(w, collectionID, "collection ID") {
+		return
+	}
+	var input assets.SetCollectionItemsRetentionInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	input.CollectionID, input.CallerService, input.IdempotencyKey = collectionID, caller, key
+	if err := h.service.SetCollectionItemsRetention(r.Context(), input); err != nil {
+		handleError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) deleteCollectionItems(w http.ResponseWriter, r *http.Request) {
+	collectionID := r.PathValue("collectionID")
+	caller, key, ok := collectionMutationIdentity(w, r)
+	if !ok || !requireOpaqueID(w, collectionID, "collection ID") {
+		return
+	}
+	var input assets.DeleteCollectionItemsInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	input.CollectionID, input.CallerService, input.IdempotencyKey = collectionID, caller, key
+	value, err := h.service.DeleteCollectionItems(r.Context(), input)
 	if err != nil {
 		handleError(w, err)
 		return

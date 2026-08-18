@@ -1751,6 +1751,184 @@ func TestCollectionChangesLimitsCombinedDeltaEvents(t *testing.T) {
 	}
 }
 
+func TestBatchRetentionUpdatesMetadataWithoutReaderRevision(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	createdAt := time.Date(2026, 8, 19, 3, 0, 0, 0, time.UTC)
+	updatedAt := createdAt.Add(time.Minute)
+	insertCollection(t, db, "batch-retention", createdAt)
+	activeID := "550e8400e29b41d4a716446655440001"
+	deletedID := "550e8400e29b41d4a716446655440002"
+	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,remote_item_id,display_name,source_revision,created_revision,retention_exempt,updated_revision,created_at,updated_at) VALUES($1,'batch-retention','active','Active','source',1,false,1,$3,$3),($2,'batch-retention','deleted','Deleted','source',1,false,1,$3,$3)`, activeID, deletedID, createdAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE asset_collection_items SET deleted_revision=2,deleted_at=$2 WHERE id=$1`, deletedID, createdAt); err != nil {
+		t.Fatal(err)
+	}
+	input := assets.SetCollectionItemsRetentionInput{CollectionID: "batch-retention", ItemIDs: []string{deletedID, activeID}, RetentionExempt: true, CallerService: "hhc-line-function-bot", IdempotencyKey: "retention"}
+	if err := store.SetCollectionItemsRetention(ctx, input, updatedAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetCollectionItemsRetention(ctx, input, updatedAt.Add(time.Minute)); err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	var revision, activeRevision int64
+	var activeExempt, deletedExempt bool
+	var activeUpdatedAt time.Time
+	if err := db.QueryRow(`SELECT revision FROM asset_collections WHERE id='batch-retention'`).Scan(&revision); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT retention_exempt,updated_revision,updated_at FROM asset_collection_items WHERE id=$1`, activeID).Scan(&activeExempt, &activeRevision, &activeUpdatedAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT retention_exempt FROM asset_collection_items WHERE id=$1`, deletedID).Scan(&deletedExempt); err != nil {
+		t.Fatal(err)
+	}
+	if revision != 1 || !activeExempt || deletedExempt || activeRevision != 1 || !activeUpdatedAt.Equal(updatedAt) {
+		t.Fatalf("revision=%d active=(%v,%d,%s) deletedExempt=%v", revision, activeExempt, activeRevision, activeUpdatedAt, deletedExempt)
+	}
+}
+
+func TestBatchDeleteHandlesActiveDeletedReplayAndInvalidatesTicket(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	createdAt := time.Date(2026, 8, 19, 3, 30, 0, 0, time.UTC)
+	deletedAt := createdAt.Add(time.Minute)
+	insertCollection(t, db, "batch-delete", createdAt)
+	activeID := "550e8400e29b41d4a716446655440011"
+	secondActiveID := "550e8400e29b41d4a716446655440014"
+	deletedID := "550e8400e29b41d4a716446655440012"
+	missingID := "550e8400e29b41d4a716446655440013"
+	insertAsset(t, db, "batch-delete-asset", assets.UploadCompleted, assets.ScanClean, assets.ProcessingReady, createdAt, time.Time{})
+	if _, err := db.Exec(`UPDATE assets SET namespace='cms.news.cover',original_file_name='video.mp4',detected_mime_type='video/mp4',size_bytes=6 WHERE id='batch-delete-asset'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,retention_exempt,updated_revision,created_at,updated_at) VALUES($1,'batch-delete','batch-delete-asset','active','Active.mp4','source',1,true,1,$4,$4),($2,'batch-delete',NULL,'second-active','Second.mp4','source',1,false,1,$4,$4),($3,'batch-delete',NULL,'deleted','Deleted.mp4','source',1,false,1,$4,$4)`, activeID, secondActiveID, deletedID, createdAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE asset_collection_items SET deleted_revision=2,deleted_at=$2 WHERE id=$1`, deletedID, createdAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE asset_collections SET revision=2 WHERE id='batch-delete'`); err != nil {
+		t.Fatal(err)
+	}
+	ticket := assets.ContentTicket{TokenHash: strings.Repeat("f", 64), CollectionID: "batch-delete", CollectionItemID: activeID, AssetETag: "etag-batch-delete-asset", UserID: "user", Roles: []string{assets.CollectionReaderRole}, ExpiresAt: createdAt.Add(5 * time.Minute), CreatedAt: createdAt}
+	if _, err := db.Exec(`INSERT INTO asset_collection_acl(id,collection_id,subject_type,subject_id,permission,created_at) VALUES('batch-delete-acl','batch-delete','user','user','read',$1)`, createdAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateContentTicket(ctx, ticket, createdAt); err != nil {
+		t.Fatal(err)
+	}
+	input := assets.DeleteCollectionItemsInput{CollectionID: "batch-delete", ItemIDs: []string{missingID, deletedID, secondActiveID, activeID}, CallerService: "hhc-line-function-bot", IdempotencyKey: "delete"}
+	result, err := store.DeleteCollectionItems(ctx, input, deletedAt)
+	if err != nil || result != (assets.DeleteCollectionItemsResult{Deleted: 2, AlreadyRemoved: 2}) {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	replay, err := store.DeleteCollectionItems(ctx, input, deletedAt.Add(time.Minute))
+	if err != nil || replay != result {
+		t.Fatalf("replay=%+v err=%v", replay, err)
+	}
+	var revision, activeDeletedRevision, secondDeletedRevision, oldDeletedRevision int64
+	if err := db.QueryRow(`SELECT c.revision,active.deleted_revision,second_active.deleted_revision,removed.deleted_revision FROM asset_collections c JOIN asset_collection_items active ON active.collection_id=c.id AND active.id=$1 JOIN asset_collection_items second_active ON second_active.collection_id=c.id AND second_active.id=$2 JOIN asset_collection_items removed ON removed.collection_id=c.id AND removed.id=$3 WHERE c.id='batch-delete'`, activeID, secondActiveID, deletedID).Scan(&revision, &activeDeletedRevision, &secondDeletedRevision, &oldDeletedRevision); err != nil {
+		t.Fatal(err)
+	}
+	if revision != 3 || activeDeletedRevision != 3 || secondDeletedRevision != 3 || oldDeletedRevision != 2 {
+		t.Fatalf("revision=%d active=%d second=%d old=%d", revision, activeDeletedRevision, secondDeletedRevision, oldDeletedRevision)
+	}
+	if _, err := store.RedeemContentTicket(ctx, ticket.TokenHash, deletedAt); !errors.Is(err, assets.ErrNotFound) {
+		t.Fatalf("ticket remained valid: %v", err)
+	}
+	if _, err := store.RenameCollectionItem(ctx, assets.RenameCollectionItemInput{CollectionID: "batch-delete", ItemID: activeID, DisplayName: "Later.mp4", CallerService: "hhc-line-function-bot", IdempotencyKey: "rename-after-delete"}, deletedAt); !errors.Is(err, assets.ErrNotFound) {
+		t.Fatalf("rename after delete: %v", err)
+	}
+}
+
+func TestBatchDeleteReferencedAssetLifecycle(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 19, 4, 0, 0, 0, time.UTC)
+	insertCollection(t, db, "asset-delete-first", now)
+	insertCollection(t, db, "asset-delete-second", now)
+	assetIDs := []string{"eligible", "referenced", "wrong-namespace", "wrong-service", "wrong-type"}
+	for _, assetID := range assetIDs {
+		insertAsset(t, db, assetID, assets.UploadCompleted, assets.ScanClean, assets.ProcessingReady, now, time.Time{})
+		if _, err := db.Exec(`UPDATE assets SET namespace='line.group.media-sync',owner_service='hhc-line-function-bot',owner_type='media_sync_ingest' WHERE id=$1`, assetID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(`UPDATE assets SET namespace='other' WHERE id='wrong-namespace'; UPDATE assets SET owner_service='other' WHERE id='wrong-service'; UPDATE assets SET owner_type='other' WHERE id='wrong-type'`); err != nil {
+		t.Fatal(err)
+	}
+	itemIDs := make([]string, 0, len(assetIDs))
+	for index, assetID := range assetIDs {
+		itemID := fmt.Sprintf("550e8400e29b41d4a7164466554401%02d", index)
+		itemIDs = append(itemIDs, itemID)
+		if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,retention_exempt,updated_revision,created_at,updated_at) VALUES($1,'asset-delete-first',$2,$2,$2,'source',1,false,1,$3,$3)`, itemID, assetID, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,retention_exempt,updated_revision,created_at,updated_at) VALUES('550e8400e29b41d4a716446655440199','asset-delete-second','referenced','referenced','Referenced','source',1,false,1,$1,$1)`, now); err != nil {
+		t.Fatal(err)
+	}
+	result, err := store.DeleteCollectionItems(ctx, assets.DeleteCollectionItemsInput{CollectionID: "asset-delete-first", ItemIDs: itemIDs, CallerService: "hhc-line-function-bot", IdempotencyKey: "asset-delete"}, now.Add(time.Minute))
+	if err != nil || result.Deleted != len(itemIDs) {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	for _, assetID := range assetIDs {
+		var deletedAt sql.NullTime
+		if err := db.QueryRow(`SELECT deleted_at FROM assets WHERE id=$1`, assetID).Scan(&deletedAt); err != nil {
+			t.Fatal(err)
+		}
+		if (assetID == "eligible") != deletedAt.Valid {
+			t.Fatalf("asset=%s deleted=%v", assetID, deletedAt.Valid)
+		}
+	}
+	blobs := &recordingLifecycleBlobStore{}
+	processed, err := lifecycle.NewWorker(store, blobs).ProcessOne(ctx)
+	if err != nil || !processed || !blobs.deleted["assets/eligible"] {
+		t.Fatalf("processed=%v blobs=%v err=%v", processed, blobs.deleted, err)
+	}
+}
+
+func TestDeleteRaceRetentionExemptionWinsBeforeWorkerLock(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 19, 4, 30, 0, 0, time.UTC)
+	insertCollection(t, db, "retention-race", now)
+	itemID := "550e8400e29b41d4a716446655440201"
+	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,remote_item_id,display_name,source_revision,created_revision,retention_exempt,updated_revision,created_at,updated_at) VALUES($1,'retention-race','remote','Media','source',1,false,1,$2,$2)`, itemID, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetCollectionItemsRetention(ctx, assets.SetCollectionItemsRetentionInput{CollectionID: "retention-race", ItemIDs: []string{itemID}, RetentionExempt: true, CallerService: "hhc-line-function-bot", IdempotencyKey: "retain-before-worker"}, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deletion, err := store.deleteCollectionItems(ctx, tx, "retention-race", "hhc-line-function-bot", []string{itemID}, now.Add(2*time.Minute), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if deletion.result.Deleted != 0 || deletion.result.AlreadyRemoved != 1 {
+		t.Fatalf("deletion=%+v", deletion)
+	}
+	var deletedRevision sql.NullInt64
+	if err := db.QueryRow(`SELECT deleted_revision FROM asset_collection_items WHERE id=$1`, itemID).Scan(&deletedRevision); err != nil {
+		t.Fatal(err)
+	}
+	if deletedRevision.Valid {
+		t.Fatalf("deleted revision=%d", deletedRevision.Int64)
+	}
+}
+
 func integrationDB(t *testing.T) *sql.DB {
 	t.Helper()
 	url := os.Getenv("TEST_DATABASE_URL")

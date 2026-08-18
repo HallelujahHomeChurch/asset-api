@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"maps"
@@ -695,6 +696,66 @@ func TestManagedCollectionItemsAndRetentionRoutes(t *testing.T) {
 	}
 }
 
+func TestBatchRetentionAndDeleteRoutesNormalizeUUIDs(t *testing.T) {
+	handler, repository := newCollectionManagementHandler()
+	canonical := "550e8400-e29b-41d4-a716-446655440000"
+	compact := "550e8400e29b41d4a716446655440000"
+	second := "650e8400e29b41d4a716446655440000"
+
+	retention := httptest.NewRequest(http.MethodPost, "/priv/assets/collections/collection/items/retention", strings.NewReader(`{"itemIds":["`+second+`","`+strings.ToUpper(canonical)+`","`+compact+`"],"retentionExempt":true}`))
+	retention.Header.Set("X-Internal-Caller-App-Id", "hhc-line-function-bot")
+	retention.Header.Set("Idempotency-Key", "batch-retention")
+	retentionResponse := httptest.NewRecorder()
+	handler.ServeHTTP(retentionResponse, retention)
+	if retentionResponse.Code != http.StatusNoContent || !repository.batchRetention.RetentionExempt || !slices.Equal(repository.batchRetention.ItemIDs, []string{compact, second}) {
+		t.Fatalf("status=%d input=%+v body=%s", retentionResponse.Code, repository.batchRetention, retentionResponse.Body.String())
+	}
+
+	deleteRequest := httptest.NewRequest(http.MethodPost, "/priv/assets/collections/collection/items/delete", strings.NewReader(`{"itemIds":["`+canonical+`","`+compact+`"]}`))
+	deleteRequest.Header.Set("X-Internal-Caller-App-Id", "hhc-line-function-bot")
+	deleteRequest.Header.Set("Idempotency-Key", "batch-delete")
+	deleteResponse := httptest.NewRecorder()
+	handler.ServeHTTP(deleteResponse, deleteRequest)
+	if deleteResponse.Code != http.StatusOK || !slices.Equal(repository.batchDelete.ItemIDs, []string{compact}) || deleteResponse.Body.String() != "{\"deleted\":1,\"alreadyRemoved\":0}\n" {
+		t.Fatalf("status=%d input=%+v body=%s", deleteResponse.Code, repository.batchDelete, deleteResponse.Body.String())
+	}
+}
+
+func TestBatchRetentionAndDeleteRejectInvalidSelectionSizes(t *testing.T) {
+	handler, repository := newCollectionManagementHandler()
+	tooMany := make([]string, 101)
+	for index := range tooMany {
+		tooMany[index] = fmt.Sprintf("550e8400-e29b-41d4-a716-%012x", index)
+	}
+	encoded, err := json.Marshal(map[string]any{"itemIds": tooMany, "retentionExempt": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name, path, body string
+	}{
+		{name: "empty retention", path: "/priv/assets/collections/collection/items/retention", body: `{"itemIds":[],"retentionExempt":true}`},
+		{name: "too many retention", path: "/priv/assets/collections/collection/items/retention", body: string(encoded)},
+		{name: "empty delete", path: "/priv/assets/collections/collection/items/delete", body: `{"itemIds":[]}`},
+		{name: "too many delete", path: "/priv/assets/collections/collection/items/delete", body: strings.ReplaceAll(string(encoded), `,"retentionExempt":true`, "")},
+		{name: "invalid UUID", path: "/priv/assets/collections/collection/items/delete", body: `{"itemIds":["not-a-uuid"]}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, test.path, strings.NewReader(test.body))
+			request.Header.Set("X-Internal-Caller-App-Id", "hhc-line-function-bot")
+			request.Header.Set("Idempotency-Key", "invalid-batch")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
+	if repository.batchRetention.CollectionID != "" || repository.batchDelete.CollectionID != "" {
+		t.Fatalf("repository called: retention=%+v delete=%+v", repository.batchRetention, repository.batchDelete)
+	}
+}
+
 func TestPrivateAssetActionRejectsUnknownAction(t *testing.T) {
 	handler, _ := newCollectionManagementHandler()
 	request := httptest.NewRequest(http.MethodGet, "/priv/assets/asset/unknown", nil)
@@ -733,6 +794,8 @@ func collectionManagementRequests() []collectionManagementRequest {
 		{name: "add acl", method: http.MethodPost, wantStatus: http.StatusCreated, request: request(http.MethodPost, "/priv/assets/collections/collection/acl", `{"subjectType":"user","subjectId":"user","permission":"read"}`, true)},
 		{name: "revoke acl", method: http.MethodDelete, wantStatus: http.StatusOK, request: request(http.MethodDelete, "/priv/assets/collections/collection/acl/acl", "", true)},
 		{name: "add item", method: http.MethodPost, wantStatus: http.StatusCreated, request: request(http.MethodPost, "/priv/assets/collections/collection/items", `{"assetId":"asset","remoteItemId":"remote","displayName":"Media","sourceRevision":"source"}`, true)},
+		{name: "retain items", method: http.MethodPost, wantStatus: http.StatusNoContent, request: request(http.MethodPost, "/priv/assets/collections/collection/items/retention", `{"itemIds":["550e8400-e29b-41d4-a716-446655440000"],"retentionExempt":true}`, true)},
+		{name: "delete items", method: http.MethodPost, wantStatus: http.StatusOK, request: request(http.MethodPost, "/priv/assets/collections/collection/items/delete", `{"itemIds":["550e8400-e29b-41d4-a716-446655440000"]}`, true)},
 		{name: "rename item", method: http.MethodPatch, wantStatus: http.StatusOK, request: request(http.MethodPatch, "/priv/assets/collections/collection/items/item", `{"displayName":"Media.mp4"}`, true)},
 		{name: "delete item", method: http.MethodDelete, wantStatus: http.StatusOK, request: request(http.MethodDelete, "/priv/assets/collections/collection/items/item", "", true)},
 	}
@@ -755,6 +818,8 @@ type collectionManagementRepository struct {
 	managedItemLimit                                             int
 	retention                                                    assets.UpdateCollectionRetentionInput
 	renameItem                                                   assets.RenameCollectionItemInput
+	batchRetention                                               assets.SetCollectionItemsRetentionInput
+	batchDelete                                                  assets.DeleteCollectionItemsInput
 }
 
 func (r *collectionManagementRepository) GetAsset(context.Context, string) (assets.Asset, error) {
@@ -819,6 +884,16 @@ func (r *collectionManagementRepository) UpdateCollectionRetention(_ context.Con
 	r.calls++
 	r.retention = input
 	return assets.Collection{ID: input.CollectionID, RetentionDays: input.RetentionDays}, nil
+}
+func (r *collectionManagementRepository) SetCollectionItemsRetention(_ context.Context, input assets.SetCollectionItemsRetentionInput, _ time.Time) error {
+	r.calls++
+	r.batchRetention = input
+	return nil
+}
+func (r *collectionManagementRepository) DeleteCollectionItems(_ context.Context, input assets.DeleteCollectionItemsInput, _ time.Time) (assets.DeleteCollectionItemsResult, error) {
+	r.calls++
+	r.batchDelete = input
+	return assets.DeleteCollectionItemsResult{Deleted: 1}, nil
 }
 func (r *collectionManagementRepository) ListAuthorizedCollections(context.Context, assets.CollectionSubject, string, int) (assets.CollectionPage, error) {
 	r.readerCalls++

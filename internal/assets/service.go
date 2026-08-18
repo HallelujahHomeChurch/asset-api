@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -361,6 +362,51 @@ func (s *Service) DeleteCollectionItem(ctx context.Context, input DeleteCollecti
 		return CollectionItemMutation{}, ErrInvalidInput
 	}
 	return s.repository.DeleteCollectionItem(ctx, input, s.now().UTC())
+}
+
+func (s *Service) SetCollectionItemsRetention(ctx context.Context, input SetCollectionItemsRetentionInput) error {
+	itemIDs, ok := normalizeCollectionItemIDs(input.ItemIDs)
+	if input.CollectionID == "" || !ok || !validMutationIdentity(input.CallerService, input.IdempotencyKey) {
+		return ErrInvalidInput
+	}
+	input.ItemIDs = itemIDs
+	return s.repository.SetCollectionItemsRetention(ctx, input, s.now().UTC())
+}
+
+func (s *Service) DeleteCollectionItems(ctx context.Context, input DeleteCollectionItemsInput) (DeleteCollectionItemsResult, error) {
+	itemIDs, ok := normalizeCollectionItemIDs(input.ItemIDs)
+	if input.CollectionID == "" || !ok || !validMutationIdentity(input.CallerService, input.IdempotencyKey) {
+		return DeleteCollectionItemsResult{}, ErrInvalidInput
+	}
+	input.ItemIDs = itemIDs
+	return s.repository.DeleteCollectionItems(ctx, input, s.now().UTC())
+}
+
+func normalizeCollectionItemIDs(values []string) ([]string, bool) {
+	if len(values) < 1 || len(values) > 100 {
+		return nil, false
+	}
+	unique := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if len(value) == 36 {
+			if value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' {
+				return nil, false
+			}
+			value = value[:8] + value[9:13] + value[14:18] + value[19:23] + value[24:]
+		}
+		decoded, err := hex.DecodeString(value)
+		if err != nil || len(decoded) != 16 {
+			return nil, false
+		}
+		unique[hex.EncodeToString(decoded)] = struct{}{}
+	}
+	itemIDs := make([]string, 0, len(unique))
+	for value := range unique {
+		itemIDs = append(itemIDs, value)
+	}
+	slices.Sort(itemIDs)
+	return itemIDs, true
 }
 
 func (s *Service) RenameCollectionItem(ctx context.Context, input RenameCollectionItemInput) (ManagedCollectionItem, error) {

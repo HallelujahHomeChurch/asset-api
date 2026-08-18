@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -242,15 +243,17 @@ func (s *Store) HasActiveGrant(ctx context.Context, assetID string, subject asse
 }
 
 const (
-	createCollectionOperation          = "create_collection"
-	renameCollectionOperation          = "rename_collection"
-	deleteCollectionOperation          = "delete_collection"
-	addCollectionACLOperation          = "add_collection_acl"
-	revokeCollectionACLOperation       = "revoke_collection_acl"
-	addCollectionItemOperation         = "add_collection_item"
-	deleteCollectionItemOperation      = "delete_collection_item"
-	renameCollectionItemOperation      = "rename_collection_item"
-	updateCollectionRetentionOperation = "update_collection_retention"
+	createCollectionOperation            = "create_collection"
+	renameCollectionOperation            = "rename_collection"
+	deleteCollectionOperation            = "delete_collection"
+	addCollectionACLOperation            = "add_collection_acl"
+	revokeCollectionACLOperation         = "revoke_collection_acl"
+	addCollectionItemOperation           = "add_collection_item"
+	deleteCollectionItemOperation        = "delete_collection_item"
+	deleteCollectionItemsOperation       = "delete_collection_items"
+	renameCollectionItemOperation        = "rename_collection_item"
+	setCollectionItemsRetentionOperation = "set_collection_items_retention"
+	updateCollectionRetentionOperation   = "update_collection_retention"
 )
 
 func (s *Store) CreateCollection(ctx context.Context, input assets.CreateCollectionInput, now time.Time) (assets.Collection, error) {
@@ -516,31 +519,129 @@ func (s *Store) DeleteCollectionItem(ctx context.Context, input assets.DeleteCol
 		value.Collection.CreatedByService = input.CallerService
 		return value, nil
 	}
-	collection, err := lockManagedCollection(ctx, tx, input.CollectionID, input.CallerService)
+	deleted, err := s.deleteCollectionItems(ctx, tx, input.CollectionID, input.CallerService, []string{input.ItemID}, now, false)
 	if err != nil {
 		return assets.CollectionItemMutation{}, err
 	}
-	var item assets.CollectionItem
-	err = tx.QueryRowContext(ctx, `SELECT id,collection_id,COALESCE(asset_id,''),remote_item_id,display_name,source_revision,created_revision,retention_exempt,updated_revision,created_at,updated_at FROM asset_collection_items WHERE id=$1 AND collection_id=$2 AND deleted_revision IS NULL FOR UPDATE`, input.ItemID, input.CollectionID).Scan(&item.ID, &item.CollectionID, &item.AssetID, &item.RemoteItemID, &item.DisplayName, &item.SourceRevision, &item.CreatedRevision, &item.RetentionExempt, &item.UpdatedRevision, &item.CreatedAt, &item.UpdatedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return assets.CollectionItemMutation{}, assets.ErrNotFound
+	value := assets.CollectionItemMutation{Collection: deleted.collection}
+	if len(deleted.items) == 1 {
+		value.Item, value.Tombstone = deleted.items[0], deleted.tombstones[0]
 	}
-	if err != nil {
-		return assets.CollectionItemMutation{}, err
-	}
-	collection.Revision, collection.UpdatedAt = collection.Revision+1, now
-	item.DeletedRevision, item.DeletedAt = collection.Revision, now
-	if _, err := tx.ExecContext(ctx, `UPDATE asset_collection_items SET deleted_revision=$2,deleted_at=$3 WHERE id=$1`, item.ID, item.DeletedRevision, now); err != nil {
-		return assets.CollectionItemMutation{}, err
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE asset_collections SET revision=$2,updated_at=$3 WHERE id=$1`, collection.ID, collection.Revision, now); err != nil {
-		return assets.CollectionItemMutation{}, err
-	}
-	value := assets.CollectionItemMutation{Collection: collection, Item: item, Tombstone: assets.CollectionTombstone{ID: item.ID, RemoteItemID: item.RemoteItemID, DeletedRevision: item.DeletedRevision, DeletedAt: now}}
 	if err := finishMutation(ctx, tx, input.CallerService, deleteCollectionItemOperation, input.IdempotencyKey, value); err != nil {
 		return assets.CollectionItemMutation{}, err
 	}
 	return value, nil
+}
+
+func (s *Store) DeleteCollectionItems(ctx context.Context, input assets.DeleteCollectionItemsInput, now time.Time) (assets.DeleteCollectionItemsResult, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return assets.DeleteCollectionItemsResult{}, err
+	}
+	defer tx.Rollback()
+	itemIDs := uniqueSortedStrings(input.ItemIDs)
+	fingerprint := mutationFingerprint(struct {
+		CollectionID string
+		ItemIDs      []string
+	}{input.CollectionID, itemIDs})
+	replay, claimed, err := claimMutation(ctx, tx, input.CallerService, deleteCollectionItemsOperation, input.IdempotencyKey, fingerprint, now)
+	if err != nil {
+		return assets.DeleteCollectionItemsResult{}, err
+	}
+	if !claimed {
+		var value assets.DeleteCollectionItemsResult
+		if err := json.Unmarshal(replay, &value); err != nil {
+			return assets.DeleteCollectionItemsResult{}, err
+		}
+		return value, nil
+	}
+	deleted, err := s.deleteCollectionItems(ctx, tx, input.CollectionID, input.CallerService, itemIDs, now, false)
+	if err != nil {
+		return assets.DeleteCollectionItemsResult{}, err
+	}
+	if err := finishMutation(ctx, tx, input.CallerService, deleteCollectionItemsOperation, input.IdempotencyKey, deleted.result); err != nil {
+		return assets.DeleteCollectionItemsResult{}, err
+	}
+	return deleted.result, nil
+}
+
+type collectionItemsDeletion struct {
+	collection assets.Collection
+	items      []assets.CollectionItem
+	tombstones []assets.CollectionTombstone
+	result     assets.DeleteCollectionItemsResult
+}
+
+func (s *Store) deleteCollectionItems(ctx context.Context, tx *sql.Tx, collectionID, callerService string, itemIDs []string, now time.Time, respectRetentionExempt bool) (collectionItemsDeletion, error) {
+	itemIDs = uniqueSortedStrings(itemIDs)
+	collection, err := lockManagedCollection(ctx, tx, collectionID, callerService)
+	if err != nil {
+		return collectionItemsDeletion{}, err
+	}
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id,collection_id,COALESCE(asset_id,''),remote_item_id,display_name,source_revision,created_revision,retention_exempt,updated_revision,created_at,updated_at
+		FROM asset_collection_items
+		WHERE collection_id=$1 AND id=ANY($2::text[]) AND deleted_revision IS NULL
+		  AND (NOT $3 OR retention_exempt=false)
+		ORDER BY id FOR UPDATE`, collectionID, itemIDs, respectRetentionExempt)
+	if err != nil {
+		return collectionItemsDeletion{}, err
+	}
+	var items []assets.CollectionItem
+	for rows.Next() {
+		var item assets.CollectionItem
+		if err := rows.Scan(&item.ID, &item.CollectionID, &item.AssetID, &item.RemoteItemID, &item.DisplayName, &item.SourceRevision, &item.CreatedRevision, &item.RetentionExempt, &item.UpdatedRevision, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			rows.Close()
+			return collectionItemsDeletion{}, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Close(); err != nil {
+		return collectionItemsDeletion{}, err
+	}
+	deletion := collectionItemsDeletion{
+		collection: collection,
+		items:      items,
+		result:     assets.DeleteCollectionItemsResult{Deleted: len(items), AlreadyRemoved: len(itemIDs) - len(items)},
+	}
+	if len(items) == 0 {
+		return deletion, nil
+	}
+	deletion.collection.Revision++
+	deletion.collection.UpdatedAt = now
+	assetIDs := make([]string, 0, len(items))
+	deletedIDs := make([]string, 0, len(items))
+	deletion.tombstones = make([]assets.CollectionTombstone, 0, len(items))
+	for index := range deletion.items {
+		item := &deletion.items[index]
+		item.DeletedRevision, item.DeletedAt = deletion.collection.Revision, now
+		deletedIDs = append(deletedIDs, item.ID)
+		assetIDs = append(assetIDs, item.AssetID)
+		deletion.tombstones = append(deletion.tombstones, assets.CollectionTombstone{ID: item.ID, RemoteItemID: item.RemoteItemID, DeletedRevision: item.DeletedRevision, DeletedAt: now})
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE asset_collection_items SET deleted_revision=$3,deleted_at=$4 WHERE collection_id=$1 AND id=ANY($2::text[]) AND deleted_revision IS NULL`, collectionID, deletedIDs, deletion.collection.Revision, now); err != nil {
+		return collectionItemsDeletion{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE asset_collections SET revision=$2,updated_at=$3 WHERE id=$1`, collectionID, deletion.collection.Revision, now); err != nil {
+		return collectionItemsDeletion{}, err
+	}
+	assetIDs = uniqueSortedStrings(assetIDs)
+	if len(assetIDs) > 0 {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE assets a SET deleted_at=$2,updated_at=$2
+			WHERE a.id=ANY($1::text[])
+			  AND a.namespace='line.group.media-sync'
+			  AND a.owner_service='hhc-line-function-bot'
+			  AND a.owner_type='media_sync_ingest'
+			  AND a.deleted_at IS NULL AND a.purged_at IS NULL
+			  AND NOT EXISTS (
+			    SELECT 1 FROM asset_collection_items i
+			    WHERE i.asset_id=a.id AND i.deleted_revision IS NULL
+			  )`, assetIDs, now); err != nil {
+			return collectionItemsDeletion{}, err
+		}
+	}
+	return deletion, nil
 }
 
 func (s *Store) RenameCollectionItem(ctx context.Context, input assets.RenameCollectionItemInput, now time.Time) (assets.ManagedCollectionItem, error) {
@@ -1040,6 +1141,52 @@ func (s *Store) UpdateCollectionRetention(ctx context.Context, input assets.Upda
 		return assets.Collection{}, err
 	}
 	return value, nil
+}
+
+func (s *Store) SetCollectionItemsRetention(ctx context.Context, input assets.SetCollectionItemsRetentionInput, now time.Time) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	itemIDs := uniqueSortedStrings(input.ItemIDs)
+	fingerprint := mutationFingerprint(struct {
+		CollectionID    string
+		ItemIDs         []string
+		RetentionExempt bool
+	}{input.CollectionID, itemIDs, input.RetentionExempt})
+	_, claimed, err := claimMutation(ctx, tx, input.CallerService, setCollectionItemsRetentionOperation, input.IdempotencyKey, fingerprint, now)
+	if err != nil {
+		return err
+	}
+	if !claimed {
+		return nil
+	}
+	if _, err := lockManagedCollection(ctx, tx, input.CollectionID, input.CallerService); err != nil {
+		return err
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM asset_collection_items WHERE collection_id=$1 AND id=ANY($2::text[]) AND deleted_revision IS NULL ORDER BY id FOR UPDATE`, input.CollectionID, itemIDs)
+	if err != nil {
+		return err
+	}
+	var activeIDs []string
+	for rows.Next() {
+		var itemID string
+		if err := rows.Scan(&itemID); err != nil {
+			rows.Close()
+			return err
+		}
+		activeIDs = append(activeIDs, itemID)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if len(activeIDs) > 0 {
+		if _, err := tx.ExecContext(ctx, `UPDATE asset_collection_items SET retention_exempt=$2,updated_at=$3 WHERE id=ANY($1::text[]) AND deleted_revision IS NULL`, activeIDs, input.RetentionExempt, now); err != nil {
+			return err
+		}
+	}
+	return finishMutation(ctx, tx, input.CallerService, setCollectionItemsRetentionOperation, input.IdempotencyKey, struct{}{})
 }
 
 func (s *Store) CollectionChanges(ctx context.Context, id, cursor string, subject assets.CollectionSubject) (assets.CollectionChangePage, error) {
@@ -1727,6 +1874,12 @@ func uniqueStrings(values []string) []string {
 			result = append(result, value)
 		}
 	}
+	return result
+}
+
+func uniqueSortedStrings(values []string) []string {
+	result := uniqueStrings(values)
+	slices.Sort(result)
 	return result
 }
 
