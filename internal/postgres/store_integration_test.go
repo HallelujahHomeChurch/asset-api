@@ -565,10 +565,10 @@ func TestCollectionSchemaDefaultsAndRevisionConstraints(t *testing.T) {
 	if _, err := db.Exec(`UPDATE asset_collections SET revision=0 WHERE id='collection'`); err == nil {
 		t.Fatal("zero collection revision was accepted")
 	}
-	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,remote_item_id,display_name,source_revision,created_revision,created_at) VALUES('item-zero','collection','remote-zero','Zero','source',0,$1)`, now); err == nil {
+	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,remote_item_id,display_name,source_revision,created_revision,retention_exempt,updated_revision,created_at,updated_at) VALUES('item-zero','collection','remote-zero','Zero','source',0,false,0,$1,$1)`, now); err == nil {
 		t.Fatal("zero item revision was accepted")
 	}
-	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,remote_item_id,display_name,source_revision,created_revision,deleted_revision,created_at,deleted_at) VALUES('item-reversed','collection','remote-reversed','Reversed','source',3,2,$1,$1)`, now); err == nil {
+	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,remote_item_id,display_name,source_revision,created_revision,deleted_revision,retention_exempt,updated_revision,created_at,updated_at,deleted_at) VALUES('item-reversed','collection','remote-reversed','Reversed','source',3,2,false,3,$1,$1,$1)`, now); err == nil {
 		t.Fatal("deleted revision before created revision was accepted")
 	}
 }
@@ -580,22 +580,22 @@ func TestCollectionSchemaStableItemOccurrencesAndActiveUniqueness(t *testing.T) 
 	insertAsset(t, db, "collection-asset-2", assets.UploadCompleted, assets.ScanClean, assets.ProcessingReady, now, time.Time{})
 	insertCollection(t, db, "collection", now)
 
-	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,created_at) VALUES('','collection','collection-asset-1','remote-blank','Blank','source',1,$1)`, now); err == nil {
+	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,retention_exempt,updated_revision,created_at,updated_at) VALUES('','collection','collection-asset-1','remote-blank','Blank','source',1,false,1,$1,$1)`, now); err == nil {
 		t.Fatal("blank item occurrence ID was accepted")
 	}
-	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,created_at) VALUES('item-1','collection','collection-asset-1','remote-1','One','source-1',1,$1)`, now); err != nil {
+	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,retention_exempt,updated_revision,created_at,updated_at) VALUES('item-1','collection','collection-asset-1','remote-1','One','source-1',1,false,1,$1,$1)`, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,created_at) VALUES('duplicate-asset','collection','collection-asset-1','remote-2','Duplicate asset','source-2',2,$1)`, now); err == nil {
+	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,retention_exempt,updated_revision,created_at,updated_at) VALUES('duplicate-asset','collection','collection-asset-1','remote-2','Duplicate asset','source-2',2,false,2,$1,$1)`, now); err == nil {
 		t.Fatal("duplicate active asset membership was accepted")
 	}
-	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,created_at) VALUES('duplicate-remote','collection','collection-asset-2','remote-1','Duplicate remote','source-2',2,$1)`, now); err == nil {
+	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,retention_exempt,updated_revision,created_at,updated_at) VALUES('duplicate-remote','collection','collection-asset-2','remote-1','Duplicate remote','source-2',2,false,2,$1,$1)`, now); err == nil {
 		t.Fatal("duplicate active remote item was accepted")
 	}
 	if _, err := db.Exec(`UPDATE asset_collection_items SET deleted_revision=2,deleted_at=$1 WHERE id='item-1'`, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,created_at) VALUES('item-2','collection','collection-asset-1','remote-1','One again','source-2',3,$1)`, now); err != nil {
+	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,retention_exempt,updated_revision,created_at,updated_at) VALUES('item-2','collection','collection-asset-1','remote-1','One again','source-2',3,false,3,$1,$1)`, now); err != nil {
 		t.Fatalf("re-add remote item: %v", err)
 	}
 	var oldDeletedRevision sql.NullInt64
@@ -646,7 +646,7 @@ func TestCollectionSchemaMutationClaimsAndTicketScope(t *testing.T) {
 	now := time.Date(2026, 8, 16, 0, 0, 0, 0, time.UTC)
 	insertAsset(t, db, "ticket-asset", assets.UploadCompleted, assets.ScanClean, assets.ProcessingReady, now, time.Time{})
 	insertCollection(t, db, "collection", now)
-	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,created_at) VALUES('ticket-item','collection','ticket-asset','remote-ticket','Ticket','source',1,$1)`, now); err != nil {
+	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,retention_exempt,updated_revision,created_at,updated_at) VALUES('ticket-item','collection','ticket-asset','remote-ticket','Ticket','source',1,false,1,$1,$1)`, now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -694,7 +694,7 @@ func TestCollectionSchemaAssetRetentionPreservesItemHistory(t *testing.T) {
 	now := time.Date(2026, 8, 16, 0, 0, 0, 0, time.UTC)
 	insertAsset(t, db, "retained-collection-asset", assets.UploadCompleted, assets.ScanClean, assets.ProcessingReady, now, time.Time{})
 	insertCollection(t, db, "collection", now)
-	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,deleted_revision,created_at,deleted_at) VALUES('retained-item','collection','retained-collection-asset','remote-retained','Retained','source',1,2,$1,$1)`, now); err != nil {
+	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,deleted_revision,retention_exempt,updated_revision,created_at,updated_at,deleted_at) VALUES('retained-item','collection','retained-collection-asset','remote-retained','Retained','source',1,2,false,1,$1,$1,$1)`, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`DELETE FROM assets WHERE id='retained-collection-asset'`); err != nil {
@@ -762,7 +762,7 @@ func TestCollectionManagementConstraints(t *testing.T) {
 			t.Fatalf("retention days %d was accepted", retentionDays)
 		}
 	}
-	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,remote_item_id,display_name,source_revision,created_revision,created_at) VALUES('ticket-item','collection','ticket-item','Ticket','source',1,$1)`, now); err != nil {
+	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,remote_item_id,display_name,source_revision,created_revision,retention_exempt,updated_revision,created_at,updated_at) VALUES('ticket-item','collection','ticket-item','Ticket','source',1,false,1,$1,$1)`, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO asset_content_tickets(token_hash,collection_id,collection_item_id,asset_etag,user_id,roles,access_mode,expires_at,created_at) VALUES($1,'collection','ticket-item','etag','user',ARRAY[]::text[],'other',$2,$3)`, strings.Repeat("a", 64), now.Add(time.Minute), now); err == nil {
@@ -1293,7 +1293,7 @@ func TestCollectionReaderGetAuthorizedItemRechecksLiveAuthorizationAndOccurrence
 	insertAuthorizedCollection(t, db, "reader-item-collection", 2, "user", now)
 	insertAuthorizedCollection(t, db, "other-reader-collection", 2, "other", now)
 	insertAsset(t, db, "reader-item-asset", assets.UploadCompleted, assets.ScanClean, assets.ProcessingReady, now, time.Time{})
-	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,created_at) VALUES('reader-item','reader-item-collection','reader-item-asset','remote-reader','Reader','source',2,$1)`, now); err != nil {
+	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,retention_exempt,updated_revision,created_at,updated_at) VALUES('reader-item','reader-item-collection','reader-item-asset','remote-reader','Reader','source',2,false,2,$1,$1)`, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO asset_collection_acl(id,collection_id,subject_type,subject_id,permission,created_at) VALUES('reader-role-acl','reader-item-collection','role','team','read',$1)`, now); err != nil {
@@ -1323,14 +1323,14 @@ func TestCollectionReaderGetAuthorizedItemRechecksLiveAuthorizationAndOccurrence
 	if _, err := store.GetAuthorizedCollectionItem(ctx, "other-reader-collection", "reader-item", assets.CollectionSubject{UserID: "other", Roles: []string{assets.CollectionReaderRole}}); !errors.Is(err, assets.ErrNotFound) {
 		t.Fatalf("other collection item err=%v", err)
 	}
-	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,remote_item_id,display_name,source_revision,created_revision,deleted_revision,created_at,deleted_at) VALUES('deleted-reader-item','reader-item-collection','remote-deleted','Deleted','source',2,3,$1,$1)`, now); err != nil {
+	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,remote_item_id,display_name,source_revision,created_revision,deleted_revision,retention_exempt,updated_revision,created_at,updated_at,deleted_at) VALUES('deleted-reader-item','reader-item-collection','remote-deleted','Deleted','source',2,3,false,2,$1,$1,$1)`, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.GetAuthorizedCollectionItem(ctx, "reader-item-collection", "deleted-reader-item", assets.CollectionSubject{UserID: "user", Roles: []string{assets.CollectionReaderRole}}); !errors.Is(err, assets.ErrNotFound) {
 		t.Fatalf("deleted item err=%v", err)
 	}
 	insertAsset(t, db, "pending-reader-asset", assets.UploadCompleted, assets.ScanPending, assets.ProcessingReady, now, time.Time{})
-	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,created_at) VALUES('pending-reader-item','reader-item-collection','pending-reader-asset','remote-pending','Pending','source',2,$1)`, now); err != nil {
+	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,retention_exempt,updated_revision,created_at,updated_at) VALUES('pending-reader-item','reader-item-collection','pending-reader-asset','remote-pending','Pending','source',2,false,2,$1,$1)`, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.GetAuthorizedCollectionItem(ctx, "reader-item-collection", "pending-reader-item", assets.CollectionSubject{UserID: "user", Roles: []string{assets.CollectionReaderRole}}); !errors.Is(err, assets.ErrNotFound) {
@@ -1360,7 +1360,7 @@ func TestCollectionContentTicketLifecycleAndLiveRevocation(t *testing.T) {
 	if _, err := db.Exec(`UPDATE assets SET original_file_name='video.mp4',detected_mime_type='video/mp4',size_bytes=6 WHERE id='ticket-live-asset'`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,created_at) VALUES('ticket-live-item','ticket-live-collection','ticket-live-asset','remote-ticket','Video','source',2,$1)`, now); err != nil {
+	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,retention_exempt,updated_revision,created_at,updated_at) VALUES('ticket-live-item','ticket-live-collection','ticket-live-asset','remote-ticket','Video','source',2,false,2,$1,$1)`, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO asset_collection_acl(id,collection_id,subject_type,subject_id,permission,created_at) VALUES('ticket-role-acl','ticket-live-collection','role','media-team','read',$1)`, now); err != nil {
@@ -1463,7 +1463,7 @@ func TestCollectionContentTicketPinsOccurrenceCollectionAndAssetVersion(t *testi
 	now := time.Date(2026, 8, 16, 7, 0, 0, 0, time.UTC)
 	insertAuthorizedCollection(t, db, "ticket-pin-collection", 2, "user", now)
 	insertAsset(t, db, "ticket-pin-asset", assets.UploadCompleted, assets.ScanClean, assets.ProcessingReady, now, time.Time{})
-	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,created_at) VALUES('ticket-pin-item','ticket-pin-collection','ticket-pin-asset','same-remote','Pinned','source',2,$1)`, now); err != nil {
+	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,retention_exempt,updated_revision,created_at,updated_at) VALUES('ticket-pin-item','ticket-pin-collection','ticket-pin-asset','same-remote','Pinned','source',2,false,2,$1,$1)`, now); err != nil {
 		t.Fatal(err)
 	}
 	ticket := assets.ContentTicket{
@@ -1486,7 +1486,7 @@ func TestCollectionContentTicketPinsOccurrenceCollectionAndAssetVersion(t *testi
 	if _, err := db.Exec(`UPDATE asset_collection_items SET deleted_revision=3,deleted_at=$1 WHERE id='ticket-pin-item'`, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,created_at) VALUES('ticket-pin-item-new','ticket-pin-collection','ticket-pin-asset','same-remote','Re-added','source-2',4,$1)`, now); err != nil {
+	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,retention_exempt,updated_revision,created_at,updated_at) VALUES('ticket-pin-item-new','ticket-pin-collection','ticket-pin-asset','same-remote','Re-added','source-2',4,false,4,$1,$1)`, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.RedeemContentTicket(ctx, ticket.TokenHash, now); !errors.Is(err, assets.ErrNotFound) {
@@ -1512,7 +1512,7 @@ func TestCollectionChangesResetDeltaAndCursorRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	for index := 1; index <= 501; index++ {
-		if _, err := tx.Exec(`INSERT INTO asset_collection_items(id,collection_id,remote_item_id,display_name,source_revision,created_revision,created_at) VALUES($1,$2,$3,$3,'source',$4,$5)`, fmt.Sprintf("item-%04d", index), collectionID, fmt.Sprintf("remote-%04d", index), index+1, now); err != nil {
+		if _, err := tx.Exec(`INSERT INTO asset_collection_items(id,collection_id,remote_item_id,display_name,source_revision,created_revision,retention_exempt,updated_revision,created_at,updated_at) VALUES($1,$2,$3,$3,'source',$4,false,$4,$5,$5)`, fmt.Sprintf("item-%04d", index), collectionID, fmt.Sprintf("remote-%04d", index), index+1, now); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1572,7 +1572,7 @@ func TestCollectionChangesFinalResetAlwaysHandsOffToDelta(t *testing.T) {
 	now := time.Date(2026, 8, 16, 6, 30, 0, 0, time.UTC)
 	collectionID := "reset-handoff"
 	insertAuthorizedCollection(t, db, collectionID, 2, "user", now)
-	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,remote_item_id,display_name,source_revision,created_revision,created_at) VALUES('reset-item',$1,'remote-reset','Reset','source',2,$2)`, collectionID, now); err != nil {
+	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,remote_item_id,display_name,source_revision,created_revision,retention_exempt,updated_revision,created_at,updated_at) VALUES('reset-item',$1,'remote-reset','Reset','source',2,false,2,$2,$2)`, collectionID, now); err != nil {
 		t.Fatal(err)
 	}
 	subject := assets.CollectionSubject{UserID: "user", Roles: []string{assets.CollectionReaderRole}}
@@ -1598,7 +1598,7 @@ func TestCollectionChangesLimitsCombinedDeltaEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	for index := 1; index <= 251; index++ {
-		if _, err := tx.Exec(`INSERT INTO asset_collection_items(id,collection_id,remote_item_id,display_name,source_revision,created_revision,deleted_revision,created_at,deleted_at) VALUES($1,$2,$3,$3,'source',$4,$5,$6,$6)`, fmt.Sprintf("delta-%04d", index), collectionID, fmt.Sprintf("remote-%04d", index), index+1, index+252, now); err != nil {
+		if _, err := tx.Exec(`INSERT INTO asset_collection_items(id,collection_id,remote_item_id,display_name,source_revision,created_revision,deleted_revision,retention_exempt,updated_revision,created_at,updated_at,deleted_at) VALUES($1,$2,$3,$3,'source',$4,$5,false,$4,$6,$6,$6)`, fmt.Sprintf("delta-%04d", index), collectionID, fmt.Sprintf("remote-%04d", index), index+1, index+252, now); err != nil {
 			t.Fatal(err)
 		}
 	}
