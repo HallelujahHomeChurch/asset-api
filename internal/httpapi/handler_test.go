@@ -622,6 +622,34 @@ func TestManagedCollectionItemsAndRetentionRoutes(t *testing.T) {
 			t.Fatalf("managed response contains %q", forbidden)
 		}
 	}
+	for _, test := range []struct {
+		name, path string
+	}{
+		{name: "malformed cursor", path: "/priv/assets/collections/collection/items?cursor=not-a-cursor"},
+		{name: "non-integer limit", path: "/priv/assets/collections/collection/items?limit=invalid"},
+		{name: "zero limit", path: "/priv/assets/collections/collection/items?limit=0"},
+		{name: "limit above maximum", path: "/priv/assets/collections/collection/items?limit=101"},
+		{name: "nul query", path: "/priv/assets/collections/collection/items?q=%00"},
+		{name: "control query", path: "/priv/assets/collections/collection/items?q=%0A"},
+		{name: "long query", path: "/priv/assets/collections/collection/items?q=" + strings.Repeat("a", 256)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, test.path, nil)
+			request.Header.Set("X-Internal-Caller-App-Id", "hhc-line-function-bot")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
+	unicode := httptest.NewRequest(http.MethodGet, "/priv/assets/collections/collection/items?q=%E4%B8%BB%E6%97%A5", nil)
+	unicode.Header.Set("X-Internal-Caller-App-Id", "hhc-line-function-bot")
+	unicodeResponse := httptest.NewRecorder()
+	handler.ServeHTTP(unicodeResponse, unicode)
+	if unicodeResponse.Code != http.StatusOK || repository.managedItemQuery != "主日" {
+		t.Fatalf("status=%d query=%q body=%s", unicodeResponse.Code, repository.managedItemQuery, unicodeResponse.Body.String())
+	}
 
 	for _, retentionDays := range []int{1, 365} {
 		request := httptest.NewRequest(http.MethodPatch, "/priv/assets/collections/collection/retention", strings.NewReader(`{"retentionDays":`+strconv.Itoa(retentionDays)+`}`))
@@ -753,6 +781,9 @@ func (r *collectionManagementRepository) GetManagedCollection(_ context.Context,
 func (r *collectionManagementRepository) ListManagedCollectionItems(_ context.Context, collectionID, query, cursor string, limit int) (assets.ManagedCollectionItemPage, error) {
 	r.calls++
 	r.managedItemCollectionID, r.managedItemQuery, r.managedItemCursor, r.managedItemLimit = collectionID, query, cursor, limit
+	if cursor == "not-a-cursor" {
+		return assets.ManagedCollectionItemPage{}, assets.ErrInvalidInput
+	}
 	return assets.ManagedCollectionItemPage{Items: []assets.ManagedCollectionItem{{ID: "item", DisplayName: "Sunday.mp4", MIMEType: "video/mp4", SizeBytes: 12}}}, nil
 }
 func (r *collectionManagementRepository) UpdateCollectionRetention(_ context.Context, input assets.UpdateCollectionRetentionInput, _ time.Time) (assets.Collection, error) {

@@ -922,6 +922,14 @@ func TestManagedCollectionItemsAndRetentionServiceValidation(t *testing.T) {
 	if repository.managedItemCollectionID != "collection" || repository.managedItemQuery != "Sunday" || repository.managedItemCursor != "cursor" || repository.managedItemLimit != 25 {
 		t.Fatalf("managed item input=%+v", repository)
 	}
+	for _, query := range []string{"bad\x00query", "bad\nquery", strings.Repeat("a", 256)} {
+		if _, err := service.ListManagedCollectionItems(context.Background(), "collection", query, "", 25); !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("query=%q err=%v", query, err)
+		}
+	}
+	if _, err := service.ListManagedCollectionItems(context.Background(), "collection", "主日", "", 25); err != nil || repository.managedItemQuery != "主日" {
+		t.Fatalf("unicode query=%q err=%v", repository.managedItemQuery, err)
+	}
 
 	for _, retentionDays := range []int{0, 366} {
 		if _, err := service.UpdateCollectionRetention(context.Background(), UpdateCollectionRetentionInput{CollectionID: "collection", RetentionDays: retentionDays, CallerService: "helper", IdempotencyKey: "key"}); !errors.Is(err, ErrInvalidInput) {
@@ -949,6 +957,7 @@ type collectionServiceRepository struct {
 	readerItemCalls                                              int
 	managedItemCollectionID, managedItemQuery, managedItemCursor string
 	managedItemLimit                                             int
+	managedItemCalls                                             int
 	ticket                                                       ContentTicket
 	ticketAsset                                                  Asset
 	ticketLookupHash                                             string
@@ -993,6 +1002,7 @@ func (r *collectionServiceRepository) GetManagedCollection(_ context.Context, _,
 }
 
 func (r *collectionServiceRepository) ListManagedCollectionItems(_ context.Context, collectionID, query, cursor string, limit int) (ManagedCollectionItemPage, error) {
+	r.managedItemCalls++
 	r.managedItemCollectionID, r.managedItemQuery, r.managedItemCursor, r.managedItemLimit = collectionID, query, cursor, limit
 	return ManagedCollectionItemPage{Items: []ManagedCollectionItem{{ID: "item", DisplayName: "Sunday.mp4"}}}, nil
 }

@@ -487,7 +487,7 @@ func collectionListLimit(w http.ResponseWriter, r *http.Request) (int, bool) {
 		return 0, true
 	}
 	limit, err := strconv.Atoi(value)
-	if err != nil || limit <= 0 {
+	if err != nil || limit <= 0 || limit > 100 {
 		writeError(w, http.StatusBadRequest, "AST_INVALID_REQUEST", "invalid limit")
 		return 0, false
 	}

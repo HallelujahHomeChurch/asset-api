@@ -814,9 +814,12 @@ func TestManagedCollectionItemsAndCollectionRetention(t *testing.T) {
 	if err != nil || len(second.Items) != 1 || second.Items[0].ID != "same-a" || second.HasMore {
 		t.Fatalf("second page=%+v err=%v", second, err)
 	}
-	malformed, err := store.ListManagedCollectionItems(ctx, "managed-items", "", "not-a-cursor", 1000)
-	if err != nil || len(malformed.Items) != 100 || !malformed.HasMore || malformed.Items[0].ID != "same-b" {
-		t.Fatalf("malformed cursor page=%+v err=%v", malformed, err)
+	if _, err := store.ListManagedCollectionItems(ctx, "managed-items", "", "not-a-cursor", 100); !errors.Is(err, assets.ErrInvalidInput) {
+		t.Fatalf("malformed cursor err=%v", err)
+	}
+	bounded, err := store.ListManagedCollectionItems(ctx, "managed-items", "", "", 100)
+	if err != nil || len(bounded.Items) != 100 || !bounded.HasMore || bounded.Items[0].ID != "same-b" {
+		t.Fatalf("bounded page=%+v err=%v", bounded, err)
 	}
 
 	for _, retentionDays := range []int{1, 365} {

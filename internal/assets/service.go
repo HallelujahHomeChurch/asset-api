@@ -17,6 +17,8 @@ import (
 	"path"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 const uploadTTL = 10 * time.Minute
@@ -470,10 +472,25 @@ func (s *Service) GetManagedCollection(ctx context.Context, id, callerService st
 }
 
 func (s *Service) ListManagedCollectionItems(ctx context.Context, collectionID, query, cursor string, limit int) (ManagedCollectionItemPage, error) {
-	if collectionID == "" {
+	if collectionID == "" || !validManagedCollectionItemQuery(query) {
 		return ManagedCollectionItemPage{}, ErrInvalidInput
 	}
 	return s.repository.ListManagedCollectionItems(ctx, collectionID, query, cursor, limit)
+}
+
+func validManagedCollectionItemQuery(query string) bool {
+	if query == "" {
+		return true
+	}
+	if len(query) > 255 || !utf8.ValidString(query) {
+		return false
+	}
+	for _, value := range query {
+		if unicode.IsControl(value) {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Service) UpdateCollectionRetention(ctx context.Context, input UpdateCollectionRetentionInput) (Collection, error) {

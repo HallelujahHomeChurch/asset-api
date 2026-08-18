@@ -899,12 +899,12 @@ func (s *Store) GetManagedCollection(ctx context.Context, id, callerService stri
 }
 
 func (s *Store) ListManagedCollectionItems(ctx context.Context, collectionID, query, cursor string, limit int) (assets.ManagedCollectionItemPage, error) {
+	last, ok := decodeManagedItemCursor(cursor)
+	if !ok {
+		return assets.ManagedCollectionItemPage{}, assets.ErrInvalidInput
+	}
 	if _, err := s.getLiveCollection(ctx, collectionID); err != nil {
 		return assets.ManagedCollectionItemPage{}, err
-	}
-	last := managedItemCursor{}
-	if decoded, ok := decodeManagedItemCursor(cursor); ok {
-		last = decoded
 	}
 	limit = boundedCollectionLimit(limit)
 	query = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(query)
