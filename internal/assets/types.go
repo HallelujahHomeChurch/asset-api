@@ -369,6 +369,21 @@ type ManagedCollectionPage struct {
 	HasMore     bool                `json:"hasMore"`
 }
 
+type ManagedCollectionItem struct {
+	ID              string    `json:"id"`
+	DisplayName     string    `json:"displayName"`
+	MIMEType        string    `json:"mimeType"`
+	SizeBytes       int64     `json:"sizeBytes"`
+	CreatedAt       time.Time `json:"createdAt"`
+	RetentionExempt bool      `json:"retentionExempt"`
+}
+
+type ManagedCollectionItemPage struct {
+	Items   []ManagedCollectionItem `json:"items"`
+	Cursor  string                  `json:"cursor,omitempty"`
+	HasMore bool                    `json:"hasMore"`
+}
+
 type CollectionACLMutation struct {
 	Collection Collection    `json:"collection"`
 	ACL        CollectionACL `json:"acl"`
@@ -433,6 +448,13 @@ type DeleteCollectionItemInput struct {
 	IdempotencyKey string `json:"-"`
 }
 
+type UpdateCollectionRetentionInput struct {
+	CollectionID   string `json:"-"`
+	RetentionDays  int    `json:"retentionDays"`
+	CallerService  string `json:"-"`
+	IdempotencyKey string `json:"-"`
+}
+
 type Repository interface {
 	CreateUpload(context.Context, Asset, UploadSession) error
 	GetAsset(context.Context, string) (Asset, error)
@@ -460,6 +482,8 @@ type Repository interface {
 	RedeemContentTicket(context.Context, string, time.Time) (Asset, error)
 	ListManagedCollections(context.Context, string, string, int) (ManagedCollectionPage, error)
 	GetManagedCollection(context.Context, string, string) (ManagedCollection, error)
+	ListManagedCollectionItems(context.Context, string, string, string, int) (ManagedCollectionItemPage, error)
+	UpdateCollectionRetention(context.Context, UpdateCollectionRetentionInput, time.Time) (Collection, error)
 }
 
 type BlobStore interface {

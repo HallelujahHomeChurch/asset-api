@@ -908,16 +908,50 @@ func TestCollectionServiceSeparatesManagedReads(t *testing.T) {
 	}
 }
 
+func TestManagedCollectionItemsAndRetentionServiceValidation(t *testing.T) {
+	repository := &collectionServiceRepository{}
+	service := NewService(repository, newMemoryBlobStore(), "", time.Now)
+
+	if _, err := service.ListManagedCollectionItems(context.Background(), "", "", "", 10); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("blank collection err=%v", err)
+	}
+	page, err := service.ListManagedCollectionItems(context.Background(), "collection", "Sunday", "cursor", 25)
+	if err != nil || len(page.Items) != 1 || page.Items[0].DisplayName != "Sunday.mp4" {
+		t.Fatalf("page=%+v err=%v", page, err)
+	}
+	if repository.managedItemCollectionID != "collection" || repository.managedItemQuery != "Sunday" || repository.managedItemCursor != "cursor" || repository.managedItemLimit != 25 {
+		t.Fatalf("managed item input=%+v", repository)
+	}
+
+	for _, retentionDays := range []int{0, 366} {
+		if _, err := service.UpdateCollectionRetention(context.Background(), UpdateCollectionRetentionInput{CollectionID: "collection", RetentionDays: retentionDays, CallerService: "helper", IdempotencyKey: "key"}); !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("retention days=%d err=%v", retentionDays, err)
+		}
+	}
+	for _, retentionDays := range []int{1, 365} {
+		collection, err := service.UpdateCollectionRetention(context.Background(), UpdateCollectionRetentionInput{CollectionID: "collection", RetentionDays: retentionDays, CallerService: "helper", IdempotencyKey: "key"})
+		if err != nil || collection.RetentionDays != retentionDays {
+			t.Fatalf("retention days=%d collection=%+v err=%v", retentionDays, collection, err)
+		}
+	}
+	if repository.managedRetentionCalls != 2 {
+		t.Fatalf("retention calls=%d", repository.managedRetentionCalls)
+	}
+}
+
 type collectionServiceRepository struct {
 	Repository
-	createCalls      int
-	readerCalls      int
-	managedListCalls int
-	managedGetCalls  int
-	readerItemCalls  int
-	ticket           ContentTicket
-	ticketAsset      Asset
-	ticketLookupHash string
+	createCalls                                                  int
+	readerCalls                                                  int
+	managedListCalls                                             int
+	managedGetCalls                                              int
+	managedRetentionCalls                                        int
+	readerItemCalls                                              int
+	managedItemCollectionID, managedItemQuery, managedItemCursor string
+	managedItemLimit                                             int
+	ticket                                                       ContentTicket
+	ticketAsset                                                  Asset
+	ticketLookupHash                                             string
 }
 
 func (r *collectionServiceRepository) GetAuthorizedCollectionItem(_ context.Context, _, itemID string, _ CollectionSubject) (CollectionItem, error) {
@@ -956,6 +990,16 @@ func (r *collectionServiceRepository) ListManagedCollections(_ context.Context, 
 func (r *collectionServiceRepository) GetManagedCollection(_ context.Context, _, _ string) (ManagedCollection, error) {
 	r.managedGetCalls++
 	return ManagedCollection{}, nil
+}
+
+func (r *collectionServiceRepository) ListManagedCollectionItems(_ context.Context, collectionID, query, cursor string, limit int) (ManagedCollectionItemPage, error) {
+	r.managedItemCollectionID, r.managedItemQuery, r.managedItemCursor, r.managedItemLimit = collectionID, query, cursor, limit
+	return ManagedCollectionItemPage{Items: []ManagedCollectionItem{{ID: "item", DisplayName: "Sunday.mp4"}}}, nil
+}
+
+func (r *collectionServiceRepository) UpdateCollectionRetention(_ context.Context, input UpdateCollectionRetentionInput, _ time.Time) (Collection, error) {
+	r.managedRetentionCalls++
+	return Collection{ID: input.CollectionID, RetentionDays: input.RetentionDays}, nil
 }
 
 type memoryRepository struct {

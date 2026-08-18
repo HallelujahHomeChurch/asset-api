@@ -1,8 +1,10 @@
 package postgres
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -767,6 +769,61 @@ func TestCollectionManagementConstraints(t *testing.T) {
 	}
 	if _, err := db.Exec(`INSERT INTO asset_content_tickets(token_hash,collection_id,collection_item_id,asset_etag,user_id,roles,access_mode,expires_at,created_at) VALUES($1,'collection','ticket-item','etag','user',ARRAY[]::text[],'other',$2,$3)`, strings.Repeat("a", 64), now.Add(time.Minute), now); err == nil {
 		t.Fatal("ticket access mode other was accepted")
+	}
+}
+
+func TestManagedCollectionItemsAndCollectionRetention(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 19, 1, 0, 0, 0, time.UTC)
+	insertCollection(t, db, "managed-items", now)
+	for _, item := range []struct {
+		id, name  string
+		createdAt time.Time
+	}{
+		{id: "same-a", name: "Sunday.mp4", createdAt: now},
+		{id: "same-b", name: "Sunday.mp4", createdAt: now},
+		{id: "older", name: "Weekday.mp4", createdAt: now.Add(-time.Minute)},
+	} {
+		if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,remote_item_id,display_name,source_revision,created_revision,retention_exempt,updated_revision,created_at,updated_at) VALUES($1,'managed-items',$1,$2,'source',1,false,1,$3,$3)`, item.id, item.name, item.createdAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for index := range 98 {
+		id := fmt.Sprintf("older-%03d", index)
+		if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,remote_item_id,display_name,source_revision,created_revision,retention_exempt,updated_revision,created_at,updated_at) VALUES($1,'managed-items',$1,$1,'source',1,false,1,$2,$2)`, id, now.Add(-2*time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	page, err := store.ListManagedCollectionItems(ctx, "managed-items", "SUNday", "", 1)
+	if err != nil || len(page.Items) != 1 || page.Items[0].ID != "same-b" || !page.HasMore || page.Cursor == "" {
+		t.Fatalf("first page=%+v err=%v", page, err)
+	}
+	encoded, err := json.Marshal(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"assetId", "blob", "remoteItemId", "ownerService"} {
+		if bytes.Contains(encoded, []byte(forbidden)) {
+			t.Fatalf("managed response contains %q", forbidden)
+		}
+	}
+	second, err := store.ListManagedCollectionItems(ctx, "managed-items", "sunday", page.Cursor, 1)
+	if err != nil || len(second.Items) != 1 || second.Items[0].ID != "same-a" || second.HasMore {
+		t.Fatalf("second page=%+v err=%v", second, err)
+	}
+	malformed, err := store.ListManagedCollectionItems(ctx, "managed-items", "", "not-a-cursor", 1000)
+	if err != nil || len(malformed.Items) != 100 || !malformed.HasMore || malformed.Items[0].ID != "same-b" {
+		t.Fatalf("malformed cursor page=%+v err=%v", malformed, err)
+	}
+
+	for _, retentionDays := range []int{1, 365} {
+		updated, err := store.UpdateCollectionRetention(ctx, assets.UpdateCollectionRetentionInput{CollectionID: "managed-items", RetentionDays: retentionDays, CallerService: "hhc-line-function-bot", IdempotencyKey: fmt.Sprintf("retention-%d", retentionDays)}, now.Add(time.Duration(retentionDays)*time.Second))
+		if err != nil || updated.RetentionDays != retentionDays || updated.Revision != 1 {
+			t.Fatalf("retention days=%d updated=%+v err=%v", retentionDays, updated, err)
+		}
 	}
 }
 

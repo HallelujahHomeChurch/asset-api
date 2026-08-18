@@ -11,6 +11,7 @@ import (
 	"errors"
 	"path"
 	"strconv"
+	"strings"
 	"time"
 
 	"hhc/asset-api/internal/assets"
@@ -240,13 +241,14 @@ func (s *Store) HasActiveGrant(ctx context.Context, assetID string, subject asse
 }
 
 const (
-	createCollectionOperation     = "create_collection"
-	renameCollectionOperation     = "rename_collection"
-	deleteCollectionOperation     = "delete_collection"
-	addCollectionACLOperation     = "add_collection_acl"
-	revokeCollectionACLOperation  = "revoke_collection_acl"
-	addCollectionItemOperation    = "add_collection_item"
-	deleteCollectionItemOperation = "delete_collection_item"
+	createCollectionOperation          = "create_collection"
+	renameCollectionOperation          = "rename_collection"
+	deleteCollectionOperation          = "delete_collection"
+	addCollectionACLOperation          = "add_collection_acl"
+	revokeCollectionACLOperation       = "revoke_collection_acl"
+	addCollectionItemOperation         = "add_collection_item"
+	deleteCollectionItemOperation      = "delete_collection_item"
+	updateCollectionRetentionOperation = "update_collection_retention"
 )
 
 func (s *Store) CreateCollection(ctx context.Context, input assets.CreateCollectionInput, now time.Time) (assets.Collection, error) {
@@ -624,6 +626,11 @@ type listCursor struct {
 	LastID string `json:"i"`
 }
 
+type managedItemCursor struct {
+	CreatedAt time.Time `json:"t"`
+	LastID    string    `json:"i"`
+}
+
 type changeCursor struct {
 	Mode          string `json:"m"`
 	CollectionID  string `json:"c"`
@@ -891,6 +898,84 @@ func (s *Store) GetManagedCollection(ctx context.Context, id, callerService stri
 	return assets.ManagedCollection{Collection: value, ACLs: acls}, nil
 }
 
+func (s *Store) ListManagedCollectionItems(ctx context.Context, collectionID, query, cursor string, limit int) (assets.ManagedCollectionItemPage, error) {
+	if _, err := s.getLiveCollection(ctx, collectionID); err != nil {
+		return assets.ManagedCollectionItemPage{}, err
+	}
+	last := managedItemCursor{}
+	if decoded, ok := decodeManagedItemCursor(cursor); ok {
+		last = decoded
+	}
+	limit = boundedCollectionLimit(limit)
+	query = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(query)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT i.id,i.display_name,COALESCE(a.detected_mime_type,''),COALESCE(a.size_bytes,0),i.created_at,i.retention_exempt
+		FROM asset_collection_items i
+		LEFT JOIN assets a ON a.id=i.asset_id
+		WHERE i.collection_id=$1 AND i.deleted_revision IS NULL
+		  AND i.display_name ILIKE '%' || $2 || '%' ESCAPE '\'
+		  AND ($3::timestamptz='0001-01-01'::timestamptz OR i.created_at<$3 OR (i.created_at=$3 AND i.id<$4))
+		ORDER BY i.created_at DESC,i.id DESC LIMIT $5`, collectionID, query, last.CreatedAt, last.LastID, limit+1)
+	if err != nil {
+		return assets.ManagedCollectionItemPage{}, err
+	}
+	defer rows.Close()
+	page := assets.ManagedCollectionItemPage{Items: []assets.ManagedCollectionItem{}}
+	for rows.Next() {
+		var item assets.ManagedCollectionItem
+		if err := rows.Scan(&item.ID, &item.DisplayName, &item.MIMEType, &item.SizeBytes, &item.CreatedAt, &item.RetentionExempt); err != nil {
+			return assets.ManagedCollectionItemPage{}, err
+		}
+		page.Items = append(page.Items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return assets.ManagedCollectionItemPage{}, err
+	}
+	if len(page.Items) > limit {
+		page.Items = page.Items[:limit]
+		last := page.Items[len(page.Items)-1]
+		page.HasMore = true
+		page.Cursor = encodeManagedItemCursor(managedItemCursor{CreatedAt: last.CreatedAt, LastID: last.ID})
+	}
+	return page, nil
+}
+
+func (s *Store) UpdateCollectionRetention(ctx context.Context, input assets.UpdateCollectionRetentionInput, now time.Time) (assets.Collection, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return assets.Collection{}, err
+	}
+	defer tx.Rollback()
+	fingerprint := mutationFingerprint(struct {
+		CollectionID  string
+		RetentionDays int
+	}{input.CollectionID, input.RetentionDays})
+	replay, claimed, err := claimMutation(ctx, tx, input.CallerService, updateCollectionRetentionOperation, input.IdempotencyKey, fingerprint, now)
+	if err != nil {
+		return assets.Collection{}, err
+	}
+	if !claimed {
+		var value assets.Collection
+		if err := json.Unmarshal(replay, &value); err != nil {
+			return assets.Collection{}, err
+		}
+		value.CreatedByService = input.CallerService
+		return value, nil
+	}
+	value, err := lockManagedCollection(ctx, tx, input.CollectionID, input.CallerService)
+	if err != nil {
+		return assets.Collection{}, err
+	}
+	value.RetentionDays, value.UpdatedAt = input.RetentionDays, now
+	if _, err := tx.ExecContext(ctx, `UPDATE asset_collections SET retention_days=$2,updated_at=$3 WHERE id=$1`, value.ID, value.RetentionDays, now); err != nil {
+		return assets.Collection{}, err
+	}
+	if err := finishMutation(ctx, tx, input.CallerService, updateCollectionRetentionOperation, input.IdempotencyKey, value); err != nil {
+		return assets.Collection{}, err
+	}
+	return value, nil
+}
+
 func (s *Store) CollectionChanges(ctx context.Context, id, cursor string, subject assets.CollectionSubject) (assets.CollectionChangePage, error) {
 	collection, err := s.GetAuthorizedCollection(ctx, id, subject)
 	if err != nil {
@@ -1099,6 +1184,26 @@ func decodeListCursor(value string) (listCursor, bool) {
 		return listCursor{}, false
 	}
 	return cursor, cursor.LastID != ""
+}
+
+func encodeManagedItemCursor(cursor managedItemCursor) string {
+	value, _ := json.Marshal(cursor)
+	return base64.RawURLEncoding.EncodeToString(value)
+}
+
+func decodeManagedItemCursor(value string) (managedItemCursor, bool) {
+	if value == "" {
+		return managedItemCursor{}, true
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil {
+		return managedItemCursor{}, false
+	}
+	var cursor managedItemCursor
+	if err := json.Unmarshal(decoded, &cursor); err != nil || cursor.CreatedAt.IsZero() || cursor.LastID == "" {
+		return managedItemCursor{}, false
+	}
+	return cursor, true
 }
 
 func encodeChangeCursor(cursor changeCursor) string {

@@ -469,6 +469,20 @@ func (s *Service) GetManagedCollection(ctx context.Context, id, callerService st
 	return s.repository.GetManagedCollection(ctx, id, callerService)
 }
 
+func (s *Service) ListManagedCollectionItems(ctx context.Context, collectionID, query, cursor string, limit int) (ManagedCollectionItemPage, error) {
+	if collectionID == "" {
+		return ManagedCollectionItemPage{}, ErrInvalidInput
+	}
+	return s.repository.ListManagedCollectionItems(ctx, collectionID, query, cursor, limit)
+}
+
+func (s *Service) UpdateCollectionRetention(ctx context.Context, input UpdateCollectionRetentionInput) (Collection, error) {
+	if input.CollectionID == "" || input.RetentionDays < 1 || input.RetentionDays > 365 || !validMutationIdentity(input.CallerService, input.IdempotencyKey) {
+		return Collection{}, ErrInvalidInput
+	}
+	return s.repository.UpdateCollectionRetention(ctx, input, s.now().UTC())
+}
+
 func validMutationIdentity(callerService, idempotencyKey string) bool {
 	return callerService != "" && idempotencyKey != ""
 }

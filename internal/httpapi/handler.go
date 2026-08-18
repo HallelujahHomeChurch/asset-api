@@ -66,8 +66,10 @@ func (h *Handler) Routes() http.Handler {
 	mux.Handle("GET /priv/assets/operations", h.internal(http.HandlerFunc(h.operations)))
 	mux.Handle("GET /priv/assets/collections", h.internal(h.collectionCaller(http.HandlerFunc(h.listManagedCollections))))
 	mux.Handle("GET /priv/assets/collections/{collectionID}", h.internal(h.collectionCaller(http.HandlerFunc(h.getManagedCollection))))
+	mux.Handle("GET /priv/assets/collections/{collectionID}/items", h.internal(h.collectionCaller(http.HandlerFunc(h.listManagedCollectionItems))))
 	mux.Handle("POST /priv/assets/collections", h.internal(h.collectionCaller(http.HandlerFunc(h.createCollection))))
 	mux.Handle("PATCH /priv/assets/collections/{collectionID}", h.internal(h.collectionCaller(http.HandlerFunc(h.renameCollection))))
+	mux.Handle("PATCH /priv/assets/collections/{collectionID}/retention", h.internal(h.collectionCaller(http.HandlerFunc(h.updateCollectionRetention))))
 	mux.Handle("DELETE /priv/assets/collections/{collectionID}", h.internal(h.collectionCaller(http.HandlerFunc(h.deleteCollection))))
 	mux.Handle("POST /priv/assets/collections/{collectionID}/acl", h.internal(h.collectionCaller(http.HandlerFunc(h.addCollectionACL))))
 	mux.Handle("DELETE /priv/assets/collections/{collectionID}/acl/{aclID}", h.internal(h.collectionCaller(http.HandlerFunc(h.revokeCollectionACL))))
@@ -504,6 +506,42 @@ func (h *Handler) getManagedCollection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, value)
+}
+
+func (h *Handler) listManagedCollectionItems(w http.ResponseWriter, r *http.Request) {
+	collectionID := r.PathValue("collectionID")
+	if !requireOpaqueID(w, collectionID, "collection ID") {
+		return
+	}
+	limit, ok := collectionListLimit(w, r)
+	if !ok {
+		return
+	}
+	page, err := h.service.ListManagedCollectionItems(r.Context(), collectionID, r.URL.Query().Get("q"), r.URL.Query().Get("cursor"), limit)
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page)
+}
+
+func (h *Handler) updateCollectionRetention(w http.ResponseWriter, r *http.Request) {
+	collectionID := r.PathValue("collectionID")
+	caller, key, ok := collectionMutationIdentity(w, r)
+	if !ok || !requireOpaqueID(w, collectionID, "collection ID") {
+		return
+	}
+	var input assets.UpdateCollectionRetentionInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	input.CollectionID, input.CallerService, input.IdempotencyKey = collectionID, caller, key
+	collection, err := h.service.UpdateCollectionRetention(r.Context(), input)
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, collection)
 }
 
 func (h *Handler) createCollection(w http.ResponseWriter, r *http.Request) {
