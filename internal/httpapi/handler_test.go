@@ -176,6 +176,40 @@ func TestCollectionContentTicketIssueRequiresVerifiedGatewayIdentity(t *testing.
 	}
 }
 
+func TestManagedContentTicketsRequireInternalCallerAndReturnSafeBatch(t *testing.T) {
+	itemID := "550e8400e29b41d4a716446655440000"
+	request := func(caller string) *http.Request {
+		value := httptest.NewRequest(http.MethodPost, "/priv/assets/collections/collection/items/content-tickets", strings.NewReader(`{"itemIds":["`+itemID+`"]}`))
+		value.Header.Set("X-Internal-Caller-App-Id", caller)
+		return value
+	}
+
+	for _, caller := range []string{"", "account-api"} {
+		handler, _ := newCollectionManagementHandler()
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request(caller))
+		if response.Code != http.StatusForbidden {
+			t.Fatalf("caller=%q status=%d body=%s", caller, response.Code, response.Body.String())
+		}
+	}
+
+	handler, repository := newCollectionManagementHandler()
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request("hhc-line-function-bot"))
+	if response.Code != http.StatusCreated || repository.ticket.AccessMode != "manager" || repository.ticket.UserID != "manager" || len(repository.ticket.Roles) != 0 {
+		t.Fatalf("status=%d ticket=%+v body=%s", response.Code, repository.ticket, response.Body.String())
+	}
+	var batch assets.ManagedContentTicketBatch
+	if err := json.Unmarshal(response.Body.Bytes(), &batch); err != nil || len(batch.Tickets) != 1 || batch.Tickets[0].ItemID != itemID || !strings.HasPrefix(batch.Tickets[0].ContentURL, "/api/assets/content?ticket=") {
+		t.Fatalf("batch=%+v err=%v", batch, err)
+	}
+	for _, secret := range []string{"assetId", "blob-key", "storage", "line-group-id", "X-HHC"} {
+		if strings.Contains(response.Body.String(), secret) {
+			t.Fatalf("response leaked %q: %s", secret, response.Body.String())
+		}
+	}
+}
+
 func TestCollectionContentBearerAndTicketConditionalRanges(t *testing.T) {
 	validToken := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32))
 	paths := []struct {
@@ -820,6 +854,7 @@ type collectionManagementRepository struct {
 	renameItem                                                   assets.RenameCollectionItemInput
 	batchRetention                                               assets.SetCollectionItemsRetentionInput
 	batchDelete                                                  assets.DeleteCollectionItemsInput
+	ticket                                                       assets.ContentTicket
 }
 
 func (r *collectionManagementRepository) GetAsset(context.Context, string) (assets.Asset, error) {
@@ -880,6 +915,9 @@ func (r *collectionManagementRepository) ListManagedCollectionItems(_ context.Co
 	}
 	return assets.ManagedCollectionItemPage{Items: []assets.ManagedCollectionItem{{ID: "item", DisplayName: "Sunday.mp4", MIMEType: "video/mp4", SizeBytes: 12}}}, nil
 }
+func (r *collectionManagementRepository) GetManagedCollectionItem(_ context.Context, collectionID, itemID string) (assets.CollectionItem, error) {
+	return assets.CollectionItem{ID: itemID, CollectionID: collectionID, AssetID: "asset", ETag: `"content-version"`}, nil
+}
 func (r *collectionManagementRepository) UpdateCollectionRetention(_ context.Context, input assets.UpdateCollectionRetentionInput, _ time.Time) (assets.Collection, error) {
 	r.calls++
 	r.retention = input
@@ -894,6 +932,11 @@ func (r *collectionManagementRepository) DeleteCollectionItems(_ context.Context
 	r.calls++
 	r.batchDelete = input
 	return assets.DeleteCollectionItemsResult{Deleted: 1}, nil
+}
+func (r *collectionManagementRepository) CreateContentTicket(_ context.Context, ticket assets.ContentTicket, _ time.Time) error {
+	r.calls++
+	r.ticket = ticket
+	return nil
 }
 func (r *collectionManagementRepository) ListAuthorizedCollections(context.Context, assets.CollectionSubject, string, int) (assets.CollectionPage, error) {
 	r.readerCalls++

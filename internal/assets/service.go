@@ -447,7 +447,12 @@ func (s *Service) AuthorizedCollectionContentMetadata(ctx context.Context, colle
 	if err != nil {
 		return PublicDownloadMetadata{}, ErrNotFound
 	}
-	return collectionContentMetadata(asset, item.ETag)
+	metadata, err := collectionContentMetadata(asset, item.ETag)
+	if err != nil {
+		return PublicDownloadMetadata{}, err
+	}
+	metadata.FileName = item.DisplayName
+	return metadata, nil
 }
 
 func (s *Service) IssueCollectionContentTicket(ctx context.Context, collectionID, itemID string, subject CollectionSubject, tokenExpiresAt time.Time) (ContentTicketResponse, error) {
@@ -478,6 +483,47 @@ func (s *Service) IssueCollectionContentTicket(ctx context.Context, collectionID
 		return ContentTicketResponse{}, err
 	}
 	return ContentTicketResponse{ContentURL: "/api/assets/content?ticket=" + token, ExpiresAt: expiresAt, ETag: item.ETag}, nil
+}
+
+func (s *Service) IssueManagedContentTickets(ctx context.Context, collectionID string, itemIDs []string, ttl time.Duration) (ManagedContentTicketBatch, error) {
+	itemIDs, ok := normalizeCollectionItemIDs(itemIDs)
+	if collectionID == "" || !ok || ttl <= 0 {
+		return ManagedContentTicketBatch{}, ErrInvalidInput
+	}
+	now := s.now().UTC()
+	expiresAt := now.Add(ttl)
+	if maximum := now.Add(contentTicketTTL); expiresAt.After(maximum) {
+		expiresAt = maximum
+	}
+	batch := ManagedContentTicketBatch{Tickets: []ManagedContentTicket{}, UnavailableItemIDs: []string{}}
+	for _, itemID := range itemIDs {
+		item, err := s.repository.GetManagedCollectionItem(ctx, collectionID, itemID)
+		if errors.Is(err, ErrNotFound) {
+			batch.UnavailableItemIDs = append(batch.UnavailableItemIDs, itemID)
+			continue
+		}
+		if err != nil {
+			return ManagedContentTicketBatch{}, err
+		}
+		raw := make([]byte, 32)
+		if _, err := rand.Read(raw); err != nil {
+			return ManagedContentTicketBatch{}, err
+		}
+		token := base64.RawURLEncoding.EncodeToString(raw)
+		hash := sha256.Sum256(raw)
+		if err := s.repository.CreateContentTicket(ctx, ContentTicket{
+			TokenHash: hex.EncodeToString(hash[:]), CollectionID: collectionID, CollectionItemID: itemID,
+			AssetETag: item.ETag, UserID: "manager", AccessMode: "manager", ExpiresAt: expiresAt, CreatedAt: now,
+		}, now); err != nil {
+			if errors.Is(err, ErrNotFound) {
+				batch.UnavailableItemIDs = append(batch.UnavailableItemIDs, itemID)
+				continue
+			}
+			return ManagedContentTicketBatch{}, err
+		}
+		batch.Tickets = append(batch.Tickets, ManagedContentTicket{ItemID: itemID, ContentURL: "/api/assets/content?ticket=" + token, ExpiresAt: expiresAt, ETag: item.ETag})
+	}
+	return batch, nil
 }
 
 func (s *Service) ContentTicketMetadata(ctx context.Context, token string) (PublicDownloadMetadata, error) {

@@ -67,6 +67,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.Handle("GET /priv/assets/collections", h.internal(h.collectionCaller(http.HandlerFunc(h.listManagedCollections))))
 	mux.Handle("GET /priv/assets/collections/{collectionID}", h.internal(h.collectionCaller(http.HandlerFunc(h.getManagedCollection))))
 	mux.Handle("GET /priv/assets/collections/{collectionID}/items", h.internal(h.collectionCaller(http.HandlerFunc(h.listManagedCollectionItems))))
+	mux.Handle("POST /priv/assets/collections/{collectionID}/items/content-tickets", h.internal(h.collectionCaller(http.HandlerFunc(h.issueManagedContentTickets))))
 	mux.Handle("POST /priv/assets/collections", h.internal(h.collectionCaller(http.HandlerFunc(h.createCollection))))
 	mux.Handle("PATCH /priv/assets/collections/{collectionID}", h.internal(h.collectionCaller(http.HandlerFunc(h.renameCollection))))
 	mux.Handle("PATCH /priv/assets/collections/{collectionID}/retention", h.internal(h.collectionCaller(http.HandlerFunc(h.updateCollectionRetention))))
@@ -526,6 +527,27 @@ func (h *Handler) listManagedCollectionItems(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	writeJSON(w, http.StatusOK, page)
+}
+
+func (h *Handler) issueManagedContentTickets(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "private, no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	collectionID := r.PathValue("collectionID")
+	if !requireOpaqueID(w, collectionID, "collection ID") {
+		return
+	}
+	var input struct {
+		ItemIDs []string `json:"itemIds"`
+	}
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	batch, err := h.service.IssueManagedContentTickets(r.Context(), collectionID, input.ItemIDs, 5*time.Minute)
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, batch)
 }
 
 func (h *Handler) updateCollectionRetention(w http.ResponseWriter, r *http.Request) {

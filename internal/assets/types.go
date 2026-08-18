@@ -343,6 +343,18 @@ type ContentTicketResponse struct {
 	ETag       string    `json:"etag"`
 }
 
+type ManagedContentTicket struct {
+	ItemID     string    `json:"itemId"`
+	ContentURL string    `json:"contentUrl"`
+	ExpiresAt  time.Time `json:"expiresAt"`
+	ETag       string    `json:"etag"`
+}
+
+type ManagedContentTicketBatch struct {
+	Tickets            []ManagedContentTicket `json:"tickets"`
+	UnavailableItemIDs []string               `json:"unavailableItemIds"`
+}
+
 type CollectionPage struct {
 	Collections []Collection `json:"collections"`
 	Cursor      string       `json:"cursor,omitempty"`
@@ -508,6 +520,7 @@ type Repository interface {
 	ListAuthorizedCollections(context.Context, CollectionSubject, string, int) (CollectionPage, error)
 	GetAuthorizedCollection(context.Context, string, CollectionSubject) (Collection, error)
 	GetAuthorizedCollectionItem(context.Context, string, string, CollectionSubject) (CollectionItem, error)
+	GetManagedCollectionItem(context.Context, string, string) (CollectionItem, error)
 	CollectionChanges(context.Context, string, string, CollectionSubject) (CollectionChangePage, error)
 	CreateContentTicket(context.Context, ContentTicket, time.Time) error
 	RedeemContentTicket(context.Context, string, time.Time) (Asset, error)

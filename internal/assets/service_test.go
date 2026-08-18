@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"slices"
 	"strings"
@@ -865,6 +866,34 @@ func TestCollectionContentTicketUsesOpaqueHashAndBoundedExpiry(t *testing.T) {
 	}
 }
 
+func TestManagedContentTicketsAreBoundedAndDoNotUseReaderAuthorization(t *testing.T) {
+	now := time.Date(2026, 8, 19, 6, 0, 0, 0, time.UTC)
+	availableID := "550e8400e29b41d4a716446655440000"
+	unavailableID := "550e8400e29b41d4a716446655440001"
+	repository := &collectionServiceRepository{unavailableTicketItems: map[string]bool{unavailableID: true}}
+	service := NewService(repository, newMemoryBlobStore(), "", func() time.Time { return now })
+
+	batch, err := service.IssueManagedContentTickets(context.Background(), "collection", []string{availableID, unavailableID}, 10*time.Minute)
+	if err != nil || len(batch.Tickets) != 1 || len(batch.UnavailableItemIDs) != 1 || batch.UnavailableItemIDs[0] != unavailableID {
+		t.Fatalf("batch=%+v err=%v", batch, err)
+	}
+	if batch.Tickets[0].ItemID != availableID || batch.Tickets[0].ExpiresAt != now.Add(5*time.Minute) || batch.Tickets[0].ContentURL == "" || repository.ticket.AccessMode != "manager" || repository.readerItemCalls != 0 {
+		t.Fatalf("ticket=%+v persisted=%+v reader calls=%d", batch.Tickets[0], repository.ticket, repository.readerItemCalls)
+	}
+
+	hundred := make([]string, 100)
+	for i := range hundred {
+		hundred[i] = fmt.Sprintf("%032x", i+1)
+	}
+	batch, err = service.IssueManagedContentTickets(context.Background(), "collection", hundred, time.Minute)
+	if err != nil || len(batch.Tickets) != 100 || len(batch.UnavailableItemIDs) != 0 {
+		t.Fatalf("100-item batch=%+v err=%v", batch, err)
+	}
+	if _, err := service.IssueManagedContentTickets(context.Background(), "collection", append(hundred, "550e8400e29b41d4a716446655440100"), time.Minute); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("101-item batch err=%v", err)
+	}
+}
+
 func TestCollectionContentTicketLookupRejectsMalformedTokensAndReturnsPinnedMetadata(t *testing.T) {
 	now := time.Date(2026, 8, 16, 6, 0, 0, 0, time.UTC)
 	repository := &collectionServiceRepository{ticketAsset: Asset{
@@ -983,6 +1012,7 @@ type collectionServiceRepository struct {
 	ticket                                                       ContentTicket
 	ticketAsset                                                  Asset
 	ticketLookupHash                                             string
+	unavailableTicketItems                                       map[string]bool
 }
 
 func (r *collectionServiceRepository) RenameCollectionItem(_ context.Context, input RenameCollectionItemInput, _ time.Time) (ManagedCollectionItem, error) {
@@ -995,8 +1025,18 @@ func (r *collectionServiceRepository) GetAuthorizedCollectionItem(_ context.Cont
 	return CollectionItem{ID: itemID, CollectionID: "collection", AssetID: "asset", ETag: `"asset-version"`}, nil
 }
 
+func (r *collectionServiceRepository) GetManagedCollectionItem(_ context.Context, collectionID, itemID string) (CollectionItem, error) {
+	if r.unavailableTicketItems[itemID] {
+		return CollectionItem{}, ErrNotFound
+	}
+	return CollectionItem{ID: itemID, CollectionID: collectionID, AssetID: "asset", ETag: `"asset-version"`}, nil
+}
+
 func (r *collectionServiceRepository) CreateContentTicket(_ context.Context, ticket ContentTicket, _ time.Time) error {
 	r.ticket = ticket
+	if r.unavailableTicketItems[ticket.CollectionItemID] {
+		return ErrNotFound
+	}
 	return nil
 }
 

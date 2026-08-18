@@ -1590,6 +1590,61 @@ func TestCollectionContentTicketLifecycleAndLiveRevocation(t *testing.T) {
 	}
 }
 
+func TestManagedContentTicketBypassesReaderACLButTracksCurrentItemAndAsset(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 19, 7, 0, 0, 0, time.UTC)
+	collectionID := "managed-ticket-collection"
+	itemID := "550e8400e29b41d4a716446655440000"
+	assetID := "managed-ticket-asset"
+	insertCollection(t, db, collectionID, now)
+	insertAsset(t, db, assetID, assets.UploadCompleted, assets.ScanClean, assets.ProcessingReady, now, time.Time{})
+	if _, err := db.Exec(`UPDATE assets SET original_file_name='stored.mp4',detected_mime_type='video/mp4',size_bytes=6 WHERE id=$1`, assetID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,retention_exempt,updated_revision,created_at,updated_at) VALUES($1,$2,$3,'remote','Original.mp4','source',1,false,1,$4,$4)`, itemID, collectionID, assetID, now); err != nil {
+		t.Fatal(err)
+	}
+	item, err := store.GetManagedCollectionItem(ctx, collectionID, itemID)
+	if err != nil || item.ETag != "etag-"+assetID {
+		t.Fatalf("item=%+v err=%v", item, err)
+	}
+	newTicket := func(hash string) assets.ContentTicket {
+		return assets.ContentTicket{TokenHash: hash, CollectionID: collectionID, CollectionItemID: itemID, AssetETag: item.ETag, UserID: "manager", AccessMode: "manager", ExpiresAt: now.Add(5 * time.Minute), CreatedAt: now}
+	}
+	first := newTicket(strings.Repeat("a", 64))
+	if err := store.CreateContentTicket(ctx, first, now); err != nil {
+		t.Fatalf("manager ticket without reader ACL: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE asset_collection_items SET display_name='renamed.mp4' WHERE id=$1`, itemID); err != nil {
+		t.Fatal(err)
+	}
+	asset, err := store.RedeemContentTicket(ctx, first.TokenHash, now)
+	if err != nil || asset.OriginalFileName != "renamed.mp4" {
+		t.Fatalf("asset=%+v err=%v", asset, err)
+	}
+	if _, err := db.Exec(`UPDATE assets SET etag='changed' WHERE id=$1`, assetID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RedeemContentTicket(ctx, first.TokenHash, now); !errors.Is(err, assets.ErrNotFound) {
+		t.Fatalf("changed ETag err=%v", err)
+	}
+	if _, err := db.Exec(`UPDATE assets SET etag=$2 WHERE id=$1`, assetID, item.ETag); err != nil {
+		t.Fatal(err)
+	}
+	second := newTicket(strings.Repeat("b", 64))
+	if err := store.CreateContentTicket(ctx, second, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE asset_collection_items SET deleted_revision=2,deleted_at=$2 WHERE id=$1`, itemID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RedeemContentTicket(ctx, second.TokenHash, now); !errors.Is(err, assets.ErrNotFound) {
+		t.Fatalf("deleted item err=%v", err)
+	}
+}
+
 func TestCollectionContentTicketPinsOccurrenceCollectionAndAssetVersion(t *testing.T) {
 	db := integrationDB(t)
 	store := New(db)

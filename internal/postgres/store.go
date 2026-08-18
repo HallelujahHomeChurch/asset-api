@@ -943,6 +943,28 @@ func (s *Store) GetAuthorizedCollectionItem(ctx context.Context, collectionID, i
 	}, nil
 }
 
+func (s *Store) GetManagedCollectionItem(ctx context.Context, collectionID, itemID string) (assets.CollectionItem, error) {
+	var item assets.CollectionItem
+	err := s.db.QueryRowContext(ctx, `
+		SELECT i.id,i.collection_id,i.asset_id,i.remote_item_id,i.display_name,i.source_revision,i.created_revision,i.retention_exempt,i.updated_revision,i.created_at,i.updated_at,
+		       a.detected_mime_type,a.size_bytes,a.etag
+		FROM asset_collections c
+		JOIN asset_collection_items i ON i.collection_id=c.id AND i.id=$2 AND i.deleted_revision IS NULL
+		JOIN assets a ON a.id=i.asset_id AND a.deleted_at IS NULL AND a.purged_at IS NULL
+		 AND a.upload_status='completed' AND a.scan_status='clean' AND a.processing_status IN ('ready','not_required')
+		WHERE c.id=$1 AND c.deleted_at IS NULL`, collectionID, itemID).Scan(
+		&item.ID, &item.CollectionID, &item.AssetID, &item.RemoteItemID, &item.DisplayName, &item.SourceRevision, &item.CreatedRevision,
+		&item.RetentionExempt, &item.UpdatedRevision, &item.CreatedAt, &item.UpdatedAt, &item.MIMEType, &item.SizeBytes, &item.ETag,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return assets.CollectionItem{}, assets.ErrNotFound
+	}
+	if err != nil {
+		return assets.CollectionItem{}, err
+	}
+	return item, nil
+}
+
 func (s *Store) CreateContentTicket(ctx context.Context, ticket assets.ContentTicket, now time.Time) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -955,6 +977,9 @@ func (s *Store) CreateContentTicket(ctx context.Context, ticket assets.ContentTi
 	accessMode := ticket.AccessMode
 	if accessMode == "" {
 		accessMode = "reader"
+	}
+	if accessMode != "reader" && accessMode != "manager" {
+		return assets.ErrNotFound
 	}
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO asset_content_tickets(
@@ -970,13 +995,12 @@ func (s *Store) CreateContentTicket(ctx context.Context, ticket assets.ContentTi
 		 AND a.processing_status IN ('ready','not_required') AND a.etag=$4
 		WHERE c.id=$2 AND c.deleted_at IS NULL
 		  AND $8::timestamptz>$10::timestamptz AND $8::timestamptz<=$10::timestamptz+interval '5 minutes'
-		  AND $11=ANY($6::text[])
-		  AND EXISTS (
+		  AND ($7='manager' OR ($7='reader' AND $11=ANY($6::text[]) AND EXISTS (
 		    SELECT 1 FROM asset_collection_acl acl
 		    WHERE acl.collection_id=c.id AND acl.permission='read' AND acl.revoked_at IS NULL
 		      AND ((acl.subject_type='user' AND acl.subject_id=$5)
 		        OR (acl.subject_type='role' AND acl.subject_id=ANY($6::text[])))
-		  )`, ticket.TokenHash, ticket.CollectionID, ticket.CollectionItemID, ticket.AssetETag,
+		  )))`, ticket.TokenHash, ticket.CollectionID, ticket.CollectionItemID, ticket.AssetETag,
 		ticket.UserID, ticket.Roles, accessMode, ticket.ExpiresAt, ticket.CreatedAt, now, assets.CollectionReaderRole)
 	if err != nil {
 		return err
@@ -1001,7 +1025,7 @@ func (s *Store) RedeemContentTicket(ctx context.Context, tokenHash string, now t
 	}
 	var asset assets.Asset
 	err = tx.QueryRowContext(ctx, `
-		SELECT a.id,a.namespace,a.object_key,a.original_file_name,a.detected_mime_type,
+		SELECT a.id,a.namespace,a.object_key,i.display_name,a.detected_mime_type,
 		       a.size_bytes,a.etag,a.upload_status,a.scan_status,a.processing_status,
 		       a.visibility,a.updated_at
 		FROM asset_content_tickets t
@@ -1012,13 +1036,13 @@ func (s *Store) RedeemContentTicket(ctx context.Context, tokenHash string, now t
 		  ON a.id=i.asset_id AND a.deleted_at IS NULL AND a.purged_at IS NULL
 		 AND a.upload_status='completed' AND a.scan_status='clean'
 		 AND a.processing_status IN ('ready','not_required') AND a.etag=t.asset_etag
-		WHERE t.token_hash=$1 AND t.expires_at>$2 AND $3=ANY(t.roles)
-		  AND EXISTS (
+		WHERE t.token_hash=$1 AND t.expires_at>$2
+		  AND (t.access_mode='manager' OR (t.access_mode='reader' AND $3=ANY(t.roles) AND EXISTS (
 		    SELECT 1 FROM asset_collection_acl acl
 		    WHERE acl.collection_id=c.id AND acl.permission='read' AND acl.revoked_at IS NULL
 		      AND ((acl.subject_type='user' AND acl.subject_id=t.user_id)
 		        OR (acl.subject_type='role' AND acl.subject_id=ANY(t.roles)))
-		  )`, tokenHash, now, assets.CollectionReaderRole).Scan(
+		  )))`, tokenHash, now, assets.CollectionReaderRole).Scan(
 		&asset.ID, &asset.Namespace, &asset.ObjectKey, &asset.OriginalFileName, &asset.DetectedMIMEType,
 		&asset.SizeBytes, &asset.ETag, &asset.UploadStatus, &asset.ScanStatus, &asset.ProcessingStatus,
 		&asset.Visibility, &asset.UpdatedAt,
