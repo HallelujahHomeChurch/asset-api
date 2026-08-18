@@ -282,6 +282,7 @@ type Collection struct {
 	Namespace        string    `json:"namespace"`
 	Name             string    `json:"name"`
 	Revision         int64     `json:"revision"`
+	RetentionDays    int       `json:"retentionDays"`
 	CreatedByService string    `json:"-"`
 	CreatedAt        time.Time `json:"createdAt"`
 	UpdatedAt        time.Time `json:"updatedAt"`
@@ -306,11 +307,14 @@ type CollectionItem struct {
 	DisplayName     string    `json:"displayName"`
 	SourceRevision  string    `json:"sourceRevision"`
 	CreatedRevision int64     `json:"createdRevision"`
+	RetentionExempt bool      `json:"retentionExempt"`
+	UpdatedRevision int64     `json:"updatedRevision"`
 	DeletedRevision int64     `json:"deletedRevision,omitempty"`
 	MIMEType        string    `json:"mimeType,omitempty"`
 	SizeBytes       int64     `json:"sizeBytes,omitempty"`
 	ETag            string    `json:"etag,omitempty"`
 	CreatedAt       time.Time `json:"createdAt"`
+	UpdatedAt       time.Time `json:"updatedAt"`
 	DeletedAt       time.Time `json:"deletedAt,omitempty"`
 }
 
@@ -328,6 +332,7 @@ type ContentTicket struct {
 	AssetETag        string
 	UserID           string
 	Roles            []string
+	AccessMode       string
 	ExpiresAt        time.Time
 	CreatedAt        time.Time
 }

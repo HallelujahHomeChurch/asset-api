@@ -268,8 +268,8 @@ func (s *Store) CreateCollection(ctx context.Context, input assets.CreateCollect
 		value.CreatedByService = input.CallerService
 		return value, nil
 	}
-	value := assets.Collection{ID: newStoreID(), Namespace: input.Namespace, Name: input.Name, Revision: 1, CreatedByService: input.CallerService, CreatedAt: now, UpdatedAt: now}
-	_, err = tx.ExecContext(ctx, `INSERT INTO asset_collections(id,namespace,name,revision,created_by_service,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$6)`, value.ID, value.Namespace, value.Name, value.Revision, value.CreatedByService, now)
+	value := assets.Collection{ID: newStoreID(), Namespace: input.Namespace, Name: input.Name, Revision: 1, RetentionDays: 14, CreatedByService: input.CallerService, CreatedAt: now, UpdatedAt: now}
+	_, err = tx.ExecContext(ctx, `INSERT INTO asset_collections(id,namespace,name,revision,retention_days,created_by_service,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$7)`, value.ID, value.Namespace, value.Name, value.Revision, value.RetentionDays, value.CreatedByService, now)
 	if err != nil {
 		return assets.Collection{}, mapCollectionError(err)
 	}
@@ -478,8 +478,8 @@ func (s *Store) AddCollectionItem(ctx context.Context, input assets.AddCollectio
 		return assets.CollectionItemMutation{}, assets.ErrConflict
 	}
 	collection.Revision, collection.UpdatedAt = collection.Revision+1, now
-	item := assets.CollectionItem{ID: newStoreID(), CollectionID: collection.ID, AssetID: input.AssetID, RemoteItemID: input.RemoteItemID, DisplayName: input.DisplayName, SourceRevision: input.SourceRevision, CreatedRevision: collection.Revision, MIMEType: mimeType, SizeBytes: sizeBytes, ETag: etag, CreatedAt: now}
-	_, err = tx.ExecContext(ctx, `INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, item.ID, item.CollectionID, item.AssetID, item.RemoteItemID, item.DisplayName, item.SourceRevision, item.CreatedRevision, now)
+	item := assets.CollectionItem{ID: newStoreID(), CollectionID: collection.ID, AssetID: input.AssetID, RemoteItemID: input.RemoteItemID, DisplayName: input.DisplayName, SourceRevision: input.SourceRevision, CreatedRevision: collection.Revision, RetentionExempt: false, UpdatedRevision: collection.Revision, MIMEType: mimeType, SizeBytes: sizeBytes, ETag: etag, CreatedAt: now, UpdatedAt: now}
+	_, err = tx.ExecContext(ctx, `INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,retention_exempt,updated_revision,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)`, item.ID, item.CollectionID, item.AssetID, item.RemoteItemID, item.DisplayName, item.SourceRevision, item.CreatedRevision, item.RetentionExempt, item.UpdatedRevision, now)
 	if err != nil {
 		return assets.CollectionItemMutation{}, mapCollectionError(err)
 	}
@@ -517,7 +517,7 @@ func (s *Store) DeleteCollectionItem(ctx context.Context, input assets.DeleteCol
 		return assets.CollectionItemMutation{}, err
 	}
 	var item assets.CollectionItem
-	err = tx.QueryRowContext(ctx, `SELECT id,collection_id,COALESCE(asset_id,''),remote_item_id,display_name,source_revision,created_revision,created_at FROM asset_collection_items WHERE id=$1 AND collection_id=$2 AND deleted_revision IS NULL FOR UPDATE`, input.ItemID, input.CollectionID).Scan(&item.ID, &item.CollectionID, &item.AssetID, &item.RemoteItemID, &item.DisplayName, &item.SourceRevision, &item.CreatedRevision, &item.CreatedAt)
+	err = tx.QueryRowContext(ctx, `SELECT id,collection_id,COALESCE(asset_id,''),remote_item_id,display_name,source_revision,created_revision,retention_exempt,updated_revision,created_at,updated_at FROM asset_collection_items WHERE id=$1 AND collection_id=$2 AND deleted_revision IS NULL FOR UPDATE`, input.ItemID, input.CollectionID).Scan(&item.ID, &item.CollectionID, &item.AssetID, &item.RemoteItemID, &item.DisplayName, &item.SourceRevision, &item.CreatedRevision, &item.RetentionExempt, &item.UpdatedRevision, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return assets.CollectionItemMutation{}, assets.ErrNotFound
 	}
@@ -575,7 +575,7 @@ func finishMutation(ctx context.Context, tx *sql.Tx, caller, operation, key stri
 
 func lockManagedCollection(ctx context.Context, tx *sql.Tx, id, caller string) (assets.Collection, error) {
 	var value assets.Collection
-	err := tx.QueryRowContext(ctx, `SELECT id,namespace,name,revision,created_by_service,created_at,updated_at,COALESCE(deleted_at,'0001-01-01'::timestamptz) FROM asset_collections WHERE id=$1 FOR UPDATE`, id).Scan(&value.ID, &value.Namespace, &value.Name, &value.Revision, &value.CreatedByService, &value.CreatedAt, &value.UpdatedAt, &value.DeletedAt)
+	err := tx.QueryRowContext(ctx, `SELECT id,namespace,name,revision,retention_days,created_by_service,created_at,updated_at,COALESCE(deleted_at,'0001-01-01'::timestamptz) FROM asset_collections WHERE id=$1 FOR UPDATE`, id).Scan(&value.ID, &value.Namespace, &value.Name, &value.Revision, &value.RetentionDays, &value.CreatedByService, &value.CreatedAt, &value.UpdatedAt, &value.DeletedAt)
 	if errors.Is(err, sql.ErrNoRows) || (!value.DeletedAt.IsZero() && err == nil) {
 		return assets.Collection{}, assets.ErrNotFound
 	}
@@ -646,7 +646,7 @@ func (s *Store) ListAuthorizedCollections(ctx context.Context, subject assets.Co
 	}
 	limit = boundedCollectionLimit(limit)
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT c.id,c.namespace,c.name,c.revision,c.created_by_service,c.created_at,c.updated_at
+		SELECT c.id,c.namespace,c.name,c.revision,c.retention_days,c.created_by_service,c.created_at,c.updated_at
 		FROM asset_collections c
 		WHERE c.deleted_at IS NULL AND c.id>$3
 		  AND EXISTS (
@@ -663,7 +663,7 @@ func (s *Store) ListAuthorizedCollections(ctx context.Context, subject assets.Co
 	page := assets.CollectionPage{Collections: []assets.Collection{}}
 	for rows.Next() {
 		var value assets.Collection
-		if err := rows.Scan(&value.ID, &value.Namespace, &value.Name, &value.Revision, &value.CreatedByService, &value.CreatedAt, &value.UpdatedAt); err != nil {
+		if err := rows.Scan(&value.ID, &value.Namespace, &value.Name, &value.Revision, &value.RetentionDays, &value.CreatedByService, &value.CreatedAt, &value.UpdatedAt); err != nil {
 			return assets.CollectionPage{}, err
 		}
 		page.Collections = append(page.Collections, value)
@@ -700,8 +700,9 @@ func (s *Store) GetAuthorizedCollection(ctx context.Context, id string, subject 
 func (s *Store) GetAuthorizedCollectionItem(ctx context.Context, collectionID, itemID string, subject assets.CollectionSubject) (assets.CollectionItem, error) {
 	var allowed bool
 	var id, itemCollectionID, assetID, remoteItemID, displayName, sourceRevision, mimeType, etag sql.NullString
-	var createdRevision, sizeBytes sql.NullInt64
-	var createdAt sql.NullTime
+	var createdRevision, updatedRevision, sizeBytes sql.NullInt64
+	var retentionExempt sql.NullBool
+	var createdAt, updatedAt sql.NullTime
 	err := s.db.QueryRowContext(ctx, `
 		SELECT
 		  ($4=ANY($3::text[])) AND EXISTS (
@@ -710,7 +711,7 @@ func (s *Store) GetAuthorizedCollectionItem(ctx context.Context, collectionID, i
 		      AND ((acl.subject_type='user' AND acl.subject_id=$5)
 		        OR (acl.subject_type='role' AND acl.subject_id=ANY($3::text[])))
 		  ) AS allowed,
-		  i.id,i.collection_id,i.asset_id,i.remote_item_id,i.display_name,i.source_revision,i.created_revision,i.created_at,
+		  i.id,i.collection_id,i.asset_id,i.remote_item_id,i.display_name,i.source_revision,i.created_revision,i.retention_exempt,i.updated_revision,i.created_at,i.updated_at,
 		  a.detected_mime_type,a.size_bytes,a.etag
 		FROM asset_collections c
 		LEFT JOIN asset_collection_items i
@@ -720,7 +721,7 @@ func (s *Store) GetAuthorizedCollectionItem(ctx context.Context, collectionID, i
 		 AND a.upload_status='completed' AND a.scan_status='clean'
 		 AND a.processing_status IN ('ready','not_required')
 		WHERE c.id=$1 AND c.deleted_at IS NULL`, collectionID, itemID, subject.Roles, assets.CollectionReaderRole, subject.UserID).Scan(
-		&allowed, &id, &itemCollectionID, &assetID, &remoteItemID, &displayName, &sourceRevision, &createdRevision, &createdAt, &mimeType, &sizeBytes, &etag,
+		&allowed, &id, &itemCollectionID, &assetID, &remoteItemID, &displayName, &sourceRevision, &createdRevision, &retentionExempt, &updatedRevision, &createdAt, &updatedAt, &mimeType, &sizeBytes, &etag,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return assets.CollectionItem{}, assets.ErrNotFound
@@ -731,14 +732,14 @@ func (s *Store) GetAuthorizedCollectionItem(ctx context.Context, collectionID, i
 	if !allowed {
 		return assets.CollectionItem{}, assets.ErrForbidden
 	}
-	if !id.Valid || !itemCollectionID.Valid || !assetID.Valid || !remoteItemID.Valid || !displayName.Valid || !sourceRevision.Valid || !createdRevision.Valid || !createdAt.Valid || !mimeType.Valid || !sizeBytes.Valid || !etag.Valid {
+	if !id.Valid || !itemCollectionID.Valid || !assetID.Valid || !remoteItemID.Valid || !displayName.Valid || !sourceRevision.Valid || !createdRevision.Valid || !retentionExempt.Valid || !updatedRevision.Valid || !createdAt.Valid || !updatedAt.Valid || !mimeType.Valid || !sizeBytes.Valid || !etag.Valid {
 		return assets.CollectionItem{}, assets.ErrNotFound
 	}
 	return assets.CollectionItem{
 		ID: id.String, CollectionID: itemCollectionID.String, AssetID: assetID.String,
 		RemoteItemID: remoteItemID.String, DisplayName: displayName.String, SourceRevision: sourceRevision.String,
-		CreatedRevision: createdRevision.Int64, MIMEType: mimeType.String, SizeBytes: sizeBytes.Int64,
-		ETag: etag.String, CreatedAt: createdAt.Time,
+		CreatedRevision: createdRevision.Int64, RetentionExempt: retentionExempt.Bool, UpdatedRevision: updatedRevision.Int64, MIMEType: mimeType.String, SizeBytes: sizeBytes.Int64,
+		ETag: etag.String, CreatedAt: createdAt.Time, UpdatedAt: updatedAt.Time,
 	}, nil
 }
 
@@ -751,11 +752,15 @@ func (s *Store) CreateContentTicket(ctx context.Context, ticket assets.ContentTi
 	if _, err := tx.ExecContext(ctx, `DELETE FROM asset_content_tickets WHERE expires_at <= $1`, now); err != nil {
 		return err
 	}
+	accessMode := ticket.AccessMode
+	if accessMode == "" {
+		accessMode = "reader"
+	}
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO asset_content_tickets(
-		  token_hash,collection_id,collection_item_id,asset_etag,user_id,roles,expires_at,created_at
+		  token_hash,collection_id,collection_item_id,asset_etag,user_id,roles,access_mode,expires_at,created_at
 		)
-		SELECT $1,c.id,i.id,a.etag,$5,$6::text[],$7::timestamptz,$8::timestamptz
+		SELECT $1,c.id,i.id,a.etag,$5,$6::text[],$7,$8::timestamptz,$9::timestamptz
 		FROM asset_collections c
 		JOIN asset_collection_items i
 		  ON i.collection_id=c.id AND i.id=$3 AND i.deleted_revision IS NULL
@@ -764,15 +769,15 @@ func (s *Store) CreateContentTicket(ctx context.Context, ticket assets.ContentTi
 		 AND a.upload_status='completed' AND a.scan_status='clean'
 		 AND a.processing_status IN ('ready','not_required') AND a.etag=$4
 		WHERE c.id=$2 AND c.deleted_at IS NULL
-		  AND $7::timestamptz>$9::timestamptz AND $7::timestamptz<=$9::timestamptz+interval '5 minutes'
-		  AND $10=ANY($6::text[])
+		  AND $8::timestamptz>$10::timestamptz AND $8::timestamptz<=$10::timestamptz+interval '5 minutes'
+		  AND $11=ANY($6::text[])
 		  AND EXISTS (
 		    SELECT 1 FROM asset_collection_acl acl
 		    WHERE acl.collection_id=c.id AND acl.permission='read' AND acl.revoked_at IS NULL
 		      AND ((acl.subject_type='user' AND acl.subject_id=$5)
 		        OR (acl.subject_type='role' AND acl.subject_id=ANY($6::text[])))
 		  )`, ticket.TokenHash, ticket.CollectionID, ticket.CollectionItemID, ticket.AssetETag,
-		ticket.UserID, ticket.Roles, ticket.ExpiresAt, ticket.CreatedAt, now, assets.CollectionReaderRole)
+		ticket.UserID, ticket.Roles, accessMode, ticket.ExpiresAt, ticket.CreatedAt, now, assets.CollectionReaderRole)
 	if err != nil {
 		return err
 	}
@@ -839,14 +844,14 @@ func (s *Store) ListManagedCollections(ctx context.Context, callerService, curso
 		lastID = decoded.LastID
 	}
 	limit = boundedCollectionLimit(limit)
-	rows, err := s.db.QueryContext(ctx, `SELECT id,namespace,name,revision,created_by_service,created_at,updated_at FROM asset_collections WHERE created_by_service=$1 AND deleted_at IS NULL AND id>$2 ORDER BY id LIMIT $3`, callerService, lastID, limit+1)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,namespace,name,revision,retention_days,created_by_service,created_at,updated_at FROM asset_collections WHERE created_by_service=$1 AND deleted_at IS NULL AND id>$2 ORDER BY id LIMIT $3`, callerService, lastID, limit+1)
 	if err != nil {
 		return assets.ManagedCollectionPage{}, err
 	}
 	var collections []assets.Collection
 	for rows.Next() {
 		var value assets.Collection
-		if err := rows.Scan(&value.ID, &value.Namespace, &value.Name, &value.Revision, &value.CreatedByService, &value.CreatedAt, &value.UpdatedAt); err != nil {
+		if err := rows.Scan(&value.ID, &value.Namespace, &value.Name, &value.Revision, &value.RetentionDays, &value.CreatedByService, &value.CreatedAt, &value.UpdatedAt); err != nil {
 			rows.Close()
 			return assets.ManagedCollectionPage{}, err
 		}
@@ -904,7 +909,7 @@ func (s *Store) CollectionChanges(ctx context.Context, id, cursor string, subjec
 func (s *Store) collectionResetPage(ctx context.Context, collection assets.Collection, cursor changeCursor, subject assets.CollectionSubject) (assets.CollectionChangePage, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT i.id,i.collection_id,COALESCE(i.asset_id,''),i.remote_item_id,i.display_name,i.source_revision,
-		       i.created_revision,i.created_at,COALESCE(a.detected_mime_type,''),COALESCE(a.size_bytes,0),COALESCE(a.etag,'')
+		       i.created_revision,i.retention_exempt,i.updated_revision,i.created_at,i.updated_at,COALESCE(a.detected_mime_type,''),COALESCE(a.size_bytes,0),COALESCE(a.etag,'')
 		FROM asset_collection_items i
 		LEFT JOIN assets a ON a.id=i.asset_id
 		WHERE i.collection_id=$1 AND i.id>$2 AND i.created_revision<=$3
@@ -917,7 +922,7 @@ func (s *Store) collectionResetPage(ctx context.Context, collection assets.Colle
 	page := assets.CollectionChangePage{Collection: collection, Items: []assets.CollectionItem{}, Tombstones: []assets.CollectionTombstone{}, Reset: true}
 	for rows.Next() {
 		var item assets.CollectionItem
-		if err := rows.Scan(&item.ID, &item.CollectionID, &item.AssetID, &item.RemoteItemID, &item.DisplayName, &item.SourceRevision, &item.CreatedRevision, &item.CreatedAt, &item.MIMEType, &item.SizeBytes, &item.ETag); err != nil {
+		if err := rows.Scan(&item.ID, &item.CollectionID, &item.AssetID, &item.RemoteItemID, &item.DisplayName, &item.SourceRevision, &item.CreatedRevision, &item.RetentionExempt, &item.UpdatedRevision, &item.CreatedAt, &item.UpdatedAt, &item.MIMEType, &item.SizeBytes, &item.ETag); err != nil {
 			return assets.CollectionChangePage{}, err
 		}
 		page.Items = append(page.Items, item)
@@ -954,16 +959,16 @@ func (s *Store) collectionDeltaPage(ctx context.Context, collection assets.Colle
 		afterRevision, afterKind = cursor.FromRevision, -1
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT kind,id,remote_item_id,display_name,source_revision,event_revision,asset_id,mime_type,size_bytes,etag,event_at
+		SELECT kind,id,remote_item_id,display_name,source_revision,event_revision,asset_id,mime_type,size_bytes,etag,retention_exempt,updated_revision,updated_at,event_at
 		FROM (
 		  SELECT 0 AS kind,i.id,i.remote_item_id,i.display_name,i.source_revision,i.created_revision AS event_revision,
 		         COALESCE(i.asset_id,'') AS asset_id,COALESCE(a.detected_mime_type,'') AS mime_type,
-		         COALESCE(a.size_bytes,0) AS size_bytes,COALESCE(a.etag,'') AS etag,i.created_at AS event_at
+		         COALESCE(a.size_bytes,0) AS size_bytes,COALESCE(a.etag,'') AS etag,i.retention_exempt,i.updated_revision,i.updated_at,i.created_at AS event_at
 		  FROM asset_collection_items i LEFT JOIN assets a ON a.id=i.asset_id
 		  WHERE i.collection_id=$1 AND i.created_revision>$2 AND i.created_revision<=$3
 		  UNION ALL
 		  SELECT 1 AS kind,i.id,i.remote_item_id,'' AS display_name,'' AS source_revision,i.deleted_revision AS event_revision,
-		         '' AS asset_id,'' AS mime_type,0::bigint AS size_bytes,'' AS etag,i.deleted_at AS event_at
+		         '' AS asset_id,'' AS mime_type,0::bigint AS size_bytes,'' AS etag,false AS retention_exempt,0::bigint AS updated_revision,'0001-01-01'::timestamptz AS updated_at,i.deleted_at AS event_at
 		  FROM asset_collection_items i
 		  WHERE i.collection_id=$1 AND i.deleted_revision>$2 AND i.deleted_revision<=$3
 		) events
@@ -977,12 +982,14 @@ func (s *Store) collectionDeltaPage(ctx context.Context, collection assets.Colle
 		revision                                                               int64
 		id, remoteItemID, displayName, sourceRevision, assetID, mimeType, etag string
 		sizeBytes                                                              int64
-		at                                                                     time.Time
+		retentionExempt                                                        bool
+		updatedRevision                                                        int64
+		updatedAt, at                                                          time.Time
 	}
 	var events []changeEvent
 	for rows.Next() {
 		var event changeEvent
-		if err := rows.Scan(&event.kind, &event.id, &event.remoteItemID, &event.displayName, &event.sourceRevision, &event.revision, &event.assetID, &event.mimeType, &event.sizeBytes, &event.etag, &event.at); err != nil {
+		if err := rows.Scan(&event.kind, &event.id, &event.remoteItemID, &event.displayName, &event.sourceRevision, &event.revision, &event.assetID, &event.mimeType, &event.sizeBytes, &event.etag, &event.retentionExempt, &event.updatedRevision, &event.updatedAt, &event.at); err != nil {
 			rows.Close()
 			return assets.CollectionChangePage{}, err
 		}
@@ -998,7 +1005,7 @@ func (s *Store) collectionDeltaPage(ctx context.Context, collection assets.Colle
 	}
 	for _, event := range events {
 		if event.kind == 0 {
-			page.Items = append(page.Items, assets.CollectionItem{ID: event.id, CollectionID: collection.ID, AssetID: event.assetID, RemoteItemID: event.remoteItemID, DisplayName: event.displayName, SourceRevision: event.sourceRevision, CreatedRevision: event.revision, MIMEType: event.mimeType, SizeBytes: event.sizeBytes, ETag: event.etag, CreatedAt: event.at})
+			page.Items = append(page.Items, assets.CollectionItem{ID: event.id, CollectionID: collection.ID, AssetID: event.assetID, RemoteItemID: event.remoteItemID, DisplayName: event.displayName, SourceRevision: event.sourceRevision, CreatedRevision: event.revision, RetentionExempt: event.retentionExempt, UpdatedRevision: event.updatedRevision, MIMEType: event.mimeType, SizeBytes: event.sizeBytes, ETag: event.etag, CreatedAt: event.at, UpdatedAt: event.updatedAt})
 		} else {
 			page.Tombstones = append(page.Tombstones, assets.CollectionTombstone{ID: event.id, RemoteItemID: event.remoteItemID, DeletedRevision: event.revision, DeletedAt: event.at})
 		}
@@ -1025,7 +1032,7 @@ func (s *Store) collectionDeltaPage(ctx context.Context, collection assets.Colle
 
 func (s *Store) getLiveCollection(ctx context.Context, id string) (assets.Collection, error) {
 	var value assets.Collection
-	err := s.db.QueryRowContext(ctx, `SELECT id,namespace,name,revision,created_by_service,created_at,updated_at FROM asset_collections WHERE id=$1 AND deleted_at IS NULL`, id).Scan(&value.ID, &value.Namespace, &value.Name, &value.Revision, &value.CreatedByService, &value.CreatedAt, &value.UpdatedAt)
+	err := s.db.QueryRowContext(ctx, `SELECT id,namespace,name,revision,retention_days,created_by_service,created_at,updated_at FROM asset_collections WHERE id=$1 AND deleted_at IS NULL`, id).Scan(&value.ID, &value.Namespace, &value.Name, &value.Revision, &value.RetentionDays, &value.CreatedByService, &value.CreatedAt, &value.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return assets.Collection{}, assets.ErrNotFound
 	}

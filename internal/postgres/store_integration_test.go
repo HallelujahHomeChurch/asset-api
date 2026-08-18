@@ -711,6 +711,65 @@ func TestCollectionSchemaAssetRetentionPreservesItemHistory(t *testing.T) {
 	}
 }
 
+func TestCollectionManagementDefaults(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 19, 0, 0, 0, 0, time.UTC)
+
+	collection, err := store.CreateCollection(ctx, assets.CreateCollectionInput{
+		Namespace:      "namespace",
+		Name:           "Managed media",
+		CallerService:  "helper",
+		IdempotencyKey: "collection-management-defaults",
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if collection.RetentionDays != 14 {
+		t.Fatalf("retention days = %d, want 14", collection.RetentionDays)
+	}
+
+	insertAsset(t, db, "management-default-asset", assets.UploadCompleted, assets.ScanClean, assets.ProcessingReady, now, time.Time{})
+	if _, err := db.Exec("UPDATE assets SET namespace='namespace',owner_service='helper' WHERE id='management-default-asset'"); err != nil {
+		t.Fatal(err)
+	}
+	mutation, err := store.AddCollectionItem(ctx, assets.AddCollectionItemInput{
+		CollectionID:   collection.ID,
+		AssetID:        "management-default-asset",
+		RemoteItemID:   "management-default-item",
+		DisplayName:    "Managed default",
+		SourceRevision: "source",
+		CallerService:  "helper",
+		IdempotencyKey: "item-management-defaults",
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := mutation.Item
+	if item.RetentionExempt || item.UpdatedRevision != item.CreatedRevision || !item.UpdatedAt.Equal(item.CreatedAt) {
+		t.Fatalf("unexpected item defaults: %+v", item)
+	}
+}
+
+func TestCollectionManagementConstraints(t *testing.T) {
+	db := integrationDB(t)
+	now := time.Date(2026, 8, 19, 0, 0, 0, 0, time.UTC)
+	insertCollection(t, db, "collection", now)
+
+	for _, retentionDays := range []int{0, 366} {
+		if _, err := db.Exec(`INSERT INTO asset_collections(id,namespace,name,retention_days,created_by_service,created_at,updated_at) VALUES($1,'namespace','Managed',$2,'helper',$3,$3)`, fmt.Sprintf("invalid-retention-%d", retentionDays), retentionDays, now); err == nil {
+			t.Fatalf("retention days %d was accepted", retentionDays)
+		}
+	}
+	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,remote_item_id,display_name,source_revision,created_revision,created_at) VALUES('ticket-item','collection','ticket-item','Ticket','source',1,$1)`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO asset_content_tickets(token_hash,collection_id,collection_item_id,asset_etag,user_id,roles,access_mode,expires_at,created_at) VALUES($1,'collection','ticket-item','etag','user',ARRAY[]::text[],'other',$2,$3)`, strings.Repeat("a", 64), now.Add(time.Minute), now); err == nil {
+		t.Fatal("ticket access mode other was accepted")
+	}
+}
+
 func TestCollectionMutationsReplayConflictAndRevision(t *testing.T) {
 	db := integrationDB(t)
 	store := New(db)
