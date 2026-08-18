@@ -1929,6 +1929,108 @@ func TestDeleteRaceRetentionExemptionWinsBeforeWorkerLock(t *testing.T) {
 	}
 }
 
+func TestCollectionAssetLockOrderAvoidsSameCollectionDeadlock(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 19, 5, 0, 0, 0, time.UTC)
+	insertCollection(t, db, "lock-order-collection", now)
+	insertAsset(t, db, "lock-order-asset", assets.UploadCompleted, assets.ScanClean, assets.ProcessingReady, now, time.Time{})
+	if _, err := db.Exec(`UPDATE assets SET namespace='line.group.media-sync',owner_service='hhc-line-function-bot' WHERE id='lock-order-asset'`); err != nil {
+		t.Fatal(err)
+	}
+	blocker, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := blocker.Exec(`SELECT id FROM asset_collections WHERE id='lock-order-collection' FOR UPDATE`); err != nil {
+		t.Fatal(err)
+	}
+	added := make(chan error, 1)
+	go func() {
+		_, err := store.AddCollectionItem(context.Background(), assets.AddCollectionItemInput{
+			CollectionID: "lock-order-collection", AssetID: "lock-order-asset", RemoteItemID: "remote",
+			DisplayName: "Media", SourceRevision: "source", CallerService: "hhc-line-function-bot", IdempotencyKey: "lock-order-add",
+		}, now)
+		added <- err
+	}()
+	select {
+	case err := <-added:
+		t.Fatalf("add did not wait for collection lock: %v", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+	if _, err := blocker.Exec(`SELECT id FROM assets WHERE id='lock-order-asset' FOR UPDATE`); err != nil {
+		blocker.Rollback()
+		t.Fatalf("asset lock deadlocked after collection lock: %v", err)
+	}
+	if err := blocker.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-added; err != nil {
+		t.Fatalf("add after lock release: %v", err)
+	}
+}
+
+func TestBatchDeleteRechecksReferencesAfterCandidateAssetLock(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 19, 5, 30, 0, 0, time.UTC)
+	insertCollection(t, db, "reference-delete", now)
+	insertCollection(t, db, "reference-add", now)
+	insertAsset(t, db, "reference-race-asset", assets.UploadCompleted, assets.ScanClean, assets.ProcessingReady, now, time.Time{})
+	if _, err := db.Exec(`UPDATE assets SET namespace='line.group.media-sync',owner_service='hhc-line-function-bot',owner_type='media_sync_ingest' WHERE id='reference-race-asset'`); err != nil {
+		t.Fatal(err)
+	}
+	deletedItemID := "550e8400e29b41d4a716446655440301"
+	addedItemID := "550e8400e29b41d4a716446655440302"
+	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,retention_exempt,updated_revision,created_at,updated_at) VALUES($1,'reference-delete','reference-race-asset','delete','Delete','source',1,false,1,$2,$2)`, deletedItemID, now); err != nil {
+		t.Fatal(err)
+	}
+	adding, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adding.Exec(`SELECT id FROM asset_collections WHERE id='reference-add' FOR UPDATE`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adding.Exec(`SELECT id FROM assets WHERE id='reference-race-asset' FOR UPDATE`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adding.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,retention_exempt,updated_revision,created_at,updated_at) VALUES($1,'reference-add','reference-race-asset','add','Add','source',1,false,1,$2,$2)`, addedItemID, now); err != nil {
+		t.Fatal(err)
+	}
+	deleted := make(chan error, 1)
+	go func() {
+		_, err := store.DeleteCollectionItems(context.Background(), assets.DeleteCollectionItemsInput{
+			CollectionID: "reference-delete", ItemIDs: []string{deletedItemID}, CallerService: "hhc-line-function-bot", IdempotencyKey: "reference-delete",
+		}, now.Add(time.Minute))
+		deleted <- err
+	}()
+	select {
+	case err := <-deleted:
+		t.Fatalf("delete did not wait for candidate asset lock: %v", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+	if err := adding.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-deleted; err != nil {
+		t.Fatal(err)
+	}
+	var deletedAt sql.NullTime
+	var active int
+	if err := db.QueryRow(`SELECT deleted_at FROM assets WHERE id='reference-race-asset'`).Scan(&deletedAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT count(*) FROM asset_collection_items WHERE asset_id='reference-race-asset' AND deleted_revision IS NULL`).Scan(&active); err != nil {
+		t.Fatal(err)
+	}
+	if deletedAt.Valid || active != 1 {
+		t.Fatalf("deleted=%v active=%d", deletedAt.Valid, active)
+	}
+}
+
 func integrationDB(t *testing.T) *sql.DB {
 	t.Helper()
 	url := os.Getenv("TEST_DATABASE_URL")

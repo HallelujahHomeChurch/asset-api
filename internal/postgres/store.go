@@ -459,6 +459,10 @@ func (s *Store) AddCollectionItem(ctx context.Context, input assets.AddCollectio
 		value.Collection.CreatedByService = input.CallerService
 		return value, nil
 	}
+	collection, err := lockManagedCollection(ctx, tx, input.CollectionID, input.CallerService)
+	if err != nil {
+		return assets.CollectionItemMutation{}, err
+	}
 	var namespace, ownerService, mimeType, etag string
 	var uploadStatus assets.UploadStatus
 	var scanStatus assets.ScanStatus
@@ -476,10 +480,6 @@ func (s *Store) AddCollectionItem(ctx context.Context, input assets.AddCollectio
 	}
 	if uploadStatus != assets.UploadCompleted || scanStatus != assets.ScanClean || (processingStatus != assets.ProcessingReady && processingStatus != assets.ProcessingNotRequired) {
 		return assets.CollectionItemMutation{}, assets.ErrConflict
-	}
-	collection, err := lockManagedCollection(ctx, tx, input.CollectionID, input.CallerService)
-	if err != nil {
-		return assets.CollectionItemMutation{}, err
 	}
 	if namespace != collection.Namespace {
 		return assets.CollectionItemMutation{}, assets.ErrConflict
@@ -596,7 +596,7 @@ func (s *Store) deleteCollectionItems(ctx context.Context, tx *sql.Tx, collectio
 		}
 		items = append(items, item)
 	}
-	if err := rows.Close(); err != nil {
+	if err := finishRows(rows); err != nil {
 		return collectionItemsDeletion{}, err
 	}
 	deletion := collectionItemsDeletion{
@@ -627,6 +627,32 @@ func (s *Store) deleteCollectionItems(ctx context.Context, tx *sql.Tx, collectio
 	}
 	assetIDs = uniqueSortedStrings(assetIDs)
 	if len(assetIDs) > 0 {
+		rows, err := tx.QueryContext(ctx, `
+			SELECT id FROM assets
+			WHERE id=ANY($1::text[])
+			  AND namespace='line.group.media-sync'
+			  AND owner_service='hhc-line-function-bot'
+			  AND owner_type='media_sync_ingest'
+			  AND deleted_at IS NULL AND purged_at IS NULL
+			ORDER BY id FOR UPDATE`, assetIDs)
+		if err != nil {
+			return collectionItemsDeletion{}, err
+		}
+		var candidateIDs []string
+		for rows.Next() {
+			var assetID string
+			if err := rows.Scan(&assetID); err != nil {
+				rows.Close()
+				return collectionItemsDeletion{}, err
+			}
+			candidateIDs = append(candidateIDs, assetID)
+		}
+		if err := finishRows(rows); err != nil {
+			return collectionItemsDeletion{}, err
+		}
+		if len(candidateIDs) == 0 {
+			return deletion, nil
+		}
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE assets a SET deleted_at=$2,updated_at=$2
 			WHERE a.id=ANY($1::text[])
@@ -637,7 +663,7 @@ func (s *Store) deleteCollectionItems(ctx context.Context, tx *sql.Tx, collectio
 			  AND NOT EXISTS (
 			    SELECT 1 FROM asset_collection_items i
 			    WHERE i.asset_id=a.id AND i.deleted_revision IS NULL
-			  )`, assetIDs, now); err != nil {
+			  )`, candidateIDs, now); err != nil {
 			return collectionItemsDeletion{}, err
 		}
 	}
@@ -1178,7 +1204,7 @@ func (s *Store) SetCollectionItemsRetention(ctx context.Context, input assets.Se
 		}
 		activeIDs = append(activeIDs, itemID)
 	}
-	if err := rows.Close(); err != nil {
+	if err := finishRows(rows); err != nil {
 		return err
 	}
 	if len(activeIDs) > 0 {
@@ -1615,74 +1641,120 @@ func (s *Store) ScheduleScanRetry(ctx context.Context, assetID string, expectedA
 }
 
 func (s *Store) SoftDeleteAsset(ctx context.Context, assetID, ownerService string, now time.Time) error {
+	for {
+		retry, err := s.softDeleteAsset(ctx, assetID, ownerService, now)
+		if err != nil || !retry {
+			return err
+		}
+	}
+}
+
+func (s *Store) softDeleteAsset(ctx context.Context, assetID, ownerService string, now time.Time) (bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer tx.Rollback()
-	var deletedAt sql.NullTime
-	err = tx.QueryRowContext(ctx, `SELECT deleted_at FROM assets WHERE id=$1 AND owner_service=$2 AND purged_at IS NULL FOR UPDATE`, assetID, ownerService).Scan(&deletedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return assets.ErrNotFound
-	}
+	collectionIDs, err := activeAssetCollectionIDs(ctx, tx, assetID)
 	if err != nil {
-		return err
+		return false, err
 	}
-	if deletedAt.Valid {
-		return tx.Commit()
-	}
-	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT collection_id FROM asset_collection_items WHERE asset_id=$1 AND deleted_revision IS NULL ORDER BY collection_id`, assetID)
-	if err != nil {
-		return err
-	}
-	var collectionIDs []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return err
-		}
-		collectionIDs = append(collectionIDs, id)
-	}
-	if err := rows.Close(); err != nil {
-		return err
-	}
+	revisions := make(map[string]int64, len(collectionIDs))
 	if len(collectionIDs) > 0 {
-		locked, err := tx.QueryContext(ctx, `SELECT id,revision FROM asset_collections WHERE id=ANY($1::text[]) ORDER BY id FOR UPDATE`, collectionIDs)
+		rows, err := tx.QueryContext(ctx, `SELECT id,revision FROM asset_collections WHERE id=ANY($1::text[]) ORDER BY id FOR UPDATE`, collectionIDs)
 		if err != nil {
-			return err
+			return false, err
 		}
-		revisions := make(map[string]int64, len(collectionIDs))
-		for locked.Next() {
+		for rows.Next() {
 			var id string
 			var revision int64
-			if err := locked.Scan(&id, &revision); err != nil {
-				locked.Close()
-				return err
+			if err := rows.Scan(&id, &revision); err != nil {
+				rows.Close()
+				return false, err
 			}
 			revisions[id] = revision
 		}
-		if err := locked.Close(); err != nil {
-			return err
+		if err := finishRows(rows); err != nil {
+			return false, err
 		}
-		for _, collectionID := range collectionIDs {
-			nextRevision := revisions[collectionID] + 1
-			result, err := tx.ExecContext(ctx, `UPDATE asset_collection_items SET deleted_revision=$3,deleted_at=$4 WHERE collection_id=$1 AND asset_id=$2 AND deleted_revision IS NULL`, collectionID, assetID, nextRevision, now)
-			if err != nil {
-				return err
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT id,collection_id FROM asset_collection_items WHERE asset_id=$1 AND deleted_revision IS NULL ORDER BY collection_id,id FOR UPDATE`, assetID)
+	if err != nil {
+		return false, err
+	}
+	for rows.Next() {
+		var itemID, collectionID string
+		if err := rows.Scan(&itemID, &collectionID); err != nil {
+			rows.Close()
+			return false, err
+		}
+		if _, locked := revisions[collectionID]; !locked {
+			if err := rows.Close(); err != nil {
+				return false, err
 			}
-			if count, _ := result.RowsAffected(); count == 0 {
-				continue
-			}
-			if _, err := tx.ExecContext(ctx, `UPDATE asset_collections SET revision=$2,updated_at=$3 WHERE id=$1`, collectionID, nextRevision, now); err != nil {
-				return err
-			}
+			return true, nil
+		}
+	}
+	if err := finishRows(rows); err != nil {
+		return false, err
+	}
+	var deletedAt sql.NullTime
+	err = tx.QueryRowContext(ctx, `SELECT deleted_at FROM assets WHERE id=$1 AND owner_service=$2 AND purged_at IS NULL FOR UPDATE`, assetID, ownerService).Scan(&deletedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, assets.ErrNotFound
+	}
+	if err != nil {
+		return false, err
+	}
+	if deletedAt.Valid {
+		return false, tx.Commit()
+	}
+	currentCollectionIDs, err := activeAssetCollectionIDs(ctx, tx, assetID)
+	if err != nil {
+		return false, err
+	}
+	for _, collectionID := range currentCollectionIDs {
+		if _, locked := revisions[collectionID]; !locked {
+			return true, nil
+		}
+	}
+	for _, collectionID := range collectionIDs {
+		nextRevision := revisions[collectionID] + 1
+		result, err := tx.ExecContext(ctx, `UPDATE asset_collection_items SET deleted_revision=$3,deleted_at=$4 WHERE collection_id=$1 AND asset_id=$2 AND deleted_revision IS NULL`, collectionID, assetID, nextRevision, now)
+		if err != nil {
+			return false, err
+		}
+		if count, _ := result.RowsAffected(); count == 0 {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE asset_collections SET revision=$2,updated_at=$3 WHERE id=$1`, collectionID, nextRevision, now); err != nil {
+			return false, err
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE assets SET deleted_at=$2,updated_at=$2 WHERE id=$1`, assetID, now); err != nil {
-		return err
+		return false, err
 	}
-	return tx.Commit()
+	return false, tx.Commit()
+}
+
+func activeAssetCollectionIDs(ctx context.Context, tx *sql.Tx, assetID string) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT collection_id FROM asset_collection_items WHERE asset_id=$1 AND deleted_revision IS NULL ORDER BY collection_id`, assetID)
+	if err != nil {
+		return nil, err
+	}
+	var collectionIDs []string
+	for rows.Next() {
+		var collectionID string
+		if err := rows.Scan(&collectionID); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		collectionIDs = append(collectionIDs, collectionID)
+	}
+	if err := finishRows(rows); err != nil {
+		return nil, err
+	}
+	return collectionIDs, nil
 }
 
 func (s *Store) RequeueFailedScan(ctx context.Context, assetID, ownerService string, request assets.ScanRequest, now time.Time) error {
@@ -1881,6 +1953,19 @@ func uniqueSortedStrings(values []string) []string {
 	result := uniqueStrings(values)
 	slices.Sort(result)
 	return result
+}
+
+type rowSet interface {
+	Err() error
+	Close() error
+}
+
+func finishRows(rows rowSet) error {
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	return rows.Close()
 }
 
 func (s *Store) ClaimPendingProcessing(ctx context.Context, now time.Time, lease time.Duration) (assets.Asset, bool, error) {
