@@ -513,7 +513,7 @@ func (s *Service) IssueManagedContentTickets(ctx context.Context, collectionID s
 		hash := sha256.Sum256(raw)
 		if err := s.repository.CreateContentTicket(ctx, ContentTicket{
 			TokenHash: hex.EncodeToString(hash[:]), CollectionID: collectionID, CollectionItemID: itemID,
-			AssetETag: item.ETag, UserID: "manager", AccessMode: "manager", ExpiresAt: expiresAt, CreatedAt: now,
+			AssetETag: item.ETag, UserID: "manager", Roles: []string{}, AccessMode: "manager", ExpiresAt: expiresAt, CreatedAt: now,
 		}, now); err != nil {
 			if errors.Is(err, ErrNotFound) {
 				batch.UnavailableItemIDs = append(batch.UnavailableItemIDs, itemID)

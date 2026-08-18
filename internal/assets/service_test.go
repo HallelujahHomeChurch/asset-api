@@ -877,7 +877,7 @@ func TestManagedContentTicketsAreBoundedAndDoNotUseReaderAuthorization(t *testin
 	if err != nil || len(batch.Tickets) != 1 || len(batch.UnavailableItemIDs) != 1 || batch.UnavailableItemIDs[0] != unavailableID {
 		t.Fatalf("batch=%+v err=%v", batch, err)
 	}
-	if batch.Tickets[0].ItemID != availableID || batch.Tickets[0].ExpiresAt != now.Add(5*time.Minute) || batch.Tickets[0].ContentURL == "" || repository.ticket.AccessMode != "manager" || repository.readerItemCalls != 0 {
+	if batch.Tickets[0].ItemID != availableID || batch.Tickets[0].ExpiresAt != now.Add(5*time.Minute) || batch.Tickets[0].ContentURL == "" || repository.ticket.AccessMode != "manager" || repository.ticket.Roles == nil || repository.readerItemCalls != 0 {
 		t.Fatalf("ticket=%+v persisted=%+v reader calls=%d", batch.Tickets[0], repository.ticket, repository.readerItemCalls)
 	}
 
