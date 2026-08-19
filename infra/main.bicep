@@ -18,6 +18,8 @@ param scanDispatchEnabled bool = true
 param embeddedScanEnabled bool = false
 param deployScanJob bool = false
 param deploySignatureRefreshJob bool = false
+param deployRetentionJob bool = false
+param retentionApplyEnabled bool = false
 param scanWorkerImage string = runtimeImage
 param workloadAuthClientId string = ''
 param workloadAuthAudience string = ''
@@ -628,6 +630,53 @@ resource signatureRefreshJob 'Microsoft.App/jobs@2025-07-01' = if (deploySignatu
   dependsOn: [acrPull, signatureBlobContributor]
 }
 
+resource retentionJob 'Microsoft.App/jobs@2025-07-01' = if (deployRetentionJob) {
+  name: 'asset-retention'
+  location: location
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${pullIdentity.id}': {}
+      '${runtimeIdentity.id}': {}
+    }
+  }
+  properties: {
+    environmentId: environment.id
+    workloadProfileName: 'Consumption'
+    configuration: {
+      triggerType: 'Schedule'
+      replicaTimeout: 900
+      replicaRetryLimit: 1
+      scheduleTriggerConfig: {
+        cronExpression: '0 19 * * *'
+        parallelism: 1
+        replicaCompletionCount: 1
+      }
+      registries: [
+        { server: registry.properties.loginServer, identity: pullIdentity.id }
+      ]
+      secrets: [
+        { name: 'database-url', keyVaultUrl: '${runtimeVault.properties.vaultUri}secrets/database-url', identity: runtimeIdentity.id }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'asset-retention'
+          image: runtimeImage
+          command: ['/asset-retention-worker']
+          env: [
+            { name: 'DATABASE_URL', secretRef: 'database-url' }
+            { name: 'ASSET_RETENTION_APPLY_ENABLED', value: string(retentionApplyEnabled) }
+          ]
+          resources: { cpu: json('0.25'), memory: '0.5Gi' }
+        }
+      ]
+    }
+  }
+  dependsOn: [acrPull, runtimeSecretAccess]
+}
+
 resource migrate 'Microsoft.App/jobs@2024-03-01' = if (deployMigrationJob) {
   name: 'asset-migrate'
   location: location
@@ -694,3 +743,4 @@ output scanQueueName string = 'asset-scan'
 output scanPoisonQueueName string = 'asset-scan-poison'
 output scanJobName string = 'asset-scan'
 output signatureRefreshJobName string = 'asset-clamav-signature-refresh'
+output retentionJobName string = 'asset-retention'

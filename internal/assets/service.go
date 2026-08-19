@@ -15,8 +15,11 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"slices"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 const uploadTTL = 10 * time.Minute
@@ -361,6 +364,59 @@ func (s *Service) DeleteCollectionItem(ctx context.Context, input DeleteCollecti
 	return s.repository.DeleteCollectionItem(ctx, input, s.now().UTC())
 }
 
+func (s *Service) SetCollectionItemsRetention(ctx context.Context, input SetCollectionItemsRetentionInput) error {
+	itemIDs, ok := normalizeCollectionItemIDs(input.ItemIDs)
+	if input.CollectionID == "" || !ok || !validMutationIdentity(input.CallerService, input.IdempotencyKey) {
+		return ErrInvalidInput
+	}
+	input.ItemIDs = itemIDs
+	return s.repository.SetCollectionItemsRetention(ctx, input, s.now().UTC())
+}
+
+func (s *Service) DeleteCollectionItems(ctx context.Context, input DeleteCollectionItemsInput) (DeleteCollectionItemsResult, error) {
+	itemIDs, ok := normalizeCollectionItemIDs(input.ItemIDs)
+	if input.CollectionID == "" || !ok || !validMutationIdentity(input.CallerService, input.IdempotencyKey) {
+		return DeleteCollectionItemsResult{}, ErrInvalidInput
+	}
+	input.ItemIDs = itemIDs
+	return s.repository.DeleteCollectionItems(ctx, input, s.now().UTC())
+}
+
+func normalizeCollectionItemIDs(values []string) ([]string, bool) {
+	if len(values) < 1 || len(values) > 100 {
+		return nil, false
+	}
+	unique := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if len(value) == 36 {
+			if value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' {
+				return nil, false
+			}
+			value = value[:8] + value[9:13] + value[14:18] + value[19:23] + value[24:]
+		}
+		decoded, err := hex.DecodeString(value)
+		if err != nil || len(decoded) != 16 {
+			return nil, false
+		}
+		unique[hex.EncodeToString(decoded)] = struct{}{}
+	}
+	itemIDs := make([]string, 0, len(unique))
+	for value := range unique {
+		itemIDs = append(itemIDs, value)
+	}
+	slices.Sort(itemIDs)
+	return itemIDs, true
+}
+
+func (s *Service) RenameCollectionItem(ctx context.Context, input RenameCollectionItemInput) (ManagedCollectionItem, error) {
+	input.DisplayName = strings.TrimSpace(input.DisplayName)
+	if input.CollectionID == "" || input.ItemID == "" || !validCollectionItemDisplayName(input.DisplayName) || !validMutationIdentity(input.CallerService, input.IdempotencyKey) {
+		return ManagedCollectionItem{}, ErrInvalidInput
+	}
+	return s.repository.RenameCollectionItem(ctx, input, s.now().UTC())
+}
+
 func (s *Service) ListAuthorizedCollections(ctx context.Context, subject CollectionSubject, cursor string, limit int) (CollectionPage, error) {
 	if !validCollectionSubject(subject) {
 		return CollectionPage{}, ErrForbidden
@@ -391,7 +447,12 @@ func (s *Service) AuthorizedCollectionContentMetadata(ctx context.Context, colle
 	if err != nil {
 		return PublicDownloadMetadata{}, ErrNotFound
 	}
-	return collectionContentMetadata(asset, item.ETag)
+	metadata, err := collectionContentMetadata(asset, item.ETag)
+	if err != nil {
+		return PublicDownloadMetadata{}, err
+	}
+	metadata.FileName = item.DisplayName
+	return metadata, nil
 }
 
 func (s *Service) IssueCollectionContentTicket(ctx context.Context, collectionID, itemID string, subject CollectionSubject, tokenExpiresAt time.Time) (ContentTicketResponse, error) {
@@ -422,6 +483,57 @@ func (s *Service) IssueCollectionContentTicket(ctx context.Context, collectionID
 		return ContentTicketResponse{}, err
 	}
 	return ContentTicketResponse{ContentURL: "/api/assets/content?ticket=" + token, ExpiresAt: expiresAt, ETag: item.ETag}, nil
+}
+
+func (s *Service) IssueManagedContentTickets(ctx context.Context, collectionID, callerService string, itemIDs []string, ttl time.Duration) (ManagedContentTicketBatch, error) {
+	itemIDs, ok := normalizeCollectionItemIDs(itemIDs)
+	if collectionID == "" || callerService == "" || !ok || ttl <= 0 {
+		return ManagedContentTicketBatch{}, ErrInvalidInput
+	}
+	collection, err := s.repository.GetManagedCollection(ctx, collectionID, callerService)
+	if errors.Is(err, ErrForbidden) || errors.Is(err, ErrNotFound) {
+		return ManagedContentTicketBatch{}, ErrNotFound
+	}
+	if err != nil {
+		return ManagedContentTicketBatch{}, err
+	}
+	if collection.Collection.Namespace != "line.group.media-sync" {
+		return ManagedContentTicketBatch{}, ErrNotFound
+	}
+	now := s.now().UTC()
+	expiresAt := now.Add(ttl)
+	if maximum := now.Add(contentTicketTTL); expiresAt.After(maximum) {
+		expiresAt = maximum
+	}
+	batch := ManagedContentTicketBatch{Tickets: []ManagedContentTicket{}, UnavailableItemIDs: []string{}}
+	for _, itemID := range itemIDs {
+		item, err := s.repository.GetManagedCollectionItem(ctx, collectionID, itemID, callerService)
+		if errors.Is(err, ErrNotFound) {
+			batch.UnavailableItemIDs = append(batch.UnavailableItemIDs, itemID)
+			continue
+		}
+		if err != nil {
+			return ManagedContentTicketBatch{}, err
+		}
+		raw := make([]byte, 32)
+		if _, err := rand.Read(raw); err != nil {
+			return ManagedContentTicketBatch{}, err
+		}
+		token := base64.RawURLEncoding.EncodeToString(raw)
+		hash := sha256.Sum256(raw)
+		if err := s.repository.CreateContentTicket(ctx, ContentTicket{
+			TokenHash: hex.EncodeToString(hash[:]), CollectionID: collectionID, CollectionItemID: itemID,
+			AssetETag: item.ETag, UserID: "manager", Roles: []string{}, AccessMode: "manager", ExpiresAt: expiresAt, CreatedAt: now,
+		}, now); err != nil {
+			if errors.Is(err, ErrNotFound) {
+				batch.UnavailableItemIDs = append(batch.UnavailableItemIDs, itemID)
+				continue
+			}
+			return ManagedContentTicketBatch{}, err
+		}
+		batch.Tickets = append(batch.Tickets, ManagedContentTicket{ItemID: itemID, ContentURL: "/api/assets/content?ticket=" + token, ExpiresAt: expiresAt, ETag: item.ETag})
+	}
+	return batch, nil
 }
 
 func (s *Service) ContentTicketMetadata(ctx context.Context, token string) (PublicDownloadMetadata, error) {
@@ -467,6 +579,39 @@ func (s *Service) GetManagedCollection(ctx context.Context, id, callerService st
 		return ManagedCollection{}, ErrInvalidInput
 	}
 	return s.repository.GetManagedCollection(ctx, id, callerService)
+}
+
+func (s *Service) ListManagedCollectionItems(ctx context.Context, collectionID, callerService, query, cursor string, limit int) (ManagedCollectionItemPage, error) {
+	if collectionID == "" || callerService == "" || !validManagedCollectionItemQuery(query) {
+		return ManagedCollectionItemPage{}, ErrInvalidInput
+	}
+	return s.repository.ListManagedCollectionItems(ctx, collectionID, callerService, query, cursor, limit)
+}
+
+func validManagedCollectionItemQuery(query string) bool {
+	if query == "" {
+		return true
+	}
+	if len(query) > 255 || !utf8.ValidString(query) {
+		return false
+	}
+	for _, value := range query {
+		if unicode.IsControl(value) {
+			return false
+		}
+	}
+	return true
+}
+
+func validCollectionItemDisplayName(value string) bool {
+	return value != "" && len(value) <= 255 && !strings.ContainsAny(value, "/\\\\") && !strings.ContainsFunc(value, unicode.IsControl)
+}
+
+func (s *Service) UpdateCollectionRetention(ctx context.Context, input UpdateCollectionRetentionInput) (Collection, error) {
+	if input.CollectionID == "" || input.RetentionDays < 1 || input.RetentionDays > 365 || !validMutationIdentity(input.CallerService, input.IdempotencyKey) {
+		return Collection{}, ErrInvalidInput
+	}
+	return s.repository.UpdateCollectionRetention(ctx, input, s.now().UTC())
 }
 
 func validMutationIdentity(callerService, idempotencyKey string) bool {

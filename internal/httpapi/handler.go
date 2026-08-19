@@ -66,12 +66,18 @@ func (h *Handler) Routes() http.Handler {
 	mux.Handle("GET /priv/assets/operations", h.internal(http.HandlerFunc(h.operations)))
 	mux.Handle("GET /priv/assets/collections", h.internal(h.collectionCaller(http.HandlerFunc(h.listManagedCollections))))
 	mux.Handle("GET /priv/assets/collections/{collectionID}", h.internal(h.collectionCaller(http.HandlerFunc(h.getManagedCollection))))
+	mux.Handle("GET /priv/assets/collections/{collectionID}/items", h.internal(h.collectionCaller(http.HandlerFunc(h.listManagedCollectionItems))))
+	mux.Handle("POST /priv/assets/collections/{collectionID}/items/content-tickets", h.internal(h.collectionCaller(http.HandlerFunc(h.issueManagedContentTickets))))
 	mux.Handle("POST /priv/assets/collections", h.internal(h.collectionCaller(http.HandlerFunc(h.createCollection))))
 	mux.Handle("PATCH /priv/assets/collections/{collectionID}", h.internal(h.collectionCaller(http.HandlerFunc(h.renameCollection))))
+	mux.Handle("PATCH /priv/assets/collections/{collectionID}/retention", h.internal(h.collectionCaller(http.HandlerFunc(h.updateCollectionRetention))))
 	mux.Handle("DELETE /priv/assets/collections/{collectionID}", h.internal(h.collectionCaller(http.HandlerFunc(h.deleteCollection))))
 	mux.Handle("POST /priv/assets/collections/{collectionID}/acl", h.internal(h.collectionCaller(http.HandlerFunc(h.addCollectionACL))))
 	mux.Handle("DELETE /priv/assets/collections/{collectionID}/acl/{aclID}", h.internal(h.collectionCaller(http.HandlerFunc(h.revokeCollectionACL))))
 	mux.Handle("POST /priv/assets/collections/{collectionID}/items", h.internal(h.collectionCaller(http.HandlerFunc(h.addCollectionItem))))
+	mux.Handle("POST /priv/assets/collections/{collectionID}/items/retention", h.internal(h.collectionCaller(http.HandlerFunc(h.setCollectionItemsRetention))))
+	mux.Handle("POST /priv/assets/collections/{collectionID}/items/delete", h.internal(h.collectionCaller(http.HandlerFunc(h.deleteCollectionItems))))
+	mux.Handle("PATCH /priv/assets/collections/{collectionID}/items/{itemID}", h.internal(h.collectionCaller(http.HandlerFunc(h.renameCollectionItem))))
 	mux.Handle("DELETE /priv/assets/collections/{collectionID}/items/{itemID}", h.internal(h.collectionCaller(http.HandlerFunc(h.deleteCollectionItem))))
 	mux.Handle("GET /priv/assets/{assetID}", h.internal(http.HandlerFunc(h.getAsset)))
 	mux.Handle("GET /priv/assets/{assetID}/{action}", h.internal(http.HandlerFunc(h.assetAction)))
@@ -345,7 +351,11 @@ func (h *Handler) listAuthorizedCollections(w http.ResponseWriter, r *http.Reque
 		handleError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, page)
+	collections := make([]collectionReaderCollection, len(page.Collections))
+	for i, collection := range page.Collections {
+		collections[i] = readerCollection(collection)
+	}
+	writeJSON(w, http.StatusOK, collectionReaderPage{Collections: collections, Cursor: page.Cursor, HasMore: page.HasMore})
 }
 
 func (h *Handler) collectionChanges(w http.ResponseWriter, r *http.Request) {
@@ -363,7 +373,7 @@ func (h *Handler) collectionChanges(w http.ResponseWriter, r *http.Request) {
 		items[i] = readerItem(item)
 	}
 	writeJSON(w, http.StatusOK, collectionReaderChangePage{
-		Collection: page.Collection,
+		Collection: readerCollection(page.Collection),
 		Items:      items,
 		Tombstones: page.Tombstones,
 		Cursor:     page.Cursor,
@@ -445,21 +455,45 @@ type collectionReaderItem struct {
 	DisplayName     string    `json:"displayName"`
 	SourceRevision  string    `json:"sourceRevision"`
 	CreatedRevision int64     `json:"createdRevision"`
+	UpdatedRevision int64     `json:"updatedRevision"`
 	DeletedRevision int64     `json:"deletedRevision,omitempty"`
 	MIMEType        string    `json:"mimeType,omitempty"`
 	SizeBytes       int64     `json:"sizeBytes,omitempty"`
 	ETag            string    `json:"etag,omitempty"`
 	CreatedAt       time.Time `json:"createdAt"`
+	UpdatedAt       time.Time `json:"updatedAt"`
 	DeletedAt       time.Time `json:"deletedAt,omitempty"`
 }
 
+type collectionReaderCollection struct {
+	ID        string    `json:"id"`
+	Namespace string    `json:"namespace"`
+	Name      string    `json:"name"`
+	Revision  int64     `json:"revision"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+type collectionReaderPage struct {
+	Collections []collectionReaderCollection `json:"collections"`
+	Cursor      string                       `json:"cursor,omitempty"`
+	HasMore     bool                         `json:"hasMore"`
+}
+
 type collectionReaderChangePage struct {
-	Collection assets.Collection            `json:"collection"`
+	Collection collectionReaderCollection   `json:"collection"`
 	Items      []collectionReaderItem       `json:"items"`
 	Tombstones []assets.CollectionTombstone `json:"tombstones"`
 	Cursor     string                       `json:"cursor"`
 	HasMore    bool                         `json:"hasMore"`
 	Reset      bool                         `json:"reset"`
+}
+
+func readerCollection(collection assets.Collection) collectionReaderCollection {
+	return collectionReaderCollection{
+		ID: collection.ID, Namespace: collection.Namespace, Name: collection.Name, Revision: collection.Revision,
+		CreatedAt: collection.CreatedAt, UpdatedAt: collection.UpdatedAt,
+	}
 }
 
 func readerItem(item assets.CollectionItem) collectionReaderItem {
@@ -470,11 +504,13 @@ func readerItem(item assets.CollectionItem) collectionReaderItem {
 		DisplayName:     item.DisplayName,
 		SourceRevision:  item.SourceRevision,
 		CreatedRevision: item.CreatedRevision,
+		UpdatedRevision: item.UpdatedRevision,
 		DeletedRevision: item.DeletedRevision,
 		MIMEType:        item.MIMEType,
 		SizeBytes:       item.SizeBytes,
 		ETag:            item.ETag,
 		CreatedAt:       item.CreatedAt,
+		UpdatedAt:       item.UpdatedAt,
 		DeletedAt:       item.DeletedAt,
 	}
 }
@@ -485,7 +521,7 @@ func collectionListLimit(w http.ResponseWriter, r *http.Request) (int, bool) {
 		return 0, true
 	}
 	limit, err := strconv.Atoi(value)
-	if err != nil || limit <= 0 {
+	if err != nil || limit <= 0 || limit > 100 {
 		writeError(w, http.StatusBadRequest, "AST_INVALID_REQUEST", "invalid limit")
 		return 0, false
 	}
@@ -504,6 +540,63 @@ func (h *Handler) getManagedCollection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, value)
+}
+
+func (h *Handler) listManagedCollectionItems(w http.ResponseWriter, r *http.Request) {
+	collectionID := r.PathValue("collectionID")
+	if !requireOpaqueID(w, collectionID, "collection ID") {
+		return
+	}
+	limit, ok := collectionListLimit(w, r)
+	if !ok {
+		return
+	}
+	page, err := h.service.ListManagedCollectionItems(r.Context(), collectionID, authenticatedCaller(r), r.URL.Query().Get("q"), r.URL.Query().Get("cursor"), limit)
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page)
+}
+
+func (h *Handler) issueManagedContentTickets(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "private, no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	collectionID := r.PathValue("collectionID")
+	if !requireOpaqueID(w, collectionID, "collection ID") {
+		return
+	}
+	var input struct {
+		ItemIDs []string `json:"itemIds"`
+	}
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	batch, err := h.service.IssueManagedContentTickets(r.Context(), collectionID, authenticatedCaller(r), input.ItemIDs, 5*time.Minute)
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, batch)
+}
+
+func (h *Handler) updateCollectionRetention(w http.ResponseWriter, r *http.Request) {
+	collectionID := r.PathValue("collectionID")
+	caller, key, ok := collectionMutationIdentity(w, r)
+	if !ok || !requireOpaqueID(w, collectionID, "collection ID") {
+		return
+	}
+	var input assets.UpdateCollectionRetentionInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	input.CollectionID, input.CallerService, input.IdempotencyKey = collectionID, caller, key
+	collection, err := h.service.UpdateCollectionRetention(r.Context(), input)
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, collection)
 }
 
 func (h *Handler) createCollection(w http.ResponseWriter, r *http.Request) {
@@ -631,6 +724,62 @@ func (h *Handler) deleteCollectionItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	value, err := h.service.DeleteCollectionItem(r.Context(), assets.DeleteCollectionItemInput{CollectionID: collectionID, ItemID: itemID, CallerService: caller, IdempotencyKey: key})
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
+}
+
+func (h *Handler) setCollectionItemsRetention(w http.ResponseWriter, r *http.Request) {
+	collectionID := r.PathValue("collectionID")
+	caller, key, ok := collectionMutationIdentity(w, r)
+	if !ok || !requireOpaqueID(w, collectionID, "collection ID") {
+		return
+	}
+	var input assets.SetCollectionItemsRetentionInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	input.CollectionID, input.CallerService, input.IdempotencyKey = collectionID, caller, key
+	if err := h.service.SetCollectionItemsRetention(r.Context(), input); err != nil {
+		handleError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) deleteCollectionItems(w http.ResponseWriter, r *http.Request) {
+	collectionID := r.PathValue("collectionID")
+	caller, key, ok := collectionMutationIdentity(w, r)
+	if !ok || !requireOpaqueID(w, collectionID, "collection ID") {
+		return
+	}
+	var input assets.DeleteCollectionItemsInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	input.CollectionID, input.CallerService, input.IdempotencyKey = collectionID, caller, key
+	value, err := h.service.DeleteCollectionItems(r.Context(), input)
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
+}
+
+func (h *Handler) renameCollectionItem(w http.ResponseWriter, r *http.Request) {
+	collectionID, itemID := r.PathValue("collectionID"), r.PathValue("itemID")
+	caller, key, ok := collectionMutationIdentity(w, r)
+	if !ok || !requireOpaqueID(w, collectionID, "collection ID") || !requireOpaqueID(w, itemID, "item ID") {
+		return
+	}
+	var input assets.RenameCollectionItemInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	input.CollectionID, input.ItemID, input.CallerService, input.IdempotencyKey = collectionID, itemID, caller, key
+	value, err := h.service.RenameCollectionItem(r.Context(), input)
 	if err != nil {
 		handleError(w, err)
 		return

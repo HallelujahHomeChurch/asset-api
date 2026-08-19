@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"slices"
 	"strings"
@@ -865,6 +866,47 @@ func TestCollectionContentTicketUsesOpaqueHashAndBoundedExpiry(t *testing.T) {
 	}
 }
 
+func TestManagedContentTicketsAreBoundedAndDoNotUseReaderAuthorization(t *testing.T) {
+	now := time.Date(2026, 8, 19, 6, 0, 0, 0, time.UTC)
+	availableID := "550e8400e29b41d4a716446655440000"
+	unavailableID := "550e8400e29b41d4a716446655440001"
+	repository := &collectionServiceRepository{unavailableTicketItems: map[string]bool{unavailableID: true}}
+	service := NewService(repository, newMemoryBlobStore(), "", func() time.Time { return now })
+	deniedRepository := &collectionServiceRepository{managedCollectionErr: ErrNotFound}
+	deniedService := NewService(deniedRepository, newMemoryBlobStore(), "", func() time.Time { return now })
+	if _, err := deniedService.IssueManagedContentTickets(context.Background(), "other-collection", "helper", []string{availableID}, time.Minute); !errors.Is(err, ErrNotFound) || deniedRepository.ticket.TokenHash != "" {
+		t.Fatalf("cross-owner ticket err=%v ticket=%+v", err, deniedRepository.ticket)
+	}
+	nonMediaRepository := &collectionServiceRepository{managedCollectionNamespace: "other"}
+	nonMediaService := NewService(nonMediaRepository, newMemoryBlobStore(), "", func() time.Time { return now })
+	if _, err := nonMediaService.IssueManagedContentTickets(context.Background(), "other-collection", "helper", []string{availableID}, time.Minute); !errors.Is(err, ErrNotFound) || nonMediaRepository.ticket.TokenHash != "" {
+		t.Fatalf("cross-namespace ticket err=%v ticket=%+v", err, nonMediaRepository.ticket)
+	}
+
+	if _, err := service.IssueManagedContentTickets(context.Background(), "collection", "", []string{availableID}, time.Minute); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("blank caller err=%v", err)
+	}
+	batch, err := service.IssueManagedContentTickets(context.Background(), "collection", "helper", []string{availableID, unavailableID}, 10*time.Minute)
+	if err != nil || len(batch.Tickets) != 1 || len(batch.UnavailableItemIDs) != 1 || batch.UnavailableItemIDs[0] != unavailableID {
+		t.Fatalf("batch=%+v err=%v", batch, err)
+	}
+	if batch.Tickets[0].ItemID != availableID || batch.Tickets[0].ExpiresAt != now.Add(5*time.Minute) || batch.Tickets[0].ContentURL == "" || repository.ticket.AccessMode != "manager" || repository.ticket.Roles == nil || repository.readerItemCalls != 0 {
+		t.Fatalf("ticket=%+v persisted=%+v reader calls=%d", batch.Tickets[0], repository.ticket, repository.readerItemCalls)
+	}
+
+	hundred := make([]string, 100)
+	for i := range hundred {
+		hundred[i] = fmt.Sprintf("%032x", i+1)
+	}
+	batch, err = service.IssueManagedContentTickets(context.Background(), "collection", "helper", hundred, time.Minute)
+	if err != nil || len(batch.Tickets) != 100 || len(batch.UnavailableItemIDs) != 0 {
+		t.Fatalf("100-item batch=%+v err=%v", batch, err)
+	}
+	if _, err := service.IssueManagedContentTickets(context.Background(), "collection", "helper", append(hundred, "550e8400e29b41d4a716446655440100"), time.Minute); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("101-item batch err=%v", err)
+	}
+}
+
 func TestCollectionContentTicketLookupRejectsMalformedTokensAndReturnsPinnedMetadata(t *testing.T) {
 	now := time.Date(2026, 8, 16, 6, 0, 0, 0, time.UTC)
 	repository := &collectionServiceRepository{ticketAsset: Asset{
@@ -908,16 +950,92 @@ func TestCollectionServiceSeparatesManagedReads(t *testing.T) {
 	}
 }
 
+func TestManagedCollectionItemsAndRetentionServiceValidation(t *testing.T) {
+	repository := &collectionServiceRepository{}
+	service := NewService(repository, newMemoryBlobStore(), "", time.Now)
+
+	if _, err := service.ListManagedCollectionItems(context.Background(), "", "helper", "", "", 10); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("blank collection err=%v", err)
+	}
+	if _, err := service.ListManagedCollectionItems(context.Background(), "collection", "", "", "", 10); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("blank caller err=%v", err)
+	}
+	page, err := service.ListManagedCollectionItems(context.Background(), "collection", "helper", "Sunday", "cursor", 25)
+	if err != nil || len(page.Items) != 1 || page.Items[0].DisplayName != "Sunday.mp4" {
+		t.Fatalf("page=%+v err=%v", page, err)
+	}
+	if repository.managedItemCollectionID != "collection" || repository.managedItemCaller != "helper" || repository.managedItemQuery != "Sunday" || repository.managedItemCursor != "cursor" || repository.managedItemLimit != 25 {
+		t.Fatalf("managed item input=%+v", repository)
+	}
+	for _, query := range []string{"bad\x00query", "bad\nquery", strings.Repeat("a", 256)} {
+		if _, err := service.ListManagedCollectionItems(context.Background(), "collection", "helper", query, "", 25); !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("query=%q err=%v", query, err)
+		}
+	}
+	if _, err := service.ListManagedCollectionItems(context.Background(), "collection", "helper", "主日", "", 25); err != nil || repository.managedItemQuery != "主日" {
+		t.Fatalf("unicode query=%q err=%v", repository.managedItemQuery, err)
+	}
+
+	for _, retentionDays := range []int{0, 366} {
+		if _, err := service.UpdateCollectionRetention(context.Background(), UpdateCollectionRetentionInput{CollectionID: "collection", RetentionDays: retentionDays, CallerService: "helper", IdempotencyKey: "key"}); !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("retention days=%d err=%v", retentionDays, err)
+		}
+	}
+	for _, retentionDays := range []int{1, 365} {
+		collection, err := service.UpdateCollectionRetention(context.Background(), UpdateCollectionRetentionInput{CollectionID: "collection", RetentionDays: retentionDays, CallerService: "helper", IdempotencyKey: "key"})
+		if err != nil || collection.RetentionDays != retentionDays {
+			t.Fatalf("retention days=%d collection=%+v err=%v", retentionDays, collection, err)
+		}
+	}
+	if repository.managedRetentionCalls != 2 {
+		t.Fatalf("retention calls=%d", repository.managedRetentionCalls)
+	}
+}
+
+func TestRenameCollectionItemServiceValidation(t *testing.T) {
+	repository := &collectionServiceRepository{}
+	service := NewService(repository, newMemoryBlobStore(), "", time.Now)
+	input := RenameCollectionItemInput{CollectionID: "collection", ItemID: "item", DisplayName: "  renamed.mp4  ", CallerService: "helper", IdempotencyKey: "rename"}
+
+	item, err := service.RenameCollectionItem(context.Background(), input)
+	if err != nil || item.DisplayName != "renamed.mp4" || repository.renameItem.DisplayName != "renamed.mp4" {
+		t.Fatalf("item=%+v input=%+v err=%v", item, repository.renameItem, err)
+	}
+	input.DisplayName = strings.Repeat("a", 255)
+	if _, err := service.RenameCollectionItem(context.Background(), input); err != nil || repository.renameItem.DisplayName != input.DisplayName {
+		t.Fatalf("255-byte display name err=%v input=%+v", err, repository.renameItem)
+	}
+	for _, displayName := range []string{"", "folder/file.mp4", `folder\\file.mp4`, "bad\x00.mp4", "bad\n.mp4", strings.Repeat("a", 256)} {
+		input.DisplayName = displayName
+		if _, err := service.RenameCollectionItem(context.Background(), input); !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("displayName=%q err=%v", displayName, err)
+		}
+	}
+}
+
 type collectionServiceRepository struct {
 	Repository
-	createCalls      int
-	readerCalls      int
-	managedListCalls int
-	managedGetCalls  int
-	readerItemCalls  int
-	ticket           ContentTicket
-	ticketAsset      Asset
-	ticketLookupHash string
+	createCalls                                                                     int
+	readerCalls                                                                     int
+	managedListCalls                                                                int
+	managedGetCalls                                                                 int
+	managedCollectionErr                                                            error
+	managedCollectionNamespace                                                      string
+	managedRetentionCalls                                                           int
+	readerItemCalls                                                                 int
+	managedItemCollectionID, managedItemCaller, managedItemQuery, managedItemCursor string
+	managedItemLimit                                                                int
+	managedItemCalls                                                                int
+	renameItem                                                                      RenameCollectionItemInput
+	ticket                                                                          ContentTicket
+	ticketAsset                                                                     Asset
+	ticketLookupHash                                                                string
+	unavailableTicketItems                                                          map[string]bool
+}
+
+func (r *collectionServiceRepository) RenameCollectionItem(_ context.Context, input RenameCollectionItemInput, _ time.Time) (ManagedCollectionItem, error) {
+	r.renameItem = input
+	return ManagedCollectionItem{ID: input.ItemID, DisplayName: input.DisplayName}, nil
 }
 
 func (r *collectionServiceRepository) GetAuthorizedCollectionItem(_ context.Context, _, itemID string, _ CollectionSubject) (CollectionItem, error) {
@@ -925,8 +1043,19 @@ func (r *collectionServiceRepository) GetAuthorizedCollectionItem(_ context.Cont
 	return CollectionItem{ID: itemID, CollectionID: "collection", AssetID: "asset", ETag: `"asset-version"`}, nil
 }
 
+func (r *collectionServiceRepository) GetManagedCollectionItem(_ context.Context, collectionID, itemID, callerService string) (CollectionItem, error) {
+	r.managedItemCaller = callerService
+	if r.unavailableTicketItems[itemID] {
+		return CollectionItem{}, ErrNotFound
+	}
+	return CollectionItem{ID: itemID, CollectionID: collectionID, AssetID: "asset", ETag: `"asset-version"`}, nil
+}
+
 func (r *collectionServiceRepository) CreateContentTicket(_ context.Context, ticket ContentTicket, _ time.Time) error {
 	r.ticket = ticket
+	if r.unavailableTicketItems[ticket.CollectionItemID] {
+		return ErrNotFound
+	}
 	return nil
 }
 
@@ -955,7 +1084,25 @@ func (r *collectionServiceRepository) ListManagedCollections(_ context.Context, 
 
 func (r *collectionServiceRepository) GetManagedCollection(_ context.Context, _, _ string) (ManagedCollection, error) {
 	r.managedGetCalls++
-	return ManagedCollection{}, nil
+	if r.managedCollectionErr != nil {
+		return ManagedCollection{}, r.managedCollectionErr
+	}
+	namespace := r.managedCollectionNamespace
+	if namespace == "" {
+		namespace = "line.group.media-sync"
+	}
+	return ManagedCollection{Collection: Collection{Namespace: namespace}}, nil
+}
+
+func (r *collectionServiceRepository) ListManagedCollectionItems(_ context.Context, collectionID, callerService, query, cursor string, limit int) (ManagedCollectionItemPage, error) {
+	r.managedItemCalls++
+	r.managedItemCollectionID, r.managedItemCaller, r.managedItemQuery, r.managedItemCursor, r.managedItemLimit = collectionID, callerService, query, cursor, limit
+	return ManagedCollectionItemPage{Items: []ManagedCollectionItem{{ID: "item", DisplayName: "Sunday.mp4"}}}, nil
+}
+
+func (r *collectionServiceRepository) UpdateCollectionRetention(_ context.Context, input UpdateCollectionRetentionInput, _ time.Time) (Collection, error) {
+	r.managedRetentionCalls++
+	return Collection{ID: input.CollectionID, RetentionDays: input.RetentionDays}, nil
 }
 
 type memoryRepository struct {

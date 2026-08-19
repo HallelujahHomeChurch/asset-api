@@ -268,6 +268,7 @@ type Operations struct {
 	ProcessingFailed        int64     `json:"processingFailed"`
 	OldestProcessingPending time.Time `json:"oldestProcessingPending,omitempty"`
 	PurgePending            int64     `json:"purgePending"`
+	ExpiredCollectionItems  int64     `json:"expiredCollectionItems"`
 }
 
 const CollectionReaderRole = "media_sync_user"
@@ -282,6 +283,7 @@ type Collection struct {
 	Namespace        string    `json:"namespace"`
 	Name             string    `json:"name"`
 	Revision         int64     `json:"revision"`
+	RetentionDays    int       `json:"retentionDays"`
 	CreatedByService string    `json:"-"`
 	CreatedAt        time.Time `json:"createdAt"`
 	UpdatedAt        time.Time `json:"updatedAt"`
@@ -306,11 +308,14 @@ type CollectionItem struct {
 	DisplayName     string    `json:"displayName"`
 	SourceRevision  string    `json:"sourceRevision"`
 	CreatedRevision int64     `json:"createdRevision"`
+	RetentionExempt bool      `json:"retentionExempt"`
+	UpdatedRevision int64     `json:"updatedRevision"`
 	DeletedRevision int64     `json:"deletedRevision,omitempty"`
 	MIMEType        string    `json:"mimeType,omitempty"`
 	SizeBytes       int64     `json:"sizeBytes,omitempty"`
 	ETag            string    `json:"etag,omitempty"`
 	CreatedAt       time.Time `json:"createdAt"`
+	UpdatedAt       time.Time `json:"updatedAt"`
 	DeletedAt       time.Time `json:"deletedAt,omitempty"`
 }
 
@@ -328,6 +333,7 @@ type ContentTicket struct {
 	AssetETag        string
 	UserID           string
 	Roles            []string
+	AccessMode       string
 	ExpiresAt        time.Time
 	CreatedAt        time.Time
 }
@@ -336,6 +342,18 @@ type ContentTicketResponse struct {
 	ContentURL string    `json:"contentUrl"`
 	ExpiresAt  time.Time `json:"expiresAt"`
 	ETag       string    `json:"etag"`
+}
+
+type ManagedContentTicket struct {
+	ItemID     string    `json:"itemId"`
+	ContentURL string    `json:"contentUrl"`
+	ExpiresAt  time.Time `json:"expiresAt"`
+	ETag       string    `json:"etag"`
+}
+
+type ManagedContentTicketBatch struct {
+	Tickets            []ManagedContentTicket `json:"tickets"`
+	UnavailableItemIDs []string               `json:"unavailableItemIds"`
 }
 
 type CollectionPage struct {
@@ -362,6 +380,21 @@ type ManagedCollectionPage struct {
 	Collections []ManagedCollection `json:"collections"`
 	Cursor      string              `json:"cursor,omitempty"`
 	HasMore     bool                `json:"hasMore"`
+}
+
+type ManagedCollectionItem struct {
+	ID              string    `json:"id"`
+	DisplayName     string    `json:"displayName"`
+	MIMEType        string    `json:"mimeType"`
+	SizeBytes       int64     `json:"sizeBytes"`
+	CreatedAt       time.Time `json:"createdAt"`
+	RetentionExempt bool      `json:"retentionExempt"`
+}
+
+type ManagedCollectionItemPage struct {
+	Items   []ManagedCollectionItem `json:"items"`
+	Cursor  string                  `json:"cursor,omitempty"`
+	HasMore bool                    `json:"hasMore"`
 }
 
 type CollectionACLMutation struct {
@@ -428,6 +461,42 @@ type DeleteCollectionItemInput struct {
 	IdempotencyKey string `json:"-"`
 }
 
+type SetCollectionItemsRetentionInput struct {
+	CollectionID    string   `json:"-"`
+	ItemIDs         []string `json:"itemIds"`
+	RetentionExempt bool     `json:"retentionExempt"`
+	CallerService   string   `json:"-"`
+	IdempotencyKey  string   `json:"-"`
+}
+
+type DeleteCollectionItemsInput struct {
+	CollectionID   string   `json:"-"`
+	ItemIDs        []string `json:"itemIds"`
+	CallerService  string   `json:"-"`
+	IdempotencyKey string   `json:"-"`
+}
+
+type DeleteCollectionItemsResult struct {
+	Deleted        int `json:"deleted"`
+	AlreadyRemoved int `json:"alreadyRemoved"`
+	ExemptSkipped  int `json:"-"`
+}
+
+type RenameCollectionItemInput struct {
+	CollectionID   string `json:"-"`
+	ItemID         string `json:"-"`
+	DisplayName    string `json:"displayName"`
+	CallerService  string `json:"-"`
+	IdempotencyKey string `json:"-"`
+}
+
+type UpdateCollectionRetentionInput struct {
+	CollectionID   string `json:"-"`
+	RetentionDays  int    `json:"retentionDays"`
+	CallerService  string `json:"-"`
+	IdempotencyKey string `json:"-"`
+}
+
 type Repository interface {
 	CreateUpload(context.Context, Asset, UploadSession) error
 	GetAsset(context.Context, string) (Asset, error)
@@ -447,14 +516,20 @@ type Repository interface {
 	RevokeCollectionACL(context.Context, RevokeCollectionACLInput, time.Time) (CollectionACLMutation, error)
 	AddCollectionItem(context.Context, AddCollectionItemInput, time.Time) (CollectionItemMutation, error)
 	DeleteCollectionItem(context.Context, DeleteCollectionItemInput, time.Time) (CollectionItemMutation, error)
+	SetCollectionItemsRetention(context.Context, SetCollectionItemsRetentionInput, time.Time) error
+	DeleteCollectionItems(context.Context, DeleteCollectionItemsInput, time.Time) (DeleteCollectionItemsResult, error)
+	RenameCollectionItem(context.Context, RenameCollectionItemInput, time.Time) (ManagedCollectionItem, error)
 	ListAuthorizedCollections(context.Context, CollectionSubject, string, int) (CollectionPage, error)
 	GetAuthorizedCollection(context.Context, string, CollectionSubject) (Collection, error)
 	GetAuthorizedCollectionItem(context.Context, string, string, CollectionSubject) (CollectionItem, error)
+	GetManagedCollectionItem(context.Context, string, string, string) (CollectionItem, error)
 	CollectionChanges(context.Context, string, string, CollectionSubject) (CollectionChangePage, error)
 	CreateContentTicket(context.Context, ContentTicket, time.Time) error
 	RedeemContentTicket(context.Context, string, time.Time) (Asset, error)
 	ListManagedCollections(context.Context, string, string, int) (ManagedCollectionPage, error)
 	GetManagedCollection(context.Context, string, string) (ManagedCollection, error)
+	ListManagedCollectionItems(context.Context, string, string, string, string, int) (ManagedCollectionItemPage, error)
+	UpdateCollectionRetention(context.Context, UpdateCollectionRetentionInput, time.Time) (Collection, error)
 }
 
 type BlobStore interface {

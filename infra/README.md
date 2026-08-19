@@ -8,6 +8,12 @@ Dapr; the dedicated LINE attachment Job uses authenticated internal ingress
 with an Entra application audience and the `Asset.Invoke` app role.
 Production scanning runs only through the Azure queue-triggered scan Job.
 
+`asset-retention` is a daily 19:00 UTC (03:00 Asia/Taipei) scheduled Job. Both
+Job deployment and mutations default off. Enable `deployRetentionJob` first
+with `retentionApplyEnabled=false`, review the opaque per-collection preflight
+counts and bytes, then change only `retentionApplyEnabled` after explicit
+approval. Set it back to `false` to stop retention mutations.
+
 Upload completion and an `asset.scan.requested.v1` outbox row commit in one
 PostgreSQL transaction. The runtime sends that event to the `asset-scan`
 Storage Queue with managed identity. Queue delivery is at-least-once; the

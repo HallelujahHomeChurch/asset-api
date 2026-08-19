@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"maps"
@@ -51,6 +52,26 @@ func TestCollectionCallerAuthorizationForEveryManagementRoute(t *testing.T) {
 				t.Fatalf("status=%d calls=%d body=%s", response.Code, repository.calls, response.Body.String())
 			}
 		})
+	}
+}
+
+func TestOperationsIncludesExpiredCollectionItemsWithoutChangingPurgePending(t *testing.T) {
+	handler, _ := newCollectionManagementHandler()
+	request := httptest.NewRequest(http.MethodGet, "/priv/assets/operations", nil)
+	request.Header.Set("X-Internal-Caller-App-Id", "hhc-line-function-bot")
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var operations assets.Operations
+	if err := json.Unmarshal(response.Body.Bytes(), &operations); err != nil {
+		t.Fatal(err)
+	}
+	if operations.ExpiredCollectionItems != 7 || operations.PurgePending != 3 {
+		t.Fatalf("operations=%+v", operations)
 	}
 }
 
@@ -172,6 +193,40 @@ func TestCollectionContentTicketIssueRequiresVerifiedGatewayIdentity(t *testing.
 				t.Fatalf("ticket persisted=%+v", repository.ticket)
 			}
 		})
+	}
+}
+
+func TestManagedContentTicketsRequireInternalCallerAndReturnSafeBatch(t *testing.T) {
+	itemID := "550e8400e29b41d4a716446655440000"
+	request := func(caller string) *http.Request {
+		value := httptest.NewRequest(http.MethodPost, "/priv/assets/collections/collection/items/content-tickets", strings.NewReader(`{"itemIds":["`+itemID+`"]}`))
+		value.Header.Set("X-Internal-Caller-App-Id", caller)
+		return value
+	}
+
+	for _, caller := range []string{"", "account-api"} {
+		handler, _ := newCollectionManagementHandler()
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request(caller))
+		if response.Code != http.StatusForbidden {
+			t.Fatalf("caller=%q status=%d body=%s", caller, response.Code, response.Body.String())
+		}
+	}
+
+	handler, repository := newCollectionManagementHandler()
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request("hhc-line-function-bot"))
+	if response.Code != http.StatusCreated || repository.managedItemCaller != "hhc-line-function-bot" || repository.ticket.AccessMode != "manager" || repository.ticket.UserID != "manager" || len(repository.ticket.Roles) != 0 {
+		t.Fatalf("status=%d ticket=%+v body=%s", response.Code, repository.ticket, response.Body.String())
+	}
+	var batch assets.ManagedContentTicketBatch
+	if err := json.Unmarshal(response.Body.Bytes(), &batch); err != nil || len(batch.Tickets) != 1 || batch.Tickets[0].ItemID != itemID || !strings.HasPrefix(batch.Tickets[0].ContentURL, "/api/assets/content?ticket=") {
+		t.Fatalf("batch=%+v err=%v", batch, err)
+	}
+	for _, secret := range []string{"assetId", "blob-key", "storage", "line-group-id", "X-HHC"} {
+		if strings.Contains(response.Body.String(), secret) {
+			t.Fatalf("response leaked %q: %s", secret, response.Body.String())
+		}
 	}
 }
 
@@ -387,6 +442,7 @@ func TestCollectionReaderMetadataIsSyncSafe(t *testing.T) {
 	handler, _ := newCollectionReaderHandler()
 	for _, path := range []string{
 		"/api/assets/collections/collection/changes",
+		"/api/assets/collections/collection/changes?cursor=delta",
 		"/api/assets/collections/collection/items/item",
 	} {
 		request := collectionReaderRequest(http.MethodGet, path)
@@ -401,11 +457,35 @@ func TestCollectionReaderMetadataIsSyncSafe(t *testing.T) {
 				t.Fatalf("path=%s leaked %q in %s", path, secret, body)
 			}
 		}
-		for _, metadata := range []string{`"id":"item"`, `"remoteItemId":"remote-item"`, `"displayName":"Media"`, `"sourceRevision":"source"`, `"mimeType":"video/mp4"`, `"sizeBytes":20`, `"etag":"etag"`} {
+		for _, metadata := range []string{`"id":"item"`, `"remoteItemId":"remote-item"`, `"displayName":"Media"`, `"sourceRevision":"source"`, `"mimeType":"video/mp4"`, `"sizeBytes":20`, `"etag":"etag"`, `"updatedRevision":3`, `"updatedAt":"2026-08-16T01:00:00Z"`} {
 			if !strings.Contains(body, metadata) {
 				t.Fatalf("path=%s missing %s in %s", path, metadata, body)
 			}
 		}
+	}
+}
+
+func TestCollectionReaderCollectionDTOExcludesManagementMetadata(t *testing.T) {
+	handler, _ := newCollectionReaderHandler()
+	for _, path := range []string{"/api/assets/collections", "/api/assets/collections/collection/changes"} {
+		request := collectionReaderRequest(http.MethodGet, path)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("path=%s status=%d body=%s", path, response.Code, response.Body.String())
+		}
+		if strings.Contains(response.Body.String(), `"retentionDays"`) || strings.Contains(response.Body.String(), `"createdByService"`) {
+			t.Fatalf("path=%s leaked management metadata: %s", path, response.Body.String())
+		}
+	}
+
+	managed, _ := newCollectionManagementHandler()
+	request := httptest.NewRequest(http.MethodGet, "/priv/assets/collections/collection", nil)
+	request.Header.Set("X-Internal-Caller-App-Id", "hhc-line-function-bot")
+	response := httptest.NewRecorder()
+	managed.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"retentionDays":14`) {
+		t.Fatalf("managed status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 
@@ -451,7 +531,7 @@ func (r *collectionReaderRepository) ListAuthorizedCollections(_ context.Context
 	if !readerTestAuthorized(subject) {
 		return assets.CollectionPage{}, assets.ErrForbidden
 	}
-	return assets.CollectionPage{Collections: []assets.Collection{{ID: "collection", Namespace: "line.group.media-sync", Name: "Media", Revision: 2}}}, nil
+	return assets.CollectionPage{Collections: []assets.Collection{{ID: "collection", Namespace: "line.group.media-sync", Name: "Media", Revision: 2, RetentionDays: 14, CreatedByService: "owner-service"}}}, nil
 }
 
 func (r *collectionReaderRepository) CollectionChanges(_ context.Context, id, cursor string, subject assets.CollectionSubject) (assets.CollectionChangePage, error) {
@@ -464,8 +544,8 @@ func (r *collectionReaderRepository) CollectionChanges(_ context.Context, id, cu
 		return assets.CollectionChangePage{}, assets.ErrForbidden
 	}
 	return assets.CollectionChangePage{
-		Collection: assets.Collection{ID: id, Revision: 2}, Cursor: cursor,
-		Items:      []assets.CollectionItem{{ID: "item", CollectionID: id, AssetID: "secret-asset", RemoteItemID: "remote-item", DisplayName: "Media", SourceRevision: "source", CreatedRevision: 2, MIMEType: "video/mp4", SizeBytes: 20, ETag: "etag"}},
+		Collection: assets.Collection{ID: id, Revision: 2, RetentionDays: 14, CreatedByService: "owner-service"}, Cursor: cursor,
+		Items:      []assets.CollectionItem{{ID: "item", CollectionID: id, AssetID: "secret-asset", RemoteItemID: "remote-item", DisplayName: "Media", SourceRevision: "source", CreatedRevision: 2, UpdatedRevision: 3, MIMEType: "video/mp4", SizeBytes: 20, ETag: "etag", UpdatedAt: time.Date(2026, 8, 16, 1, 0, 0, 0, time.UTC)}},
 		Tombstones: []assets.CollectionTombstone{},
 	}, nil
 }
@@ -479,7 +559,7 @@ func (r *collectionReaderRepository) GetAuthorizedCollectionItem(_ context.Conte
 	if collectionID != "collection" || itemID != "item" {
 		return assets.CollectionItem{}, assets.ErrNotFound
 	}
-	return assets.CollectionItem{ID: itemID, CollectionID: collectionID, AssetID: "secret-asset", RemoteItemID: "remote-item", DisplayName: "Media", SourceRevision: "source", CreatedRevision: 2, MIMEType: "video/mp4", SizeBytes: 20, ETag: "etag"}, nil
+	return assets.CollectionItem{ID: itemID, CollectionID: collectionID, AssetID: "secret-asset", RemoteItemID: "remote-item", DisplayName: "Media", SourceRevision: "source", CreatedRevision: 2, UpdatedRevision: 3, MIMEType: "video/mp4", SizeBytes: 20, ETag: "etag", UpdatedAt: time.Date(2026, 8, 16, 1, 0, 0, 0, time.UTC)}, nil
 }
 
 func readerTestAuthorized(subject assets.CollectionSubject) bool {
@@ -538,6 +618,7 @@ func TestCollectionManagementValidationAndManagedReads(t *testing.T) {
 		{name: "unknown field", method: http.MethodPost, path: "/priv/assets/collections", body: `{"namespace":"line.group.media-sync","name":"Media","unknown":true}`, key: "key"},
 		{name: "trailing value", method: http.MethodPost, path: "/priv/assets/collections", body: `{"namespace":"line.group.media-sync","name":"Media"} {}`, key: "key"},
 		{name: "invalid limit", method: http.MethodGet, path: "/priv/assets/collections?limit=nope"},
+		{name: "invalid item limit", method: http.MethodGet, path: "/priv/assets/collections/collection/items?limit=0"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -586,6 +667,28 @@ func TestCollectionManagementTrimsNamesAndUsesAuthenticatedCaller(t *testing.T) 
 	}
 }
 
+func TestRenameCollectionItemRouteUsesBasenameOnly(t *testing.T) {
+	handler, repository := newCollectionManagementHandler()
+	request := httptest.NewRequest(http.MethodPatch, "/priv/assets/collections/collection/items/item", bytes.NewBufferString(`{"displayName":"  Renamed.MP4  "}`))
+	request.Header.Set("X-Internal-Caller-App-Id", "hhc-line-function-bot")
+	request.Header.Set("Idempotency-Key", "rename-item")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || repository.renameItem.CollectionID != "collection" || repository.renameItem.ItemID != "item" || repository.renameItem.DisplayName != "Renamed.MP4" || repository.renameItem.CallerService != "hhc-line-function-bot" {
+		t.Fatalf("status=%d input=%+v body=%s", response.Code, repository.renameItem, response.Body.String())
+	}
+	for _, displayName := range []string{"bad/name.mp4", `bad\\name.mp4`, "bad\n.mp4", strings.Repeat("a", 256)} {
+		request := httptest.NewRequest(http.MethodPatch, "/priv/assets/collections/collection/items/item", bytes.NewBufferString(`{"displayName":`+strconv.Quote(displayName)+`}`))
+		request.Header.Set("X-Internal-Caller-App-Id", "hhc-line-function-bot")
+		request.Header.Set("Idempotency-Key", "rename-invalid")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("displayName=%q status=%d body=%s", displayName, response.Code, response.Body.String())
+		}
+	}
+}
+
 func TestCollectionManagementAcceptsInclusiveByteLimits(t *testing.T) {
 	for _, test := range []struct {
 		name, path, body, key string
@@ -604,6 +707,131 @@ func TestCollectionManagementAcceptsInclusiveByteLimits(t *testing.T) {
 				t.Fatalf("status=%d calls=%d body=%s", response.Code, repository.calls, response.Body.String())
 			}
 		})
+	}
+}
+
+func TestManagedCollectionItemsAndRetentionRoutes(t *testing.T) {
+	handler, repository := newCollectionManagementHandler()
+	list := httptest.NewRequest(http.MethodGet, "/priv/assets/collections/collection/items?q=SUNday&cursor=next&limit=25", nil)
+	list.Header.Set("X-Internal-Caller-App-Id", "hhc-line-function-bot")
+	listResponse := httptest.NewRecorder()
+	handler.ServeHTTP(listResponse, list)
+	if listResponse.Code != http.StatusOK || repository.managedItemCollectionID != "collection" || repository.managedItemCaller != "hhc-line-function-bot" || repository.managedItemQuery != "SUNday" || repository.managedItemCursor != "next" || repository.managedItemLimit != 25 {
+		t.Fatalf("status=%d input=%+v body=%s", listResponse.Code, repository, listResponse.Body.String())
+	}
+	for _, forbidden := range []string{"assetId", "blob", "remoteItemId", "ownerService"} {
+		if bytes.Contains(listResponse.Body.Bytes(), []byte(forbidden)) {
+			t.Fatalf("managed response contains %q", forbidden)
+		}
+	}
+	for _, test := range []struct {
+		name, path string
+	}{
+		{name: "malformed cursor", path: "/priv/assets/collections/collection/items?cursor=not-a-cursor"},
+		{name: "non-integer limit", path: "/priv/assets/collections/collection/items?limit=invalid"},
+		{name: "zero limit", path: "/priv/assets/collections/collection/items?limit=0"},
+		{name: "limit above maximum", path: "/priv/assets/collections/collection/items?limit=101"},
+		{name: "nul query", path: "/priv/assets/collections/collection/items?q=%00"},
+		{name: "control query", path: "/priv/assets/collections/collection/items?q=%0A"},
+		{name: "long query", path: "/priv/assets/collections/collection/items?q=" + strings.Repeat("a", 256)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, test.path, nil)
+			request.Header.Set("X-Internal-Caller-App-Id", "hhc-line-function-bot")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
+	unicode := httptest.NewRequest(http.MethodGet, "/priv/assets/collections/collection/items?q=%E4%B8%BB%E6%97%A5", nil)
+	unicode.Header.Set("X-Internal-Caller-App-Id", "hhc-line-function-bot")
+	unicodeResponse := httptest.NewRecorder()
+	handler.ServeHTTP(unicodeResponse, unicode)
+	if unicodeResponse.Code != http.StatusOK || repository.managedItemQuery != "主日" {
+		t.Fatalf("status=%d query=%q body=%s", unicodeResponse.Code, repository.managedItemQuery, unicodeResponse.Body.String())
+	}
+
+	for _, retentionDays := range []int{1, 365} {
+		request := httptest.NewRequest(http.MethodPatch, "/priv/assets/collections/collection/retention", strings.NewReader(`{"retentionDays":`+strconv.Itoa(retentionDays)+`}`))
+		request.Header.Set("X-Internal-Caller-App-Id", "hhc-line-function-bot")
+		request.Header.Set("Idempotency-Key", "key-"+strconv.Itoa(retentionDays))
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusOK || repository.retention.RetentionDays != retentionDays || repository.retention.CollectionID != "collection" {
+			t.Fatalf("retention days=%d status=%d input=%+v body=%s", retentionDays, response.Code, repository.retention, response.Body.String())
+		}
+	}
+	for _, retentionDays := range []int{0, 366} {
+		request := httptest.NewRequest(http.MethodPatch, "/priv/assets/collections/collection/retention", strings.NewReader(`{"retentionDays":`+strconv.Itoa(retentionDays)+`}`))
+		request.Header.Set("X-Internal-Caller-App-Id", "hhc-line-function-bot")
+		request.Header.Set("Idempotency-Key", "invalid-"+strconv.Itoa(retentionDays))
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("retention days=%d status=%d body=%s", retentionDays, response.Code, response.Body.String())
+		}
+	}
+}
+
+func TestBatchRetentionAndDeleteRoutesNormalizeUUIDs(t *testing.T) {
+	handler, repository := newCollectionManagementHandler()
+	canonical := "550e8400-e29b-41d4-a716-446655440000"
+	compact := "550e8400e29b41d4a716446655440000"
+	second := "650e8400e29b41d4a716446655440000"
+
+	retention := httptest.NewRequest(http.MethodPost, "/priv/assets/collections/collection/items/retention", strings.NewReader(`{"itemIds":["`+second+`","`+strings.ToUpper(canonical)+`","`+compact+`"],"retentionExempt":true}`))
+	retention.Header.Set("X-Internal-Caller-App-Id", "hhc-line-function-bot")
+	retention.Header.Set("Idempotency-Key", "batch-retention")
+	retentionResponse := httptest.NewRecorder()
+	handler.ServeHTTP(retentionResponse, retention)
+	if retentionResponse.Code != http.StatusNoContent || !repository.batchRetention.RetentionExempt || !slices.Equal(repository.batchRetention.ItemIDs, []string{compact, second}) {
+		t.Fatalf("status=%d input=%+v body=%s", retentionResponse.Code, repository.batchRetention, retentionResponse.Body.String())
+	}
+
+	deleteRequest := httptest.NewRequest(http.MethodPost, "/priv/assets/collections/collection/items/delete", strings.NewReader(`{"itemIds":["`+canonical+`","`+compact+`"]}`))
+	deleteRequest.Header.Set("X-Internal-Caller-App-Id", "hhc-line-function-bot")
+	deleteRequest.Header.Set("Idempotency-Key", "batch-delete")
+	deleteResponse := httptest.NewRecorder()
+	handler.ServeHTTP(deleteResponse, deleteRequest)
+	if deleteResponse.Code != http.StatusOK || !slices.Equal(repository.batchDelete.ItemIDs, []string{compact}) || deleteResponse.Body.String() != "{\"deleted\":1,\"alreadyRemoved\":0}\n" {
+		t.Fatalf("status=%d input=%+v body=%s", deleteResponse.Code, repository.batchDelete, deleteResponse.Body.String())
+	}
+}
+
+func TestBatchRetentionAndDeleteRejectInvalidSelectionSizes(t *testing.T) {
+	handler, repository := newCollectionManagementHandler()
+	tooMany := make([]string, 101)
+	for index := range tooMany {
+		tooMany[index] = fmt.Sprintf("550e8400-e29b-41d4-a716-%012x", index)
+	}
+	encoded, err := json.Marshal(map[string]any{"itemIds": tooMany, "retentionExempt": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name, path, body string
+	}{
+		{name: "empty retention", path: "/priv/assets/collections/collection/items/retention", body: `{"itemIds":[],"retentionExempt":true}`},
+		{name: "too many retention", path: "/priv/assets/collections/collection/items/retention", body: string(encoded)},
+		{name: "empty delete", path: "/priv/assets/collections/collection/items/delete", body: `{"itemIds":[]}`},
+		{name: "too many delete", path: "/priv/assets/collections/collection/items/delete", body: strings.ReplaceAll(string(encoded), `,"retentionExempt":true`, "")},
+		{name: "invalid UUID", path: "/priv/assets/collections/collection/items/delete", body: `{"itemIds":["not-a-uuid"]}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, test.path, strings.NewReader(test.body))
+			request.Header.Set("X-Internal-Caller-App-Id", "hhc-line-function-bot")
+			request.Header.Set("Idempotency-Key", "invalid-batch")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
+	if repository.batchRetention.CollectionID != "" || repository.batchDelete.CollectionID != "" {
+		t.Fatalf("repository called: retention=%+v delete=%+v", repository.batchRetention, repository.batchDelete)
 	}
 }
 
@@ -637,12 +865,17 @@ func collectionManagementRequests() []collectionManagementRequest {
 	return []collectionManagementRequest{
 		{name: "list", method: http.MethodGet, wantStatus: http.StatusOK, request: request(http.MethodGet, "/priv/assets/collections", "", false)},
 		{name: "get", method: http.MethodGet, wantStatus: http.StatusOK, request: request(http.MethodGet, "/priv/assets/collections/collection", "", false)},
+		{name: "list items", method: http.MethodGet, wantStatus: http.StatusOK, request: request(http.MethodGet, "/priv/assets/collections/collection/items", "", false)},
 		{name: "create", method: http.MethodPost, wantStatus: http.StatusCreated, request: request(http.MethodPost, "/priv/assets/collections", `{"namespace":"line.group.media-sync","name":"Media"}`, true)},
 		{name: "rename", method: http.MethodPatch, wantStatus: http.StatusOK, request: request(http.MethodPatch, "/priv/assets/collections/collection", `{"name":"Renamed"}`, true)},
+		{name: "update retention", method: http.MethodPatch, wantStatus: http.StatusOK, request: request(http.MethodPatch, "/priv/assets/collections/collection/retention", `{"retentionDays":14}`, true)},
 		{name: "delete", method: http.MethodDelete, wantStatus: http.StatusOK, request: request(http.MethodDelete, "/priv/assets/collections/collection", "", true)},
 		{name: "add acl", method: http.MethodPost, wantStatus: http.StatusCreated, request: request(http.MethodPost, "/priv/assets/collections/collection/acl", `{"subjectType":"user","subjectId":"user","permission":"read"}`, true)},
 		{name: "revoke acl", method: http.MethodDelete, wantStatus: http.StatusOK, request: request(http.MethodDelete, "/priv/assets/collections/collection/acl/acl", "", true)},
 		{name: "add item", method: http.MethodPost, wantStatus: http.StatusCreated, request: request(http.MethodPost, "/priv/assets/collections/collection/items", `{"assetId":"asset","remoteItemId":"remote","displayName":"Media","sourceRevision":"source"}`, true)},
+		{name: "retain items", method: http.MethodPost, wantStatus: http.StatusNoContent, request: request(http.MethodPost, "/priv/assets/collections/collection/items/retention", `{"itemIds":["550e8400-e29b-41d4-a716-446655440000"],"retentionExempt":true}`, true)},
+		{name: "delete items", method: http.MethodPost, wantStatus: http.StatusOK, request: request(http.MethodPost, "/priv/assets/collections/collection/items/delete", `{"itemIds":["550e8400-e29b-41d4-a716-446655440000"]}`, true)},
+		{name: "rename item", method: http.MethodPatch, wantStatus: http.StatusOK, request: request(http.MethodPatch, "/priv/assets/collections/collection/items/item", `{"displayName":"Media.mp4"}`, true)},
 		{name: "delete item", method: http.MethodDelete, wantStatus: http.StatusOK, request: request(http.MethodDelete, "/priv/assets/collections/collection/items/item", "", true)},
 	}
 }
@@ -656,10 +889,21 @@ func newCollectionManagementHandler() (http.Handler, *collectionManagementReposi
 
 type collectionManagementRepository struct {
 	assets.Repository
-	calls, managedListCalls, managedGetCalls, readerCalls int
-	caller, listCursor                                    string
-	listLimit                                             int
-	create                                                assets.CreateCollectionInput
+	calls, managedListCalls, managedGetCalls, readerCalls                           int
+	caller, listCursor                                                              string
+	listLimit                                                                       int
+	create                                                                          assets.CreateCollectionInput
+	managedItemCollectionID, managedItemCaller, managedItemQuery, managedItemCursor string
+	managedItemLimit                                                                int
+	retention                                                                       assets.UpdateCollectionRetentionInput
+	renameItem                                                                      assets.RenameCollectionItemInput
+	batchRetention                                                                  assets.SetCollectionItemsRetentionInput
+	batchDelete                                                                     assets.DeleteCollectionItemsInput
+	ticket                                                                          assets.ContentTicket
+}
+
+func (r *collectionManagementRepository) GetOperations(context.Context, time.Time) (assets.Operations, error) {
+	return assets.Operations{ExpiredCollectionItems: 7, PurgePending: 3}, nil
 }
 
 func (r *collectionManagementRepository) GetAsset(context.Context, string) (assets.Asset, error) {
@@ -695,6 +939,11 @@ func (r *collectionManagementRepository) DeleteCollectionItem(_ context.Context,
 	r.calls++
 	return assets.CollectionItemMutation{Collection: assets.Collection{ID: input.CollectionID}, Item: assets.CollectionItem{ID: input.ItemID}}, nil
 }
+func (r *collectionManagementRepository) RenameCollectionItem(_ context.Context, input assets.RenameCollectionItemInput, _ time.Time) (assets.ManagedCollectionItem, error) {
+	r.calls++
+	r.renameItem = input
+	return assets.ManagedCollectionItem{ID: input.ItemID, DisplayName: input.DisplayName}, nil
+}
 func (r *collectionManagementRepository) ListManagedCollections(_ context.Context, caller, cursor string, limit int) (assets.ManagedCollectionPage, error) {
 	r.calls++
 	r.managedListCalls++
@@ -705,7 +954,39 @@ func (r *collectionManagementRepository) GetManagedCollection(_ context.Context,
 	r.calls++
 	r.managedGetCalls++
 	r.caller = caller
-	return assets.ManagedCollection{Collection: assets.Collection{ID: id}}, nil
+	return assets.ManagedCollection{Collection: assets.Collection{ID: id, Namespace: "line.group.media-sync", RetentionDays: 14}}, nil
+}
+func (r *collectionManagementRepository) ListManagedCollectionItems(_ context.Context, collectionID, callerService, query, cursor string, limit int) (assets.ManagedCollectionItemPage, error) {
+	r.calls++
+	r.managedItemCollectionID, r.managedItemCaller, r.managedItemQuery, r.managedItemCursor, r.managedItemLimit = collectionID, callerService, query, cursor, limit
+	if cursor == "not-a-cursor" {
+		return assets.ManagedCollectionItemPage{}, assets.ErrInvalidInput
+	}
+	return assets.ManagedCollectionItemPage{Items: []assets.ManagedCollectionItem{{ID: "item", DisplayName: "Sunday.mp4", MIMEType: "video/mp4", SizeBytes: 12}}}, nil
+}
+func (r *collectionManagementRepository) GetManagedCollectionItem(_ context.Context, collectionID, itemID, callerService string) (assets.CollectionItem, error) {
+	r.managedItemCaller = callerService
+	return assets.CollectionItem{ID: itemID, CollectionID: collectionID, AssetID: "asset", ETag: `"content-version"`}, nil
+}
+func (r *collectionManagementRepository) UpdateCollectionRetention(_ context.Context, input assets.UpdateCollectionRetentionInput, _ time.Time) (assets.Collection, error) {
+	r.calls++
+	r.retention = input
+	return assets.Collection{ID: input.CollectionID, RetentionDays: input.RetentionDays}, nil
+}
+func (r *collectionManagementRepository) SetCollectionItemsRetention(_ context.Context, input assets.SetCollectionItemsRetentionInput, _ time.Time) error {
+	r.calls++
+	r.batchRetention = input
+	return nil
+}
+func (r *collectionManagementRepository) DeleteCollectionItems(_ context.Context, input assets.DeleteCollectionItemsInput, _ time.Time) (assets.DeleteCollectionItemsResult, error) {
+	r.calls++
+	r.batchDelete = input
+	return assets.DeleteCollectionItemsResult{Deleted: 1}, nil
+}
+func (r *collectionManagementRepository) CreateContentTicket(_ context.Context, ticket assets.ContentTicket, _ time.Time) error {
+	r.calls++
+	r.ticket = ticket
+	return nil
 }
 func (r *collectionManagementRepository) ListAuthorizedCollections(context.Context, assets.CollectionSubject, string, int) (assets.CollectionPage, error) {
 	r.readerCalls++
