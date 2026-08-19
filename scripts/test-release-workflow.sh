@@ -9,7 +9,8 @@ grep -q 'branches: \[main\]' "$workflow"
 grep -Fq "github.event_name == 'push' && 'deploy-asset-api-production' || inputs.confirmation" "$workflow"
 grep -q 'ACTIVATE_QUEUE_SCANNING: "true"' "$workflow"
 grep -q 'EMBEDDED_SCAN_ENABLED: "false"' "$workflow"
-grep -q 'DEPLOY_RETENTION_JOB: "false"' "$workflow"
+grep -q 'DEPLOY_RETENTION_JOB: "true"' "$workflow"
+grep -q 'RETENTION_SCHEDULE_ENABLED: "false"' "$workflow"
 grep -q 'RETENTION_APPLY_ENABLED: "false"' "$workflow"
 grep -q 'deploy-asset-api-production' "$workflow"
 grep -q 'environment: production' "$workflow"
@@ -43,7 +44,11 @@ if grep -Eq '172\.16\.65\.5|CLAMAV_HOST|AllowACAtoClamAV|DenyOtherVNetToClamAV' 
 fi
 test "$(grep -c 'embeddedScanEnabled="$EMBEDDED_SCAN_ENABLED"' "$workflow")" = 2
 test "$(grep -c 'deployRetentionJob="$DEPLOY_RETENTION_JOB"' "$workflow")" = 2
+test "$(grep -c 'retentionScheduleEnabled="$RETENTION_SCHEDULE_ENABLED"' "$workflow")" = 2
 test "$(grep -c 'retentionApplyEnabled="$RETENTION_APPLY_ENABLED"' "$workflow")" = 2
+grep -Fq 'for name in RETENTION_SCHEDULE_ENABLED RETENTION_APPLY_ENABLED; do' "$workflow"
+grep -Fq 'case "${!name}" in' "$workflow"
+grep -Fq 'true|false) ;;' "$workflow"
 if grep -q 'ACTIVATE_QUEUE_SCANNING/true/false' "$workflow"; then
   echo 'queue and embedded scanners must use explicit inverse modes' >&2
   exit 1
@@ -103,9 +108,15 @@ grep -q "migrationKeyVaultName string = 'alive-asset-migrate-kv'" infra/main.bic
 grep -q "name: 'asset-migrate'" infra/main.bicep
 grep -q "command: \\['/asset-migrate'\\]" infra/main.bicep
 grep -q 'param deployRetentionJob bool = false' infra/main.bicep
+grep -q 'param retentionScheduleEnabled bool = false' infra/main.bicep
 grep -q 'param retentionApplyEnabled bool = false' infra/main.bicep
 grep -q "name: 'asset-retention'" infra/main.bicep
 grep -q "cronExpression: '0 19 \* \* \*'" infra/main.bicep
+grep -q 'var retentionTriggerConfiguration = retentionScheduleEnabled ? {' infra/main.bicep
+grep -q "triggerType: 'Schedule'" infra/main.bicep
+grep -q "triggerType: 'Manual'" infra/main.bicep
+grep -q 'configuration: union({' infra/main.bicep
+grep -q '}, retentionTriggerConfiguration)' infra/main.bicep
 grep -q "command: \\['/asset-retention-worker'\\]" infra/main.bicep
 grep -q "name: 'ASSET_RETENTION_APPLY_ENABLED', value: string(retentionApplyEnabled)" infra/main.bicep
 grep -q 'enableRbacAuthorization: true' infra/main.bicep
