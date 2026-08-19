@@ -1191,5 +1191,5 @@ func workloadCaller(encoded string, config WorkloadAuthConfig) string {
 }
 
 func validWorkloadIssuer(issuer string, config WorkloadAuthConfig) bool {
-	return issuer == config.Issuer || issuer == "https://sts.windows.net/"+config.TenantID+"/"
+	return issuer == config.Issuer
 }

@@ -35,6 +35,7 @@ param uploadAllowedOrigins array = [
 
 var keyVaultSecretsUserRole = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
 var workloadAuthEnabled = workloadAuthClientId != '' && workloadAuthAudience != '' && lineAttachmentClientId != '' && lineAttachmentObjectId != ''
+var workloadAuthIssuer = 'https://sts.windows.net/${subscription().tenantId}/'
 
 resource environment 'Microsoft.App/managedEnvironments@2024-03-01' existing = {
   name: containerAppEnvironmentName
@@ -337,7 +338,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = if (deployRuntime) {
             { name: 'ASSET_READER_CALLER_APP_ID', value: readerCallerAppId }
             { name: 'ASSET_ALLOW_DEV_CALLER_HEADER', value: 'false' }
             { name: 'ASSET_WORKLOAD_TENANT_ID', value: workloadAuthEnabled ? subscription().tenantId : '' }
-            { name: 'ASSET_WORKLOAD_ISSUER', value: workloadAuthEnabled ? '${az.environment().authentication.loginEndpoint}${subscription().tenantId}/v2.0' : '' }
+            { name: 'ASSET_WORKLOAD_ISSUER', value: workloadAuthEnabled ? workloadAuthIssuer : '' }
             { name: 'ASSET_WORKLOAD_AUDIENCE', value: workloadAuthEnabled ? workloadAuthAudience : '' }
             { name: 'ASSET_WORKLOAD_REQUIRED_ROLE', value: 'Asset.Invoke' }
             { name: 'ASSET_LINE_WORKLOAD_CLIENT_ID', value: workloadAuthEnabled ? lineAttachmentClientId : '' }
@@ -401,7 +402,7 @@ resource workloadAuth 'Microsoft.App/containerApps/authConfigs@2025-01-01' = if 
         isAutoProvisioned: false
         registration: {
           clientId: workloadAuthClientId
-          openIdIssuer: '${az.environment().authentication.loginEndpoint}${subscription().tenantId}/v2.0'
+          openIdIssuer: workloadAuthIssuer
         }
         validation: {
           allowedAudiences: [workloadAuthAudience]
