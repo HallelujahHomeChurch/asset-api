@@ -60,6 +60,9 @@ grep -q "'storage-queue-data-reader'" infra/main.bicep
 grep -q "roleDefinitionName=='Storage Queue Data Reader'" "$workflow"
 grep -q 'ASSET_WORKLOAD_AUDIENCE' "$workflow"
 grep -q 'ASSET_WORKLOAD_CLIENT_ID' "$workflow"
+grep -Fqx "var workloadAuthIssuer = 'https://sts.windows.net/\${subscription().tenantId}/'" infra/main.bicep
+grep -Fqx "            { name: 'ASSET_WORKLOAD_ISSUER', value: workloadAuthEnabled ? workloadAuthIssuer : '' }" infra/main.bicep
+grep -Fqx '          openIdIssuer: workloadAuthIssuer' infra/main.bicep
 grep -q 'LINE_ATTACHMENT_CLIENT_ID' "$workflow"
 grep -q 'LINE_ATTACHMENT_OBJECT_ID' "$workflow"
 grep -q 'workloadAuthAudience="$ASSET_WORKLOAD_AUDIENCE"' "$workflow"
