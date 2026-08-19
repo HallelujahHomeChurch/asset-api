@@ -8,11 +8,14 @@ Dapr; the dedicated LINE attachment Job uses authenticated internal ingress
 with an Entra application audience and the `Asset.Invoke` app role.
 Production scanning runs only through the Azure queue-triggered scan Job.
 
-`asset-retention` is a daily 19:00 UTC (03:00 Asia/Taipei) scheduled Job. Both
-Job deployment and mutations default off. Enable `deployRetentionJob` first
-with `retentionApplyEnabled=false`, review the opaque per-collection preflight
-counts and bytes, then change only `retentionApplyEnabled` after explicit
-approval. Set it back to `false` to stop retention mutations.
+`asset-retention` is deployed as a Manual Job with mutations disabled. The
+release workflow keeps `RETENTION_SCHEDULE_ENABLED=false` and
+`RETENTION_APPLY_ENABLED=false`, so deployment alone cannot schedule cleanup or
+delete media. After verifying identity, network access, and a read-only
+preflight, explicit production approval is required before enabling the 19:00
+UTC (03:00 Asia/Taipei) schedule or mutations. Keep the schedule disabled for
+the first approved bounded mutation run, verify its database and Blob purge
+results, then enable the recurring schedule separately.
 
 Upload completion and an `asset.scan.requested.v1` outbox row commit in one
 PostgreSQL transaction. The runtime sends that event to the `asset-scan`

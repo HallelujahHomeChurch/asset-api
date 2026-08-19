@@ -19,6 +19,7 @@ param embeddedScanEnabled bool = false
 param deployScanJob bool = false
 param deploySignatureRefreshJob bool = false
 param deployRetentionJob bool = false
+param retentionScheduleEnabled bool = false
 param retentionApplyEnabled bool = false
 param scanWorkerImage string = runtimeImage
 param workloadAuthClientId string = ''
@@ -36,6 +37,20 @@ param uploadAllowedOrigins array = [
 var keyVaultSecretsUserRole = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
 var workloadAuthEnabled = workloadAuthClientId != '' && workloadAuthAudience != '' && lineAttachmentClientId != '' && lineAttachmentObjectId != ''
 var workloadAuthIssuer = 'https://sts.windows.net/${subscription().tenantId}/'
+var retentionTriggerConfiguration = retentionScheduleEnabled ? {
+  triggerType: 'Schedule'
+  scheduleTriggerConfig: {
+    cronExpression: '0 19 * * *'
+    parallelism: 1
+    replicaCompletionCount: 1
+  }
+} : {
+  triggerType: 'Manual'
+  manualTriggerConfig: {
+    parallelism: 1
+    replicaCompletionCount: 1
+  }
+}
 
 resource environment 'Microsoft.App/managedEnvironments@2024-03-01' existing = {
   name: containerAppEnvironmentName
@@ -644,22 +659,16 @@ resource retentionJob 'Microsoft.App/jobs@2025-07-01' = if (deployRetentionJob) 
   properties: {
     environmentId: environment.id
     workloadProfileName: 'Consumption'
-    configuration: {
-      triggerType: 'Schedule'
+    configuration: union({
       replicaTimeout: 900
       replicaRetryLimit: 1
-      scheduleTriggerConfig: {
-        cronExpression: '0 19 * * *'
-        parallelism: 1
-        replicaCompletionCount: 1
-      }
       registries: [
         { server: registry.properties.loginServer, identity: pullIdentity.id }
       ]
       secrets: [
         { name: 'database-url', keyVaultUrl: '${runtimeVault.properties.vaultUri}secrets/database-url', identity: runtimeIdentity.id }
       ]
-    }
+    }, retentionTriggerConfiguration)
     template: {
       containers: [
         {

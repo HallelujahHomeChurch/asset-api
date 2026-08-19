@@ -88,7 +88,8 @@ jobs:
       RELEASE_CONFIRMATION: ${{ github.event_name == 'push' && 'deploy-asset-api-production' || inputs.confirmation }}
       ACTIVATE_QUEUE_SCANNING: "true"
       EMBEDDED_SCAN_ENABLED: "false"
-      DEPLOY_RETENTION_JOB: "false"
+      DEPLOY_RETENTION_JOB: "true"
+      RETENTION_SCHEDULE_ENABLED: "false"
       RETENTION_APPLY_ENABLED: "false"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -98,6 +99,12 @@ jobs:
           [[ "$RELEASE_CONFIRMATION" == "deploy-asset-api-production" ]]
           for name in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID ASSET_WORKLOAD_CLIENT_ID ASSET_WORKLOAD_AUDIENCE LINE_ATTACHMENT_CLIENT_ID LINE_ATTACHMENT_OBJECT_ID; do
             test -n "${!name:-}" || { echo "Missing repository variable: ${name}" >&2; exit 1; }
+          done
+          for name in RETENTION_SCHEDULE_ENABLED RETENTION_APPLY_ENABLED; do
+            case "${!name}" in
+              true|false) ;;
+              *) echo "${name} must be true or false" >&2; exit 1 ;;
+            esac
           done
       - name: Set image tag
         run: echo "IMAGE_TAG=main-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
@@ -169,7 +176,7 @@ jobs:
           az deployment group what-if \
             --resource-group "$RESOURCE_GROUP" \
             --template-file infra/main.bicep \
-            --parameters storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" scanWorkerImage="$SCAN_IMAGE_REF" deployRuntime=true deployMigrationJob=true deployScanJob=true deploySignatureRefreshJob=true deployRetentionJob="$DEPLOY_RETENTION_JOB" retentionApplyEnabled="$RETENTION_APPLY_ENABLED" scanDispatchEnabled="$ACTIVATE_QUEUE_SCANNING" embeddedScanEnabled="$EMBEDDED_SCAN_ENABLED" workloadAuthClientId="$ASSET_WORKLOAD_CLIENT_ID" workloadAuthAudience="$ASSET_WORKLOAD_AUDIENCE" lineAttachmentClientId="$LINE_ATTACHMENT_CLIENT_ID" lineAttachmentObjectId="$LINE_ATTACHMENT_OBJECT_ID" readerCallerAppId="$ASSET_READER_CALLER_APP_ID" provisionPermissions=false manageSharedInfrastructure=false \
+            --parameters storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" scanWorkerImage="$SCAN_IMAGE_REF" deployRuntime=true deployMigrationJob=true deployScanJob=true deploySignatureRefreshJob=true deployRetentionJob="$DEPLOY_RETENTION_JOB" retentionScheduleEnabled="$RETENTION_SCHEDULE_ENABLED" retentionApplyEnabled="$RETENTION_APPLY_ENABLED" scanDispatchEnabled="$ACTIVATE_QUEUE_SCANNING" embeddedScanEnabled="$EMBEDDED_SCAN_ENABLED" workloadAuthClientId="$ASSET_WORKLOAD_CLIENT_ID" workloadAuthAudience="$ASSET_WORKLOAD_AUDIENCE" lineAttachmentClientId="$LINE_ATTACHMENT_CLIENT_ID" lineAttachmentObjectId="$LINE_ATTACHMENT_OBJECT_ID" readerCallerAppId="$ASSET_READER_CALLER_APP_ID" provisionPermissions=false manageSharedInfrastructure=false \
             --validation-level Provider --result-format FullResourcePayloads --no-pretty-print --only-show-errors \
             --output json > what-if.json
           ./scripts/check-what-if.sh what-if.json
@@ -202,7 +209,7 @@ jobs:
           az deployment group create \
             --name "asset-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --resource-group "$RESOURCE_GROUP" --template-file infra/main.bicep \
-            --parameters storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" scanWorkerImage="$SCAN_IMAGE_REF" deployRuntime=true deployMigrationJob=true deployScanJob=true deploySignatureRefreshJob=true deployRetentionJob="$DEPLOY_RETENTION_JOB" retentionApplyEnabled="$RETENTION_APPLY_ENABLED" scanDispatchEnabled="$ACTIVATE_QUEUE_SCANNING" embeddedScanEnabled="$EMBEDDED_SCAN_ENABLED" workloadAuthClientId="$ASSET_WORKLOAD_CLIENT_ID" workloadAuthAudience="$ASSET_WORKLOAD_AUDIENCE" lineAttachmentClientId="$LINE_ATTACHMENT_CLIENT_ID" lineAttachmentObjectId="$LINE_ATTACHMENT_OBJECT_ID" readerCallerAppId="$ASSET_READER_CALLER_APP_ID" provisionPermissions=false manageSharedInfrastructure=false \
+            --parameters storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" scanWorkerImage="$SCAN_IMAGE_REF" deployRuntime=true deployMigrationJob=true deployScanJob=true deploySignatureRefreshJob=true deployRetentionJob="$DEPLOY_RETENTION_JOB" retentionScheduleEnabled="$RETENTION_SCHEDULE_ENABLED" retentionApplyEnabled="$RETENTION_APPLY_ENABLED" scanDispatchEnabled="$ACTIVATE_QUEUE_SCANNING" embeddedScanEnabled="$EMBEDDED_SCAN_ENABLED" workloadAuthClientId="$ASSET_WORKLOAD_CLIENT_ID" workloadAuthAudience="$ASSET_WORKLOAD_AUDIENCE" lineAttachmentClientId="$LINE_ATTACHMENT_CLIENT_ID" lineAttachmentObjectId="$LINE_ATTACHMENT_OBJECT_ID" readerCallerAppId="$ASSET_READER_CALLER_APP_ID" provisionPermissions=false manageSharedInfrastructure=false \
             --only-show-errors --output none
       - name: Wait for API revision
         run: |
