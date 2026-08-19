@@ -988,6 +988,10 @@ func (s *Store) CreateContentTicket(ctx context.Context, ticket assets.ContentTi
 	if accessMode != "reader" && accessMode != "manager" {
 		return assets.ErrNotFound
 	}
+	roles := ticket.Roles
+	if roles == nil {
+		roles = []string{}
+	}
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO asset_content_tickets(
 		  token_hash,collection_id,collection_item_id,asset_etag,user_id,roles,access_mode,expires_at,created_at
@@ -1008,7 +1012,7 @@ func (s *Store) CreateContentTicket(ctx context.Context, ticket assets.ContentTi
 		      AND ((acl.subject_type='user' AND acl.subject_id=$5)
 		        OR (acl.subject_type='role' AND acl.subject_id=ANY($6::text[])))
 		  )))`, ticket.TokenHash, ticket.CollectionID, ticket.CollectionItemID, ticket.AssetETag,
-		ticket.UserID, ticket.Roles, accessMode, ticket.ExpiresAt, ticket.CreatedAt, now, assets.CollectionReaderRole)
+		ticket.UserID, roles, accessMode, ticket.ExpiresAt, ticket.CreatedAt, now, assets.CollectionReaderRole)
 	if err != nil {
 		return err
 	}

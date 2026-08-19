@@ -1541,6 +1541,10 @@ func TestCollectionContentTicketLifecycleAndLiveRevocation(t *testing.T) {
 	if err := store.CreateContentTicket(ctx, roleTicket, now); err != nil {
 		t.Fatal(err)
 	}
+	var rolesPreserved bool
+	if err := db.QueryRow(`SELECT roles=ARRAY[$2,$3]::text[] FROM asset_content_tickets WHERE token_hash=$1`, roleTicket.TokenHash, assets.CollectionReaderRole, "media-team").Scan(&rolesPreserved); err != nil || !rolesPreserved {
+		t.Fatalf("roles preserved=%v err=%v", rolesPreserved, err)
+	}
 	if _, err := store.RedeemContentTicket(ctx, roleTicket.TokenHash, now); err != nil {
 		t.Fatal(err)
 	}
@@ -1648,6 +1652,10 @@ func TestManagedContentTicketBypassesReaderACLButTracksCurrentItemAndAsset(t *te
 	first := newTicket(strings.Repeat("a", 64))
 	if err := store.CreateContentTicket(ctx, first, now); err != nil {
 		t.Fatalf("manager ticket without reader ACL: %v", err)
+	}
+	var storedRoles string
+	if err := db.QueryRow(`SELECT roles::text FROM asset_content_tickets WHERE token_hash=$1`, first.TokenHash).Scan(&storedRoles); err != nil || storedRoles != "{}" {
+		t.Fatalf("stored roles=%q err=%v", storedRoles, err)
 	}
 	if _, err := db.Exec(`UPDATE asset_collection_items SET display_name='renamed.mp4' WHERE id=$1`, itemID); err != nil {
 		t.Fatal(err)
@@ -2029,7 +2037,7 @@ func TestExpiredCollectionItemsUseCurrentPolicyAndExactBoundary(t *testing.T) {
 		('exact','expired-items','exact','Exact','source',1,false,1,$1,$1,NULL,NULL),
 		('active','expired-items','active','Active','source',1,false,1,$2,$2,NULL,NULL),
 		('exempt','expired-items','exempt','Exempt','source',1,true,1,$3,$3,NULL,NULL),
-		('removed','expired-items','removed','Removed','source',1,false,1,$3,$3,2,$4)`, now.Add(-48*time.Hour), now.Add(-48*time.Hour+time.Nanosecond), now.Add(-72*time.Hour), now); err != nil {
+		('removed','expired-items','removed','Removed','source',1,false,1,$3,$3,2,$4)`, now.Add(-48*time.Hour), now.Add(-48*time.Hour+time.Microsecond), now.Add(-72*time.Hour), now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO asset_collections(id,namespace,name,retention_days,created_by_service,created_at,updated_at) VALUES('other-namespace','other','Other',1,'hhc-line-function-bot',$1,$1)`, now); err != nil {
