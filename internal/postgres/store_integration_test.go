@@ -918,6 +918,204 @@ func TestCollectionMutationsReplayConflictAndRevision(t *testing.T) {
 	}
 }
 
+func TestCollectionDeleteCascadesItemsAssetsTicketsAndReplays(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	createdAt := time.Date(2026, 8, 19, 6, 0, 0, 0, time.UTC)
+	deletedAt := createdAt.Add(time.Minute)
+	insertCollection(t, db, "collection-delete", createdAt)
+	insertCollection(t, db, "collection-delete-shared", createdAt)
+	for _, assetID := range []string{"collection-delete-owned", "collection-delete-referenced"} {
+		insertAsset(t, db, assetID, assets.UploadCompleted, assets.ScanClean, assets.ProcessingReady, createdAt, time.Time{})
+		if _, err := db.Exec(`UPDATE assets SET namespace='line.group.media-sync',owner_service='hhc-line-function-bot',owner_type='media_sync_ingest' WHERE id=$1`, assetID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(`
+		INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,retention_exempt,updated_revision,created_at,updated_at)
+		VALUES
+		  ('collection-delete-active','collection-delete','collection-delete-owned','active','Active','source',1,false,1,$1,$1),
+		  ('collection-delete-permanent','collection-delete','collection-delete-referenced','permanent','Permanent','source',1,true,1,$1,$1),
+		  ('collection-delete-shared-item','collection-delete-shared','collection-delete-referenced','shared','Shared','source',1,false,1,$1,$1)`, createdAt); err != nil {
+		t.Fatal(err)
+	}
+	ticketHash := strings.Repeat("c", 64)
+	if _, err := db.Exec(`INSERT INTO asset_content_tickets(token_hash,collection_id,collection_item_id,asset_etag,user_id,roles,access_mode,expires_at,created_at) VALUES($1,'collection-delete','collection-delete-active','etag-collection-delete-owned','manager',ARRAY[]::text[],'manager',$2,$3)`, ticketHash, createdAt.Add(5*time.Minute), createdAt); err != nil {
+		t.Fatal(err)
+	}
+
+	input := assets.DeleteCollectionInput{CollectionID: "collection-delete", CallerService: "hhc-line-function-bot", IdempotencyKey: "collection-delete"}
+	deleted, err := store.DeleteCollection(ctx, input, deletedAt)
+	if err != nil || deleted.Revision != 2 || !deleted.DeletedAt.Equal(deletedAt) {
+		t.Fatalf("deleted=%+v err=%v", deleted, err)
+	}
+	replay, err := store.DeleteCollection(ctx, input, deletedAt.Add(time.Minute))
+	if err != nil || replay.Revision != deleted.Revision || !replay.DeletedAt.Equal(deletedAt) {
+		t.Fatalf("replay=%+v err=%v", replay, err)
+	}
+	for _, itemID := range []string{"collection-delete-active", "collection-delete-permanent"} {
+		var deletedRevision sql.NullInt64
+		var itemDeletedAt sql.NullTime
+		if err := db.QueryRow(`SELECT deleted_revision,deleted_at FROM asset_collection_items WHERE id=$1`, itemID).Scan(&deletedRevision, &itemDeletedAt); err != nil {
+			t.Fatal(err)
+		}
+		if !deletedRevision.Valid || deletedRevision.Int64 != 2 || !itemDeletedAt.Valid || !itemDeletedAt.Time.Equal(deletedAt) {
+			t.Fatalf("item=%s revision=%v deletedAt=%v", itemID, deletedRevision, itemDeletedAt)
+		}
+	}
+	for assetID, wantDeleted := range map[string]bool{
+		"collection-delete-owned":      true,
+		"collection-delete-referenced": false,
+	} {
+		var assetDeletedAt sql.NullTime
+		if err := db.QueryRow(`SELECT deleted_at FROM assets WHERE id=$1`, assetID).Scan(&assetDeletedAt); err != nil {
+			t.Fatal(err)
+		}
+		if assetDeletedAt.Valid != wantDeleted || (wantDeleted && !assetDeletedAt.Time.Equal(deletedAt)) {
+			t.Fatalf("asset=%s deletedAt=%v", assetID, assetDeletedAt)
+		}
+	}
+	if _, err := store.RedeemContentTicket(ctx, ticketHash, deletedAt); !errors.Is(err, assets.ErrNotFound) {
+		t.Fatalf("ticket remained valid: %v", err)
+	}
+}
+
+func TestAddCollectionItemFirstThenDeleteCollectionCascadesTheItem(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 19, 6, 30, 0, 0, time.UTC)
+	insertCollection(t, db, "add-first-delete-second", now)
+	insertAsset(t, db, "add-first-delete-second-asset", assets.UploadCompleted, assets.ScanClean, assets.ProcessingReady, now, time.Time{})
+	if _, err := db.Exec(`UPDATE assets SET namespace='line.group.media-sync',owner_service='hhc-line-function-bot',owner_type='media_sync_ingest' WHERE id='add-first-delete-second-asset'`); err != nil {
+		t.Fatal(err)
+	}
+	blocker, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Rollback()
+	if _, err := blocker.Exec(`SELECT id FROM asset_collections WHERE id='add-first-delete-second' FOR UPDATE`); err != nil {
+		t.Fatal(err)
+	}
+	added := make(chan error, 1)
+	go func() {
+		_, err := store.AddCollectionItem(context.Background(), assets.AddCollectionItemInput{
+			CollectionID: "add-first-delete-second", AssetID: "add-first-delete-second-asset", RemoteItemID: "remote",
+			DisplayName: "Media", SourceRevision: "source", CallerService: "hhc-line-function-bot", IdempotencyKey: "add-first",
+		}, now)
+		added <- err
+	}()
+	select {
+	case err := <-added:
+		t.Fatalf("add did not wait for collection lock: %v", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+	deleted := make(chan error, 1)
+	go func() {
+		_, err := store.DeleteCollection(context.Background(), assets.DeleteCollectionInput{
+			CollectionID: "add-first-delete-second", CallerService: "hhc-line-function-bot", IdempotencyKey: "delete-second",
+		}, now.Add(time.Minute))
+		deleted <- err
+	}()
+	select {
+	case err := <-deleted:
+		t.Fatalf("delete did not wait for collection lock: %v", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+	if err := blocker.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-added; err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if err := <-deleted; err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	var revision, createdRevision int64
+	var deletedRevision sql.NullInt64
+	var assetDeletedAt sql.NullTime
+	if err := db.QueryRow(`SELECT c.revision,i.created_revision,i.deleted_revision,a.deleted_at FROM asset_collections c JOIN asset_collection_items i ON i.collection_id=c.id JOIN assets a ON a.id=i.asset_id WHERE c.id='add-first-delete-second'`).Scan(&revision, &createdRevision, &deletedRevision, &assetDeletedAt); err != nil {
+		t.Fatal(err)
+	}
+	if revision != 3 || createdRevision != 2 || !deletedRevision.Valid || deletedRevision.Int64 != 3 || !assetDeletedAt.Valid {
+		t.Fatalf("revision=%d created=%d deleted=%v assetDeleted=%v", revision, createdRevision, deletedRevision, assetDeletedAt.Valid)
+	}
+}
+
+func TestAddCollectionItemWaitsForDeleteCollectionAndCannotResurrectIt(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 19, 7, 0, 0, 0, time.UTC)
+	insertCollection(t, db, "delete-first-add-second", now)
+	for _, assetID := range []string{"delete-first-existing-asset", "delete-first-new-asset"} {
+		insertAsset(t, db, assetID, assets.UploadCompleted, assets.ScanClean, assets.ProcessingReady, now, time.Time{})
+		if _, err := db.Exec(`UPDATE assets SET namespace='line.group.media-sync',owner_service='hhc-line-function-bot',owner_type='media_sync_ingest' WHERE id=$1`, assetID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,retention_exempt,updated_revision,created_at,updated_at) VALUES('delete-first-existing-item','delete-first-add-second','delete-first-existing-asset','existing','Existing','source',1,false,1,$1,$1)`, now); err != nil {
+		t.Fatal(err)
+	}
+	blocker, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Rollback()
+	if _, err := blocker.Exec(`SELECT id FROM asset_collections WHERE id='delete-first-add-second' FOR UPDATE`); err != nil {
+		t.Fatal(err)
+	}
+	deleted := make(chan error, 1)
+	go func() {
+		_, err := store.DeleteCollection(context.Background(), assets.DeleteCollectionInput{
+			CollectionID: "delete-first-add-second", CallerService: "hhc-line-function-bot", IdempotencyKey: "delete-first",
+		}, now.Add(time.Minute))
+		deleted <- err
+	}()
+	select {
+	case err := <-deleted:
+		t.Fatalf("delete did not wait for collection lock: %v", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+	if _, err := blocker.Exec(`SELECT id FROM assets WHERE id='delete-first-existing-asset' FOR UPDATE`); err != nil {
+		blocker.Rollback()
+		t.Fatalf("delete locked asset before collection: %v", err)
+	}
+	added := make(chan error, 1)
+	go func() {
+		_, err := store.AddCollectionItem(context.Background(), assets.AddCollectionItemInput{
+			CollectionID: "delete-first-add-second", AssetID: "delete-first-new-asset", RemoteItemID: "new",
+			DisplayName: "New", SourceRevision: "source", CallerService: "hhc-line-function-bot", IdempotencyKey: "add-second",
+		}, now.Add(2*time.Minute))
+		added <- err
+	}()
+	select {
+	case err := <-added:
+		t.Fatalf("add did not wait for collection lock: %v", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+	if err := blocker.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-deleted; err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if err := <-added; !errors.Is(err, assets.ErrNotFound) {
+		t.Fatalf("add after delete: %v", err)
+	}
+	var revision int64
+	var deletedRevision sql.NullInt64
+	var existingDeletedAt, newDeletedAt sql.NullTime
+	if err := db.QueryRow(`SELECT c.revision,i.deleted_revision,existing.deleted_at,new_asset.deleted_at FROM asset_collections c JOIN asset_collection_items i ON i.collection_id=c.id JOIN assets existing ON existing.id=i.asset_id CROSS JOIN assets new_asset WHERE c.id='delete-first-add-second' AND new_asset.id='delete-first-new-asset'`).Scan(&revision, &deletedRevision, &existingDeletedAt, &newDeletedAt); err != nil {
+		t.Fatal(err)
+	}
+	if revision != 2 || !deletedRevision.Valid || deletedRevision.Int64 != 2 || !existingDeletedAt.Valid || newDeletedAt.Valid {
+		t.Fatalf("revision=%d deleted=%v existingAsset=%v newAsset=%v", revision, deletedRevision, existingDeletedAt.Valid, newDeletedAt.Valid)
+	}
+}
+
 func TestRenameCollectionItemUpdatesRevisionWithoutChangingContentIdentity(t *testing.T) {
 	db := integrationDB(t)
 	store := New(db)

@@ -343,7 +343,29 @@ func (s *Store) DeleteCollection(ctx context.Context, input assets.DeleteCollect
 	if err != nil {
 		return assets.Collection{}, err
 	}
-	value.Revision, value.UpdatedAt, value.DeletedAt = value.Revision+1, now, now
+	nextRevision := value.Revision + 1
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM asset_collection_items WHERE collection_id=$1 AND deleted_revision IS NULL ORDER BY id`, input.CollectionID)
+	if err != nil {
+		return assets.Collection{}, err
+	}
+	var itemIDs []string
+	for rows.Next() {
+		var itemID string
+		if err := rows.Scan(&itemID); err != nil {
+			rows.Close()
+			return assets.Collection{}, err
+		}
+		itemIDs = append(itemIDs, itemID)
+	}
+	if err := finishRows(rows); err != nil {
+		return assets.Collection{}, err
+	}
+	deleted, err := s.deleteCollectionItems(ctx, tx, input.CollectionID, input.CallerService, itemIDs, now, false)
+	if err != nil {
+		return assets.Collection{}, err
+	}
+	value = deleted.collection
+	value.Revision, value.UpdatedAt, value.DeletedAt = nextRevision, now, now
 	if _, err := tx.ExecContext(ctx, `UPDATE asset_collections SET revision=$2,updated_at=$3,deleted_at=$3 WHERE id=$1`, value.ID, value.Revision, now); err != nil {
 		return assets.Collection{}, err
 	}
