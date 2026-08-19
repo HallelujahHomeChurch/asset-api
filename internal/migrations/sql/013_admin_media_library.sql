@@ -5,17 +5,16 @@ ALTER TABLE asset_collections
 
 ALTER TABLE asset_collection_items
   ADD COLUMN retention_exempt boolean NOT NULL DEFAULT false,
-  ADD COLUMN updated_revision bigint,
-  ADD COLUMN updated_at timestamptz;
+  ADD COLUMN updated_revision bigint NOT NULL DEFAULT 1,
+  ADD COLUMN updated_at timestamptz NOT NULL DEFAULT '1970-01-01 00:00:00+00'::timestamptz;
 
 UPDATE asset_collection_items
 SET updated_revision = created_revision,
-    updated_at = created_at
-WHERE updated_revision IS NULL OR updated_at IS NULL;
+    updated_at = created_at;
 
 ALTER TABLE asset_collection_items
-  ALTER COLUMN updated_revision SET NOT NULL,
-  ALTER COLUMN updated_at SET NOT NULL,
+  ALTER COLUMN updated_revision DROP DEFAULT,
+  ALTER COLUMN updated_at DROP DEFAULT,
   ADD CONSTRAINT asset_collection_items_updated_revision_check
     CHECK (updated_revision >= created_revision);
 
