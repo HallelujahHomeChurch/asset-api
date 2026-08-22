@@ -51,7 +51,13 @@ results enable the existing grant checks; infected, pending, and failed assets
 remain unavailable. Transient failures use bounded retries before becoming
 `failed`.
 
-Clean image uploads are processed into stable 480, 960, and 1440 pixel JPEG variants. Variants inherit the original asset grant and cannot be downloaded before scanning and processing complete. Upload-session idempotency keys replay the original asset/session instead of creating duplicate objects.
+Clean image uploads enqueue a versioned derivative event. The event-triggered
+Azure derivative Job processes one immutable asset version into stable 480,
+960, and 1440 pixel JPEG variants. Variants inherit the original asset grant
+and cannot be downloaded before scanning and processing complete. Queue
+delivery is at-least-once; the asset ID and Blob ETag make replay and stale
+events safe. Upload-session idempotency keys replay the original asset/session
+instead of creating duplicate objects.
 
 Failed scans can be requeued by the owning service. Infected scans cannot be
 requeued. `GET /priv/assets/operations` exposes scan backlog and purge backlog
@@ -67,7 +73,8 @@ and retried independently of the database transaction.
 ## Azure deployment
 
 `infra/main.bicep` provisions the internal Dapr-enabled Container App, migration
-job, isolated Key Vault access, and Blob RBAC. The manual GitHub Actions release
-workflow runs DB-backed tests, builds an immutable image, applies migrations,
-and then replaces the runtime with rollback protection. Complete the reviewed
-one-time cutover in `infra/README.md` first.
+job, scan and derivative event Jobs, isolated Key Vault access, and scoped
+storage RBAC. The manual GitHub Actions release workflow runs DB-backed tests,
+builds an immutable image, applies migrations, and then replaces the runtime
+and Jobs with rollback protection. Complete the reviewed one-time cutover in
+`infra/README.md` first.

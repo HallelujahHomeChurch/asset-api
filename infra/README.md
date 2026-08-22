@@ -7,6 +7,10 @@ Blob contributor and account-scoped Blob delegator roles. Owner services use
 Dapr; the dedicated LINE attachment Job uses authenticated internal ingress
 with an Entra application audience and the `Asset.Invoke` app role.
 Production scanning runs only through the Azure queue-triggered scan Job.
+Clean supported images are processed only through the queue-triggered
+`asset-derivative` Job. Terraform owns its stable queues, identity, RBAC, and
+job configuration; the service release updates the job to the same immutable
+runtime image as the API.
 
 `asset-retention` is deployed as a Manual Job with mutations disabled. The
 release workflow keeps `RETENTION_SCHEDULE_ENABLED=false` and
@@ -25,6 +29,13 @@ The event-triggered `asset-scan` Job consumes the queue with managed identity,
 validates the immutable Blob, and runs local `clamscan` against a read-only
 signature snapshot. PostgreSQL records poison work before it is forwarded to
 `asset-scan-poison`. Queue messages use an infinite TTL.
+
+A clean scan result and an `asset.derivative.requested.v1` outbox row commit in
+one PostgreSQL transaction. The runtime sends the event to `asset-derivative`.
+The Job consumes one message per execution, verifies the asset ID and immutable
+Blob ETag, and acknowledges ready, stale, deleted, or unsupported work
+idempotently. Retryable failures remain visible for queue retry; exhausted or
+invalid messages move to `asset-derivative-poison`.
 
 `asset-clamav-signature-refresh` validates new databases, writes an immutable
 generation to the private `asset-signatures` Blob container, and atomically
@@ -81,14 +92,19 @@ database URLs are stored in separate RBAC Key Vaults.
    confirmation `deploy-asset-api-production`. It runs migrations before
    replacing the runtime and rolls back only the runtime image on failure.
 
-6. Confirm both queues and Jobs exist and all images use immutable digests.
+6. Confirm the scan and derivative queues and Jobs exist and all images use
+   immutable digests.
 
 7. Start the signature refresh Job, then send isolated clean and EICAR fixtures
    through the queue path. Clean must become `clean`; EICAR must become
    `infected` and remain unpublishable.
 
-8. Deploy the runtime. Queue dispatch is always enabled and the embedded
-   scanner is always disabled in production.
+8. Deploy the runtime. Scan and derivative queue dispatch are enabled and the
+   embedded scanner and derivative poller are disabled in production.
+
+9. Upload a small supported image through the authenticated API, complete it,
+   wait for scan state `clean` and all three variants `ready`, then delete the
+   asset through the normal API. Confirm both derivative queues return to zero.
 
 The template explicitly disables Defender for Storage; ClamAV is the only
 malware scanner. `ASSET_ALLOW_DEV_CALLER_HEADER` remains false in Azure.

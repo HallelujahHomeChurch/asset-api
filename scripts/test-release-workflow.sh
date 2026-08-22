@@ -122,6 +122,16 @@ grep -q "name: 'ASSET_RETENTION_APPLY_ENABLED', value: string(retentionApplyEnab
 grep -q 'enableRbacAuthorization: true' infra/main.bicep
 grep -q 'test-migration-policy-test.sh' .github/workflows/ci.yml
 grep -q 'test-what-if-policy.sh' .github/workflows/ci.yml
+grep -q 'param deployDerivativeJob bool = false' infra/main.bicep
+grep -q "name: 'asset-derivative-identity'" infra/main.bicep
+grep -q "name: 'asset-derivative'" infra/main.bicep
+grep -q "name: 'asset-derivative-poison'" infra/main.bicep
+grep -q "command: \['/asset-derivative-worker'\]" infra/main.bicep
+grep -q 'minExecutions: 0' infra/main.bicep
+grep -q 'maxExecutions: 1' infra/main.bicep
+grep -q "queueName: 'asset-derivative'" infra/main.bicep
+grep -q "queueLength: '1'" infra/main.bicep
+grep -q "name: 'ASSET_DERIVATIVE_QUEUE_URL'" infra/main.bicep
 
 if grep -Eiq 'migrate[[:space:]_-]*down|migration[[:space:]_-]*rollback' "$workflow"; then
   echo 'release workflow must not roll back database migrations automatically' >&2
