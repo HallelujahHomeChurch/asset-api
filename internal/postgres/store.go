@@ -17,6 +17,7 @@ import (
 	"unicode"
 
 	"hhc/asset-api/internal/assets"
+	"hhc/asset-api/internal/derivativequeue"
 	"hhc/asset-api/internal/lifecycle"
 	"hhc/asset-api/internal/retention"
 
@@ -176,6 +177,69 @@ func (s *Store) ScheduleScanRequestRetry(ctx context.Context, eventID string, ex
 func (s *Store) scanRequestTransitionError(ctx context.Context, eventID string) error {
 	var exists bool
 	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM asset_scan_outbox WHERE event_id=$1)`, eventID).Scan(&exists); err != nil {
+		return err
+	}
+	if exists {
+		return assets.ErrConflict
+	}
+	return assets.ErrNotFound
+}
+
+func (s *Store) ClaimDerivativeRequest(ctx context.Context, now time.Time, lease time.Duration) (derivativequeue.Request, bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return derivativequeue.Request{}, false, err
+	}
+	defer tx.Rollback()
+	var request derivativequeue.Request
+	err = tx.QueryRowContext(ctx, `
+		SELECT event_id,asset_id,asset_etag,attempts,created_at
+		FROM asset_derivative_outbox
+		WHERE delivered_at IS NULL AND available_at <= $1
+		  AND (claimed_until IS NULL OR claimed_until < $1)
+		ORDER BY available_at,created_at
+		FOR UPDATE SKIP LOCKED LIMIT 1`, now).Scan(&request.EventID, &request.AssetID, &request.ETag, &request.Attempts, &request.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return derivativequeue.Request{}, false, nil
+	}
+	if err != nil {
+		return derivativequeue.Request{}, false, err
+	}
+	request.Attempts++
+	if _, err := tx.ExecContext(ctx, `UPDATE asset_derivative_outbox SET attempts=$2,claimed_until=$3 WHERE event_id=$1`, request.EventID, request.Attempts, now.Add(lease)); err != nil {
+		return derivativequeue.Request{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return derivativequeue.Request{}, false, err
+	}
+	return request, true, nil
+}
+
+func (s *Store) MarkDerivativeRequestDelivered(ctx context.Context, eventID string, expectedAttempt int, now time.Time) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE asset_derivative_outbox SET delivered_at=$3,claimed_until=NULL,last_error='' WHERE event_id=$1 AND attempts=$2 AND delivered_at IS NULL`, eventID, expectedAttempt, now)
+	if err != nil {
+		return err
+	}
+	if count, _ := result.RowsAffected(); count != 1 {
+		return s.derivativeRequestTransitionError(ctx, eventID)
+	}
+	return nil
+}
+
+func (s *Store) ScheduleDerivativeRequestRetry(ctx context.Context, eventID string, expectedAttempt int, details string, nextAttempt, _ time.Time) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE asset_derivative_outbox SET available_at=$3,claimed_until=NULL,last_error=$4 WHERE event_id=$1 AND attempts=$2 AND delivered_at IS NULL`, eventID, expectedAttempt, nextAttempt, details)
+	if err != nil {
+		return err
+	}
+	if count, _ := result.RowsAffected(); count != 1 {
+		return s.derivativeRequestTransitionError(ctx, eventID)
+	}
+	return nil
+}
+
+func (s *Store) derivativeRequestTransitionError(ctx context.Context, eventID string) error {
+	var exists bool
+	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM asset_derivative_outbox WHERE event_id=$1)`, eventID).Scan(&exists); err != nil {
 		return err
 	}
 	if exists {

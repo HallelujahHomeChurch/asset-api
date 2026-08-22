@@ -356,6 +356,40 @@ func TestDerivativeOutboxMigrationBackfillsCleanPendingImages(t *testing.T) {
 	}
 }
 
+func TestDerivativeOutboxClaimRetryAndDeliveryAreFenced(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC)
+	insertAsset(t, db, "derivative-dispatch", assets.UploadCompleted, assets.ScanClean, assets.ProcessingPending, now, time.Time{})
+	if _, err := db.Exec(`INSERT INTO asset_derivative_outbox(event_id,asset_id,asset_etag,available_at,created_at) VALUES('derivative-event','derivative-dispatch','etag-derivative-dispatch',$1,$1)`, now); err != nil {
+		t.Fatal(err)
+	}
+	first, ok, err := store.ClaimDerivativeRequest(ctx, now, time.Minute)
+	if err != nil || !ok || first.Attempts != 1 {
+		t.Fatalf("first=%+v ok=%v err=%v", first, ok, err)
+	}
+	if _, ok, err := store.ClaimDerivativeRequest(ctx, now, time.Minute); err != nil || ok {
+		t.Fatalf("concurrent claim: ok=%v err=%v", ok, err)
+	}
+	if err := store.ScheduleDerivativeRequestRetry(ctx, first.EventID, first.Attempts, "temporary", now.Add(time.Minute), now); err != nil {
+		t.Fatal(err)
+	}
+	second, ok, err := store.ClaimDerivativeRequest(ctx, now.Add(time.Minute), time.Minute)
+	if err != nil || !ok || second.Attempts != 2 {
+		t.Fatalf("second=%+v ok=%v err=%v", second, ok, err)
+	}
+	if err := store.MarkDerivativeRequestDelivered(ctx, first.EventID, first.Attempts, now); !errors.Is(err, assets.ErrConflict) {
+		t.Fatalf("stale mark err=%v", err)
+	}
+	if err := store.MarkDerivativeRequestDelivered(ctx, second.EventID, second.Attempts, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := store.ClaimDerivativeRequest(ctx, now.Add(2*time.Minute), time.Minute); err != nil || ok {
+		t.Fatalf("delivered claim: ok=%v err=%v", ok, err)
+	}
+}
+
 func TestApplyScanResultRollsBackWhenDerivativeOutboxInsertFails(t *testing.T) {
 	db := integrationDB(t)
 	store := New(db)
