@@ -54,7 +54,8 @@ func TestProcessAssetTargetsExactVersion(t *testing.T) {
 	blobs := &processingBlobs{objects: map[string][]byte{repo.asset.ObjectKey: testImage(t)}}
 	worker := NewWorker(repo, blobs)
 
-	if err := worker.ProcessAsset(context.Background(), repo.asset.ID, repo.asset.ETag); err != nil {
+	result, err := worker.ProcessAsset(context.Background(), repo.asset.ID, repo.asset.ETag)
+	if err != nil || result.State != ProcessSatisfied {
 		t.Fatal(err)
 	}
 	if repo.requestedID != repo.asset.ID || repo.requestedETag != repo.asset.ETag || len(repo.derivatives) != 3 {
@@ -66,7 +67,8 @@ func TestProcessAssetTreatsIneligibleVersionAsSatisfied(t *testing.T) {
 	repo := &processingRepository{asset: processingAsset(1)}
 	worker := NewWorker(repo, &processingBlobs{objects: map[string][]byte{}})
 
-	if err := worker.ProcessAsset(context.Background(), "stale-asset", "stale-etag"); err != nil {
+	result, err := worker.ProcessAsset(context.Background(), "stale-asset", "stale-etag")
+	if err != nil || result.State != ProcessSatisfied {
 		t.Fatal(err)
 	}
 	if repo.requestedID != "stale-asset" || repo.requestedETag != "stale-etag" || len(repo.derivatives) != 0 {
@@ -80,11 +82,35 @@ func TestProcessAssetSchedulesRetryAfterProcessingError(t *testing.T) {
 	worker := NewWorker(repo, &processingBlobs{objects: map[string][]byte{}, openErr: errors.New("blob unavailable")})
 	worker.now = func() time.Time { return now }
 
-	if err := worker.ProcessAsset(context.Background(), repo.asset.ID, repo.asset.ETag); err == nil {
-		t.Fatal("expected processing error")
+	result, err := worker.ProcessAsset(context.Background(), repo.asset.ID, repo.asset.ETag)
+	if err != nil || result.State != ProcessRetry || result.RetryAt != now.Add(time.Minute) {
+		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	if repo.retryAt != now.Add(time.Minute) {
 		t.Fatalf("retryAt=%s", repo.retryAt)
+	}
+}
+
+func TestProcessAssetDefersUntilDatabaseRetryTime(t *testing.T) {
+	now := time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC)
+	repo := &processingRepository{asset: processingAsset(1), claimState: assets.ProcessingDeferred}
+	repo.asset.ProcessingNextAt = now.Add(time.Minute)
+	worker := NewWorker(repo, &processingBlobs{})
+	worker.now = func() time.Time { return now }
+
+	result, err := worker.ProcessAsset(context.Background(), repo.asset.ID, repo.asset.ETag)
+	if err != nil || result.State != ProcessRetry || result.RetryAt != now.Add(time.Minute) {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
+func TestProcessAssetReturnsTerminalFailureForDurablePoison(t *testing.T) {
+	repo := &processingRepository{asset: processingAsset(5), exactOK: true}
+	worker := NewWorker(repo, &processingBlobs{openErr: errors.New("blob unavailable")})
+
+	result, err := worker.ProcessAsset(context.Background(), repo.asset.ID, repo.asset.ETag)
+	if err != nil || result.State != ProcessTerminal || result.Attempt != 5 || repo.failed {
+		t.Fatalf("result=%+v err=%v failed=%v", result, err, repo.failed)
 	}
 }
 
@@ -215,6 +241,7 @@ type processingRepository struct {
 	retryAt       time.Time
 	failed        bool
 	exactOK       bool
+	claimState    assets.ProcessingClaimState
 	requestedID   string
 	requestedETag string
 }
@@ -222,9 +249,15 @@ type processingRepository struct {
 func (r *processingRepository) ClaimPendingProcessing(context.Context, time.Time, time.Duration) (assets.Asset, bool, error) {
 	return r.asset, true, nil
 }
-func (r *processingRepository) ClaimProcessing(_ context.Context, assetID, etag string, _ time.Time, _ time.Duration) (assets.Asset, bool, error) {
+func (r *processingRepository) ClaimProcessing(_ context.Context, assetID, etag string, _ time.Time, _ time.Duration) (assets.Asset, assets.ProcessingClaimState, error) {
 	r.requestedID, r.requestedETag = assetID, etag
-	return r.asset, r.exactOK, nil
+	if r.claimState != "" {
+		return r.asset, r.claimState, nil
+	}
+	if r.exactOK {
+		return r.asset, assets.ProcessingClaimed, nil
+	}
+	return r.asset, assets.ProcessingTerminal, nil
 }
 func (r *processingRepository) CompleteProcessing(_ context.Context, _, _ string, _ int, values []assets.Derivative, _ time.Time) error {
 	if r.completeErr != nil {
@@ -244,8 +277,8 @@ func (r *processingRepository) ScheduleProcessingRetry(_ context.Context, _, _ s
 func (*processingRepository) CreateUpload(context.Context, assets.Asset, assets.UploadSession) error {
 	return nil
 }
-func (*processingRepository) GetAsset(context.Context, string) (assets.Asset, error) {
-	return assets.Asset{}, nil
+func (r *processingRepository) GetAsset(context.Context, string) (assets.Asset, error) {
+	return r.asset, nil
 }
 func (*processingRepository) GetUploadSession(context.Context, string) (assets.UploadSession, error) {
 	return assets.UploadSession{}, nil

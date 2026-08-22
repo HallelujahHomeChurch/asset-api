@@ -30,9 +30,24 @@ type Worker struct {
 	now        func() time.Time
 }
 
+type ProcessState string
+
+const (
+	ProcessSatisfied ProcessState = "satisfied"
+	ProcessRetry     ProcessState = "retry"
+	ProcessTerminal  ProcessState = "terminal"
+)
+
+type ProcessResult struct {
+	State   ProcessState
+	RetryAt time.Time
+	Attempt int
+	Details string
+}
+
 type Repository interface {
 	ClaimPendingProcessing(context.Context, time.Time, time.Duration) (assets.Asset, bool, error)
-	ClaimProcessing(context.Context, string, string, time.Time, time.Duration) (assets.Asset, bool, error)
+	ClaimProcessing(context.Context, string, string, time.Time, time.Duration) (assets.Asset, assets.ProcessingClaimState, error)
 	CompleteProcessing(context.Context, string, string, int, []assets.Derivative, time.Time) error
 	FailProcessing(context.Context, string, string, int, string, time.Time) error
 	ScheduleProcessingRetry(context.Context, string, string, int, string, time.Time, time.Time) error
@@ -68,27 +83,45 @@ func (w *Worker) ProcessOne(ctx context.Context) error {
 	if err != nil || !ok {
 		return err
 	}
-	return w.processClaimed(ctx, asset)
+	_, err = w.processClaimed(ctx, asset, true)
+	return err
 }
 
-func (w *Worker) ProcessAsset(ctx context.Context, assetID, etag string) error {
+func (w *Worker) ProcessAsset(ctx context.Context, assetID, etag string) (ProcessResult, error) {
 	if assetID == "" || etag == "" {
-		return assets.ErrInvalidInput
+		return ProcessResult{}, assets.ErrInvalidInput
 	}
-	asset, ok, err := w.repository.ClaimProcessing(ctx, assetID, etag, w.now().UTC(), 3*time.Minute)
-	if err != nil || !ok {
-		return err
+	now := w.now().UTC()
+	asset, state, err := w.repository.ClaimProcessing(ctx, assetID, etag, now, 3*time.Minute)
+	if err != nil {
+		return ProcessResult{}, err
 	}
-	return w.processClaimed(ctx, asset)
+	switch state {
+	case assets.ProcessingClaimed:
+		return w.processClaimed(ctx, asset, false)
+	case assets.ProcessingDeferred:
+		retryAt := maxTime(asset.ProcessingNextAt, asset.ProcessingClaimedUntil)
+		if !retryAt.After(now) {
+			retryAt = now.Add(15 * time.Second)
+		}
+		return ProcessResult{State: ProcessRetry, RetryAt: retryAt}, nil
+	case assets.ProcessingTerminal:
+		if asset.ID == assetID && asset.ETag == etag && (asset.ProcessingStatus == assets.ProcessingFailed || (asset.ProcessingStatus == assets.ProcessingPending && asset.ProcessingAttempts >= 5)) {
+			return ProcessResult{State: ProcessTerminal, Attempt: asset.ProcessingAttempts, Details: asset.ProcessingError}, nil
+		}
+		return ProcessResult{State: ProcessSatisfied}, nil
+	default:
+		return ProcessResult{}, errors.New("unknown processing claim state")
+	}
 }
 
-func (w *Worker) processClaimed(ctx context.Context, asset assets.Asset) error {
+func (w *Worker) processClaimed(ctx context.Context, asset assets.Asset, persistTerminal bool) (ProcessResult, error) {
 	written, err := w.process(ctx, asset)
 	if err == nil {
-		return nil
+		return ProcessResult{State: ProcessSatisfied}, nil
 	}
 	if errors.Is(err, assets.ErrCommitOutcomeUnknown) {
-		return err
+		return ProcessResult{}, err
 	}
 	for _, key := range written {
 		err = errors.Join(err, w.blobs.Delete(ctx, key))
@@ -97,10 +130,26 @@ func (w *Worker) processClaimed(ctx context.Context, asset assets.Asset) error {
 	details := truncate(err.Error(), 500)
 	var invalid terminalError
 	if errors.As(err, &invalid) || asset.ProcessingAttempts >= 5 {
-		return errors.Join(err, w.repository.FailProcessing(ctx, asset.ID, asset.ETag, asset.ProcessingAttempts, details, now))
+		if persistTerminal {
+			return ProcessResult{}, errors.Join(err, w.repository.FailProcessing(ctx, asset.ID, asset.ETag, asset.ProcessingAttempts, details, now))
+		}
+		return ProcessResult{State: ProcessTerminal, Attempt: asset.ProcessingAttempts, Details: details}, nil
 	}
 	nextAttempt := now.Add(time.Minute << (asset.ProcessingAttempts - 1))
-	return errors.Join(err, w.repository.ScheduleProcessingRetry(ctx, asset.ID, asset.ETag, asset.ProcessingAttempts, details, nextAttempt, now))
+	if scheduleErr := w.repository.ScheduleProcessingRetry(ctx, asset.ID, asset.ETag, asset.ProcessingAttempts, details, nextAttempt, now); scheduleErr != nil {
+		return ProcessResult{}, errors.Join(err, scheduleErr)
+	}
+	if persistTerminal {
+		return ProcessResult{}, err
+	}
+	return ProcessResult{State: ProcessRetry, RetryAt: nextAttempt}, nil
+}
+
+func maxTime(left, right time.Time) time.Time {
+	if right.After(left) {
+		return right
+	}
+	return left
 }
 
 func (w *Worker) process(ctx context.Context, asset assets.Asset) ([]string, error) {

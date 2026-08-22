@@ -52,6 +52,14 @@ const (
 	ProcessingFailed      ProcessingStatus = "failed"
 )
 
+type ProcessingClaimState string
+
+const (
+	ProcessingClaimed  ProcessingClaimState = "claimed"
+	ProcessingDeferred ProcessingClaimState = "deferred"
+	ProcessingTerminal ProcessingClaimState = "terminal"
+)
+
 type SubjectType string
 
 const (
@@ -71,33 +79,55 @@ const (
 )
 
 type Asset struct {
-	ID                 string           `json:"id"`
-	Namespace          string           `json:"namespace"`
-	OwnerService       string           `json:"ownerService"`
-	OwnerType          string           `json:"ownerType"`
-	OwnerID            string           `json:"ownerId"`
-	Purpose            string           `json:"purpose"`
-	Locale             string           `json:"locale,omitempty"`
-	OriginalFileName   string           `json:"originalFileName"`
-	ObjectKey          string           `json:"-"`
-	ExpectedMIMEType   string           `json:"expectedMimeType"`
-	DetectedMIMEType   string           `json:"detectedMimeType,omitempty"`
-	SizeBytes          int64            `json:"sizeBytes,omitempty"`
-	ChecksumSHA256     string           `json:"checksumSha256,omitempty"`
-	ETag               string           `json:"etag,omitempty"`
-	UploadStatus       UploadStatus     `json:"uploadStatus"`
-	ScanStatus         ScanStatus       `json:"scanStatus"`
-	ScanDetails        string           `json:"scanDetails,omitempty"`
-	ScanSignature      string           `json:"scanSignatureVersion,omitempty"`
-	ScanFailure        string           `json:"scanFailureCategory,omitempty"`
-	ProcessingStatus   ProcessingStatus `json:"processingStatus"`
-	Visibility         Visibility       `json:"visibility"`
-	CreatedAt          time.Time        `json:"createdAt"`
-	UpdatedAt          time.Time        `json:"updatedAt"`
-	DeletedAt          time.Time        `json:"deletedAt,omitempty"`
-	ScanAttempts       int              `json:"-"`
-	ScanEventID        string           `json:"-"`
-	ProcessingAttempts int              `json:"-"`
+	ID                     string           `json:"id"`
+	Namespace              string           `json:"namespace"`
+	OwnerService           string           `json:"ownerService"`
+	OwnerType              string           `json:"ownerType"`
+	OwnerID                string           `json:"ownerId"`
+	Purpose                string           `json:"purpose"`
+	Locale                 string           `json:"locale,omitempty"`
+	OriginalFileName       string           `json:"originalFileName"`
+	ObjectKey              string           `json:"-"`
+	ExpectedMIMEType       string           `json:"expectedMimeType"`
+	DetectedMIMEType       string           `json:"detectedMimeType,omitempty"`
+	SizeBytes              int64            `json:"sizeBytes,omitempty"`
+	ChecksumSHA256         string           `json:"checksumSha256,omitempty"`
+	ETag                   string           `json:"etag,omitempty"`
+	UploadStatus           UploadStatus     `json:"uploadStatus"`
+	ScanStatus             ScanStatus       `json:"scanStatus"`
+	ScanDetails            string           `json:"scanDetails,omitempty"`
+	ScanSignature          string           `json:"scanSignatureVersion,omitempty"`
+	ScanFailure            string           `json:"scanFailureCategory,omitempty"`
+	ProcessingStatus       ProcessingStatus `json:"processingStatus"`
+	Visibility             Visibility       `json:"visibility"`
+	CreatedAt              time.Time        `json:"createdAt"`
+	UpdatedAt              time.Time        `json:"updatedAt"`
+	DeletedAt              time.Time        `json:"deletedAt,omitempty"`
+	ScanAttempts           int              `json:"-"`
+	ScanEventID            string           `json:"-"`
+	ProcessingAttempts     int              `json:"-"`
+	ProcessingError        string           `json:"-"`
+	ProcessingNextAt       time.Time        `json:"-"`
+	ProcessingClaimedUntil time.Time        `json:"-"`
+}
+
+type ProcessingFailure struct {
+	AssetID         string
+	ETag            string
+	ExpectedAttempt int
+	Details         string
+}
+
+type DerivativePoison struct {
+	PoisonID        string
+	EventID         string
+	AssetID         string
+	ETag            string
+	Reason          string
+	Details         string
+	DequeueCount    int64
+	SourceMessageID string
+	BodySHA256      string
 }
 
 type Derivative struct {

@@ -76,5 +76,7 @@ and retried independently of the database transaction.
 job, scan and derivative event Jobs, isolated Key Vault access, and scoped
 storage RBAC. The manual GitHub Actions release workflow runs DB-backed tests,
 builds an immutable image, applies migrations, and then replaces the runtime
-and Jobs with rollback protection. Complete the reviewed one-time cutover in
-`infra/README.md` first.
+and Jobs. A failed release rolls the API back; the schema-compatible derivative
+Job stays on the new immutable image so it can drain events already committed
+by that revision. Complete the reviewed one-time cutover in `infra/README.md`
+first.

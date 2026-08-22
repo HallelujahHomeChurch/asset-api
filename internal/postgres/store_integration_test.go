@@ -68,12 +68,13 @@ func TestClaimProcessingTargetsOnlyTheRequestedAssetVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	claimed, ok, err := store.ClaimProcessing(ctx, "exact", "etag-exact", now, time.Minute)
-	if err != nil || !ok || claimed.ID != "exact" || claimed.ProcessingAttempts != 1 {
-		t.Fatalf("claimed=%+v ok=%v err=%v", claimed, ok, err)
+	claimed, state, err := store.ClaimProcessing(ctx, "exact", "etag-exact", now, time.Minute)
+	if err != nil || state != assets.ProcessingClaimed || claimed.ID != "exact" || claimed.ProcessingAttempts != 1 {
+		t.Fatalf("claimed=%+v state=%v err=%v", claimed, state, err)
 	}
-	if _, ok, err := store.ClaimProcessing(ctx, "exact", "etag-exact", now, time.Minute); !errors.Is(err, assets.ErrConflict) || ok {
-		t.Fatalf("busy claim: ok=%v err=%v", ok, err)
+	deferred, state, err := store.ClaimProcessing(ctx, "exact", "etag-exact", now, time.Minute)
+	if err != nil || state != assets.ProcessingDeferred || !deferred.ProcessingClaimedUntil.Equal(now.Add(time.Minute)) {
+		t.Fatalf("busy claim: asset=%+v state=%v err=%v", deferred, state, err)
 	}
 	var otherAttempts int
 	if err := db.QueryRow(`SELECT processing_attempts FROM assets WHERE id='other'`).Scan(&otherAttempts); err != nil {
@@ -114,10 +115,45 @@ func TestClaimProcessingRejectsAlreadyCompleteStaleAndIneligibleAssets(t *testin
 					t.Fatal(err)
 				}
 			}
-			if claimed, ok, err := store.ClaimProcessing(ctx, test.id, test.etag, now, time.Minute); err != nil || ok {
-				t.Fatalf("claimed=%+v ok=%v err=%v", claimed, ok, err)
+			if claimed, state, err := store.ClaimProcessing(ctx, test.id, test.etag, now, time.Minute); err != nil || state != assets.ProcessingTerminal {
+				t.Fatalf("claimed=%+v state=%v err=%v", claimed, state, err)
 			}
 		})
+	}
+}
+
+func TestFailDerivativeToPoisonIsAtomicAndIdempotent(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	now := time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC)
+	insertAsset(t, db, "poison-derivative", assets.UploadCompleted, assets.ScanClean, assets.ProcessingPending, now, time.Time{})
+	if _, err := db.Exec(`UPDATE assets SET detected_mime_type='image/png',processing_attempts=5 WHERE id='poison-derivative'`); err != nil {
+		t.Fatal(err)
+	}
+	failure := assets.ProcessingFailure{AssetID: "poison-derivative", ETag: "etag-poison-derivative", ExpectedAttempt: 5, Details: "decode failed"}
+	poison := assets.DerivativePoison{PoisonID: "message:processing_failed", EventID: "event-1", AssetID: failure.AssetID, ETag: failure.ETag, Reason: "processing_failed", Details: failure.Details, DequeueCount: 1, SourceMessageID: "message", BodySHA256: strings.Repeat("a", 64)}
+
+	shouldForward, err := store.FailDerivativeToPoison(context.Background(), failure, poison, now)
+	if err != nil || !shouldForward {
+		t.Fatalf("shouldForward=%v err=%v", shouldForward, err)
+	}
+	var status, details string
+	var poisonCount int
+	if err := db.QueryRow(`SELECT processing_status,processing_error FROM assets WHERE id='poison-derivative'`).Scan(&status, &details); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM asset_derivative_poison_events WHERE poison_id=$1`, poison.PoisonID).Scan(&poisonCount); err != nil {
+		t.Fatal(err)
+	}
+	if status != string(assets.ProcessingFailed) || details != failure.Details || poisonCount != 1 {
+		t.Fatalf("status=%s details=%s poisonCount=%d", status, details, poisonCount)
+	}
+	if err := store.MarkDerivativePoisonForwarded(context.Background(), poison.PoisonID, now); err != nil {
+		t.Fatal(err)
+	}
+	shouldForward, err = store.FailDerivativeToPoison(context.Background(), failure, poison, now.Add(time.Second))
+	if err != nil || shouldForward {
+		t.Fatalf("replay shouldForward=%v err=%v", shouldForward, err)
 	}
 }
 

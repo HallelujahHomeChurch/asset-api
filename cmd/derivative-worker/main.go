@@ -55,7 +55,8 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	job := derivativequeue.NewJob(derivatives.NewWorker(postgres.New(db), blobs), queue, 5)
+	store := postgres.New(db)
+	job := derivativequeue.NewJob(derivatives.NewWorker(store, blobs), store, queue)
 	processed, err := job.RunOnce(ctx)
 	if err == nil {
 		slog.Info("asset derivative worker finished", "processed", processed)

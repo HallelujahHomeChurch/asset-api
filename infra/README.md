@@ -34,8 +34,9 @@ A clean scan result and an `asset.derivative.requested.v1` outbox row commit in
 one PostgreSQL transaction. The runtime sends the event to `asset-derivative`.
 The Job consumes one message per execution, verifies the asset ID and immutable
 Blob ETag, and acknowledges ready, stale, deleted, or unsupported work
-idempotently. Retryable failures remain visible for queue retry; exhausted or
-invalid messages move to `asset-derivative-poison`.
+idempotently. Retryable failures stay invisible until the PostgreSQL retry time
+instead of exhausting on raw queue deliveries. Terminal state and the durable
+poison record commit together before forwarding to `asset-derivative-poison`.
 
 `asset-clamav-signature-refresh` validates new databases, writes an immutable
 generation to the private `asset-signatures` Blob container, and atomically

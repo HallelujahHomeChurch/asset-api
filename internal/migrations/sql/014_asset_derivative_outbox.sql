@@ -15,6 +15,20 @@ CREATE INDEX IF NOT EXISTS asset_derivative_outbox_pending_idx
   ON asset_derivative_outbox(available_at, created_at)
   WHERE delivered_at IS NULL;
 
+CREATE TABLE IF NOT EXISTS asset_derivative_poison_events (
+  poison_id text PRIMARY KEY CHECK (poison_id <> ''),
+  event_id text NOT NULL DEFAULT '',
+  asset_id text NOT NULL DEFAULT '',
+  asset_etag text NOT NULL DEFAULT '',
+  reason text NOT NULL CHECK (reason <> ''),
+  details text NOT NULL DEFAULT '',
+  dequeue_count bigint NOT NULL CHECK (dequeue_count >= 0),
+  source_message_id text NOT NULL CHECK (source_message_id <> ''),
+  body_sha256 text NOT NULL CHECK (body_sha256 <> ''),
+  created_at timestamptz NOT NULL,
+  forwarded_at timestamptz
+);
+
 INSERT INTO asset_derivative_outbox(event_id, asset_id, asset_etag, available_at, created_at)
 SELECT 'backfill-derivative-' || md5(id || ':' || etag), id, etag, updated_at, updated_at
 FROM assets
