@@ -1565,6 +1565,15 @@ func (s *Store) ApplyScanResult(ctx context.Context, result assets.ScanResult, n
 	if count, _ := updated.RowsAffected(); count != 1 {
 		return false, assets.ErrConflict
 	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO asset_derivative_outbox(event_id,asset_id,asset_etag,available_at,created_at)
+		SELECT $1,id,etag,$3,$3 FROM assets
+		WHERE id=$2 AND upload_status='completed' AND scan_status='clean' AND processing_status='pending'
+		  AND detected_mime_type IN ('image/jpeg','image/png','image/webp')
+		  AND deleted_at IS NULL AND purged_at IS NULL
+		ON CONFLICT(asset_id,asset_etag) DO NOTHING`, result.EventID, result.AssetID, now); err != nil {
+		return false, err
+	}
 	if err := tx.Commit(); err != nil {
 		return false, err
 	}

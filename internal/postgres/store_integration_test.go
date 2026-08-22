@@ -258,6 +258,133 @@ func TestScanLeaseRejectsStaleWorkerWrites(t *testing.T) {
 	}
 }
 
+func TestApplyScanResultCreatesOneDerivativeOutboxRow(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC)
+	insertAsset(t, db, "derivative-clean", assets.UploadCompleted, assets.ScanPending, assets.ProcessingPending, now, time.Time{})
+	if _, err := db.Exec(`UPDATE assets SET detected_mime_type='image/png' WHERE id='derivative-clean'`); err != nil {
+		t.Fatal(err)
+	}
+	result := assets.ScanResult{EventID: "event-derivative-clean", AssetID: "derivative-clean", Status: assets.ScanClean, ETag: "etag-derivative-clean"}
+
+	applied, err := store.ApplyScanResult(ctx, result, now)
+	if err != nil || !applied {
+		t.Fatalf("apply: applied=%v err=%v", applied, err)
+	}
+	if applied, err = store.ApplyScanResult(ctx, result, now); err != nil || applied {
+		t.Fatalf("replay: applied=%v err=%v", applied, err)
+	}
+	var count int
+	var assetID, etag string
+	if err := db.QueryRow(`SELECT COUNT(*),MIN(asset_id),MIN(asset_etag) FROM asset_derivative_outbox WHERE asset_id='derivative-clean'`).Scan(&count, &assetID, &etag); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 || assetID != "derivative-clean" || etag != "etag-derivative-clean" {
+		t.Fatalf("count=%d assetID=%q etag=%q", count, assetID, etag)
+	}
+}
+
+func TestApplyScanResultSkipsIneligibleDerivativeOutboxRows(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC)
+	tests := []struct {
+		id        string
+		status    assets.ScanStatus
+		mime      string
+		etag      string
+		deleted   bool
+		wantError bool
+	}{
+		{id: "infected", status: assets.ScanInfected, mime: "image/png", etag: "etag-infected"},
+		{id: "failed", status: assets.ScanFailed, mime: "image/png", etag: "etag-failed"},
+		{id: "stale", status: assets.ScanClean, mime: "image/png", etag: "stale-etag", wantError: true},
+		{id: "non-image", status: assets.ScanClean, mime: "application/pdf", etag: "etag-non-image"},
+		{id: "rejected", status: assets.ScanClean, mime: "image/png", etag: "etag-rejected", deleted: true, wantError: true},
+	}
+	for _, test := range tests {
+		t.Run(test.id, func(t *testing.T) {
+			insertAsset(t, db, test.id, assets.UploadCompleted, assets.ScanPending, assets.ProcessingPending, now, time.Time{})
+			if _, err := db.Exec(`UPDATE assets SET detected_mime_type=$2 WHERE id=$1`, test.id, test.mime); err != nil {
+				t.Fatal(err)
+			}
+			if test.deleted {
+				if _, err := db.Exec(`UPDATE assets SET deleted_at=$2 WHERE id=$1`, test.id, now); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, err := store.ApplyScanResult(ctx, assets.ScanResult{EventID: "event-" + test.id, AssetID: test.id, Status: test.status, ETag: test.etag}, now)
+			if (err != nil) != test.wantError {
+				t.Fatalf("err=%v", err)
+			}
+			var count int
+			if err := db.QueryRow(`SELECT COUNT(*) FROM asset_derivative_outbox WHERE asset_id=$1`, test.id).Scan(&count); err != nil {
+				t.Fatal(err)
+			}
+			if count != 0 {
+				t.Fatalf("outbox rows=%d", count)
+			}
+		})
+	}
+}
+
+func TestDerivativeOutboxMigrationBackfillsCleanPendingImages(t *testing.T) {
+	db := integrationDB(t)
+	now := time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC)
+	if _, err := db.Exec(`DROP TABLE asset_derivative_outbox`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`DELETE FROM schema_migrations WHERE version='sql/014_asset_derivative_outbox.sql'`); err != nil {
+		t.Fatal(err)
+	}
+	insertAsset(t, db, "derivative-backfill", assets.UploadCompleted, assets.ScanClean, assets.ProcessingPending, now, time.Time{})
+	if _, err := db.Exec(`UPDATE assets SET detected_mime_type='image/webp' WHERE id='derivative-backfill'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrations.Run(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM asset_derivative_outbox WHERE asset_id='derivative-backfill' AND asset_etag='etag-derivative-backfill' AND delivered_at IS NULL`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("backfill rows=%d", count)
+	}
+}
+
+func TestApplyScanResultRollsBackWhenDerivativeOutboxInsertFails(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC)
+	insertAsset(t, db, "derivative-rollback", assets.UploadCompleted, assets.ScanPending, assets.ProcessingPending, now, time.Time{})
+	if _, err := db.Exec(`UPDATE assets SET detected_mime_type='image/jpeg' WHERE id='derivative-rollback'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE FUNCTION reject_derivative_outbox() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'rejected'; END $$; CREATE TRIGGER reject_derivative_outbox BEFORE INSERT ON asset_derivative_outbox FOR EACH ROW EXECUTE FUNCTION reject_derivative_outbox()`); err != nil {
+		t.Fatal(err)
+	}
+	result := assets.ScanResult{EventID: "event-derivative-rollback", AssetID: "derivative-rollback", Status: assets.ScanClean, ETag: "etag-derivative-rollback"}
+	if _, err := store.ApplyScanResult(ctx, result, now); err == nil {
+		t.Fatal("scan result succeeded")
+	}
+	var status string
+	var events int
+	if err := db.QueryRow(`SELECT scan_status FROM assets WHERE id='derivative-rollback'`).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM asset_scan_events WHERE event_id='event-derivative-rollback'`).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	if status != string(assets.ScanPending) || events != 0 {
+		t.Fatalf("status=%q scan events=%d", status, events)
+	}
+}
+
 func TestQueueScanClaimFencesEventAndReportsBusy(t *testing.T) {
 	db := integrationDB(t)
 	store := New(db)
