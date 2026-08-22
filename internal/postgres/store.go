@@ -2236,6 +2236,64 @@ func (s *Store) ClaimPendingProcessing(ctx context.Context, now time.Time, lease
 	return asset, err == nil, err
 }
 
+func (s *Store) ClaimProcessing(ctx context.Context, assetID, etag string, now time.Time, lease time.Duration) (assets.Asset, bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return assets.Asset{}, false, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE assets
+		SET processing_status='failed',processing_error='processing lease expired after maximum attempts',
+		    processing_next_attempt_at=NULL,processing_claimed_until=NULL,updated_at=$3
+		WHERE id=$1 AND etag=$2 AND upload_status='completed' AND scan_status='clean'
+		  AND processing_status='pending' AND processing_attempts >= 5
+		  AND detected_mime_type IN ('image/jpeg','image/png','image/webp')
+		  AND deleted_at IS NULL AND purged_at IS NULL
+		  AND (processing_claimed_until IS NULL OR processing_claimed_until < $3)`, assetID, etag, now); err != nil {
+		return assets.Asset{}, false, err
+	}
+	var id string
+	err = tx.QueryRowContext(ctx, `
+		SELECT id FROM assets
+		WHERE id=$1 AND etag=$2 AND upload_status='completed' AND scan_status='clean'
+		  AND processing_status='pending' AND processing_attempts < 5
+		  AND detected_mime_type IN ('image/jpeg','image/png','image/webp')
+		  AND deleted_at IS NULL AND purged_at IS NULL
+		  AND (processing_next_attempt_at IS NULL OR processing_next_attempt_at <= $3)
+		  AND (processing_claimed_until IS NULL OR processing_claimed_until < $3)
+		FOR UPDATE`, assetID, etag, now).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		var retryable bool
+		if err := tx.QueryRowContext(ctx, `
+			SELECT EXISTS(SELECT 1 FROM assets
+			WHERE id=$1 AND etag=$2 AND upload_status='completed' AND scan_status='clean'
+			  AND processing_status='pending' AND processing_attempts < 5
+			  AND detected_mime_type IN ('image/jpeg','image/png','image/webp')
+			  AND deleted_at IS NULL AND purged_at IS NULL)`, assetID, etag).Scan(&retryable); err != nil {
+			return assets.Asset{}, false, err
+		}
+		if err := tx.Commit(); err != nil {
+			return assets.Asset{}, false, err
+		}
+		if retryable {
+			return assets.Asset{}, false, assets.ErrConflict
+		}
+		return assets.Asset{}, false, nil
+	}
+	if err != nil {
+		return assets.Asset{}, false, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE assets SET processing_attempts=processing_attempts+1,processing_claimed_until=$2 WHERE id=$1`, id, now.Add(lease)); err != nil {
+		return assets.Asset{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return assets.Asset{}, false, err
+	}
+	asset, err := s.GetAsset(ctx, id)
+	return asset, err == nil, err
+}
+
 func (s *Store) CompleteProcessing(ctx context.Context, assetID, expectedETag string, expectedAttempt int, derivatives []assets.Derivative, now time.Time) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

@@ -57,6 +57,70 @@ func TestProcessingRetryClaimsDueUnlockedAssets(t *testing.T) {
 	}
 }
 
+func TestClaimProcessingTargetsOnlyTheRequestedAssetVersion(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC)
+	insertAsset(t, db, "exact", assets.UploadCompleted, assets.ScanClean, assets.ProcessingPending, now, time.Time{})
+	insertAsset(t, db, "other", assets.UploadCompleted, assets.ScanClean, assets.ProcessingPending, now, time.Time{})
+	if _, err := db.Exec(`UPDATE assets SET detected_mime_type='image/png' WHERE id IN ('exact','other')`); err != nil {
+		t.Fatal(err)
+	}
+
+	claimed, ok, err := store.ClaimProcessing(ctx, "exact", "etag-exact", now, time.Minute)
+	if err != nil || !ok || claimed.ID != "exact" || claimed.ProcessingAttempts != 1 {
+		t.Fatalf("claimed=%+v ok=%v err=%v", claimed, ok, err)
+	}
+	if _, ok, err := store.ClaimProcessing(ctx, "exact", "etag-exact", now, time.Minute); !errors.Is(err, assets.ErrConflict) || ok {
+		t.Fatalf("busy claim: ok=%v err=%v", ok, err)
+	}
+	var otherAttempts int
+	if err := db.QueryRow(`SELECT processing_attempts FROM assets WHERE id='other'`).Scan(&otherAttempts); err != nil {
+		t.Fatal(err)
+	}
+	if otherAttempts != 0 {
+		t.Fatalf("other attempts=%d", otherAttempts)
+	}
+}
+
+func TestClaimProcessingRejectsAlreadyCompleteStaleAndIneligibleAssets(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC)
+	tests := []struct {
+		id         string
+		scan       assets.ScanStatus
+		processing assets.ProcessingStatus
+		mime       string
+		etag       string
+		deleted    bool
+	}{
+		{id: "ready", scan: assets.ScanClean, processing: assets.ProcessingReady, mime: "image/png", etag: "etag-ready"},
+		{id: "stale-version", scan: assets.ScanClean, processing: assets.ProcessingPending, mime: "image/png", etag: "stale"},
+		{id: "non-clean", scan: assets.ScanPending, processing: assets.ProcessingPending, mime: "image/png", etag: "etag-non-clean"},
+		{id: "deleted", scan: assets.ScanClean, processing: assets.ProcessingPending, mime: "image/png", etag: "etag-deleted", deleted: true},
+		{id: "unsupported", scan: assets.ScanClean, processing: assets.ProcessingPending, mime: "application/pdf", etag: "etag-unsupported"},
+	}
+	for _, test := range tests {
+		t.Run(test.id, func(t *testing.T) {
+			insertAsset(t, db, test.id, assets.UploadCompleted, test.scan, test.processing, now, time.Time{})
+			if _, err := db.Exec(`UPDATE assets SET detected_mime_type=$2 WHERE id=$1`, test.id, test.mime); err != nil {
+				t.Fatal(err)
+			}
+			if test.deleted {
+				if _, err := db.Exec(`UPDATE assets SET deleted_at=$2 WHERE id=$1`, test.id, now); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if claimed, ok, err := store.ClaimProcessing(ctx, test.id, test.etag, now, time.Minute); err != nil || ok {
+				t.Fatalf("claimed=%+v ok=%v err=%v", claimed, ok, err)
+			}
+		})
+	}
+}
+
 func TestProcessingAttemptFencesStaleWorkersAndCompletionIsReentrant(t *testing.T) {
 	db := integrationDB(t)
 	store := New(db)

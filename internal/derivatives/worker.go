@@ -32,6 +32,7 @@ type Worker struct {
 
 type Repository interface {
 	ClaimPendingProcessing(context.Context, time.Time, time.Duration) (assets.Asset, bool, error)
+	ClaimProcessing(context.Context, string, string, time.Time, time.Duration) (assets.Asset, bool, error)
 	CompleteProcessing(context.Context, string, string, int, []assets.Derivative, time.Time) error
 	FailProcessing(context.Context, string, string, int, string, time.Time) error
 	ScheduleProcessingRetry(context.Context, string, string, int, string, time.Time, time.Time) error
@@ -67,6 +68,21 @@ func (w *Worker) ProcessOne(ctx context.Context) error {
 	if err != nil || !ok {
 		return err
 	}
+	return w.processClaimed(ctx, asset)
+}
+
+func (w *Worker) ProcessAsset(ctx context.Context, assetID, etag string) error {
+	if assetID == "" || etag == "" {
+		return assets.ErrInvalidInput
+	}
+	asset, ok, err := w.repository.ClaimProcessing(ctx, assetID, etag, w.now().UTC(), 3*time.Minute)
+	if err != nil || !ok {
+		return err
+	}
+	return w.processClaimed(ctx, asset)
+}
+
+func (w *Worker) processClaimed(ctx context.Context, asset assets.Asset) error {
 	written, err := w.process(ctx, asset)
 	if err == nil {
 		return nil

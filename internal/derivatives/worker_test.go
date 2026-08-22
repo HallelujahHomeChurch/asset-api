@@ -49,6 +49,45 @@ func TestWorkerCreatesStableResponsiveVariants(t *testing.T) {
 	}
 }
 
+func TestProcessAssetTargetsExactVersion(t *testing.T) {
+	repo := &processingRepository{asset: processingAsset(1), exactOK: true}
+	blobs := &processingBlobs{objects: map[string][]byte{repo.asset.ObjectKey: testImage(t)}}
+	worker := NewWorker(repo, blobs)
+
+	if err := worker.ProcessAsset(context.Background(), repo.asset.ID, repo.asset.ETag); err != nil {
+		t.Fatal(err)
+	}
+	if repo.requestedID != repo.asset.ID || repo.requestedETag != repo.asset.ETag || len(repo.derivatives) != 3 {
+		t.Fatalf("requested=%s/%s derivatives=%d", repo.requestedID, repo.requestedETag, len(repo.derivatives))
+	}
+}
+
+func TestProcessAssetTreatsIneligibleVersionAsSatisfied(t *testing.T) {
+	repo := &processingRepository{asset: processingAsset(1)}
+	worker := NewWorker(repo, &processingBlobs{objects: map[string][]byte{}})
+
+	if err := worker.ProcessAsset(context.Background(), "stale-asset", "stale-etag"); err != nil {
+		t.Fatal(err)
+	}
+	if repo.requestedID != "stale-asset" || repo.requestedETag != "stale-etag" || len(repo.derivatives) != 0 {
+		t.Fatalf("requested=%s/%s derivatives=%d", repo.requestedID, repo.requestedETag, len(repo.derivatives))
+	}
+}
+
+func TestProcessAssetSchedulesRetryAfterProcessingError(t *testing.T) {
+	now := time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC)
+	repo := &processingRepository{asset: processingAsset(1), exactOK: true}
+	worker := NewWorker(repo, &processingBlobs{objects: map[string][]byte{}, openErr: errors.New("blob unavailable")})
+	worker.now = func() time.Time { return now }
+
+	if err := worker.ProcessAsset(context.Background(), repo.asset.ID, repo.asset.ETag); err == nil {
+		t.Fatal("expected processing error")
+	}
+	if repo.retryAt != now.Add(time.Minute) {
+		t.Fatalf("retryAt=%s", repo.retryAt)
+	}
+}
+
 func TestWorkerRetriesDependencyFailureAndDeletesPartialDerivatives(t *testing.T) {
 	now := time.Date(2026, 7, 13, 0, 0, 0, 0, time.UTC)
 	repo := &processingRepository{asset: processingAsset(1)}
@@ -170,15 +209,22 @@ func TestWorkerDoesNotCleanupUnknownCommitOutcome(t *testing.T) {
 }
 
 type processingRepository struct {
-	asset       assets.Asset
-	derivatives []assets.Derivative
-	completeErr error
-	retryAt     time.Time
-	failed      bool
+	asset         assets.Asset
+	derivatives   []assets.Derivative
+	completeErr   error
+	retryAt       time.Time
+	failed        bool
+	exactOK       bool
+	requestedID   string
+	requestedETag string
 }
 
 func (r *processingRepository) ClaimPendingProcessing(context.Context, time.Time, time.Duration) (assets.Asset, bool, error) {
 	return r.asset, true, nil
+}
+func (r *processingRepository) ClaimProcessing(_ context.Context, assetID, etag string, _ time.Time, _ time.Duration) (assets.Asset, bool, error) {
+	r.requestedID, r.requestedETag = assetID, etag
+	return r.asset, r.exactOK, nil
 }
 func (r *processingRepository) CompleteProcessing(_ context.Context, _, _ string, _ int, values []assets.Derivative, _ time.Time) error {
 	if r.completeErr != nil {
