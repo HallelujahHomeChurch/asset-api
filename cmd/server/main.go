@@ -14,7 +14,7 @@ import (
 	"hhc/asset-api/internal/assets"
 	"hhc/asset-api/internal/clamav"
 	"hhc/asset-api/internal/config"
-	"hhc/asset-api/internal/derivatives"
+	"hhc/asset-api/internal/derivativequeue"
 	"hhc/asset-api/internal/httpapi"
 	"hhc/asset-api/internal/lifecycle"
 	"hhc/asset-api/internal/postgres"
@@ -75,11 +75,6 @@ func run() error {
 	}, localUpload)
 	server := &http.Server{Addr: ":" + cfg.Port, Handler: handler.Routes(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 2 * time.Minute, IdleTimeout: 2 * time.Minute}
 
-	derivativeBlobs, ok := blobStore.(derivatives.BlobStore)
-	if !ok {
-		return errors.New("storage backend does not support derivative writes")
-	}
-	derivativeWorker := derivatives.NewWorker(repository, derivativeBlobs)
 	lifecycleWorker := lifecycle.NewWorker(repository, blobStore)
 	if cfg.ScanDispatchEnabled {
 		sender, err := scanqueue.NewAzureSender(cfg.ScanQueueURL)
@@ -94,6 +89,19 @@ func run() error {
 			}
 		}()
 	}
+	if cfg.DerivativeQueueURL != "" {
+		sender, err := derivativequeue.NewAzureSender(cfg.DerivativeQueueURL)
+		if err != nil {
+			return err
+		}
+		dispatcher := derivativequeue.NewDispatcher(repository, sender, time.Now)
+		go func() {
+			if err := dispatcher.Run(ctx); err != nil && ctx.Err() == nil {
+				slog.Error("derivative outbox dispatcher stopped", "error", err)
+				stop()
+			}
+		}()
+	}
 	if cfg.EmbeddedScanEnabled {
 		scanClient := clamav.NewClient(cfg.ClamAVHost, cfg.ClamAVPort, cfg.ClamAVTimeout, cfg.ClamAVMaxFileSize)
 		scanWorker := clamav.NewWorker(repository, blobStore, scanClient, cfg.ClamAVMaxRetries, cfg.ClamAVTimeout)
@@ -104,12 +112,6 @@ func run() error {
 			}
 		}()
 	}
-	go func() {
-		if err := derivativeWorker.Run(ctx); err != nil && ctx.Err() == nil {
-			slog.Error("derivative worker stopped", "error", err)
-			stop()
-		}
-	}()
 	go func() {
 		if err := lifecycleWorker.Run(ctx); err != nil && ctx.Err() == nil {
 			slog.Error("lifecycle worker stopped", "error", err)

@@ -99,6 +99,20 @@ func TestLoadRequiresQueueURLWhenScanDispatchIsEnabled(t *testing.T) {
 	}
 }
 
+func TestLoadRequiresDerivativeQueueForAzureStorage(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://test")
+	t.Setenv("ASSET_ALLOW_DEV_CALLER_HEADER", "true")
+	t.Setenv("ASSET_STORAGE_BACKEND", "azure")
+	t.Setenv("ASSET_AZURE_ACCOUNT_URL", "https://storage.blob.core.windows.net")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "ASSET_DERIVATIVE_QUEUE_URL") {
+		t.Fatalf("Load() error=%v", err)
+	}
+	t.Setenv("ASSET_DERIVATIVE_QUEUE_URL", "https://storage.queue.core.windows.net/asset-derivative")
+	if cfg, err := Load(); err != nil || cfg.DerivativeQueueURL == "" {
+		t.Fatalf("config=%+v err=%v", cfg, err)
+	}
+}
+
 func TestLoadCanDisableEmbeddedScannerForQueueCutover(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://test")
 	t.Setenv("ASSET_ALLOW_DEV_CALLER_HEADER", "true")

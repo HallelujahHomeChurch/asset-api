@@ -57,6 +57,106 @@ func TestProcessingRetryClaimsDueUnlockedAssets(t *testing.T) {
 	}
 }
 
+func TestClaimProcessingTargetsOnlyTheRequestedAssetVersion(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC)
+	insertAsset(t, db, "exact", assets.UploadCompleted, assets.ScanClean, assets.ProcessingPending, now, time.Time{})
+	insertAsset(t, db, "other", assets.UploadCompleted, assets.ScanClean, assets.ProcessingPending, now, time.Time{})
+	if _, err := db.Exec(`UPDATE assets SET detected_mime_type='image/png' WHERE id IN ('exact','other')`); err != nil {
+		t.Fatal(err)
+	}
+
+	claimed, state, err := store.ClaimProcessing(ctx, "exact", "etag-exact", now, time.Minute)
+	if err != nil || state != assets.ProcessingClaimed || claimed.ID != "exact" || claimed.ProcessingAttempts != 1 {
+		t.Fatalf("claimed=%+v state=%v err=%v", claimed, state, err)
+	}
+	deferred, state, err := store.ClaimProcessing(ctx, "exact", "etag-exact", now, time.Minute)
+	if err != nil || state != assets.ProcessingDeferred || !deferred.ProcessingClaimedUntil.Equal(now.Add(time.Minute)) {
+		t.Fatalf("busy claim: asset=%+v state=%v err=%v", deferred, state, err)
+	}
+	var otherAttempts int
+	if err := db.QueryRow(`SELECT processing_attempts FROM assets WHERE id='other'`).Scan(&otherAttempts); err != nil {
+		t.Fatal(err)
+	}
+	if otherAttempts != 0 {
+		t.Fatalf("other attempts=%d", otherAttempts)
+	}
+}
+
+func TestClaimProcessingRejectsAlreadyCompleteStaleAndIneligibleAssets(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC)
+	tests := []struct {
+		id         string
+		scan       assets.ScanStatus
+		processing assets.ProcessingStatus
+		mime       string
+		etag       string
+		deleted    bool
+	}{
+		{id: "ready", scan: assets.ScanClean, processing: assets.ProcessingReady, mime: "image/png", etag: "etag-ready"},
+		{id: "stale-version", scan: assets.ScanClean, processing: assets.ProcessingPending, mime: "image/png", etag: "stale"},
+		{id: "non-clean", scan: assets.ScanPending, processing: assets.ProcessingPending, mime: "image/png", etag: "etag-non-clean"},
+		{id: "deleted", scan: assets.ScanClean, processing: assets.ProcessingPending, mime: "image/png", etag: "etag-deleted", deleted: true},
+		{id: "unsupported", scan: assets.ScanClean, processing: assets.ProcessingPending, mime: "application/pdf", etag: "etag-unsupported"},
+	}
+	for _, test := range tests {
+		t.Run(test.id, func(t *testing.T) {
+			insertAsset(t, db, test.id, assets.UploadCompleted, test.scan, test.processing, now, time.Time{})
+			if _, err := db.Exec(`UPDATE assets SET detected_mime_type=$2 WHERE id=$1`, test.id, test.mime); err != nil {
+				t.Fatal(err)
+			}
+			if test.deleted {
+				if _, err := db.Exec(`UPDATE assets SET deleted_at=$2 WHERE id=$1`, test.id, now); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if claimed, state, err := store.ClaimProcessing(ctx, test.id, test.etag, now, time.Minute); err != nil || state != assets.ProcessingTerminal {
+				t.Fatalf("claimed=%+v state=%v err=%v", claimed, state, err)
+			}
+		})
+	}
+}
+
+func TestFailDerivativeToPoisonIsAtomicAndIdempotent(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	now := time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC)
+	insertAsset(t, db, "poison-derivative", assets.UploadCompleted, assets.ScanClean, assets.ProcessingPending, now, time.Time{})
+	if _, err := db.Exec(`UPDATE assets SET detected_mime_type='image/png',processing_attempts=5 WHERE id='poison-derivative'`); err != nil {
+		t.Fatal(err)
+	}
+	failure := assets.ProcessingFailure{AssetID: "poison-derivative", ETag: "etag-poison-derivative", ExpectedAttempt: 5, Details: "decode failed"}
+	poison := assets.DerivativePoison{PoisonID: "message:processing_failed", EventID: "event-1", AssetID: failure.AssetID, ETag: failure.ETag, Reason: "processing_failed", Details: failure.Details, DequeueCount: 1, SourceMessageID: "message", BodySHA256: strings.Repeat("a", 64)}
+
+	shouldForward, err := store.FailDerivativeToPoison(context.Background(), failure, poison, now)
+	if err != nil || !shouldForward {
+		t.Fatalf("shouldForward=%v err=%v", shouldForward, err)
+	}
+	var status, details string
+	var poisonCount int
+	if err := db.QueryRow(`SELECT processing_status,processing_error FROM assets WHERE id='poison-derivative'`).Scan(&status, &details); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM asset_derivative_poison_events WHERE poison_id=$1`, poison.PoisonID).Scan(&poisonCount); err != nil {
+		t.Fatal(err)
+	}
+	if status != string(assets.ProcessingFailed) || details != failure.Details || poisonCount != 1 {
+		t.Fatalf("status=%s details=%s poisonCount=%d", status, details, poisonCount)
+	}
+	if err := store.MarkDerivativePoisonForwarded(context.Background(), poison.PoisonID, now); err != nil {
+		t.Fatal(err)
+	}
+	shouldForward, err = store.FailDerivativeToPoison(context.Background(), failure, poison, now.Add(time.Second))
+	if err != nil || shouldForward {
+		t.Fatalf("replay shouldForward=%v err=%v", shouldForward, err)
+	}
+}
+
 func TestProcessingAttemptFencesStaleWorkersAndCompletionIsReentrant(t *testing.T) {
 	db := integrationDB(t)
 	store := New(db)
@@ -255,6 +355,167 @@ func TestScanLeaseRejectsStaleWorkerWrites(t *testing.T) {
 	}
 	if current.ScanStatus != assets.ScanPending || current.ScanAttempts != 2 {
 		t.Fatalf("current asset=%+v", current)
+	}
+}
+
+func TestApplyScanResultCreatesOneDerivativeOutboxRow(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC)
+	insertAsset(t, db, "derivative-clean", assets.UploadCompleted, assets.ScanPending, assets.ProcessingPending, now, time.Time{})
+	if _, err := db.Exec(`UPDATE assets SET detected_mime_type='image/png' WHERE id='derivative-clean'`); err != nil {
+		t.Fatal(err)
+	}
+	result := assets.ScanResult{EventID: "event-derivative-clean", AssetID: "derivative-clean", Status: assets.ScanClean, ETag: "etag-derivative-clean"}
+
+	applied, err := store.ApplyScanResult(ctx, result, now)
+	if err != nil || !applied {
+		t.Fatalf("apply: applied=%v err=%v", applied, err)
+	}
+	if applied, err = store.ApplyScanResult(ctx, result, now); err != nil || applied {
+		t.Fatalf("replay: applied=%v err=%v", applied, err)
+	}
+	var count int
+	var assetID, etag string
+	if err := db.QueryRow(`SELECT COUNT(*),MIN(asset_id),MIN(asset_etag) FROM asset_derivative_outbox WHERE asset_id='derivative-clean'`).Scan(&count, &assetID, &etag); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 || assetID != "derivative-clean" || etag != "etag-derivative-clean" {
+		t.Fatalf("count=%d assetID=%q etag=%q", count, assetID, etag)
+	}
+}
+
+func TestApplyScanResultSkipsIneligibleDerivativeOutboxRows(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC)
+	tests := []struct {
+		id        string
+		status    assets.ScanStatus
+		mime      string
+		etag      string
+		deleted   bool
+		wantError bool
+	}{
+		{id: "infected", status: assets.ScanInfected, mime: "image/png", etag: "etag-infected"},
+		{id: "failed", status: assets.ScanFailed, mime: "image/png", etag: "etag-failed"},
+		{id: "stale", status: assets.ScanClean, mime: "image/png", etag: "stale-etag", wantError: true},
+		{id: "non-image", status: assets.ScanClean, mime: "application/pdf", etag: "etag-non-image"},
+		{id: "rejected", status: assets.ScanClean, mime: "image/png", etag: "etag-rejected", deleted: true, wantError: true},
+	}
+	for _, test := range tests {
+		t.Run(test.id, func(t *testing.T) {
+			insertAsset(t, db, test.id, assets.UploadCompleted, assets.ScanPending, assets.ProcessingPending, now, time.Time{})
+			if _, err := db.Exec(`UPDATE assets SET detected_mime_type=$2 WHERE id=$1`, test.id, test.mime); err != nil {
+				t.Fatal(err)
+			}
+			if test.deleted {
+				if _, err := db.Exec(`UPDATE assets SET deleted_at=$2 WHERE id=$1`, test.id, now); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, err := store.ApplyScanResult(ctx, assets.ScanResult{EventID: "event-" + test.id, AssetID: test.id, Status: test.status, ETag: test.etag}, now)
+			if (err != nil) != test.wantError {
+				t.Fatalf("err=%v", err)
+			}
+			var count int
+			if err := db.QueryRow(`SELECT COUNT(*) FROM asset_derivative_outbox WHERE asset_id=$1`, test.id).Scan(&count); err != nil {
+				t.Fatal(err)
+			}
+			if count != 0 {
+				t.Fatalf("outbox rows=%d", count)
+			}
+		})
+	}
+}
+
+func TestDerivativeOutboxMigrationBackfillsCleanPendingImages(t *testing.T) {
+	db := integrationDB(t)
+	now := time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC)
+	if _, err := db.Exec(`DROP TABLE asset_derivative_outbox`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`DELETE FROM schema_migrations WHERE version='sql/014_asset_derivative_outbox.sql'`); err != nil {
+		t.Fatal(err)
+	}
+	insertAsset(t, db, "derivative-backfill", assets.UploadCompleted, assets.ScanClean, assets.ProcessingPending, now, time.Time{})
+	if _, err := db.Exec(`UPDATE assets SET detected_mime_type='image/webp' WHERE id='derivative-backfill'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrations.Run(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM asset_derivative_outbox WHERE asset_id='derivative-backfill' AND asset_etag='etag-derivative-backfill' AND delivered_at IS NULL`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("backfill rows=%d", count)
+	}
+}
+
+func TestDerivativeOutboxClaimRetryAndDeliveryAreFenced(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC)
+	insertAsset(t, db, "derivative-dispatch", assets.UploadCompleted, assets.ScanClean, assets.ProcessingPending, now, time.Time{})
+	if _, err := db.Exec(`INSERT INTO asset_derivative_outbox(event_id,asset_id,asset_etag,available_at,created_at) VALUES('derivative-event','derivative-dispatch','etag-derivative-dispatch',$1,$1)`, now); err != nil {
+		t.Fatal(err)
+	}
+	first, ok, err := store.ClaimDerivativeRequest(ctx, now, time.Minute)
+	if err != nil || !ok || first.Attempts != 1 {
+		t.Fatalf("first=%+v ok=%v err=%v", first, ok, err)
+	}
+	if _, ok, err := store.ClaimDerivativeRequest(ctx, now, time.Minute); err != nil || ok {
+		t.Fatalf("concurrent claim: ok=%v err=%v", ok, err)
+	}
+	if err := store.ScheduleDerivativeRequestRetry(ctx, first.EventID, first.Attempts, "temporary", now.Add(time.Minute), now); err != nil {
+		t.Fatal(err)
+	}
+	second, ok, err := store.ClaimDerivativeRequest(ctx, now.Add(time.Minute), time.Minute)
+	if err != nil || !ok || second.Attempts != 2 {
+		t.Fatalf("second=%+v ok=%v err=%v", second, ok, err)
+	}
+	if err := store.MarkDerivativeRequestDelivered(ctx, first.EventID, first.Attempts, now); !errors.Is(err, assets.ErrConflict) {
+		t.Fatalf("stale mark err=%v", err)
+	}
+	if err := store.MarkDerivativeRequestDelivered(ctx, second.EventID, second.Attempts, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := store.ClaimDerivativeRequest(ctx, now.Add(2*time.Minute), time.Minute); err != nil || ok {
+		t.Fatalf("delivered claim: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestApplyScanResultRollsBackWhenDerivativeOutboxInsertFails(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC)
+	insertAsset(t, db, "derivative-rollback", assets.UploadCompleted, assets.ScanPending, assets.ProcessingPending, now, time.Time{})
+	if _, err := db.Exec(`UPDATE assets SET detected_mime_type='image/jpeg' WHERE id='derivative-rollback'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE FUNCTION reject_derivative_outbox() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'rejected'; END $$; CREATE TRIGGER reject_derivative_outbox BEFORE INSERT ON asset_derivative_outbox FOR EACH ROW EXECUTE FUNCTION reject_derivative_outbox()`); err != nil {
+		t.Fatal(err)
+	}
+	result := assets.ScanResult{EventID: "event-derivative-rollback", AssetID: "derivative-rollback", Status: assets.ScanClean, ETag: "etag-derivative-rollback"}
+	if _, err := store.ApplyScanResult(ctx, result, now); err == nil {
+		t.Fatal("scan result succeeded")
+	}
+	var status string
+	var events int
+	if err := db.QueryRow(`SELECT scan_status FROM assets WHERE id='derivative-rollback'`).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM asset_scan_events WHERE event_id='event-derivative-rollback'`).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	if status != string(assets.ScanPending) || events != 0 {
+		t.Fatalf("status=%q scan events=%d", status, events)
 	}
 }
 

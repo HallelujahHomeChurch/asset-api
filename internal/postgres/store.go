@@ -17,6 +17,7 @@ import (
 	"unicode"
 
 	"hhc/asset-api/internal/assets"
+	"hhc/asset-api/internal/derivativequeue"
 	"hhc/asset-api/internal/lifecycle"
 	"hhc/asset-api/internal/retention"
 
@@ -45,9 +46,9 @@ func (s *Store) CreateUpload(ctx context.Context, asset assets.Asset, session as
 }
 
 func (s *Store) GetAsset(ctx context.Context, id string) (assets.Asset, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id,namespace,owner_service,owner_type,owner_id,purpose,locale,original_file_name,object_key,expected_mime_type,detected_mime_type,size_bytes,checksum_sha256,etag,upload_status,scan_status,scan_details,scan_signature_version,scan_failure_category,processing_status,visibility,created_at,updated_at,COALESCE(deleted_at,'0001-01-01'::timestamptz),scan_attempts,scan_event_id,processing_attempts FROM assets WHERE id=$1 AND purged_at IS NULL`, id)
+	row := s.db.QueryRowContext(ctx, `SELECT id,namespace,owner_service,owner_type,owner_id,purpose,locale,original_file_name,object_key,expected_mime_type,detected_mime_type,size_bytes,checksum_sha256,etag,upload_status,scan_status,scan_details,scan_signature_version,scan_failure_category,processing_status,visibility,created_at,updated_at,COALESCE(deleted_at,'0001-01-01'::timestamptz),scan_attempts,scan_event_id,processing_attempts,processing_error,COALESCE(processing_next_attempt_at,'0001-01-01'::timestamptz),COALESCE(processing_claimed_until,'0001-01-01'::timestamptz) FROM assets WHERE id=$1 AND purged_at IS NULL`, id)
 	var value assets.Asset
-	err := row.Scan(&value.ID, &value.Namespace, &value.OwnerService, &value.OwnerType, &value.OwnerID, &value.Purpose, &value.Locale, &value.OriginalFileName, &value.ObjectKey, &value.ExpectedMIMEType, &value.DetectedMIMEType, &value.SizeBytes, &value.ChecksumSHA256, &value.ETag, &value.UploadStatus, &value.ScanStatus, &value.ScanDetails, &value.ScanSignature, &value.ScanFailure, &value.ProcessingStatus, &value.Visibility, &value.CreatedAt, &value.UpdatedAt, &value.DeletedAt, &value.ScanAttempts, &value.ScanEventID, &value.ProcessingAttempts)
+	err := row.Scan(&value.ID, &value.Namespace, &value.OwnerService, &value.OwnerType, &value.OwnerID, &value.Purpose, &value.Locale, &value.OriginalFileName, &value.ObjectKey, &value.ExpectedMIMEType, &value.DetectedMIMEType, &value.SizeBytes, &value.ChecksumSHA256, &value.ETag, &value.UploadStatus, &value.ScanStatus, &value.ScanDetails, &value.ScanSignature, &value.ScanFailure, &value.ProcessingStatus, &value.Visibility, &value.CreatedAt, &value.UpdatedAt, &value.DeletedAt, &value.ScanAttempts, &value.ScanEventID, &value.ProcessingAttempts, &value.ProcessingError, &value.ProcessingNextAt, &value.ProcessingClaimedUntil)
 	if errors.Is(err, sql.ErrNoRows) {
 		return assets.Asset{}, assets.ErrNotFound
 	}
@@ -182,6 +183,116 @@ func (s *Store) scanRequestTransitionError(ctx context.Context, eventID string) 
 		return assets.ErrConflict
 	}
 	return assets.ErrNotFound
+}
+
+func (s *Store) ClaimDerivativeRequest(ctx context.Context, now time.Time, lease time.Duration) (derivativequeue.Request, bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return derivativequeue.Request{}, false, err
+	}
+	defer tx.Rollback()
+	var request derivativequeue.Request
+	err = tx.QueryRowContext(ctx, `
+		SELECT event_id,asset_id,asset_etag,attempts,created_at
+		FROM asset_derivative_outbox
+		WHERE delivered_at IS NULL AND available_at <= $1
+		  AND (claimed_until IS NULL OR claimed_until < $1)
+		ORDER BY available_at,created_at
+		FOR UPDATE SKIP LOCKED LIMIT 1`, now).Scan(&request.EventID, &request.AssetID, &request.ETag, &request.Attempts, &request.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return derivativequeue.Request{}, false, nil
+	}
+	if err != nil {
+		return derivativequeue.Request{}, false, err
+	}
+	request.Attempts++
+	if _, err := tx.ExecContext(ctx, `UPDATE asset_derivative_outbox SET attempts=$2,claimed_until=$3 WHERE event_id=$1`, request.EventID, request.Attempts, now.Add(lease)); err != nil {
+		return derivativequeue.Request{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return derivativequeue.Request{}, false, err
+	}
+	return request, true, nil
+}
+
+func (s *Store) MarkDerivativeRequestDelivered(ctx context.Context, eventID string, expectedAttempt int, now time.Time) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE asset_derivative_outbox SET delivered_at=$3,claimed_until=NULL,last_error='' WHERE event_id=$1 AND attempts=$2 AND delivered_at IS NULL`, eventID, expectedAttempt, now)
+	if err != nil {
+		return err
+	}
+	if count, _ := result.RowsAffected(); count != 1 {
+		return s.derivativeRequestTransitionError(ctx, eventID)
+	}
+	return nil
+}
+
+func (s *Store) ScheduleDerivativeRequestRetry(ctx context.Context, eventID string, expectedAttempt int, details string, nextAttempt, _ time.Time) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE asset_derivative_outbox SET available_at=$3,claimed_until=NULL,last_error=$4 WHERE event_id=$1 AND attempts=$2 AND delivered_at IS NULL`, eventID, expectedAttempt, nextAttempt, details)
+	if err != nil {
+		return err
+	}
+	if count, _ := result.RowsAffected(); count != 1 {
+		return s.derivativeRequestTransitionError(ctx, eventID)
+	}
+	return nil
+}
+
+func (s *Store) derivativeRequestTransitionError(ctx context.Context, eventID string) error {
+	var exists bool
+	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM asset_derivative_outbox WHERE event_id=$1)`, eventID).Scan(&exists); err != nil {
+		return err
+	}
+	if exists {
+		return assets.ErrConflict
+	}
+	return assets.ErrNotFound
+}
+
+func (s *Store) RecordDerivativePoison(ctx context.Context, poison assets.DerivativePoison, now time.Time) (bool, error) {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO asset_derivative_poison_events(poison_id,event_id,asset_id,asset_etag,reason,details,dequeue_count,source_message_id,body_sha256,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(poison_id) DO NOTHING`, poison.PoisonID, poison.EventID, poison.AssetID, poison.ETag, poison.Reason, poison.Details, poison.DequeueCount, poison.SourceMessageID, poison.BodySHA256, now)
+	if err != nil {
+		return false, err
+	}
+	var shouldForward bool
+	err = s.db.QueryRowContext(ctx, `SELECT forwarded_at IS NULL FROM asset_derivative_poison_events WHERE poison_id=$1`, poison.PoisonID).Scan(&shouldForward)
+	return shouldForward, err
+}
+
+func (s *Store) FailDerivativeToPoison(ctx context.Context, failure assets.ProcessingFailure, poison assets.DerivativePoison, now time.Time) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE assets SET processing_status='failed',processing_error=$4,processing_next_attempt_at=NULL,processing_claimed_until=NULL,updated_at=$5 WHERE id=$1 AND processing_status='pending' AND etag=$2 AND processing_attempts=$3 AND deleted_at IS NULL AND purged_at IS NULL`, failure.AssetID, failure.ETag, failure.ExpectedAttempt, failure.Details, now)
+	if err != nil {
+		return false, err
+	}
+	if count, _ := result.RowsAffected(); count != 1 {
+		var status, etag string
+		if err := tx.QueryRowContext(ctx, `SELECT processing_status,etag FROM assets WHERE id=$1 AND purged_at IS NULL`, failure.AssetID).Scan(&status, &etag); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return false, assets.ErrNotFound
+			}
+			return false, err
+		}
+		if status != string(assets.ProcessingFailed) || etag != failure.ETag {
+			return false, assets.ErrConflict
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO asset_derivative_poison_events(poison_id,event_id,asset_id,asset_etag,reason,details,dequeue_count,source_message_id,body_sha256,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(poison_id) DO NOTHING`, poison.PoisonID, poison.EventID, poison.AssetID, poison.ETag, poison.Reason, poison.Details, poison.DequeueCount, poison.SourceMessageID, poison.BodySHA256, now); err != nil {
+		return false, err
+	}
+	var shouldForward bool
+	if err := tx.QueryRowContext(ctx, `SELECT forwarded_at IS NULL FROM asset_derivative_poison_events WHERE poison_id=$1`, poison.PoisonID).Scan(&shouldForward); err != nil {
+		return false, err
+	}
+	return shouldForward, tx.Commit()
+}
+
+func (s *Store) MarkDerivativePoisonForwarded(ctx context.Context, poisonID string, now time.Time) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE asset_derivative_poison_events SET forwarded_at=COALESCE(forwarded_at,$2) WHERE poison_id=$1`, poisonID, now)
+	return err
 }
 
 func (s *Store) FailUpload(ctx context.Context, assetID string, now time.Time) error {
@@ -1565,6 +1676,15 @@ func (s *Store) ApplyScanResult(ctx context.Context, result assets.ScanResult, n
 	if count, _ := updated.RowsAffected(); count != 1 {
 		return false, assets.ErrConflict
 	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO asset_derivative_outbox(event_id,asset_id,asset_etag,available_at,created_at)
+		SELECT $1,id,etag,$3,$3 FROM assets
+		WHERE id=$2 AND upload_status='completed' AND scan_status='clean' AND processing_status='pending'
+		  AND detected_mime_type IN ('image/jpeg','image/png','image/webp')
+		  AND deleted_at IS NULL AND purged_at IS NULL
+		ON CONFLICT(asset_id,asset_etag) DO NOTHING`, result.EventID, result.AssetID, now); err != nil {
+		return false, err
+	}
 	if err := tx.Commit(); err != nil {
 		return false, err
 	}
@@ -2161,6 +2281,51 @@ func (s *Store) ClaimPendingProcessing(ctx context.Context, now time.Time, lease
 	}
 	asset, err := s.GetAsset(ctx, id)
 	return asset, err == nil, err
+}
+
+func (s *Store) ClaimProcessing(ctx context.Context, assetID, etag string, now time.Time, lease time.Duration) (assets.Asset, assets.ProcessingClaimState, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return assets.Asset{}, "", err
+	}
+	defer tx.Rollback()
+	var id string
+	err = tx.QueryRowContext(ctx, `
+		SELECT id FROM assets
+		WHERE id=$1 AND etag=$2 AND upload_status='completed' AND scan_status='clean'
+		  AND processing_status='pending' AND processing_attempts < 5
+		  AND detected_mime_type IN ('image/jpeg','image/png','image/webp')
+		  AND deleted_at IS NULL AND purged_at IS NULL
+		  AND (processing_next_attempt_at IS NULL OR processing_next_attempt_at <= $3)
+		  AND (processing_claimed_until IS NULL OR processing_claimed_until < $3)
+		FOR UPDATE`, assetID, etag, now).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		if err := tx.Commit(); err != nil {
+			return assets.Asset{}, "", err
+		}
+		asset, getErr := s.GetAsset(ctx, assetID)
+		if errors.Is(getErr, assets.ErrNotFound) {
+			return assets.Asset{}, assets.ProcessingTerminal, nil
+		}
+		if getErr != nil {
+			return assets.Asset{}, "", getErr
+		}
+		if asset.ETag == etag && asset.UploadStatus == assets.UploadCompleted && asset.ScanStatus == assets.ScanClean && asset.ProcessingStatus == assets.ProcessingPending && asset.ProcessingAttempts < 5 && (asset.DetectedMIMEType == "image/jpeg" || asset.DetectedMIMEType == "image/png" || asset.DetectedMIMEType == "image/webp") && asset.DeletedAt.IsZero() {
+			return asset, assets.ProcessingDeferred, nil
+		}
+		return asset, assets.ProcessingTerminal, nil
+	}
+	if err != nil {
+		return assets.Asset{}, "", err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE assets SET processing_attempts=processing_attempts+1,processing_claimed_until=$2 WHERE id=$1`, id, now.Add(lease)); err != nil {
+		return assets.Asset{}, "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return assets.Asset{}, "", err
+	}
+	asset, err := s.GetAsset(ctx, id)
+	return asset, assets.ProcessingClaimed, err
 }
 
 func (s *Store) CompleteProcessing(ctx context.Context, assetID, expectedETag string, expectedAttempt int, derivatives []assets.Derivative, now time.Time) error {

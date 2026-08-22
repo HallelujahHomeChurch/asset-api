@@ -19,6 +19,7 @@ type Config struct {
 	AzureAccountURL      string
 	AzureContainer       string
 	ScanQueueURL         string
+	DerivativeQueueURL   string
 	ScanDispatchEnabled  bool
 	EmbeddedScanEnabled  bool
 	ClamAVHost           string
@@ -54,6 +55,7 @@ func Load() (Config, error) {
 		AzureAccountURL:      os.Getenv("ASSET_AZURE_ACCOUNT_URL"),
 		AzureContainer:       value("ASSET_AZURE_CONTAINER", "assets"),
 		ScanQueueURL:         strings.TrimSpace(os.Getenv("ASSET_SCAN_QUEUE_URL")),
+		DerivativeQueueURL:   strings.TrimSpace(os.Getenv("ASSET_DERIVATIVE_QUEUE_URL")),
 		EmbeddedScanEnabled:  true,
 		ClamAVHost:           value("CLAMAV_HOST", "127.0.0.1"),
 		ClamAVPort:           3310,
@@ -83,6 +85,9 @@ func Load() (Config, error) {
 	}
 	if cfg.StorageBackend == "azure" && cfg.AzureAccountURL == "" {
 		return Config{}, fmt.Errorf("ASSET_AZURE_ACCOUNT_URL is required for azure storage")
+	}
+	if cfg.StorageBackend == "azure" && cfg.DerivativeQueueURL == "" {
+		return Config{}, fmt.Errorf("ASSET_DERIVATIVE_QUEUE_URL is required for azure storage")
 	}
 	if cfg.AllowedCallers[cfg.ReaderCallerAppID] {
 		return Config{}, fmt.Errorf("ASSET_READER_CALLER_APP_ID must not be in ASSET_ALLOWED_CALLERS")

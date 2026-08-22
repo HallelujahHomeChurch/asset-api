@@ -19,6 +19,7 @@ param embeddedScanEnabled bool = false
 param deployScanJob bool = false
 param deploySignatureRefreshJob bool = false
 param deployRetentionJob bool = false
+param deployDerivativeJob bool = false
 param retentionScheduleEnabled bool = false
 param retentionApplyEnabled bool = false
 param scanWorkerImage string = runtimeImage
@@ -121,6 +122,11 @@ resource signatureRefreshIdentity 'Microsoft.ManagedIdentity/userAssignedIdentit
   location: location
 }
 
+resource derivativeIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: 'asset-derivative-identity'
+  location: location
+}
+
 resource acrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (provisionPermissions) {
   name: guid(registry.id, pullIdentity.id, 'acr-pull')
   scope: registry
@@ -161,6 +167,16 @@ resource scanSecretAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' =
   }
 }
 
+resource derivativeSecretAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (provisionPermissions) {
+  name: guid(runtimeVault.id, derivativeIdentity.id, 'key-vault-secrets-user')
+  scope: runtimeVault
+  properties: {
+    principalId: derivativeIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: keyVaultSecretsUserRole
+  }
+}
+
 resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
   name: storageAccountName
 }
@@ -180,6 +196,16 @@ resource scanPoisonQueue 'Microsoft.Storage/storageAccounts/queueServices/queues
   name: 'asset-scan-poison'
 }
 
+resource derivativeQueue 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' = if (manageSharedInfrastructure) {
+  parent: queueService
+  name: 'asset-derivative'
+}
+
+resource derivativePoisonQueue 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' = if (manageSharedInfrastructure) {
+  parent: queueService
+  name: 'asset-derivative-poison'
+}
+
 resource queueServiceScope 'Microsoft.Storage/storageAccounts/queueServices@2023-05-01' existing = {
   parent: storageAccount
   name: 'default'
@@ -193,6 +219,16 @@ resource scanQueueScope 'Microsoft.Storage/storageAccounts/queueServices/queues@
 resource scanPoisonQueueScope 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' existing = {
   parent: queueServiceScope
   name: 'asset-scan-poison'
+}
+
+resource derivativeQueueScope 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' existing = {
+  parent: queueServiceScope
+  name: 'asset-derivative'
+}
+
+resource derivativePoisonQueueScope 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' existing = {
+  parent: queueServiceScope
+  name: 'asset-derivative-poison'
 }
 
 resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = if (manageSharedInfrastructure) {
@@ -347,6 +383,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = if (deployRuntime) {
             { name: 'ASSET_AZURE_ACCOUNT_URL', value: 'https://${storageAccount.name}.blob.${az.environment().suffixes.storage}' }
             { name: 'ASSET_AZURE_CONTAINER', value: 'assets' }
             { name: 'ASSET_SCAN_QUEUE_URL', value: 'https://${storageAccount.name}.queue.${az.environment().suffixes.storage}/asset-scan' }
+            { name: 'ASSET_DERIVATIVE_QUEUE_URL', value: 'https://${storageAccount.name}.queue.${az.environment().suffixes.storage}/asset-derivative' }
             { name: 'ASSET_SCAN_DISPATCH_ENABLED', value: string(scanDispatchEnabled) }
             { name: 'ASSET_EMBEDDED_SCAN_ENABLED', value: string(embeddedScanEnabled) }
             { name: 'ASSET_ALLOWED_CALLERS', value: 'account-api,hhc-web-api,hhc-line-function-bot' }
@@ -472,6 +509,56 @@ resource scanQueueProcessor 'Microsoft.Authorization/roleAssignments@2022-04-01'
     principalId: scanIdentity.properties.principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '8a0f0c08-91a1-4084-bc3d-661d67233fed')
+  }
+}
+
+resource derivativeQueueSender 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (manageSharedInfrastructure) {
+  name: guid(derivativeQueueScope.id, 'asset-api', 'storage-queue-data-message-sender', 'scoped-v1')
+  scope: derivativeQueueScope
+  properties: {
+    principalId: deployRuntime ? app!.identity.principalId : existingApp!.identity.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'c6a89b2d-59bc-44d0-9896-0f6e12d7b80a')
+  }
+}
+
+resource derivativeQueueProcessor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (manageSharedInfrastructure) {
+  name: guid(derivativeQueueScope.id, derivativeIdentity.id, 'storage-queue-data-message-processor', 'scoped-v1')
+  scope: derivativeQueueScope
+  properties: {
+    principalId: derivativeIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '8a0f0c08-91a1-4084-bc3d-661d67233fed')
+  }
+}
+
+resource derivativeQueueReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (manageSharedInfrastructure) {
+  name: guid(derivativeQueueScope.id, derivativeIdentity.id, 'storage-queue-data-reader', 'scoped-v1')
+  scope: derivativeQueueScope
+  properties: {
+    principalId: derivativeIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '19e7f393-937e-4f77-808e-94535e297925')
+  }
+}
+
+resource derivativePoisonQueueContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (manageSharedInfrastructure) {
+  name: guid(derivativePoisonQueueScope.id, derivativeIdentity.id, 'storage-queue-data-message-contributor', 'scoped-v1')
+  scope: derivativePoisonQueueScope
+  properties: {
+    principalId: derivativeIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '974c5e8b-45b9-4653-ba55-5f855dd0fb88')
+  }
+}
+
+resource derivativeBlobContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (manageSharedInfrastructure) {
+  name: guid(assetContainerScope.id, derivativeIdentity.id, 'storage-blob-data-contributor', 'scoped-v1')
+  scope: assetContainerScope
+  properties: {
+    principalId: derivativeIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
   }
 }
 
@@ -646,6 +733,73 @@ resource signatureRefreshJob 'Microsoft.App/jobs@2025-07-01' = if (deploySignatu
   dependsOn: [acrPull, signatureBlobContributor]
 }
 
+resource derivativeJob 'Microsoft.App/jobs@2025-07-01' = if (deployDerivativeJob) {
+  name: 'asset-derivative'
+  location: location
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${pullIdentity.id}': {}
+      '${derivativeIdentity.id}': {}
+    }
+  }
+  properties: {
+    environmentId: environment.id
+    workloadProfileName: 'Consumption'
+    configuration: {
+      triggerType: 'Event'
+      replicaTimeout: 600
+      replicaRetryLimit: 0
+      eventTriggerConfig: {
+        parallelism: 1
+        replicaCompletionCount: 1
+        scale: {
+          pollingInterval: 10
+          minExecutions: 0
+          maxExecutions: 1
+          rules: [
+            {
+              name: 'asset-derivative-queue'
+              type: 'azure-queue'
+              metadata: {
+                accountName: storageAccount.name
+                queueName: 'asset-derivative'
+                queueLength: '1'
+              }
+              identity: derivativeIdentity.id
+            }
+          ]
+        }
+      }
+      registries: [
+        { server: registry.properties.loginServer, identity: pullIdentity.id }
+      ]
+      secrets: [
+        { name: 'database-url', keyVaultUrl: '${runtimeVault.properties.vaultUri}secrets/database-url', identity: derivativeIdentity.id }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'asset-derivative'
+          image: runtimeImage
+          command: ['/asset-derivative-worker']
+          env: [
+            { name: 'DATABASE_URL', secretRef: 'database-url' }
+            { name: 'ASSET_AZURE_ACCOUNT_URL', value: 'https://${storageAccount.name}.blob.${az.environment().suffixes.storage}' }
+            { name: 'ASSET_AZURE_CONTAINER', value: 'assets' }
+            { name: 'AZURE_CLIENT_ID', value: derivativeIdentity.properties.clientId }
+            { name: 'ASSET_DERIVATIVE_QUEUE_URL', value: 'https://${storageAccount.name}.queue.${az.environment().suffixes.storage}/asset-derivative' }
+            { name: 'ASSET_DERIVATIVE_POISON_QUEUE_URL', value: 'https://${storageAccount.name}.queue.${az.environment().suffixes.storage}/asset-derivative-poison' }
+          ]
+          resources: { cpu: json('0.5'), memory: '1Gi' }
+        }
+      ]
+    }
+  }
+  dependsOn: [acrPull, derivativeSecretAccess, derivativeQueueProcessor, derivativeQueueReader, derivativePoisonQueueContributor, derivativeBlobContributor]
+}
+
 resource retentionJob 'Microsoft.App/jobs@2025-07-01' = if (deployRetentionJob) {
   name: 'asset-retention'
   location: location
@@ -754,3 +908,4 @@ output scanPoisonQueueName string = 'asset-scan-poison'
 output scanJobName string = 'asset-scan'
 output signatureRefreshJobName string = 'asset-clamav-signature-refresh'
 output retentionJobName string = 'asset-retention'
+output derivativeJobName string = 'asset-derivative'

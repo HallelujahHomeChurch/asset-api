@@ -23,6 +23,8 @@ fi
 grep -q 'IMAGE_REF=.*@${digest}' "$workflow"
 grep -q 'SCAN_IMAGE_REF=.*@${scan_digest}' "$workflow"
 grep -q 'Dockerfile.scan' "$workflow"
+grep -Fq "docker export \"\$(docker create asset-api:verify)\" | tar -tf - | grep -Fxq 'asset-derivative-worker'" "$workflow"
+grep -Fq "docker export \"\$(docker create asset-api:verify)\" | tar -tf - | grep -Fxq 'asset-derivative-worker'" .github/workflows/ci.yml
 grep -Fq 'docker run --rm --entrypoint clamscan asset-scan:verify --help' "$workflow"
 for flag in --max-filesize --max-scansize --max-files --max-recursion --alert-exceeds-max --alert-encrypted; do
   grep -Fq -- "$flag" "$workflow"
@@ -44,6 +46,7 @@ if grep -Eq '172\.16\.65\.5|CLAMAV_HOST|AllowACAtoClamAV|DenyOtherVNetToClamAV' 
 fi
 test "$(grep -c 'embeddedScanEnabled="$EMBEDDED_SCAN_ENABLED"' "$workflow")" = 2
 test "$(grep -c 'deployRetentionJob="$DEPLOY_RETENTION_JOB"' "$workflow")" = 2
+test "$(grep -c 'deployDerivativeJob=true' "$workflow")" = 2
 test "$(grep -c 'retentionScheduleEnabled="$RETENTION_SCHEDULE_ENABLED"' "$workflow")" = 2
 test "$(grep -c 'retentionApplyEnabled="$RETENTION_APPLY_ENABLED"' "$workflow")" = 2
 grep -Fq 'for name in RETENTION_SCHEDULE_ENABLED RETENTION_APPLY_ENABLED; do' "$workflow"
@@ -63,6 +66,10 @@ done
 test "$(grep -c "'scoped-v2'" infra/main.bicep)" = 7
 grep -q "'storage-queue-data-reader'" infra/main.bicep
 grep -q "roleDefinitionName=='Storage Queue Data Reader'" "$workflow"
+grep -q 'asset-derivative-identity' "$workflow"
+grep -q 'asset-derivative-poison' "$workflow"
+grep -q "roleDefinitionName=='Storage Queue Data Message Processor'" "$workflow"
+grep -q "roleDefinitionName=='Storage Blob Data Contributor'" "$workflow"
 grep -q 'ASSET_WORKLOAD_AUDIENCE' "$workflow"
 grep -q 'ASSET_WORKLOAD_CLIENT_ID' "$workflow"
 grep -Fqx "var workloadAuthIssuer = 'https://sts.windows.net/\${subscription().tenantId}/'" infra/main.bicep
@@ -100,6 +107,9 @@ grep -q 'exposedPort: 0' infra/main.bicep
 grep -q 'latestRevision: true' infra/main.bicep
 grep -q 'isAutoProvisioned: false' infra/main.bicep
 grep -q 'az containerapp job start' "$workflow"
+grep -q 'DERIVATIVE_JOB_NAME: asset-derivative' "$workflow"
+grep -q 'az containerapp job show.*"$DERIVATIVE_JOB_NAME"' "$workflow"
+grep -q '"$derivative_image" == "$IMAGE_REF"' "$workflow"
 grep -q 'PREVIOUS_IMAGE_REF=' "$workflow"
 grep -q 'az containerapp revision copy' "$workflow"
 grep -q -- '--image "$PREVIOUS_IMAGE_REF"' "$workflow"
@@ -122,6 +132,21 @@ grep -q "name: 'ASSET_RETENTION_APPLY_ENABLED', value: string(retentionApplyEnab
 grep -q 'enableRbacAuthorization: true' infra/main.bicep
 grep -q 'test-migration-policy-test.sh' .github/workflows/ci.yml
 grep -q 'test-what-if-policy.sh' .github/workflows/ci.yml
+grep -q 'param deployDerivativeJob bool = false' infra/main.bicep
+grep -q "name: 'asset-derivative-identity'" infra/main.bicep
+grep -q "name: 'asset-derivative'" infra/main.bicep
+grep -q "name: 'asset-derivative-poison'" infra/main.bicep
+grep -q "command: \['/asset-derivative-worker'\]" infra/main.bicep
+grep -q 'minExecutions: 0' infra/main.bicep
+grep -q 'maxExecutions: 1' infra/main.bicep
+grep -q "queueName: 'asset-derivative'" infra/main.bicep
+grep -q "queueLength: '1'" infra/main.bicep
+grep -q "name: 'ASSET_DERIVATIVE_QUEUE_URL'" infra/main.bicep
+
+migration_line="$(grep -n -- '- name: Run migrations' "$workflow" | cut -d: -f1)"
+deploy_line="$(grep -n -- '- name: Deploy API' "$workflow" | cut -d: -f1)"
+test "$migration_line" -lt "$deploy_line"
+test -f internal/migrations/sql/014_asset_derivative_outbox.sql
 
 if grep -Eiq 'migrate[[:space:]_-]*down|migration[[:space:]_-]*rollback' "$workflow"; then
   echo 'release workflow must not roll back database migrations automatically' >&2
