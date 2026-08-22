@@ -43,3 +43,4 @@ jobs:
           go vet ./...
           ./scripts/test-release-workflow.sh
           docker build -t asset-api:verify .
+          docker export "$(docker create asset-api:verify)" | tar -tf - | grep -Fxq 'asset-derivative-worker'
