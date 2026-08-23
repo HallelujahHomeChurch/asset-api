@@ -34,6 +34,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
+        with:
+          node-version: 24
+      - name: Lint OpenAPI
+        run: npx --yes @redocly/cli@2.47.0 lint docs/openapi.yaml
       - run: |
           ./scripts/bootstrap-migration-role.test.sh
           ./scripts/test-migration-policy-test.sh

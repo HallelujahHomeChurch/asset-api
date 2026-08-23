@@ -1,0 +1,796 @@
+openapi: 3.1.0
+info:
+  title: HHC Asset API
+  version: 1.0.0
+  description: Asset owns bytes, upload validation, scanning, derivatives, grants, downloads, and deletion lifecycle. CMS business records remain owned by the caller.
+servers:
+  - url: http://asset-api
+    description: Internal service address; public requests enter through API Gateway.
+x-hhc-service: asset-api
+x-hhc-owner: HHC Platform
+x-hhc-repository: HallelujahHomeChurch/asset-api
+tags:
+  - name: Operations
+    description: Health and readiness checks.
+  - name: Public
+    description: Gateway-proxied public asset and authorized collection delivery.
+  - name: Private
+    description: Dapr-authenticated service operations.
+paths:
+  /health:
+    get:
+      summary: Asset API operation
+      tags: [Operations]
+      x-hhc-visibility: operations
+      x-hhc-callers: []
+      security: []
+      responses:
+        '200': { $ref: '#/components/responses/Health' }
+  /ready:
+    get:
+      summary: Asset API operation
+      tags: [Operations]
+      x-hhc-visibility: operations
+      x-hhc-callers: []
+      security: []
+      responses:
+        '200': { $ref: '#/components/responses/Health' }
+        '503': { $ref: '#/components/responses/Error' }
+  /api/assets/public/{assetID}:
+    parameters: [ { $ref: '#/components/parameters/AssetID' } ]
+    get:
+      summary: Asset API operation
+      tags: [Public]
+      description: API Gateway is the current application caller. Serves only a clean, public asset version.
+      x-hhc-visibility: public
+      x-hhc-callers: [api-gateway]
+      security: []
+      responses:
+        '200': { $ref: '#/components/responses/Download' }
+        '404': { $ref: '#/components/responses/Error' }
+  /api/assets/public/{assetID}/{variant}:
+    parameters: [ { $ref: '#/components/parameters/AssetID' }, { $ref: '#/components/parameters/Variant' } ]
+    get:
+      summary: Asset API operation
+      tags: [Public]
+      description: API Gateway is the current application caller. Serves a completed public image derivative.
+      x-hhc-visibility: public
+      x-hhc-callers: [api-gateway]
+      security: []
+      responses:
+        '200': { $ref: '#/components/responses/Download' }
+        '404': { $ref: '#/components/responses/Error' }
+  /api/assets/collections:
+    get:
+      summary: Asset API operation
+      tags: [Public]
+      description: API Gateway forwards verified user identity for authorized collection listing.
+      x-hhc-visibility: public
+      x-hhc-callers: [api-gateway]
+      security: [ { gatewayIdentity: [] } ]
+      responses:
+        '200': { $ref: '#/components/responses/CollectionPage' }
+        '401': { $ref: '#/components/responses/Error' }
+  /api/assets/collections/{collectionID}/changes:
+    parameters: [ { $ref: '#/components/parameters/CollectionID' } ]
+    get:
+      summary: Asset API operation
+      tags: [Public]
+      description: API Gateway forwards verified user identity for incremental collection changes.
+      x-hhc-visibility: public
+      x-hhc-callers: [api-gateway]
+      security: [ { gatewayIdentity: [] } ]
+      responses:
+        '200': { $ref: '#/components/responses/CollectionChanges' }
+        '404': { $ref: '#/components/responses/Error' }
+  /api/assets/collections/{collectionID}/items/{itemID}:
+    parameters: [ { $ref: '#/components/parameters/CollectionID' }, { $ref: '#/components/parameters/ItemID' } ]
+    get:
+      summary: Asset API operation
+      tags: [Public]
+      description: API Gateway forwards verified user identity for an authorized collection item.
+      x-hhc-visibility: public
+      x-hhc-callers: [api-gateway]
+      security: [ { gatewayIdentity: [] } ]
+      responses:
+        '200': { $ref: '#/components/responses/CollectionItem' }
+        '404': { $ref: '#/components/responses/Error' }
+  /api/assets/collections/{collectionID}/items/{itemID}/content-ticket:
+    parameters: [ { $ref: '#/components/parameters/CollectionID' }, { $ref: '#/components/parameters/ItemID' } ]
+    post:
+      summary: Asset API operation
+      tags: [Public]
+      description: API Gateway forwards verified user identity and token expiry to issue a short-lived content ticket.
+      x-hhc-visibility: public
+      x-hhc-callers: [api-gateway]
+      security: [ { gatewayIdentity: [] } ]
+      responses:
+        '201': { $ref: '#/components/responses/ContentTicket' }
+        '403': { $ref: '#/components/responses/Error' }
+  /api/assets/collections/{collectionID}/items/{itemID}/content:
+    parameters: [ { $ref: '#/components/parameters/CollectionID' }, { $ref: '#/components/parameters/ItemID' } ]
+    get:
+      summary: Asset API operation
+      tags: [Public]
+      description: API Gateway forwards verified user identity to stream authorized content with range support.
+      x-hhc-visibility: public
+      x-hhc-callers: [api-gateway]
+      security: [ { gatewayIdentity: [] } ]
+      responses:
+        '200': { $ref: '#/components/responses/Download' }
+        '206': { $ref: '#/components/responses/Download' }
+  /api/assets/content:
+    get:
+      summary: Asset API operation
+      tags: [Public]
+      description: API Gateway redeems a short-lived content ticket; the ticket is not a user identity.
+      x-hhc-visibility: public
+      x-hhc-callers: [api-gateway]
+      security: [ { daprCaller: [] } ]
+      responses:
+        '200': { $ref: '#/components/responses/Download' }
+        '206': { $ref: '#/components/responses/Download' }
+        '401': { $ref: '#/components/responses/Error' }
+  /priv/assets/upload-sessions:
+    post:
+      summary: Asset API operation
+      tags: [Private]
+      description: The owning service creates an idempotent upload session. The returned short-lived upload target is a response value, never a durable credential.
+      x-hhc-visibility: private
+      x-hhc-callers: [account-api, hhc-web-api, hhc-line-function-bot]
+      security: [ { daprCaller: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateUploadRequest' }
+      responses:
+        '201': { $ref: '#/components/responses/CreatedUpload' }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /priv/assets/operations:
+    get:
+      summary: Asset API operation
+      tags: [Private]
+      description: Returns scan, processing, and purge backlog counts for current owning services.
+      x-hhc-visibility: private
+      x-hhc-callers: [account-api, hhc-web-api, hhc-line-function-bot]
+      security: [ { daprCaller: [] } ]
+      responses:
+        '200': { $ref: '#/components/responses/Operations' }
+  /priv/assets/collections:
+    get:
+      summary: Asset API operation
+      tags: [Private]
+      description: LINE media-sync collection management is currently owned by the LINE function bot.
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-line-function-bot]
+      security: [ { daprCaller: [] } ]
+      responses:
+        '200': { $ref: '#/components/responses/ManagedCollectionPage' }
+    post:
+      summary: Asset API operation
+      tags: [Private]
+      description: Creates a storage collection; caller-owned business context is not stored here.
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-line-function-bot]
+      security: [ { daprCaller: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateCollectionRequest' }
+      responses:
+        '201': { $ref: '#/components/responses/Collection' }
+  /priv/assets/collections/{collectionID}:
+    parameters: [ { $ref: '#/components/parameters/CollectionID' } ]
+    get:
+      summary: Asset API operation
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-line-function-bot]
+      security: [ { daprCaller: [] } ]
+      responses:
+        '200': { $ref: '#/components/responses/ManagedCollection' }
+    patch:
+      summary: Asset API operation
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-line-function-bot]
+      security: [ { daprCaller: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RenameRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Collection' }
+    delete:
+      summary: Asset API operation
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-line-function-bot]
+      security: [ { daprCaller: [] } ]
+      responses:
+        '200': { $ref: '#/components/responses/Collection' }
+  /priv/assets/collections/{collectionID}/items:
+    parameters: [ { $ref: '#/components/parameters/CollectionID' } ]
+    get:
+      summary: Asset API operation
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-line-function-bot]
+      security: [ { daprCaller: [] } ]
+      responses:
+        '200': { $ref: '#/components/responses/ManagedCollectionItemPage' }
+    post:
+      summary: Asset API operation
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-line-function-bot]
+      security: [ { daprCaller: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AddCollectionItemRequest' }
+      responses:
+        '201': { $ref: '#/components/responses/CollectionItemMutation' }
+  /priv/assets/collections/{collectionID}/items/content-tickets:
+    parameters: [ { $ref: '#/components/parameters/CollectionID' } ]
+    post:
+      summary: Asset API operation
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-line-function-bot]
+      security: [ { daprCaller: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ContentTicketBatchRequest' }
+      responses:
+        '201': { $ref: '#/components/responses/ContentTicketBatch' }
+  /priv/assets/collections/{collectionID}/items/retention:
+    parameters: [ { $ref: '#/components/parameters/CollectionID' } ]
+    post:
+      summary: Asset API operation
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-line-function-bot]
+      security: [ { daprCaller: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SetCollectionItemsRetentionRequest' }
+      responses:
+        '204': { description: Retention flags updated. }
+  /priv/assets/collections/{collectionID}/items/delete:
+    parameters: [ { $ref: '#/components/parameters/CollectionID' } ]
+    post:
+      summary: Asset API operation
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-line-function-bot]
+      security: [ { daprCaller: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ItemIDsRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/DeleteCollectionItems' }
+  /priv/assets/collections/{collectionID}/items/{itemID}:
+    parameters: [ { $ref: '#/components/parameters/CollectionID' }, { $ref: '#/components/parameters/ItemID' } ]
+    patch:
+      summary: Asset API operation
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-line-function-bot]
+      security: [ { daprCaller: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RenameRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/ManagedCollectionItem' }
+    delete:
+      summary: Asset API operation
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-line-function-bot]
+      security: [ { daprCaller: [] } ]
+      responses:
+        '200': { $ref: '#/components/responses/CollectionItemMutation' }
+  /priv/assets/collections/{collectionID}/retention:
+    parameters: [ { $ref: '#/components/parameters/CollectionID' } ]
+    patch:
+      summary: Asset API operation
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-line-function-bot]
+      security: [ { daprCaller: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CollectionRetentionRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Collection' }
+  /priv/assets/collections/{collectionID}/acl:
+    parameters: [ { $ref: '#/components/parameters/CollectionID' } ]
+    post:
+      summary: Asset API operation
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-line-function-bot]
+      security: [ { daprCaller: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateGrantRequest' }
+      responses:
+        '201': { $ref: '#/components/responses/CollectionACLMutation' }
+  /priv/assets/collections/{collectionID}/acl/{aclID}:
+    parameters: [ { $ref: '#/components/parameters/CollectionID' }, { $ref: '#/components/parameters/ACLID' } ]
+    delete:
+      summary: Asset API operation
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-line-function-bot]
+      security: [ { daprCaller: [] } ]
+      responses:
+        '200': { $ref: '#/components/responses/CollectionACLMutation' }
+  /priv/assets/{assetID}:
+    parameters: [ { $ref: '#/components/parameters/AssetID' } ]
+    get:
+      summary: Asset API operation
+      tags: [Private]
+      description: Returns lifecycle metadata only to the service that owns the asset namespace.
+      x-hhc-visibility: private
+      x-hhc-callers: [account-api, hhc-web-api, hhc-line-function-bot]
+      security: [ { daprCaller: [] } ]
+      responses:
+        '200': { $ref: '#/components/responses/Asset' }
+        '403': { $ref: '#/components/responses/Error' }
+    delete:
+      summary: Asset API operation
+      tags: [Private]
+      description: Soft-deletes the owner asset and immediately denies future download; retention performs idempotent byte removal.
+      x-hhc-visibility: private
+      x-hhc-callers: [account-api, hhc-web-api, hhc-line-function-bot]
+      security: [ { daprCaller: [] } ]
+      responses:
+        '204': { description: Asset deletion accepted. }
+  /priv/assets/{assetID}/download:
+    parameters: [ { $ref: '#/components/parameters/AssetID' } ]
+    get:
+      summary: Asset API operation
+      tags: [Private]
+      description: Streams an owned, granted, clean asset. Restricted downloads require matching subject headers.
+      x-hhc-visibility: private
+      x-hhc-callers: [account-api, hhc-web-api, hhc-line-function-bot]
+      security: [ { daprCaller: [] } ]
+      responses:
+        '200': { $ref: '#/components/responses/Download' }
+        '206': { $ref: '#/components/responses/Download' }
+        '403': { $ref: '#/components/responses/Error' }
+  /priv/assets/{assetID}/public-url:
+    parameters: [ { $ref: '#/components/parameters/AssetID' } ]
+    get:
+      summary: Asset API operation
+      tags: [Private]
+      description: Returns the stable platform download URL, not a Blob or SAS URL.
+      x-hhc-visibility: private
+      x-hhc-callers: [account-api, hhc-web-api, hhc-line-function-bot]
+      security: [ { daprCaller: [] } ]
+      responses:
+        '200': { $ref: '#/components/responses/PublicURL' }
+  /priv/assets/{assetID}/complete:
+    parameters: [ { $ref: '#/components/parameters/AssetID' } ]
+    post:
+      summary: Asset API operation
+      tags: [Private]
+      description: Validates completed upload bytes and queues the scan lifecycle.
+      x-hhc-visibility: private
+      x-hhc-callers: [account-api, hhc-web-api, hhc-line-function-bot]
+      security: [ { daprCaller: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CompleteUploadRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Asset' }
+        '400': { $ref: '#/components/responses/Error' }
+  /priv/assets/{assetID}/grants:
+    parameters: [ { $ref: '#/components/parameters/AssetID' } ]
+    post:
+      summary: Asset API operation
+      tags: [Private]
+      description: Creates an idempotent subject grant for an owned asset.
+      x-hhc-visibility: private
+      x-hhc-callers: [account-api, hhc-web-api, hhc-line-function-bot]
+      security: [ { daprCaller: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateGrantRequest' }
+      responses:
+        '201': { $ref: '#/components/responses/Grant' }
+  /priv/assets/{assetID}/grants/{grantID}:
+    parameters: [ { $ref: '#/components/parameters/AssetID' }, { $ref: '#/components/parameters/GrantID' } ]
+    delete:
+      summary: Asset API operation
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [account-api, hhc-web-api, hhc-line-function-bot]
+      security: [ { daprCaller: [] } ]
+      responses:
+        '204': { description: Grant revoked. }
+  /priv/assets/{assetID}/scan/requeue:
+    parameters: [ { $ref: '#/components/parameters/AssetID' } ]
+    post:
+      summary: Asset API operation
+      tags: [Private]
+      description: Requeues a failed scan for an owned asset; infected assets cannot be requeued.
+      x-hhc-visibility: private
+      x-hhc-callers: [account-api, hhc-web-api, hhc-line-function-bot]
+      security: [ { daprCaller: [] } ]
+      responses:
+        '202': { description: Scan requeue accepted. }
+        '409': { $ref: '#/components/responses/Error' }
+components:
+  securitySchemes:
+    daprCaller:
+      type: apiKey
+      in: header
+      name: dapr-api-token
+      description: Dapr app-channel token with the authenticated Dapr caller identity.
+    gatewayIdentity:
+      type: apiKey
+      in: header
+      name: Dapr-Caller-App-Id
+      description: API Gateway app caller plus trusted user identity headers injected after gateway validation.
+  parameters:
+    AssetID: { name: assetID, in: path, required: true, schema: { $ref: '#/components/schemas/OpaqueID' } }
+    CollectionID: { name: collectionID, in: path, required: true, schema: { $ref: '#/components/schemas/OpaqueID' } }
+    ItemID: { name: itemID, in: path, required: true, schema: { $ref: '#/components/schemas/OpaqueID' } }
+    GrantID: { name: grantID, in: path, required: true, schema: { $ref: '#/components/schemas/OpaqueID' } }
+    ACLID: { name: aclID, in: path, required: true, schema: { $ref: '#/components/schemas/OpaqueID' } }
+    Variant: { name: variant, in: path, required: true, schema: { type: string, enum: [small, medium, large] } }
+  responses:
+    Health:
+      description: Service state.
+      content: { application/json: { schema: { $ref: '#/components/schemas/Health' } } }
+    Error:
+      description: Stable Asset API error.
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+    Asset:
+      description: Asset lifecycle metadata.
+      content: { application/json: { schema: { $ref: '#/components/schemas/Asset' } } }
+    CreatedUpload:
+      description: Idempotent upload session with a short-lived upload target.
+      content: { application/json: { schema: { $ref: '#/components/schemas/CreatedUpload' } } }
+    Grant:
+      description: Asset access grant.
+      content: { application/json: { schema: { $ref: '#/components/schemas/Grant' } } }
+    PublicURL:
+      description: Stable platform download URL.
+      content: { application/json: { schema: { $ref: '#/components/schemas/PublicURL' } } }
+    Operations:
+      description: Scan, processing, and purge work counts.
+      content: { application/json: { schema: { $ref: '#/components/schemas/Operations' } } }
+    Download:
+      description: Asset bytes with ETag and Range support.
+      headers:
+        ETag: { schema: { type: string } }
+        Accept-Ranges: { schema: { type: string, enum: [bytes] } }
+      content: { application/octet-stream: { schema: { type: string, format: binary } } }
+    Collection: { description: Storage collection metadata., content: { application/json: { schema: { $ref: '#/components/schemas/Collection' } } } }
+    CollectionPage: { description: Authorized collection page., content: { application/json: { schema: { $ref: '#/components/schemas/CollectionPage' } } } }
+    CollectionChanges: { description: Authorized collection change page., content: { application/json: { schema: { $ref: '#/components/schemas/CollectionChanges' } } } }
+    CollectionItem: { description: Collection item metadata., content: { application/json: { schema: { $ref: '#/components/schemas/CollectionItem' } } } }
+    ContentTicket: { description: Short-lived content ticket., content: { application/json: { schema: { $ref: '#/components/schemas/ContentTicket' } } } }
+    ContentTicketBatch: { description: Short-lived managed content tickets., content: { application/json: { schema: { $ref: '#/components/schemas/ContentTicketBatch' } } } }
+    ManagedCollection: { description: Managed collection and ACLs., content: { application/json: { schema: { $ref: '#/components/schemas/ManagedCollection' } } } }
+    ManagedCollectionPage: { description: Managed collection page., content: { application/json: { schema: { $ref: '#/components/schemas/ManagedCollectionPage' } } } }
+    ManagedCollectionItem: { description: Managed collection item., content: { application/json: { schema: { $ref: '#/components/schemas/ManagedCollectionItem' } } } }
+    ManagedCollectionItemPage: { description: Managed collection item page., content: { application/json: { schema: { $ref: '#/components/schemas/ManagedCollectionItemPage' } } } }
+    CollectionItemMutation: { description: Collection item mutation., content: { application/json: { schema: { $ref: '#/components/schemas/CollectionItemMutation' } } } }
+    CollectionACLMutation: { description: Collection ACL mutation., content: { application/json: { schema: { $ref: '#/components/schemas/CollectionACLMutation' } } } }
+    DeleteCollectionItems: { description: Collection deletion result., content: { application/json: { schema: { $ref: '#/components/schemas/DeleteCollectionItemsResult' } } } }
+  schemas:
+    OpaqueID: { type: string, minLength: 1, maxLength: 255, description: Opaque Asset API identifier. }
+    Health: { type: object, required: [status], properties: { status: { type: string, enum: [healthy, ready] } } }
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string, enum: [AST_INVALID_REQUEST, AST_INVALID_TICKET, AST_UNAUTHORIZED, AST_FORBIDDEN, AST_NOT_FOUND, AST_CONFLICT, AST_NOT_READY, AST_INTERNAL] }
+            message: { type: string }
+    Asset:
+      type: object
+      required: [id, namespace, ownerService, ownerType, ownerId, purpose, originalFileName, expectedMimeType, uploadStatus, scanStatus, processingStatus, visibility, createdAt, updatedAt]
+      properties:
+        id: { $ref: '#/components/schemas/OpaqueID' }
+        namespace: { type: string }
+        ownerService: { type: string }
+        ownerType: { type: string }
+        ownerId: { type: string }
+        purpose: { type: string }
+        locale: { type: string }
+        originalFileName: { type: string }
+        expectedMimeType: { type: string }
+        detectedMimeType: { type: string, description: Detected MIME type after completion validation. }
+        sizeBytes: { type: integer, format: int64, minimum: 1 }
+        checksumSha256: { type: string, description: SHA-256 checksum of completed bytes. }
+        etag: { type: string }
+        uploadStatus: { type: string, enum: [created, completed, failed] }
+        scanStatus: { type: string, enum: [pending, clean, infected, failed] }
+        scanDetails: { type: string }
+        scanSignatureVersion: { type: string }
+        scanFailureCategory: { type: string }
+        processingStatus: { type: string, enum: [pending, ready, not_required, failed] }
+        visibility: { type: string, enum: [public, authenticated, restricted, private] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        deletedAt: { type: string, format: date-time }
+    UploadSession:
+      type: object
+      required: [id, assetId, maxSizeBytes, status, expiresAt, createdAt]
+      properties:
+        id: { $ref: '#/components/schemas/OpaqueID' }
+        assetId: { $ref: '#/components/schemas/OpaqueID' }
+        maxSizeBytes: { type: integer, format: int64 }
+        status: { type: string, enum: [created, completed, failed] }
+        expiresAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time }
+    UploadTarget:
+      type: object
+      required: [url, method, headers, expiresAt]
+      properties:
+        url: { type: string, format: uri, description: Short-lived SAS or local development upload URL returned only for the upload session. }
+        method: { type: string, enum: [PUT] }
+        headers: { type: object, additionalProperties: { type: string } }
+        expiresAt: { type: string, format: date-time }
+    CreatedUpload:
+      type: object
+      required: [asset, session]
+      properties:
+        asset: { $ref: '#/components/schemas/Asset' }
+        session: { $ref: '#/components/schemas/UploadSession' }
+        uploadTarget: { $ref: '#/components/schemas/UploadTarget' }
+    CreateUploadRequest:
+      type: object
+      required: [namespace, ownerService, ownerType, ownerId, purpose, originalFileName, expectedMimeType, maxSizeBytes, visibility]
+      properties:
+        namespace: { type: string }
+        ownerService: { type: string }
+        ownerType: { type: string }
+        ownerId: { type: string }
+        purpose: { type: string }
+        locale: { type: string }
+        originalFileName: { type: string }
+        expectedMimeType: { type: string }
+        maxSizeBytes: { type: integer, format: int64, minimum: 1 }
+        visibility: { type: string, enum: [public, authenticated, restricted, private] }
+    CompleteUploadRequest:
+      type: object
+      required: [sizeBytes, checksumSha256, mimeType]
+      properties:
+        sizeBytes: { type: integer, format: int64, minimum: 1 }
+        checksumSha256: { type: string }
+        mimeType: { type: string }
+    Grant:
+      type: object
+      required: [id, assetId, subjectType, subjectId, permission, createdAt]
+      properties:
+        id: { $ref: '#/components/schemas/OpaqueID' }
+        assetId: { $ref: '#/components/schemas/OpaqueID' }
+        subjectType: { type: string, enum: [public, user, role, service, line_group, app_client] }
+        subjectId: { type: string }
+        permission: { type: string, enum: [read, delete] }
+        expiresAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        revokedAt: { type: string, format: date-time }
+    CreateGrantRequest:
+      type: object
+      required: [subjectType, subjectId, permission]
+      properties:
+        subjectType: { type: string, enum: [public, user, role, service, line_group, app_client] }
+        subjectId: { type: string }
+        permission: { type: string, enum: [read, delete] }
+        expiresAt: { type: string, format: date-time }
+        idempotencyKey: { type: string }
+    PublicURL:
+      type: object
+      required: [assetId, downloadUrl]
+      properties:
+        assetId: { $ref: '#/components/schemas/OpaqueID' }
+        downloadUrl: { type: string, format: uri }
+    Operations:
+      type: object
+      required: [scanPending, scanFailed, processingPending, processingFailed, purgePending, expiredCollectionItems]
+      properties:
+        scanPending: { type: integer, format: int64 }
+        scanFailed: { type: integer, format: int64 }
+        oldestScanPending: { type: string, format: date-time }
+        processingPending: { type: integer, format: int64 }
+        processingFailed: { type: integer, format: int64 }
+        oldestProcessingPending: { type: string, format: date-time }
+        purgePending: { type: integer, format: int64 }
+        expiredCollectionItems: { type: integer, format: int64 }
+    Collection:
+      type: object
+      required: [id, namespace, name, revision, retentionDays, createdAt, updatedAt]
+      properties:
+        id: { $ref: '#/components/schemas/OpaqueID' }
+        namespace: { type: string }
+        name: { type: string }
+        revision: { type: integer, format: int64 }
+        retentionDays: { type: integer }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        deletedAt: { type: string, format: date-time }
+    CollectionItem:
+      type: object
+      required: [id, collectionId, remoteItemId, displayName, sourceRevision, createdRevision, updatedRevision, createdAt, updatedAt]
+      properties:
+        id: { $ref: '#/components/schemas/OpaqueID' }
+        collectionId: { $ref: '#/components/schemas/OpaqueID' }
+        assetId: { $ref: '#/components/schemas/OpaqueID' }
+        remoteItemId: { type: string }
+        displayName: { type: string }
+        sourceRevision: { type: string }
+        createdRevision: { type: integer, format: int64 }
+        updatedRevision: { type: integer, format: int64 }
+        deletedRevision: { type: integer, format: int64 }
+        mimeType: { type: string }
+        sizeBytes: { type: integer, format: int64 }
+        etag: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        deletedAt: { type: string, format: date-time }
+    CollectionACL:
+      type: object
+      required: [id, collectionId, subjectType, subjectId, permission, createdAt]
+      properties:
+        id: { $ref: '#/components/schemas/OpaqueID' }
+        collectionId: { $ref: '#/components/schemas/OpaqueID' }
+        subjectType: { type: string, enum: [public, user, role, service, line_group, app_client] }
+        subjectId: { type: string }
+        permission: { type: string, enum: [read, delete] }
+        createdAt: { type: string, format: date-time }
+        revokedAt: { type: string, format: date-time }
+    CollectionTombstone:
+      type: object
+      required: [id, remoteItemId, deletedRevision, deletedAt]
+      properties:
+        id: { $ref: '#/components/schemas/OpaqueID' }
+        remoteItemId: { type: string }
+        deletedRevision: { type: integer, format: int64 }
+        deletedAt: { type: string, format: date-time }
+    CollectionPage:
+      type: object
+      required: [collections, hasMore]
+      properties:
+        collections: { type: array, items: { $ref: '#/components/schemas/Collection' } }
+        cursor: { type: string }
+        hasMore: { type: boolean }
+    CollectionChanges:
+      type: object
+      required: [collection, items, tombstones, cursor, hasMore, reset]
+      properties:
+        collection: { $ref: '#/components/schemas/Collection' }
+        items: { type: array, items: { $ref: '#/components/schemas/CollectionItem' } }
+        tombstones: { type: array, items: { $ref: '#/components/schemas/CollectionTombstone' } }
+        cursor: { type: string }
+        hasMore: { type: boolean }
+        reset: { type: boolean }
+    ContentTicket:
+      type: object
+      required: [contentUrl, expiresAt, etag]
+      properties:
+        contentUrl: { type: string, format: uri-reference }
+        expiresAt: { type: string, format: date-time }
+        etag: { type: string }
+    ContentTicketBatch:
+      type: object
+      required: [tickets, unavailableItemIds]
+      properties:
+        tickets: { type: array, items: { $ref: '#/components/schemas/ContentTicket' } }
+        unavailableItemIds: { type: array, items: { $ref: '#/components/schemas/OpaqueID' } }
+    ManagedCollection:
+      type: object
+      required: [collection, acls]
+      properties:
+        collection: { $ref: '#/components/schemas/Collection' }
+        acls: { type: array, items: { $ref: '#/components/schemas/CollectionACL' } }
+    ManagedCollectionPage:
+      type: object
+      required: [collections, hasMore]
+      properties:
+        collections: { type: array, items: { $ref: '#/components/schemas/ManagedCollection' } }
+        cursor: { type: string }
+        hasMore: { type: boolean }
+    ManagedCollectionItem:
+      type: object
+      required: [id, displayName, mimeType, sizeBytes, createdAt, retentionExempt]
+      properties:
+        id: { $ref: '#/components/schemas/OpaqueID' }
+        displayName: { type: string }
+        mimeType: { type: string }
+        sizeBytes: { type: integer, format: int64 }
+        createdAt: { type: string, format: date-time }
+        retentionExempt: { type: boolean }
+    ManagedCollectionItemPage:
+      type: object
+      required: [items, hasMore]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/ManagedCollectionItem' } }
+        cursor: { type: string }
+        hasMore: { type: boolean }
+    CollectionItemMutation:
+      type: object
+      required: [collection]
+      properties:
+        collection: { $ref: '#/components/schemas/Collection' }
+        item: { $ref: '#/components/schemas/CollectionItem' }
+        tombstone: { type: object }
+    CollectionACLMutation:
+      type: object
+      required: [collection, acl]
+      properties:
+        collection: { $ref: '#/components/schemas/Collection' }
+        acl: { $ref: '#/components/schemas/CollectionACL' }
+    DeleteCollectionItemsResult:
+      type: object
+      required: [deleted, alreadyRemoved]
+      properties:
+        deleted: { type: integer }
+        alreadyRemoved: { type: integer }
+    CreateCollectionRequest:
+      type: object
+      required: [namespace, name]
+      properties: { namespace: { type: string }, name: { type: string } }
+    RenameRequest:
+      type: object
+      required: [name]
+      properties: { name: { type: string } }
+    AddCollectionItemRequest:
+      type: object
+      required: [assetId, remoteItemId, displayName, sourceRevision]
+      properties:
+        assetId: { $ref: '#/components/schemas/OpaqueID' }
+        remoteItemId: { type: string }
+        displayName: { type: string }
+        sourceRevision: { type: string }
+    ContentTicketBatchRequest:
+      type: object
+      required: [itemIds]
+      properties: { itemIds: { type: array, items: { $ref: '#/components/schemas/OpaqueID' } } }
+    ItemIDsRequest:
+      type: object
+      required: [itemIds]
+      properties: { itemIds: { type: array, items: { $ref: '#/components/schemas/OpaqueID' } } }
+    SetCollectionItemsRetentionRequest:
+      type: object
+      required: [itemIds, retentionExempt]
+      properties:
+        itemIds: { type: array, items: { $ref: '#/components/schemas/OpaqueID' } }
+        retentionExempt: { type: boolean }
+    CollectionRetentionRequest:
+      type: object
+      required: [retentionDays]
+      properties: { retentionDays: { type: integer, minimum: 1 } }
