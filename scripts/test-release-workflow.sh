@@ -6,6 +6,17 @@ workflow=.github/workflows/release.yml
 grep -q 'workflow_dispatch:' "$workflow"
 grep -q '^  push:' "$workflow"
 grep -q 'branches: \[main\]' "$workflow"
+expected_paths_ignore='docs/**
+.github/workflows/ci.yml'
+actual_paths_ignore="$(awk '
+  $0 == "    paths-ignore:" { in_paths_ignore = 1; next }
+  in_paths_ignore && /^      - / { sub(/^      - /, ""); print; next }
+  in_paths_ignore { exit }
+' "$workflow")"
+if [ "$actual_paths_ignore" != "$expected_paths_ignore" ]; then
+  echo 'release docs-only paths-ignore policy mismatch' >&2
+  exit 1
+fi
 grep -Fq "github.event_name == 'push' && 'deploy-asset-api-production' || inputs.confirmation" "$workflow"
 grep -q 'ACTIVATE_QUEUE_SCANNING: "true"' "$workflow"
 grep -q 'EMBEDDED_SCAN_ENABLED: "false"' "$workflow"
