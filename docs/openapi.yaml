@@ -48,6 +48,7 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/Download' }
         '404': { $ref: '#/components/responses/Error' }
+        '416': { $ref: '#/components/responses/Error' }
   /api/assets/public/{assetID}/{variant}:
     parameters: [ { $ref: '#/components/parameters/AssetID' }, { $ref: '#/components/parameters/Variant' } ]
     get:
@@ -60,6 +61,7 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/Download' }
         '404': { $ref: '#/components/responses/Error' }
+        '416': { $ref: '#/components/responses/Error' }
   /api/assets/collections:
     get:
       summary: Asset API operation
@@ -67,9 +69,9 @@ paths:
       description: API Gateway forwards verified user identity for authorized collection listing.
       x-hhc-visibility: public
       x-hhc-callers: [api-gateway]
-      security: [ { gatewayIdentity: [] } ]
+      security: [ { gatewayDaprCaller: [], gatewayTrustedIdentity: [] } ]
       responses:
-        '200': { $ref: '#/components/responses/CollectionPage' }
+        '200': { $ref: '#/components/responses/ReaderCollectionPage' }
         '401': { $ref: '#/components/responses/Error' }
   /api/assets/collections/{collectionID}/changes:
     parameters: [ { $ref: '#/components/parameters/CollectionID' } ]
@@ -79,9 +81,9 @@ paths:
       description: API Gateway forwards verified user identity for incremental collection changes.
       x-hhc-visibility: public
       x-hhc-callers: [api-gateway]
-      security: [ { gatewayIdentity: [] } ]
+      security: [ { gatewayDaprCaller: [], gatewayTrustedIdentity: [] } ]
       responses:
-        '200': { $ref: '#/components/responses/CollectionChanges' }
+        '200': { $ref: '#/components/responses/ReaderCollectionChanges' }
         '404': { $ref: '#/components/responses/Error' }
   /api/assets/collections/{collectionID}/items/{itemID}:
     parameters: [ { $ref: '#/components/parameters/CollectionID' }, { $ref: '#/components/parameters/ItemID' } ]
@@ -91,9 +93,9 @@ paths:
       description: API Gateway forwards verified user identity for an authorized collection item.
       x-hhc-visibility: public
       x-hhc-callers: [api-gateway]
-      security: [ { gatewayIdentity: [] } ]
+      security: [ { gatewayDaprCaller: [], gatewayTrustedIdentity: [] } ]
       responses:
-        '200': { $ref: '#/components/responses/CollectionItem' }
+        '200': { $ref: '#/components/responses/ReaderCollectionItem' }
         '404': { $ref: '#/components/responses/Error' }
   /api/assets/collections/{collectionID}/items/{itemID}/content-ticket:
     parameters: [ { $ref: '#/components/parameters/CollectionID' }, { $ref: '#/components/parameters/ItemID' } ]
@@ -103,7 +105,7 @@ paths:
       description: API Gateway forwards verified user identity and token expiry to issue a short-lived content ticket.
       x-hhc-visibility: public
       x-hhc-callers: [api-gateway]
-      security: [ { gatewayIdentity: [] } ]
+      security: [ { gatewayDaprCaller: [], gatewayTrustedIdentity: [] } ]
       responses:
         '201': { $ref: '#/components/responses/ContentTicket' }
         '403': { $ref: '#/components/responses/Error' }
@@ -115,10 +117,11 @@ paths:
       description: API Gateway forwards verified user identity to stream authorized content with range support.
       x-hhc-visibility: public
       x-hhc-callers: [api-gateway]
-      security: [ { gatewayIdentity: [] } ]
+      security: [ { gatewayDaprCaller: [], gatewayTrustedIdentity: [] } ]
       responses:
         '200': { $ref: '#/components/responses/Download' }
         '206': { $ref: '#/components/responses/Download' }
+        '416': { $ref: '#/components/responses/Error' }
   /api/assets/content:
     get:
       summary: Asset API operation
@@ -126,11 +129,13 @@ paths:
       description: API Gateway redeems a short-lived content ticket; the ticket is not a user identity.
       x-hhc-visibility: public
       x-hhc-callers: [api-gateway]
-      security: [ { daprCaller: [] } ]
+      security: [ { gatewayDaprCaller: [] } ]
+      parameters: [ { $ref: '#/components/parameters/ContentTicket' } ]
       responses:
         '200': { $ref: '#/components/responses/Download' }
         '206': { $ref: '#/components/responses/Download' }
         '401': { $ref: '#/components/responses/Error' }
+        '416': { $ref: '#/components/responses/Error' }
   /priv/assets/upload-sessions:
     post:
       summary: Asset API operation
@@ -138,7 +143,7 @@ paths:
       description: The owning service creates an idempotent upload session. The returned short-lived upload target is a response value, never a durable credential.
       x-hhc-visibility: private
       x-hhc-callers: [account-api, hhc-web-api, hhc-line-function-bot]
-      security: [ { daprCaller: [] } ]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
       requestBody:
         required: true
         content:
@@ -156,7 +161,7 @@ paths:
       description: Returns scan, processing, and purge backlog counts for current owning services.
       x-hhc-visibility: private
       x-hhc-callers: [account-api, hhc-web-api, hhc-line-function-bot]
-      security: [ { daprCaller: [] } ]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
       responses:
         '200': { $ref: '#/components/responses/Operations' }
   /priv/assets/collections:
@@ -166,7 +171,7 @@ paths:
       description: LINE media-sync collection management is currently owned by the LINE function bot.
       x-hhc-visibility: private
       x-hhc-callers: [hhc-line-function-bot]
-      security: [ { daprCaller: [] } ]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
       responses:
         '200': { $ref: '#/components/responses/ManagedCollectionPage' }
     post:
@@ -175,7 +180,8 @@ paths:
       description: Creates a storage collection; caller-owned business context is not stored here.
       x-hhc-visibility: private
       x-hhc-callers: [hhc-line-function-bot]
-      security: [ { daprCaller: [] } ]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
       requestBody:
         required: true
         content:
@@ -190,7 +196,7 @@ paths:
       tags: [Private]
       x-hhc-visibility: private
       x-hhc-callers: [hhc-line-function-bot]
-      security: [ { daprCaller: [] } ]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
       responses:
         '200': { $ref: '#/components/responses/ManagedCollection' }
     patch:
@@ -198,7 +204,8 @@ paths:
       tags: [Private]
       x-hhc-visibility: private
       x-hhc-callers: [hhc-line-function-bot]
-      security: [ { daprCaller: [] } ]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
       requestBody:
         required: true
         content:
@@ -211,7 +218,8 @@ paths:
       tags: [Private]
       x-hhc-visibility: private
       x-hhc-callers: [hhc-line-function-bot]
-      security: [ { daprCaller: [] } ]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
       responses:
         '200': { $ref: '#/components/responses/Collection' }
   /priv/assets/collections/{collectionID}/items:
@@ -221,7 +229,7 @@ paths:
       tags: [Private]
       x-hhc-visibility: private
       x-hhc-callers: [hhc-line-function-bot]
-      security: [ { daprCaller: [] } ]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
       responses:
         '200': { $ref: '#/components/responses/ManagedCollectionItemPage' }
     post:
@@ -229,7 +237,8 @@ paths:
       tags: [Private]
       x-hhc-visibility: private
       x-hhc-callers: [hhc-line-function-bot]
-      security: [ { daprCaller: [] } ]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
       requestBody:
         required: true
         content:
@@ -244,7 +253,7 @@ paths:
       tags: [Private]
       x-hhc-visibility: private
       x-hhc-callers: [hhc-line-function-bot]
-      security: [ { daprCaller: [] } ]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
       requestBody:
         required: true
         content:
@@ -259,7 +268,8 @@ paths:
       tags: [Private]
       x-hhc-visibility: private
       x-hhc-callers: [hhc-line-function-bot]
-      security: [ { daprCaller: [] } ]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
       requestBody:
         required: true
         content:
@@ -274,7 +284,8 @@ paths:
       tags: [Private]
       x-hhc-visibility: private
       x-hhc-callers: [hhc-line-function-bot]
-      security: [ { daprCaller: [] } ]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
       requestBody:
         required: true
         content:
@@ -289,7 +300,8 @@ paths:
       tags: [Private]
       x-hhc-visibility: private
       x-hhc-callers: [hhc-line-function-bot]
-      security: [ { daprCaller: [] } ]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
       requestBody:
         required: true
         content:
@@ -302,7 +314,8 @@ paths:
       tags: [Private]
       x-hhc-visibility: private
       x-hhc-callers: [hhc-line-function-bot]
-      security: [ { daprCaller: [] } ]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
       responses:
         '200': { $ref: '#/components/responses/CollectionItemMutation' }
   /priv/assets/collections/{collectionID}/retention:
@@ -312,7 +325,8 @@ paths:
       tags: [Private]
       x-hhc-visibility: private
       x-hhc-callers: [hhc-line-function-bot]
-      security: [ { daprCaller: [] } ]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
       requestBody:
         required: true
         content:
@@ -327,12 +341,13 @@ paths:
       tags: [Private]
       x-hhc-visibility: private
       x-hhc-callers: [hhc-line-function-bot]
-      security: [ { daprCaller: [] } ]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/CreateGrantRequest' }
+            schema: { $ref: '#/components/schemas/CollectionACLRequest' }
       responses:
         '201': { $ref: '#/components/responses/CollectionACLMutation' }
   /priv/assets/collections/{collectionID}/acl/{aclID}:
@@ -342,7 +357,8 @@ paths:
       tags: [Private]
       x-hhc-visibility: private
       x-hhc-callers: [hhc-line-function-bot]
-      security: [ { daprCaller: [] } ]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
       responses:
         '200': { $ref: '#/components/responses/CollectionACLMutation' }
   /priv/assets/{assetID}:
@@ -353,7 +369,7 @@ paths:
       description: Returns lifecycle metadata only to the service that owns the asset namespace.
       x-hhc-visibility: private
       x-hhc-callers: [account-api, hhc-web-api, hhc-line-function-bot]
-      security: [ { daprCaller: [] } ]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
       responses:
         '200': { $ref: '#/components/responses/Asset' }
         '403': { $ref: '#/components/responses/Error' }
@@ -363,7 +379,7 @@ paths:
       description: Soft-deletes the owner asset and immediately denies future download; retention performs idempotent byte removal.
       x-hhc-visibility: private
       x-hhc-callers: [account-api, hhc-web-api, hhc-line-function-bot]
-      security: [ { daprCaller: [] } ]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
       responses:
         '204': { description: Asset deletion accepted. }
   /priv/assets/{assetID}/download:
@@ -374,11 +390,12 @@ paths:
       description: Streams an owned, granted, clean asset. Restricted downloads require matching subject headers.
       x-hhc-visibility: private
       x-hhc-callers: [account-api, hhc-web-api, hhc-line-function-bot]
-      security: [ { daprCaller: [] } ]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
       responses:
         '200': { $ref: '#/components/responses/Download' }
         '206': { $ref: '#/components/responses/Download' }
         '403': { $ref: '#/components/responses/Error' }
+        '416': { $ref: '#/components/responses/Error' }
   /priv/assets/{assetID}/public-url:
     parameters: [ { $ref: '#/components/parameters/AssetID' } ]
     get:
@@ -387,7 +404,7 @@ paths:
       description: Returns the stable platform download URL, not a Blob or SAS URL.
       x-hhc-visibility: private
       x-hhc-callers: [account-api, hhc-web-api, hhc-line-function-bot]
-      security: [ { daprCaller: [] } ]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
       responses:
         '200': { $ref: '#/components/responses/PublicURL' }
   /priv/assets/{assetID}/complete:
@@ -398,7 +415,7 @@ paths:
       description: Validates completed upload bytes and queues the scan lifecycle.
       x-hhc-visibility: private
       x-hhc-callers: [account-api, hhc-web-api, hhc-line-function-bot]
-      security: [ { daprCaller: [] } ]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
       requestBody:
         required: true
         content:
@@ -415,7 +432,7 @@ paths:
       description: Creates an idempotent subject grant for an owned asset.
       x-hhc-visibility: private
       x-hhc-callers: [account-api, hhc-web-api, hhc-line-function-bot]
-      security: [ { daprCaller: [] } ]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
       requestBody:
         required: true
         content:
@@ -430,7 +447,7 @@ paths:
       tags: [Private]
       x-hhc-visibility: private
       x-hhc-callers: [account-api, hhc-web-api, hhc-line-function-bot]
-      security: [ { daprCaller: [] } ]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
       responses:
         '204': { description: Grant revoked. }
   /priv/assets/{assetID}/scan/requeue:
@@ -441,7 +458,7 @@ paths:
       description: Requeues a failed scan for an owned asset; infected assets cannot be requeued.
       x-hhc-visibility: private
       x-hhc-callers: [account-api, hhc-web-api, hhc-line-function-bot]
-      security: [ { daprCaller: [] } ]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
       responses:
         '202': { description: Scan requeue accepted. }
         '409': { $ref: '#/components/responses/Error' }
@@ -452,11 +469,21 @@ components:
       in: header
       name: dapr-api-token
       description: Dapr app-channel token with the authenticated Dapr caller identity.
-    gatewayIdentity:
+    workloadPrincipal:
       type: apiKey
       in: header
-      name: Dapr-Caller-App-Id
-      description: API Gateway app caller plus trusted user identity headers injected after gateway validation.
+      name: X-MS-CLIENT-PRINCIPAL
+      description: Validated Azure workload principal. The configured LINE workload principal maps to `hhc-line-function-bot`.
+    gatewayDaprCaller:
+      type: apiKey
+      in: header
+      name: dapr-api-token
+      description: Valid Dapr app-channel token and Dapr-Caller-App-Id exactly `api-gateway`.
+    gatewayTrustedIdentity:
+      type: apiKey
+      in: header
+      name: X-HHC-User-ID
+      description: Gateway-injected identity. X-HHC-User-ID and X-HHC-Token-Expires-At are required; X-HHC-Roles, X-HHC-Token-ID, X-HHC-Session-ID, and X-HHC-Auth-Provider are optional trusted context.
   parameters:
     AssetID: { name: assetID, in: path, required: true, schema: { $ref: '#/components/schemas/OpaqueID' } }
     CollectionID: { name: collectionID, in: path, required: true, schema: { $ref: '#/components/schemas/OpaqueID' } }
@@ -464,6 +491,8 @@ components:
     GrantID: { name: grantID, in: path, required: true, schema: { $ref: '#/components/schemas/OpaqueID' } }
     ACLID: { name: aclID, in: path, required: true, schema: { $ref: '#/components/schemas/OpaqueID' } }
     Variant: { name: variant, in: path, required: true, schema: { type: string, enum: [small, medium, large] } }
+    IdempotencyKey: { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 1, maxLength: 128 } }
+    ContentTicket: { name: ticket, in: query, required: true, schema: { type: string, minLength: 1 } }
   responses:
     Health:
       description: Service state.
@@ -496,6 +525,9 @@ components:
     CollectionPage: { description: Authorized collection page., content: { application/json: { schema: { $ref: '#/components/schemas/CollectionPage' } } } }
     CollectionChanges: { description: Authorized collection change page., content: { application/json: { schema: { $ref: '#/components/schemas/CollectionChanges' } } } }
     CollectionItem: { description: Collection item metadata., content: { application/json: { schema: { $ref: '#/components/schemas/CollectionItem' } } } }
+    ReaderCollectionPage: { description: Reader-safe collection page., content: { application/json: { schema: { $ref: '#/components/schemas/ReaderCollectionPage' } } } }
+    ReaderCollectionChanges: { description: Reader-safe collection change page., content: { application/json: { schema: { $ref: '#/components/schemas/ReaderCollectionChanges' } } } }
+    ReaderCollectionItem: { description: Reader-safe collection item metadata., content: { application/json: { schema: { $ref: '#/components/schemas/ReaderCollectionItem' } } } }
     ContentTicket: { description: Short-lived content ticket., content: { application/json: { schema: { $ref: '#/components/schemas/ContentTicket' } } } }
     ContentTicketBatch: { description: Short-lived managed content tickets., content: { application/json: { schema: { $ref: '#/components/schemas/ContentTicketBatch' } } } }
     ManagedCollection: { description: Managed collection and ACLs., content: { application/json: { schema: { $ref: '#/components/schemas/ManagedCollection' } } } }
@@ -516,7 +548,7 @@ components:
           type: object
           required: [code, message]
           properties:
-            code: { type: string, enum: [AST_INVALID_REQUEST, AST_INVALID_TICKET, AST_UNAUTHORIZED, AST_FORBIDDEN, AST_NOT_FOUND, AST_CONFLICT, AST_NOT_READY, AST_INTERNAL] }
+            code: { type: string, enum: [AST_INVALID_REQUEST, AST_INVALID_RANGE, AST_INVALID_TICKET, AST_UNAUTHORIZED, AST_FORBIDDEN, AST_NOT_FOUND, AST_CONFLICT, AST_NOT_READY, AST_INTERNAL] }
             message: { type: string }
     Asset:
       type: object
@@ -662,6 +694,34 @@ components:
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
         deletedAt: { type: string, format: date-time }
+    ReaderCollection:
+      type: object
+      required: [id, namespace, name, revision, createdAt, updatedAt]
+      properties:
+        id: { $ref: '#/components/schemas/OpaqueID' }
+        namespace: { type: string }
+        name: { type: string }
+        revision: { type: integer, format: int64 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    ReaderCollectionItem:
+      type: object
+      required: [id, collectionId, remoteItemId, displayName, sourceRevision, createdRevision, updatedRevision, createdAt, updatedAt]
+      properties:
+        id: { $ref: '#/components/schemas/OpaqueID' }
+        collectionId: { $ref: '#/components/schemas/OpaqueID' }
+        remoteItemId: { type: string }
+        displayName: { type: string }
+        sourceRevision: { type: string }
+        createdRevision: { type: integer, format: int64 }
+        updatedRevision: { type: integer, format: int64 }
+        deletedRevision: { type: integer, format: int64 }
+        mimeType: { type: string }
+        sizeBytes: { type: integer, format: int64 }
+        etag: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        deletedAt: { type: string, format: date-time }
     CollectionACL:
       type: object
       required: [id, collectionId, subjectType, subjectId, permission, createdAt]
@@ -698,6 +758,23 @@ components:
         cursor: { type: string }
         hasMore: { type: boolean }
         reset: { type: boolean }
+    ReaderCollectionPage:
+      type: object
+      required: [collections, hasMore]
+      properties:
+        collections: { type: array, items: { $ref: '#/components/schemas/ReaderCollection' } }
+        cursor: { type: string }
+        hasMore: { type: boolean }
+    ReaderCollectionChanges:
+      type: object
+      required: [collection, items, tombstones, cursor, hasMore, reset]
+      properties:
+        collection: { $ref: '#/components/schemas/ReaderCollection' }
+        items: { type: array, items: { $ref: '#/components/schemas/ReaderCollectionItem' } }
+        tombstones: { type: array, items: { $ref: '#/components/schemas/CollectionTombstone' } }
+        cursor: { type: string }
+        hasMore: { type: boolean }
+        reset: { type: boolean }
     ContentTicket:
       type: object
       required: [contentUrl, expiresAt, etag]
@@ -709,8 +786,16 @@ components:
       type: object
       required: [tickets, unavailableItemIds]
       properties:
-        tickets: { type: array, items: { $ref: '#/components/schemas/ContentTicket' } }
+        tickets: { type: array, items: { $ref: '#/components/schemas/ManagedContentTicket' } }
         unavailableItemIds: { type: array, items: { $ref: '#/components/schemas/OpaqueID' } }
+    ManagedContentTicket:
+      type: object
+      required: [itemId, contentUrl, expiresAt, etag]
+      properties:
+        itemId: { $ref: '#/components/schemas/OpaqueID' }
+        contentUrl: { type: string, format: uri-reference }
+        expiresAt: { type: string, format: date-time }
+        etag: { type: string }
     ManagedCollection:
       type: object
       required: [collection, acls]
@@ -764,6 +849,13 @@ components:
       type: object
       required: [namespace, name]
       properties: { namespace: { type: string }, name: { type: string } }
+    CollectionACLRequest:
+      type: object
+      required: [subjectType, subjectId, permission]
+      properties:
+        subjectType: { type: string, enum: [public, user, role, service, line_group, app_client] }
+        subjectId: { type: string }
+        permission: { type: string, enum: [read, delete] }
     RenameRequest:
       type: object
       required: [name]
