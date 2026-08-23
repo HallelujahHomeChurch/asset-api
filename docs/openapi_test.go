@@ -169,6 +169,32 @@ func TestOpenAPISecurityAndWireContracts(t *testing.T) {
 	assertContains(t, schemaBlockFor(t, document, "ErrorResponse"), "AST_INVALID_RANGE")
 }
 
+func TestOpenAPILifecycleRequestInputs(t *testing.T) {
+	raw, err := os.ReadFile("openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := string(raw)
+
+	upload := operationBlockFor(t, document, documentedOperation{"POST", "/priv/assets/upload-sessions", ""})
+	assertContains(t, upload, "$ref: '#/components/parameters/IdempotencyKey'")
+	assertContains(t, document, "IdempotencyKey: { name: Idempotency-Key, in: header, required: true")
+
+	grant := operationBlockFor(t, document, documentedOperation{"POST", "/priv/assets/{assetID}/grants", ""})
+	assertContains(t, grant, "$ref: '#/components/parameters/GrantIdempotencyKey'")
+	assertContains(t, grant, "At least one of body idempotencyKey or Idempotency-Key header is required.")
+	assertContains(t, document, "GrantIdempotencyKey: { name: Idempotency-Key, in: header, required: false")
+	grantRequest := schemaBlockFor(t, document, "CreateGrantRequest")
+	assertContains(t, grantRequest, "required: [subjectType, subjectId, permission]")
+	assertContains(t, grantRequest, "idempotencyKey: { type: string, description: Required when Idempotency-Key header is absent. }")
+
+	download := operationBlockFor(t, document, documentedOperation{"GET", "/priv/assets/{assetID}/download", ""})
+	assertContains(t, download, "$ref: '#/components/parameters/AssetSubjectType'")
+	assertContains(t, download, "$ref: '#/components/parameters/AssetSubjectID'")
+	assertContains(t, document, "AssetSubjectType: { name: X-Asset-Subject-Type, in: header, required: true")
+	assertContains(t, document, "AssetSubjectID: { name: X-Asset-Subject-Id, in: header, required: true")
+}
+
 func assertOperation(t *testing.T, document string, operation documentedOperation) {
 	t.Helper()
 	block := operationBlockFor(t, document, operation)

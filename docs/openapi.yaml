@@ -144,6 +144,7 @@ paths:
       x-hhc-visibility: private
       x-hhc-callers: [account-api, hhc-web-api, hhc-line-function-bot]
       security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
       requestBody:
         required: true
         content:
@@ -387,10 +388,11 @@ paths:
     get:
       summary: Asset API operation
       tags: [Private]
-      description: Streams an owned, granted, clean asset. Restricted downloads require matching subject headers.
+      description: Streams an owned, granted, clean asset. X-Asset-Subject-Type and X-Asset-Subject-Id are required for authorization.
       x-hhc-visibility: private
       x-hhc-callers: [account-api, hhc-web-api, hhc-line-function-bot]
       security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      parameters: [ { $ref: '#/components/parameters/AssetSubjectType' }, { $ref: '#/components/parameters/AssetSubjectID' } ]
       responses:
         '200': { $ref: '#/components/responses/Download' }
         '206': { $ref: '#/components/responses/Download' }
@@ -429,10 +431,11 @@ paths:
     post:
       summary: Asset API operation
       tags: [Private]
-      description: Creates an idempotent subject grant for an owned asset.
+      description: Creates an idempotent subject grant for an owned asset. At least one of body idempotencyKey or Idempotency-Key header is required.
       x-hhc-visibility: private
       x-hhc-callers: [account-api, hhc-web-api, hhc-line-function-bot]
       security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      parameters: [ { $ref: '#/components/parameters/GrantIdempotencyKey' } ]
       requestBody:
         required: true
         content:
@@ -492,6 +495,9 @@ components:
     ACLID: { name: aclID, in: path, required: true, schema: { $ref: '#/components/schemas/OpaqueID' } }
     Variant: { name: variant, in: path, required: true, schema: { type: string, enum: [small, medium, large] } }
     IdempotencyKey: { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 1, maxLength: 128 } }
+    GrantIdempotencyKey: { name: Idempotency-Key, in: header, required: false, description: Required when body idempotencyKey is absent., schema: { type: string, minLength: 1, maxLength: 128 } }
+    AssetSubjectType: { name: X-Asset-Subject-Type, in: header, required: true, schema: { type: string, enum: [user, role, service, line_group, app_client] } }
+    AssetSubjectID: { name: X-Asset-Subject-Id, in: header, required: true, schema: { type: string, minLength: 1 } }
     ContentTicket: { name: ticket, in: query, required: true, schema: { type: string, minLength: 1 } }
   responses:
     Health:
@@ -644,7 +650,7 @@ components:
         subjectId: { type: string }
         permission: { type: string, enum: [read, delete] }
         expiresAt: { type: string, format: date-time }
-        idempotencyKey: { type: string }
+        idempotencyKey: { type: string, description: Required when Idempotency-Key header is absent. }
     PublicURL:
       type: object
       required: [assetId, downloadUrl]
