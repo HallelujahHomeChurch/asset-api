@@ -3,11 +3,13 @@ package postgres
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -935,7 +937,7 @@ func TestCollectionSchemaMutationClaimsAndTicketScope(t *testing.T) {
 	}
 
 	validHash := strings.Repeat("a", 64)
-	if _, err := db.Exec(`INSERT INTO asset_content_tickets(token_hash,collection_id,collection_item_id,asset_etag,user_id,role_ids,expires_at,created_at) VALUES($1,'collection','ticket-item','etag-ticket','user',ARRAY[$2]::text[],$3,$4)`, validHash, testCollectionRoleID, now.Add(5*time.Minute), now); err != nil {
+	if _, err := db.Exec(`INSERT INTO asset_content_tickets(token_hash,collection_id,collection_item_id,asset_etag,user_id,roles,role_ids,expires_at,created_at) VALUES($1,'collection','ticket-item','etag-ticket','user','{}'::text[],ARRAY[$2]::text[],$3,$4)`, validHash, testCollectionRoleID, now.Add(5*time.Minute), now); err != nil {
 		t.Fatal(err)
 	}
 	var rolesType string
@@ -946,17 +948,147 @@ func TestCollectionSchemaMutationClaimsAndTicketScope(t *testing.T) {
 		t.Fatalf("roles type=%q", rolesType)
 	}
 	insertCollection(t, db, "other-collection", now)
-	if _, err := db.Exec(`INSERT INTO asset_content_tickets(token_hash,collection_id,collection_item_id,asset_etag,user_id,role_ids,expires_at,created_at) VALUES($1,'other-collection','ticket-item','etag-ticket','user',ARRAY[]::text[],$2,$3)`, strings.Repeat("d", 64), now.Add(time.Minute), now); err == nil {
+	if _, err := db.Exec(`INSERT INTO asset_content_tickets(token_hash,collection_id,collection_item_id,asset_etag,user_id,roles,role_ids,expires_at,created_at) VALUES($1,'other-collection','ticket-item','etag-ticket','user','{}'::text[],ARRAY[]::text[],$2,$3)`, strings.Repeat("d", 64), now.Add(time.Minute), now); err == nil {
 		t.Fatal("ticket referencing an item from another collection was accepted")
 	}
 	for _, tokenHash := range []string{strings.Repeat("A", 64), strings.Repeat("a", 63), strings.Repeat("g", 64)} {
-		if _, err := db.Exec(`INSERT INTO asset_content_tickets(token_hash,collection_id,collection_item_id,asset_etag,user_id,role_ids,expires_at,created_at) VALUES($1,'collection','ticket-item','etag-ticket','user',ARRAY[]::text[],$2,$3)`, tokenHash, now.Add(time.Minute), now); err == nil {
+		if _, err := db.Exec(`INSERT INTO asset_content_tickets(token_hash,collection_id,collection_item_id,asset_etag,user_id,roles,role_ids,expires_at,created_at) VALUES($1,'collection','ticket-item','etag-ticket','user','{}'::text[],ARRAY[]::text[],$2,$3)`, tokenHash, now.Add(time.Minute), now); err == nil {
 			t.Fatalf("invalid token hash was accepted: %q", tokenHash)
 		}
 	}
-	if _, err := db.Exec(`INSERT INTO asset_content_tickets(token_hash,collection_id,collection_item_id,asset_etag,user_id,role_ids,expires_at,created_at) VALUES($1,'collection','missing-item','etag-ticket','user',ARRAY[]::text[],$2,$3)`, strings.Repeat("b", 64), now.Add(time.Minute), now); err == nil {
+	if _, err := db.Exec(`INSERT INTO asset_content_tickets(token_hash,collection_id,collection_item_id,asset_etag,user_id,roles,role_ids,expires_at,created_at) VALUES($1,'collection','missing-item','etag-ticket','user','{}'::text[],ARRAY[]::text[],$2,$3)`, strings.Repeat("b", 64), now.Add(time.Minute), now); err == nil {
 		t.Fatal("ticket without a concrete item occurrence was accepted")
 	}
+}
+
+func TestCollectionACLAuthorityMigration015IsExpandCompatible(t *testing.T) {
+	const (
+		collectionID   = "migration-collection"
+		itemID         = "migration-item"
+		assetID        = "migration-asset"
+		legacyRoleName = "Worship Team"
+		viewerRoleName = "media_sync_user"
+	)
+	now := time.Date(2026, 8, 24, 9, 0, 0, 0, time.UTC)
+	fixture := func(t *testing.T) *sql.DB {
+		t.Helper()
+		db := integrationDBThrough014(t)
+		insertAsset(t, db, assetID, assets.UploadCompleted, assets.ScanClean, assets.ProcessingReady, now, time.Time{})
+		insertCollection(t, db, collectionID, now)
+		if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,retention_exempt,updated_revision,created_at,updated_at) VALUES($1,$2,$3,'remote','Media','source',1,false,1,$4,$4)`, itemID, collectionID, assetID, now); err != nil {
+			t.Fatal(err)
+		}
+		return db
+	}
+
+	t.Run("pre-015 runtime insert and select remain valid", func(t *testing.T) {
+		db := fixture(t)
+		if err := migrations.Run(context.Background(), db); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`INSERT INTO asset_collection_acl(id,collection_id,subject_type,subject_id,permission,created_at) VALUES('old-user-acl',$1,'user','old-user','read',$2)`, collectionID, now); err != nil {
+			t.Fatal(err)
+		}
+
+		tokenHash := strings.Repeat("a", 64)
+		result, err := db.Exec(`
+			INSERT INTO asset_content_tickets(
+			  token_hash,collection_id,collection_item_id,asset_etag,user_id,roles,access_mode,expires_at,created_at
+			)
+			SELECT $1,c.id,i.id,a.etag,$5,$6::text[],$7,$8::timestamptz,$9::timestamptz
+			FROM asset_collections c
+			JOIN asset_collection_items i
+			  ON i.collection_id=c.id AND i.id=$3 AND i.deleted_revision IS NULL
+			JOIN assets a
+			  ON a.id=i.asset_id AND a.deleted_at IS NULL AND a.purged_at IS NULL
+			 AND a.upload_status='completed' AND a.scan_status='clean'
+			 AND a.processing_status IN ('ready','not_required') AND a.etag=$4
+			WHERE c.id=$2 AND c.deleted_at IS NULL
+			  AND $8::timestamptz>$10::timestamptz AND $8::timestamptz<=$10::timestamptz+interval '5 minutes'
+			  AND ($7='manager' OR ($7='reader' AND $11=ANY($6::text[]) AND EXISTS (
+			    SELECT 1 FROM asset_collection_acl acl
+			    WHERE acl.collection_id=c.id AND acl.permission='read' AND acl.revoked_at IS NULL
+			      AND ((acl.subject_type='user' AND acl.subject_id=$5)
+			        OR (acl.subject_type='role' AND acl.subject_id=ANY($6::text[])))
+			  )))`, tokenHash, collectionID, itemID, "etag-"+assetID, "old-user", []string{viewerRoleName}, "reader", now.Add(5*time.Minute), now, now, viewerRoleName)
+		if err != nil {
+			t.Fatalf("pre-015 insert: %v", err)
+		}
+		if count, _ := result.RowsAffected(); count != 1 {
+			t.Fatalf("pre-015 insert rows=%d", count)
+		}
+
+		var redeemedAssetID string
+		err = db.QueryRow(`
+			SELECT a.id
+			FROM asset_content_tickets t
+			JOIN asset_collections c ON c.id=t.collection_id AND c.deleted_at IS NULL
+			JOIN asset_collection_items i
+			  ON i.id=t.collection_item_id AND i.collection_id=t.collection_id AND i.deleted_revision IS NULL
+			JOIN assets a
+			  ON a.id=i.asset_id AND a.deleted_at IS NULL AND a.purged_at IS NULL
+			 AND a.upload_status='completed' AND a.scan_status='clean'
+			 AND a.processing_status IN ('ready','not_required') AND a.etag=t.asset_etag
+			WHERE t.token_hash=$1 AND t.expires_at>$2
+			  AND (t.access_mode='manager' OR (t.access_mode='reader' AND $3=ANY(t.roles) AND EXISTS (
+			    SELECT 1 FROM asset_collection_acl acl
+			    WHERE acl.collection_id=c.id AND acl.permission='read' AND acl.revoked_at IS NULL
+			      AND ((acl.subject_type='user' AND acl.subject_id=t.user_id)
+			        OR (acl.subject_type='role' AND acl.subject_id=ANY(t.roles)))
+			  )))`, tokenHash, now, viewerRoleName).Scan(&redeemedAssetID)
+		if err != nil || redeemedAssetID != assetID {
+			t.Fatalf("pre-015 select asset=%q err=%v", redeemedAssetID, err)
+		}
+	})
+
+	t.Run("legacy role names gain no UUID authority", func(t *testing.T) {
+		db := fixture(t)
+		if _, err := db.Exec(`INSERT INTO asset_collection_acl(id,collection_id,subject_type,subject_id,permission,created_at) VALUES('legacy-role-acl',$1,'role',$2,'read',$3)`, collectionID, legacyRoleName, now); err != nil {
+			t.Fatal(err)
+		}
+		tokenHash := strings.Repeat("b", 64)
+		if _, err := db.Exec(`INSERT INTO asset_content_tickets(token_hash,collection_id,collection_item_id,asset_etag,user_id,roles,expires_at,created_at) VALUES($1,$2,$3,$4,'legacy-user',$5,$6,$7)`, tokenHash, collectionID, itemID, "etag-"+assetID, []string{viewerRoleName, legacyRoleName}, now.Add(5*time.Minute), now); err != nil {
+			t.Fatal(err)
+		}
+		if err := migrations.Run(context.Background(), db); err != nil {
+			t.Fatal(err)
+		}
+		var legacyPreserved, roleIDsEmpty bool
+		if err := db.QueryRow(`SELECT roles=ARRAY[$2,$3]::text[],role_ids='{}'::text[] FROM asset_content_tickets WHERE token_hash=$1`, tokenHash, viewerRoleName, legacyRoleName).Scan(&legacyPreserved, &roleIDsEmpty); err != nil {
+			t.Fatal(err)
+		}
+		if !legacyPreserved || !roleIDsEmpty {
+			t.Fatalf("legacy preserved=%v role IDs empty=%v", legacyPreserved, roleIDsEmpty)
+		}
+		if _, err := New(db).RedeemContentTicket(context.Background(), tokenHash, now); !errors.Is(err, assets.ErrNotFound) {
+			t.Fatalf("legacy role-name ticket authority err=%v", err)
+		}
+	})
+
+	t.Run("new runtime writes deny-closed legacy roles", func(t *testing.T) {
+		db := fixture(t)
+		if err := migrations.Run(context.Background(), db); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`INSERT INTO asset_collection_acl(id,collection_id,subject_type,subject_id,permission,created_at) VALUES('uuid-role-acl',$1,'role',$2,'read',$3)`, collectionID, testCollectionRoleID, now); err != nil {
+			t.Fatal(err)
+		}
+		ticket := assets.ContentTicket{
+			TokenHash: strings.Repeat("c", 64), CollectionID: collectionID, CollectionItemID: itemID,
+			AssetETag: "etag-" + assetID, UserID: "uuid-user", RoleIDs: []string{testCollectionRoleID},
+			ExpiresAt: now.Add(5 * time.Minute), CreatedAt: now,
+		}
+		if err := New(db).CreateContentTicket(context.Background(), ticket, now); err != nil {
+			t.Fatal(err)
+		}
+		var legacyEmpty, roleIDsPreserved bool
+		if err := db.QueryRow(`SELECT roles='{}'::text[],role_ids=ARRAY[$2]::text[] FROM asset_content_tickets WHERE token_hash=$1`, ticket.TokenHash, testCollectionRoleID).Scan(&legacyEmpty, &roleIDsPreserved); err != nil {
+			t.Fatal(err)
+		}
+		if !legacyEmpty || !roleIDsPreserved {
+			t.Fatalf("legacy empty=%v role IDs preserved=%v", legacyEmpty, roleIDsPreserved)
+		}
+	})
 }
 
 func TestCollectionSchemaAssetRetentionPreservesItemHistory(t *testing.T) {
@@ -1035,7 +1167,7 @@ func TestCollectionManagementConstraints(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,remote_item_id,display_name,source_revision,created_revision,retention_exempt,updated_revision,created_at,updated_at) VALUES('ticket-item','collection','ticket-item','Ticket','source',1,false,1,$1,$1)`, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO asset_content_tickets(token_hash,collection_id,collection_item_id,asset_etag,user_id,role_ids,access_mode,expires_at,created_at) VALUES($1,'collection','ticket-item','etag','user',ARRAY[]::text[],'other',$2,$3)`, strings.Repeat("a", 64), now.Add(time.Minute), now); err == nil {
+	if _, err := db.Exec(`INSERT INTO asset_content_tickets(token_hash,collection_id,collection_item_id,asset_etag,user_id,roles,role_ids,access_mode,expires_at,created_at) VALUES($1,'collection','ticket-item','etag','user','{}'::text[],ARRAY[]::text[],'other',$2,$3)`, strings.Repeat("a", 64), now.Add(time.Minute), now); err == nil {
 		t.Fatal("ticket access mode other was accepted")
 	}
 }
@@ -1162,7 +1294,7 @@ func TestCollectionMutationsReplayConflictAndRevision(t *testing.T) {
 	if err != nil || deletedItem.Collection.Revision != 6 || deletedItem.Tombstone.ID != itemResult.Item.ID || deletedItem.Tombstone.DeletedRevision != 6 {
 		t.Fatalf("delete item=%+v err=%v", deletedItem, err)
 	}
-	if _, err := db.Exec(`INSERT INTO asset_content_tickets(token_hash,collection_id,collection_item_id,asset_etag,user_id,role_ids,expires_at,created_at) VALUES($1,$2,$3,'etag','user',ARRAY[]::text[],$4,$5)`, strings.Repeat("e", 64), collection.ID, itemResult.Item.ID, now.Add(time.Minute), now); err != nil {
+	if _, err := db.Exec(`INSERT INTO asset_content_tickets(token_hash,collection_id,collection_item_id,asset_etag,user_id,roles,role_ids,expires_at,created_at) VALUES($1,$2,$3,'etag','user','{}'::text[],ARRAY[]::text[],$4,$5)`, strings.Repeat("e", 64), collection.ID, itemResult.Item.ID, now.Add(time.Minute), now); err != nil {
 		t.Fatal(err)
 	}
 	readded, err := store.AddCollectionItem(ctx, assets.AddCollectionItemInput{CollectionID: collection.ID, AssetID: "collection-mutation-asset", RemoteItemID: "remote", DisplayName: "Media again", SourceRevision: "source-2", CallerService: "helper", IdempotencyKey: "item-readd"}, now)
@@ -1295,7 +1427,7 @@ func TestCollectionDeleteCascadesItemsAssetsTicketsAndReplays(t *testing.T) {
 		t.Fatal(err)
 	}
 	ticketHash := strings.Repeat("c", 64)
-	if _, err := db.Exec(`INSERT INTO asset_content_tickets(token_hash,collection_id,collection_item_id,asset_etag,user_id,role_ids,access_mode,expires_at,created_at) VALUES($1,'collection-delete','collection-delete-active','etag-collection-delete-owned','manager',ARRAY[]::text[],'manager',$2,$3)`, ticketHash, createdAt.Add(5*time.Minute), createdAt); err != nil {
+	if _, err := db.Exec(`INSERT INTO asset_content_tickets(token_hash,collection_id,collection_item_id,asset_etag,user_id,roles,role_ids,access_mode,expires_at,created_at) VALUES($1,'collection-delete','collection-delete-active','etag-collection-delete-owned','manager','{}'::text[],ARRAY[]::text[],'manager',$2,$3)`, ticketHash, createdAt.Add(5*time.Minute), createdAt); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2058,7 +2190,7 @@ func TestCollectionContentTicketRoleIDsAndLiveRevocation(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO asset_collection_acl(id,collection_id,subject_type,subject_id,permission,created_at) VALUES('ticket-role-acl','ticket-live-collection','role',$2,'read',$1)`, now, testCollectionRoleID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO asset_content_tickets(token_hash,collection_id,collection_item_id,asset_etag,user_id,role_ids,expires_at,created_at) VALUES($1,'ticket-live-collection','ticket-live-item','etag-ticket-live-asset','ticket-user',ARRAY[]::text[],$2,$3)`, strings.Repeat("a", 64), now.Add(-time.Second), now.Add(-time.Minute)); err != nil {
+	if _, err := db.Exec(`INSERT INTO asset_content_tickets(token_hash,collection_id,collection_item_id,asset_etag,user_id,roles,role_ids,expires_at,created_at) VALUES($1,'ticket-live-collection','ticket-live-item','etag-ticket-live-asset','ticket-user','{}'::text[],ARRAY[]::text[],$2,$3)`, strings.Repeat("a", 64), now.Add(-time.Second), now.Add(-time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2729,6 +2861,45 @@ func TestBatchDeleteRechecksReferencesAfterCandidateAssetLock(t *testing.T) {
 
 func integrationDB(t *testing.T) *sql.DB {
 	t.Helper()
+	db := isolatedIntegrationDB(t)
+	if err := migrations.Run(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+	return db
+}
+
+func integrationDBThrough014(t *testing.T) *sql.DB {
+	t.Helper()
+	db := isolatedIntegrationDB(t)
+	if _, err := db.Exec(`CREATE TABLE schema_migrations (version text PRIMARY KEY, checksum text NOT NULL DEFAULT '', applied_at timestamptz NOT NULL DEFAULT now())`); err != nil {
+		t.Fatal(err)
+	}
+	paths, err := filepath.Glob("../migrations/sql/*.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range paths {
+		base := filepath.Base(path)
+		if base >= "015_collection_acl_authority.sql" {
+			break
+		}
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(string(contents)); err != nil {
+			t.Fatalf("apply %s: %v", base, err)
+		}
+		checksum := fmt.Sprintf("%x", sha256.Sum256(contents))
+		if _, err := db.Exec(`INSERT INTO schema_migrations(version,checksum) VALUES($1,$2)`, "sql/"+base, checksum); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return db
+}
+
+func isolatedIntegrationDB(t *testing.T) *sql.DB {
+	t.Helper()
 	url := os.Getenv("TEST_DATABASE_URL")
 	if url == "" {
 		t.Skip("TEST_DATABASE_URL is not set")
@@ -2750,9 +2921,6 @@ func integrationDB(t *testing.T) *sql.DB {
 	testConfig.RuntimeParams["search_path"] = schema
 	db := stdlib.OpenDB(*testConfig)
 	t.Cleanup(func() { db.Close() })
-	if err := migrations.Run(ctx, db); err != nil {
-		t.Fatal(err)
-	}
 	return db
 }
 

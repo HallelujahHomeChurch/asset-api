@@ -51,6 +51,11 @@ collection ACL also matches that manager.
 - A reader content ticket stores the user UUID and immutable role UUID snapshot,
   expires no later than five minutes or the source access token, and rechecks
   the active ACL, item, ETag, scan state, and deletion state on every redemption.
+- Migration 015 expands the ticket table with `role_ids` while retaining legacy
+  `roles` only for pre-015 runtime SQL compatibility. Existing role names are
+  not copied and runtime authorization never dual-reads them; new writes keep
+  `roles` empty and write UUIDs to `role_ids`. A later contract migration removes
+  `roles` after old runtime revisions can no longer be deployed.
 - ACL revocation invalidates an already-issued reader ticket immediately.
 - Role membership and account-status changes remain bounded by the access-token
   lifetime because Gateway deliberately performs offline JWT validation.

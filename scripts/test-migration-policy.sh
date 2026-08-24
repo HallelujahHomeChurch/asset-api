@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-pattern='DROP[[:space:]]+(SCHEMA|TABLE|COLUMN|VIEW|MATERIALIZED[[:space:]]+VIEW|TYPE|FUNCTION|CONSTRAINT)|TRUNCATE|RENAME[[:space:]]+(TABLE|COLUMN)|ALTER[[:space:]]+TABLE[^;]*(ALTER[[:space:]]+COLUMN[^;]*TYPE|DROP[[:space:]]+CONSTRAINT|SET[[:space:]]+NOT[[:space:]]+NULL)'
-legacy_pattern='DROP[[:space:]]+(SCHEMA|TABLE|COLUMN|VIEW|MATERIALIZED[[:space:]]+VIEW|TYPE|FUNCTION)|TRUNCATE|RENAME[[:space:]]+(TABLE|COLUMN)|ALTER[[:space:]]+TABLE[^;]*(ALTER[[:space:]]+COLUMN[^;]*TYPE|SET[[:space:]]+NOT[[:space:]]+NULL)'
+pattern='DROP[[:space:]]+(SCHEMA|TABLE|COLUMN|VIEW|MATERIALIZED[[:space:]]+VIEW|TYPE|FUNCTION|CONSTRAINT)|(^|;)[[:space:]]*TRUNCATE([[:space:]]+TABLE)?[[:space:]]+|RENAME[[:space:]]+(TABLE|COLUMN)|ALTER[[:space:]]+TABLE[^;]*(ALTER[[:space:]]+COLUMN[^;]*TYPE|DROP[[:space:]]+CONSTRAINT|SET[[:space:]]+NOT[[:space:]]+NULL)'
+legacy_pattern='DROP[[:space:]]+(SCHEMA|TABLE|COLUMN|VIEW|MATERIALIZED[[:space:]]+VIEW|TYPE|FUNCTION)|(^|;)[[:space:]]*TRUNCATE([[:space:]]+TABLE)?[[:space:]]+|RENAME[[:space:]]+(TABLE|COLUMN)|ALTER[[:space:]]+TABLE[^;]*(ALTER[[:space:]]+COLUMN[^;]*TYPE|SET[[:space:]]+NOT[[:space:]]+NULL)'
 
 if [ "$#" -eq 0 ]; then
   set -- internal/migrations/sql/*.sql

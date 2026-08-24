@@ -1139,9 +1139,9 @@ func (s *Store) CreateContentTicket(ctx context.Context, ticket assets.ContentTi
 	}
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO asset_content_tickets(
-		  token_hash,collection_id,collection_item_id,asset_etag,user_id,role_ids,access_mode,expires_at,created_at
+		  token_hash,collection_id,collection_item_id,asset_etag,user_id,roles,role_ids,access_mode,expires_at,created_at
 		)
-		SELECT $1,c.id,i.id,a.etag,$5,$6::text[],$7,$8::timestamptz,$9::timestamptz
+		SELECT $1,c.id,i.id,a.etag,$5,'{}'::text[],$6::text[],$7,$8::timestamptz,$9::timestamptz
 		FROM asset_collections c
 		JOIN asset_collection_items i
 		  ON i.collection_id=c.id AND i.id=$3 AND i.deleted_revision IS NULL

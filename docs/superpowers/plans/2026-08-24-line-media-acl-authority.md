@@ -191,7 +191,7 @@ git commit -m "feat: forward verified role ids"
 - Consumes trusted X-HHC-User-ID, optional X-HHC-Role-IDs, token expiry, and exact Gateway Dapr identity.
 - CollectionSubject becomes { UserID string; RoleIDs []string }.
 - ACL mutation inputs add ActorUserID and RequestID.
-- Migration renames the short-lived ticket snapshot column from roles to role_ids and creates asset_collection_acl_audit.
+- Migration additively adds the short-lived ticket `role_ids` snapshot and creates `asset_collection_acl_audit`. It retains legacy `roles` only so the pre-015 runtime SQL remains deployable during expansion; legacy names are never copied into or dual-read with UUID authorization, and a later contract migration removes `roles`.
 
 - [ ] **Step 1: Write failing service tests**
 
@@ -249,7 +249,7 @@ Expected: FAIL because the audit table and actor fields do not exist.
 
 - [ ] **Step 8: Implement atomic successful-mutation audit**
 
-Create asset_collection_acl_audit in migration 015. Rename the reader-ticket snapshot column there. Thread actor and request ID through handler/service inputs. Insert audit inside the existing add/revoke transaction only for a first claimed mutation.
+Create asset_collection_acl_audit in migration 015. Add `role_ids text[] NOT NULL DEFAULT '{}'` while retaining `roles`; do not copy legacy names or read them for UUID authorization. New runtime inserts write empty `roles` and the verified UUID snapshot to `role_ids`. Remove `roles` only in a later contract migration after old runtimes are retired. Thread actor and request ID through handler/service inputs. Insert audit inside the existing add/revoke transaction only for a first claimed mutation.
 
 - [ ] **Step 9: Verify Asset gates**
 

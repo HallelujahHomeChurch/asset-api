@@ -1,5 +1,5 @@
 ALTER TABLE asset_content_tickets
-  RENAME COLUMN roles TO role_ids;
+  ADD COLUMN role_ids text[] NOT NULL DEFAULT '{}'::text[];
 
 CREATE TABLE asset_collection_acl_audit (
   id text PRIMARY KEY CHECK (id <> ''),

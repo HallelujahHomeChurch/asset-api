@@ -2,7 +2,8 @@ openapi: 3.1.0
 info:
   title: HHC Asset API
   version: 1.0.0
-  description: Asset owns bytes, upload validation, scanning, derivatives, grants, downloads, and deletion lifecycle. CMS business records remain owned by the caller.
+  description: >-
+    Asset owns bytes, upload validation, scanning, derivatives, grants, downloads, and deletion lifecycle. CMS business records remain owned by the caller. Migration 015 expands reader tickets with UUID role IDs while retaining the legacy role-name field only for pre-015 runtime SQL compatibility; legacy values are never copied or dual-read for authorization, new writes keep them empty, and a later contract migration removes the field.
 servers:
   - url: http://asset-api
     description: Internal service address; public requests enter through API Gateway.
