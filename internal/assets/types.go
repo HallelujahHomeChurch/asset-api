@@ -301,11 +301,9 @@ type Operations struct {
 	ExpiredCollectionItems  int64     `json:"expiredCollectionItems"`
 }
 
-const CollectionReaderRole = "media_sync_user"
-
 type CollectionSubject struct {
-	UserID string
-	Roles  []string
+	UserID  string
+	RoleIDs []string
 }
 
 type Collection struct {
@@ -362,7 +360,7 @@ type ContentTicket struct {
 	CollectionItemID string
 	AssetETag        string
 	UserID           string
-	Roles            []string
+	RoleIDs          []string
 	AccessMode       string
 	ExpiresAt        time.Time
 	CreatedAt        time.Time
@@ -464,6 +462,8 @@ type AddCollectionACLInput struct {
 	SubjectID      string      `json:"subjectId"`
 	Permission     Permission  `json:"permission"`
 	CallerService  string      `json:"-"`
+	ActorUserID    string      `json:"-"`
+	RequestID      string      `json:"-"`
 	IdempotencyKey string      `json:"-"`
 }
 
@@ -471,6 +471,8 @@ type RevokeCollectionACLInput struct {
 	CollectionID   string `json:"-"`
 	ACLID          string `json:"-"`
 	CallerService  string `json:"-"`
+	ActorUserID    string `json:"-"`
+	RequestID      string `json:"-"`
 	IdempotencyKey string `json:"-"`
 }
 

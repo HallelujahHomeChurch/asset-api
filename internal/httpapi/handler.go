@@ -670,7 +670,7 @@ func (h *Handler) addCollectionACL(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	input.CollectionID, input.CallerService, input.IdempotencyKey = id, caller, key
+	input.CollectionID, input.CallerService, input.ActorUserID, input.RequestID, input.IdempotencyKey = id, caller, strings.TrimSpace(r.Header.Get("X-HHC-Actor-User-ID")), strings.TrimSpace(r.Header.Get("X-HHC-Request-ID")), key
 	value, err := h.service.AddCollectionACL(r.Context(), input)
 	if err != nil {
 		handleError(w, err)
@@ -685,7 +685,10 @@ func (h *Handler) revokeCollectionACL(w http.ResponseWriter, r *http.Request) {
 	if !ok || !requireOpaqueID(w, collectionID, "collection ID") || !requireOpaqueID(w, aclID, "ACL ID") {
 		return
 	}
-	value, err := h.service.RevokeCollectionACL(r.Context(), assets.RevokeCollectionACLInput{CollectionID: collectionID, ACLID: aclID, CallerService: caller, IdempotencyKey: key})
+	value, err := h.service.RevokeCollectionACL(r.Context(), assets.RevokeCollectionACLInput{
+		CollectionID: collectionID, ACLID: aclID, CallerService: caller,
+		ActorUserID: strings.TrimSpace(r.Header.Get("X-HHC-Actor-User-ID")), RequestID: strings.TrimSpace(r.Header.Get("X-HHC-Request-ID")), IdempotencyKey: key,
+	})
 	if err != nil {
 		handleError(w, err)
 		return
@@ -1121,17 +1124,17 @@ func parseCollectionReaderIdentity(r *http.Request) (collectionReaderIdentity, b
 	if userID == "" || err != nil || expires <= 0 {
 		return collectionReaderIdentity{}, false
 	}
-	roles := []string{}
+	roleIDs := []string{}
 	seen := map[string]bool{}
-	for _, value := range strings.Split(r.Header.Get("X-HHC-Roles"), ",") {
+	for _, value := range strings.Split(r.Header.Get("X-HHC-Role-IDs"), ",") {
 		value = strings.TrimSpace(value)
 		if value != "" && !seen[value] {
 			seen[value] = true
-			roles = append(roles, value)
+			roleIDs = append(roleIDs, value)
 		}
 	}
 	return collectionReaderIdentity{
-		Subject: assets.CollectionSubject{UserID: userID, Roles: roles}, TokenID: strings.TrimSpace(r.Header.Get("X-HHC-Token-ID")),
+		Subject: assets.CollectionSubject{UserID: userID, RoleIDs: roleIDs}, TokenID: strings.TrimSpace(r.Header.Get("X-HHC-Token-ID")),
 		TokenExpiresAt: time.Unix(expires, 0).UTC(), SessionID: strings.TrimSpace(r.Header.Get("X-HHC-Session-ID")),
 		AuthProvider: strings.TrimSpace(r.Header.Get("X-HHC-Auth-Provider")),
 	}, true

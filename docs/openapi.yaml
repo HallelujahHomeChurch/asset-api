@@ -66,7 +66,7 @@ paths:
     get:
       summary: Asset API operation
       tags: [Public]
-      description: API Gateway forwards verified user identity for authorized collection listing.
+      description: Returns collections with an active ACL matching the verified user UUID or an immutable role UUID. A user with no matching ACL receives 200 with an empty collections array.
       x-hhc-visibility: public
       x-hhc-callers: [api-gateway]
       security: [ { gatewayDaprCaller: [], gatewayTrustedIdentity: [] } ]
@@ -78,7 +78,7 @@ paths:
     get:
       summary: Asset API operation
       tags: [Public]
-      description: API Gateway forwards verified user identity for incremental collection changes.
+      description: Returns incremental changes only when an active collection ACL matches the verified user or role UUID. Missing and unauthorized collections both return 404.
       x-hhc-visibility: public
       x-hhc-callers: [api-gateway]
       security: [ { gatewayDaprCaller: [], gatewayTrustedIdentity: [] } ]
@@ -90,7 +90,7 @@ paths:
     get:
       summary: Asset API operation
       tags: [Public]
-      description: API Gateway forwards verified user identity for an authorized collection item.
+      description: Returns item metadata only when an active collection ACL matches the verified user or role UUID. Missing and unauthorized collections or items all return 404.
       x-hhc-visibility: public
       x-hhc-callers: [api-gateway]
       security: [ { gatewayDaprCaller: [], gatewayTrustedIdentity: [] } ]
@@ -102,25 +102,26 @@ paths:
     post:
       summary: Asset API operation
       tags: [Public]
-      description: API Gateway forwards verified user identity and token expiry to issue a short-lived content ticket.
+      description: Issues a reader ticket only when an active collection ACL matches the verified user or role UUID. The ticket expires within five minutes and no later than the source access token; missing and unauthorized resources both return 404.
       x-hhc-visibility: public
       x-hhc-callers: [api-gateway]
       security: [ { gatewayDaprCaller: [], gatewayTrustedIdentity: [] } ]
       responses:
         '201': { $ref: '#/components/responses/ContentTicket' }
-        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
   /api/assets/collections/{collectionID}/items/{itemID}/content:
     parameters: [ { $ref: '#/components/parameters/CollectionID' }, { $ref: '#/components/parameters/ItemID' } ]
     get:
       summary: Asset API operation
       tags: [Public]
-      description: API Gateway forwards verified user identity to stream authorized content with range support.
+      description: Streams content only when an active collection ACL matches the verified user or role UUID. Missing and unauthorized resources both return 404.
       x-hhc-visibility: public
       x-hhc-callers: [api-gateway]
       security: [ { gatewayDaprCaller: [], gatewayTrustedIdentity: [] } ]
       responses:
         '200': { $ref: '#/components/responses/Download' }
         '206': { $ref: '#/components/responses/Download' }
+        '404': { $ref: '#/components/responses/Error' }
         '416': { $ref: '#/components/responses/Error' }
   /api/assets/content:
     get:
@@ -343,7 +344,8 @@ paths:
       x-hhc-visibility: private
       x-hhc-callers: [hhc-line-function-bot]
       security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
-      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      description: Adds a user-UUID or role-UUID reader ACL. The first successful mutation and its actor are audited atomically; an idempotent replay does not append an audit event.
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/ACLActorUserID' }, { $ref: '#/components/parameters/RequestID' } ]
       requestBody:
         required: true
         content:
@@ -359,7 +361,8 @@ paths:
       x-hhc-visibility: private
       x-hhc-callers: [hhc-line-function-bot]
       security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
-      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      description: Revokes a reader ACL. The first successful mutation and its actor are audited atomically; an idempotent replay does not append an audit event.
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/ACLActorUserID' }, { $ref: '#/components/parameters/RequestID' } ]
       responses:
         '200': { $ref: '#/components/responses/CollectionACLMutation' }
   /priv/assets/{assetID}:
@@ -486,7 +489,7 @@ components:
       type: apiKey
       in: header
       name: X-HHC-User-ID
-      description: Gateway-injected identity. X-HHC-User-ID and X-HHC-Token-Expires-At are required; X-HHC-Roles, X-HHC-Token-ID, X-HHC-Session-ID, and X-HHC-Auth-Provider are optional trusted context.
+      description: Gateway-injected identity. X-HHC-User-ID and X-HHC-Token-Expires-At are required; X-HHC-Role-IDs optionally carries deduplicated immutable Account role UUIDs. X-HHC-Token-ID, X-HHC-Session-ID, and X-HHC-Auth-Provider remain optional trusted context. Reader authorization is active collection ACL only.
   parameters:
     AssetID: { name: assetID, in: path, required: true, schema: { $ref: '#/components/schemas/OpaqueID' } }
     CollectionID: { name: collectionID, in: path, required: true, schema: { $ref: '#/components/schemas/OpaqueID' } }
@@ -495,6 +498,8 @@ components:
     ACLID: { name: aclID, in: path, required: true, schema: { $ref: '#/components/schemas/OpaqueID' } }
     Variant: { name: variant, in: path, required: true, schema: { type: string, enum: [small, medium, large] } }
     IdempotencyKey: { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 1, maxLength: 128 } }
+    ACLActorUserID: { name: X-HHC-Actor-User-ID, in: header, required: true, description: Verified Account manager user UUID recorded in the successful ACL mutation audit event., schema: { type: string, format: uuid } }
+    RequestID: { name: X-HHC-Request-ID, in: header, required: true, description: Request correlation ID recorded in the successful ACL mutation audit event., schema: { type: string, minLength: 1 } }
     GrantIdempotencyKey: { name: Idempotency-Key, in: header, required: false, description: Required when body idempotencyKey is absent., schema: { type: string, minLength: 1, maxLength: 128 } }
     AssetSubjectType: { name: X-Asset-Subject-Type, in: header, required: true, schema: { type: string, enum: [user, role, service, line_group, app_client] } }
     AssetSubjectID: { name: X-Asset-Subject-Id, in: header, required: true, schema: { type: string, minLength: 1 } }
@@ -734,9 +739,9 @@ components:
       properties:
         id: { $ref: '#/components/schemas/OpaqueID' }
         collectionId: { $ref: '#/components/schemas/OpaqueID' }
-        subjectType: { type: string, enum: [public, user, role, service, line_group, app_client] }
-        subjectId: { type: string }
-        permission: { type: string, enum: [read, delete] }
+        subjectType: { type: string, enum: [user, role] }
+        subjectId: { type: string, format: uuid, description: Immutable Account user or role UUID. }
+        permission: { type: string, enum: [read] }
         createdAt: { type: string, format: date-time }
         revokedAt: { type: string, format: date-time }
     CollectionTombstone:
@@ -859,9 +864,9 @@ components:
       type: object
       required: [subjectType, subjectId, permission]
       properties:
-        subjectType: { type: string, enum: [public, user, role, service, line_group, app_client] }
-        subjectId: { type: string }
-        permission: { type: string, enum: [read, delete] }
+        subjectType: { type: string, enum: [user, role] }
+        subjectId: { type: string, format: uuid, description: Immutable Account user or role UUID. }
+        permission: { type: string, enum: [read] }
     RenameRequest:
       type: object
       required: [name]

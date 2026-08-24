@@ -497,7 +497,8 @@ func (s *Store) AddCollectionACL(ctx context.Context, input assets.AddCollection
 		SubjectType  assets.SubjectType
 		SubjectID    string
 		Permission   assets.Permission
-	}{input.CollectionID, input.SubjectType, input.SubjectID, input.Permission})
+		ActorUserID  string
+	}{input.CollectionID, input.SubjectType, input.SubjectID, input.Permission, input.ActorUserID})
 	replay, claimed, err := claimMutation(ctx, tx, input.CallerService, addCollectionACLOperation, input.IdempotencyKey, fingerprint, now)
 	if err != nil {
 		return assets.CollectionACLMutation{}, err
@@ -522,6 +523,9 @@ func (s *Store) AddCollectionACL(ctx context.Context, input assets.AddCollection
 	if _, err := tx.ExecContext(ctx, `UPDATE asset_collections SET revision=$2,updated_at=$3 WHERE id=$1`, collection.ID, collection.Revision, now); err != nil {
 		return assets.CollectionACLMutation{}, err
 	}
+	if err := insertCollectionACLAudit(ctx, tx, "add", acl, input.ActorUserID, input.RequestID, now); err != nil {
+		return assets.CollectionACLMutation{}, err
+	}
 	value := assets.CollectionACLMutation{Collection: collection, ACL: acl}
 	if err := finishMutation(ctx, tx, input.CallerService, addCollectionACLOperation, input.IdempotencyKey, value); err != nil {
 		return assets.CollectionACLMutation{}, err
@@ -535,7 +539,7 @@ func (s *Store) RevokeCollectionACL(ctx context.Context, input assets.RevokeColl
 		return assets.CollectionACLMutation{}, err
 	}
 	defer tx.Rollback()
-	fingerprint := mutationFingerprint(struct{ CollectionID, ACLID string }{input.CollectionID, input.ACLID})
+	fingerprint := mutationFingerprint(struct{ CollectionID, ACLID, ActorUserID string }{input.CollectionID, input.ACLID, input.ActorUserID})
 	replay, claimed, err := claimMutation(ctx, tx, input.CallerService, revokeCollectionACLOperation, input.IdempotencyKey, fingerprint, now)
 	if err != nil {
 		return assets.CollectionACLMutation{}, err
@@ -567,11 +571,19 @@ func (s *Store) RevokeCollectionACL(ctx context.Context, input assets.RevokeColl
 	if _, err := tx.ExecContext(ctx, `UPDATE asset_collections SET revision=$2,updated_at=$3 WHERE id=$1`, collection.ID, collection.Revision, now); err != nil {
 		return assets.CollectionACLMutation{}, err
 	}
+	if err := insertCollectionACLAudit(ctx, tx, "revoke", acl, input.ActorUserID, input.RequestID, now); err != nil {
+		return assets.CollectionACLMutation{}, err
+	}
 	value := assets.CollectionACLMutation{Collection: collection, ACL: acl}
 	if err := finishMutation(ctx, tx, input.CallerService, revokeCollectionACLOperation, input.IdempotencyKey, value); err != nil {
 		return assets.CollectionACLMutation{}, err
 	}
 	return value, nil
+}
+
+func insertCollectionACLAudit(ctx context.Context, tx *sql.Tx, action string, acl assets.CollectionACL, actorUserID, requestID string, now time.Time) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO asset_collection_acl_audit(id,collection_id,acl_id,action,subject_type,subject_id,actor_user_id,request_id,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, newStoreID(), acl.CollectionID, acl.ID, action, acl.SubjectType, acl.SubjectID, actorUserID, requestID, now)
+	return err
 }
 
 func (s *Store) AddCollectionItem(ctx context.Context, input assets.AddCollectionItemInput, now time.Time) (assets.CollectionItemMutation, error) {
@@ -977,7 +989,7 @@ type changeCursor struct {
 }
 
 func (s *Store) ListAuthorizedCollections(ctx context.Context, subject assets.CollectionSubject, cursor string, limit int) (assets.CollectionPage, error) {
-	if !validReaderSubject(subject) {
+	if subject.UserID == "" {
 		return assets.CollectionPage{}, assets.ErrForbidden
 	}
 	lastID := ""
@@ -995,7 +1007,7 @@ func (s *Store) ListAuthorizedCollections(ctx context.Context, subject assets.Co
 		      AND ((acl.subject_type='user' AND acl.subject_id=$1)
 		        OR (acl.subject_type='role' AND acl.subject_id=ANY($2::text[])))
 		  )
-		ORDER BY c.id LIMIT $4`, subject.UserID, subject.Roles, lastID, limit+1)
+		ORDER BY c.id LIMIT $4`, subject.UserID, subject.RoleIDs, lastID, limit+1)
 	if err != nil {
 		return assets.CollectionPage{}, err
 	}
@@ -1020,19 +1032,19 @@ func (s *Store) ListAuthorizedCollections(ctx context.Context, subject assets.Co
 }
 
 func (s *Store) GetAuthorizedCollection(ctx context.Context, id string, subject assets.CollectionSubject) (assets.Collection, error) {
+	if subject.UserID == "" {
+		return assets.Collection{}, assets.ErrForbidden
+	}
 	value, err := s.getLiveCollection(ctx, id)
 	if err != nil {
 		return assets.Collection{}, err
-	}
-	if !validReaderSubject(subject) {
-		return assets.Collection{}, assets.ErrForbidden
 	}
 	allowed, err := s.hasCollectionACL(ctx, id, subject)
 	if err != nil {
 		return assets.Collection{}, err
 	}
 	if !allowed {
-		return assets.Collection{}, assets.ErrForbidden
+		return assets.Collection{}, assets.ErrNotFound
 	}
 	return value, nil
 }
@@ -1045,10 +1057,10 @@ func (s *Store) GetAuthorizedCollectionItem(ctx context.Context, collectionID, i
 	var createdAt, updatedAt sql.NullTime
 	err := s.db.QueryRowContext(ctx, `
 		SELECT
-		  ($4=ANY($3::text[])) AND EXISTS (
+		  EXISTS (
 		    SELECT 1 FROM asset_collection_acl acl
 		    WHERE acl.collection_id=c.id AND acl.permission='read' AND acl.revoked_at IS NULL
-		      AND ((acl.subject_type='user' AND acl.subject_id=$5)
+		      AND ((acl.subject_type='user' AND acl.subject_id=$4)
 		        OR (acl.subject_type='role' AND acl.subject_id=ANY($3::text[])))
 		  ) AS allowed,
 		  i.id,i.collection_id,i.asset_id,i.remote_item_id,i.display_name,i.source_revision,i.created_revision,i.retention_exempt,i.updated_revision,i.created_at,i.updated_at,
@@ -1060,7 +1072,7 @@ func (s *Store) GetAuthorizedCollectionItem(ctx context.Context, collectionID, i
 		  ON a.id=i.asset_id AND a.deleted_at IS NULL AND a.purged_at IS NULL
 		 AND a.upload_status='completed' AND a.scan_status='clean'
 		 AND a.processing_status IN ('ready','not_required')
-		WHERE c.id=$1 AND c.deleted_at IS NULL`, collectionID, itemID, subject.Roles, assets.CollectionReaderRole, subject.UserID).Scan(
+		WHERE c.id=$1 AND c.deleted_at IS NULL`, collectionID, itemID, subject.RoleIDs, subject.UserID).Scan(
 		&allowed, &id, &itemCollectionID, &assetID, &remoteItemID, &displayName, &sourceRevision, &createdRevision, &retentionExempt, &updatedRevision, &createdAt, &updatedAt, &mimeType, &sizeBytes, &etag,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1070,7 +1082,7 @@ func (s *Store) GetAuthorizedCollectionItem(ctx context.Context, collectionID, i
 		return assets.CollectionItem{}, err
 	}
 	if !allowed {
-		return assets.CollectionItem{}, assets.ErrForbidden
+		return assets.CollectionItem{}, assets.ErrNotFound
 	}
 	if !id.Valid || !itemCollectionID.Valid || !assetID.Valid || !remoteItemID.Valid || !displayName.Valid || !sourceRevision.Valid || !createdRevision.Valid || !retentionExempt.Valid || !updatedRevision.Valid || !createdAt.Valid || !updatedAt.Valid || !mimeType.Valid || !sizeBytes.Valid || !etag.Valid {
 		return assets.CollectionItem{}, assets.ErrNotFound
@@ -1121,13 +1133,13 @@ func (s *Store) CreateContentTicket(ctx context.Context, ticket assets.ContentTi
 	if accessMode != "reader" && accessMode != "manager" {
 		return assets.ErrNotFound
 	}
-	roles := ticket.Roles
-	if roles == nil {
-		roles = []string{}
+	roleIDs := ticket.RoleIDs
+	if roleIDs == nil {
+		roleIDs = []string{}
 	}
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO asset_content_tickets(
-		  token_hash,collection_id,collection_item_id,asset_etag,user_id,roles,access_mode,expires_at,created_at
+		  token_hash,collection_id,collection_item_id,asset_etag,user_id,role_ids,access_mode,expires_at,created_at
 		)
 		SELECT $1,c.id,i.id,a.etag,$5,$6::text[],$7,$8::timestamptz,$9::timestamptz
 		FROM asset_collections c
@@ -1139,13 +1151,13 @@ func (s *Store) CreateContentTicket(ctx context.Context, ticket assets.ContentTi
 		 AND a.processing_status IN ('ready','not_required') AND a.etag=$4
 		WHERE c.id=$2 AND c.deleted_at IS NULL
 		  AND $8::timestamptz>$10::timestamptz AND $8::timestamptz<=$10::timestamptz+interval '5 minutes'
-		  AND ($7='manager' OR ($7='reader' AND $11=ANY($6::text[]) AND EXISTS (
+		  AND ($7='manager' OR ($7='reader' AND EXISTS (
 		    SELECT 1 FROM asset_collection_acl acl
 		    WHERE acl.collection_id=c.id AND acl.permission='read' AND acl.revoked_at IS NULL
 		      AND ((acl.subject_type='user' AND acl.subject_id=$5)
 		        OR (acl.subject_type='role' AND acl.subject_id=ANY($6::text[])))
 		  )))`, ticket.TokenHash, ticket.CollectionID, ticket.CollectionItemID, ticket.AssetETag,
-		ticket.UserID, roles, accessMode, ticket.ExpiresAt, ticket.CreatedAt, now, assets.CollectionReaderRole)
+		ticket.UserID, roleIDs, accessMode, ticket.ExpiresAt, ticket.CreatedAt, now)
 	if err != nil {
 		return err
 	}
@@ -1181,12 +1193,12 @@ func (s *Store) RedeemContentTicket(ctx context.Context, tokenHash string, now t
 		 AND a.upload_status='completed' AND a.scan_status='clean'
 		 AND a.processing_status IN ('ready','not_required') AND a.etag=t.asset_etag
 		WHERE t.token_hash=$1 AND t.expires_at>$2
-		  AND (t.access_mode='manager' OR (t.access_mode='reader' AND $3=ANY(t.roles) AND EXISTS (
+		  AND (t.access_mode='manager' OR (t.access_mode='reader' AND EXISTS (
 		    SELECT 1 FROM asset_collection_acl acl
 		    WHERE acl.collection_id=c.id AND acl.permission='read' AND acl.revoked_at IS NULL
 		      AND ((acl.subject_type='user' AND acl.subject_id=t.user_id)
-		        OR (acl.subject_type='role' AND acl.subject_id=ANY(t.roles)))
-		  )))`, tokenHash, now, assets.CollectionReaderRole).Scan(
+		        OR (acl.subject_type='role' AND acl.subject_id=ANY(t.role_ids)))
+		  )))`, tokenHash, now).Scan(
 		&asset.ID, &asset.Namespace, &asset.ObjectKey, &asset.OriginalFileName, &asset.DetectedMIMEType,
 		&asset.SizeBytes, &asset.ETag, &asset.UploadStatus, &asset.ScanStatus, &asset.ProcessingStatus,
 		&asset.Visibility, &asset.UpdatedAt,
@@ -1539,7 +1551,7 @@ func (s *Store) getLiveCollection(ctx context.Context, id string) (assets.Collec
 
 func (s *Store) hasCollectionACL(ctx context.Context, id string, subject assets.CollectionSubject) (bool, error) {
 	var allowed bool
-	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM asset_collection_acl WHERE collection_id=$1 AND permission='read' AND revoked_at IS NULL AND ((subject_type='user' AND subject_id=$2) OR (subject_type='role' AND subject_id=ANY($3::text[]))))`, id, subject.UserID, subject.Roles).Scan(&allowed)
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM asset_collection_acl WHERE collection_id=$1 AND permission='read' AND revoked_at IS NULL AND ((subject_type='user' AND subject_id=$2) OR (subject_type='role' AND subject_id=ANY($3::text[]))))`, id, subject.UserID, subject.RoleIDs).Scan(&allowed)
 	return allowed, err
 }
 
@@ -1558,18 +1570,6 @@ func (s *Store) collectionACLs(ctx context.Context, id string) ([]assets.Collect
 		values = append(values, value)
 	}
 	return values, rows.Err()
-}
-
-func validReaderSubject(subject assets.CollectionSubject) bool {
-	if subject.UserID == "" {
-		return false
-	}
-	for _, role := range subject.Roles {
-		if role == assets.CollectionReaderRole {
-			return true
-		}
-	}
-	return false
 }
 
 func boundedCollectionLimit(limit int) int {

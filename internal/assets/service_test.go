@@ -783,44 +783,46 @@ func TestCollectionMutationJSONCannotSetTrustedIdentity(t *testing.T) {
 	}
 }
 
-func TestCollectionServiceRequiresGlobalReaderRole(t *testing.T) {
+func TestCollectionSubjectIsACLOnly(t *testing.T) {
 	repository := &collectionServiceRepository{}
 	service := NewService(repository, newMemoryBlobStore(), "", time.Now)
 
-	for _, subject := range []CollectionSubject{
-		{},
-		{UserID: "user", Roles: []string{"admin"}},
-		{UserID: "", Roles: []string{CollectionReaderRole}},
-	} {
-		if _, err := service.ListAuthorizedCollections(context.Background(), subject, "", 10); !errors.Is(err, ErrForbidden) {
-			t.Fatalf("subject=%+v err=%v", subject, err)
-		}
+	if _, err := service.ListAuthorizedCollections(context.Background(), CollectionSubject{UserID: "user"}, "", 10); err != nil {
+		t.Fatalf("authenticated subject err=%v", err)
 	}
-	if repository.readerCalls != 0 {
+	if repository.readerCalls != 1 {
 		t.Fatalf("reader calls=%d", repository.readerCalls)
 	}
-
-	if _, err := service.ListAuthorizedCollections(context.Background(), CollectionSubject{
-		UserID: "user", Roles: []string{"role", CollectionReaderRole},
-	}, "", 10); err != nil {
-		t.Fatal(err)
+	if _, err := service.ListAuthorizedCollections(context.Background(), CollectionSubject{}, "", 10); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("empty subject err=%v", err)
 	}
 	if repository.readerCalls != 1 {
 		t.Fatalf("reader calls=%d", repository.readerCalls)
 	}
 }
 
+func TestCollectionItemAndTicketWithoutGlobalRole(t *testing.T) {
+	now := time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
+	repository := &collectionServiceRepository{}
+	service := NewService(repository, newMemoryBlobStore(), "", func() time.Time { return now })
+	subject := CollectionSubject{UserID: "user"}
+
+	if _, err := service.GetAuthorizedCollectionItem(context.Background(), "collection", "item", subject); err != nil {
+		t.Fatalf("item err=%v", err)
+	}
+	if _, err := service.IssueCollectionContentTicket(context.Background(), "collection", "item", subject, now.Add(time.Minute)); err != nil {
+		t.Fatalf("ticket err=%v", err)
+	}
+}
+
 func TestCollectionReaderServiceGetsAuthorizedItem(t *testing.T) {
 	repository := &collectionServiceRepository{}
 	service := NewService(repository, newMemoryBlobStore(), "", time.Now)
-	subject := CollectionSubject{UserID: "user", Roles: []string{CollectionReaderRole}}
+	subject := CollectionSubject{UserID: "user"}
 
 	item, err := service.GetAuthorizedCollectionItem(context.Background(), "collection", "item", subject)
 	if err != nil || item.ID != "item" || repository.readerItemCalls != 1 {
 		t.Fatalf("item=%+v calls=%d err=%v", item, repository.readerItemCalls, err)
-	}
-	if _, err := service.GetAuthorizedCollectionItem(context.Background(), "collection", "item", CollectionSubject{UserID: "user"}); !errors.Is(err, ErrForbidden) {
-		t.Fatalf("missing reader role err=%v", err)
 	}
 	if repository.readerItemCalls != 1 {
 		t.Fatalf("reader item calls=%d", repository.readerItemCalls)
@@ -831,7 +833,7 @@ func TestCollectionContentTicketUsesOpaqueHashAndBoundedExpiry(t *testing.T) {
 	now := time.Date(2026, 8, 16, 6, 0, 0, 0, time.UTC)
 	repository := &collectionServiceRepository{}
 	service := NewService(repository, newMemoryBlobStore(), "", func() time.Time { return now })
-	subject := CollectionSubject{UserID: "user", Roles: []string{CollectionReaderRole, "media-team"}}
+	subject := CollectionSubject{UserID: "user", RoleIDs: []string{"018f0000-0000-7000-8000-000000000001"}}
 
 	issued, err := service.IssueCollectionContentTicket(context.Background(), "collection", "item", subject, now.Add(10*time.Minute))
 	if err != nil {
@@ -853,7 +855,7 @@ func TestCollectionContentTicketUsesOpaqueHashAndBoundedExpiry(t *testing.T) {
 	if repository.ticket.TokenHash != hex.EncodeToString(hash[:]) || strings.Contains(repository.ticket.TokenHash, token) {
 		t.Fatalf("persisted hash=%q token=%q", repository.ticket.TokenHash, token)
 	}
-	if repository.ticket.CollectionID != "collection" || repository.ticket.CollectionItemID != "item" || repository.ticket.AssetETag != issued.ETag || repository.ticket.UserID != "user" || !slices.Equal(repository.ticket.Roles, subject.Roles) {
+	if repository.ticket.CollectionID != "collection" || repository.ticket.CollectionItemID != "item" || repository.ticket.AssetETag != issued.ETag || repository.ticket.UserID != "user" || !slices.Equal(repository.ticket.RoleIDs, subject.RoleIDs) {
 		t.Fatalf("ticket=%+v", repository.ticket)
 	}
 
@@ -890,7 +892,7 @@ func TestManagedContentTicketsAreBoundedAndDoNotUseReaderAuthorization(t *testin
 	if err != nil || len(batch.Tickets) != 1 || len(batch.UnavailableItemIDs) != 1 || batch.UnavailableItemIDs[0] != unavailableID {
 		t.Fatalf("batch=%+v err=%v", batch, err)
 	}
-	if batch.Tickets[0].ItemID != availableID || batch.Tickets[0].ExpiresAt != now.Add(5*time.Minute) || batch.Tickets[0].ContentURL == "" || repository.ticket.AccessMode != "manager" || repository.ticket.Roles == nil || repository.readerItemCalls != 0 {
+	if batch.Tickets[0].ItemID != availableID || batch.Tickets[0].ExpiresAt != now.Add(5*time.Minute) || batch.Tickets[0].ContentURL == "" || repository.ticket.AccessMode != "manager" || repository.ticket.RoleIDs == nil || repository.readerItemCalls != 0 {
 		t.Fatalf("ticket=%+v persisted=%+v reader calls=%d", batch.Tickets[0], repository.ticket, repository.readerItemCalls)
 	}
 
