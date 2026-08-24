@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-pattern='DROP[[:space:]]+(SCHEMA|TABLE|COLUMN|VIEW|MATERIALIZED[[:space:]]+VIEW|TYPE|FUNCTION|CONSTRAINT)|(^|;)[[:space:]]*TRUNCATE([[:space:]]+TABLE)?[[:space:]]+|RENAME[[:space:]]+(TABLE|COLUMN)|ALTER[[:space:]]+TABLE[^;]*(ALTER[[:space:]]+COLUMN[^;]*TYPE|DROP[[:space:]]+CONSTRAINT|SET[[:space:]]+NOT[[:space:]]+NULL)'
-legacy_pattern='DROP[[:space:]]+(SCHEMA|TABLE|COLUMN|VIEW|MATERIALIZED[[:space:]]+VIEW|TYPE|FUNCTION)|(^|;)[[:space:]]*TRUNCATE([[:space:]]+TABLE)?[[:space:]]+|RENAME[[:space:]]+(TABLE|COLUMN)|ALTER[[:space:]]+TABLE[^;]*(ALTER[[:space:]]+COLUMN[^;]*TYPE|SET[[:space:]]+NOT[[:space:]]+NULL)'
+pattern='DROP[[:space:]]+(SCHEMA|TABLE|COLUMN|VIEW|MATERIALIZED[[:space:]]+VIEW|TYPE|FUNCTION|CONSTRAINT)|RENAME[[:space:]]+(TABLE|COLUMN)|ALTER[[:space:]]+TABLE[^;]*(ALTER[[:space:]]+COLUMN[^;]*TYPE|DROP[[:space:]]+CONSTRAINT|SET[[:space:]]+NOT[[:space:]]+NULL)'
+legacy_pattern='DROP[[:space:]]+(SCHEMA|TABLE|COLUMN|VIEW|MATERIALIZED[[:space:]]+VIEW|TYPE|FUNCTION)|RENAME[[:space:]]+(TABLE|COLUMN)|ALTER[[:space:]]+TABLE[^;]*(ALTER[[:space:]]+COLUMN[^;]*TYPE|SET[[:space:]]+NOT[[:space:]]+NULL)'
 
 if [ "$#" -eq 0 ]; then
   set -- internal/migrations/sql/*.sql
@@ -31,7 +31,9 @@ for file in "$@"; do
     }
     current_pattern="$legacy_pattern"
   fi
-  if perl -0777 -pe 's{/\*.*?\*/}{}gs; s/--[^\n]*//g' "$file" | tr '\n' ' ' | grep -Eiq "$current_pattern"; then
+  normalized="$(perl -0777 -pe 's{/\*.*?\*/}{ }gs; s/--[^\n]*//g' "$file" | tr '\n' ' ')"
+  if printf '%s' "$normalized" | grep -Eiq "$current_pattern" || \
+    printf '%s' "$normalized" | perl -0777 -e '$sql = <>; exit($sql =~ /\bTRUNCATE\s+(?:TABLE\s+)?(?!ON\b)/i ? 0 : 1)'; then
     echo 'migrations must use expand/contract; destructive DDL requires a later release' >&2
     exit 1
   fi

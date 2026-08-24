@@ -10,10 +10,14 @@ printf '%s\n' "ALTER TABLE asset_content_tickets ADD COLUMN role_ids text[] NOT 
 ./scripts/test-migration-policy.sh "$tmp/expand.sql"
 printf '%s\n' 'REVOKE UPDATE, DELETE, TRUNCATE ON asset_collection_acl_audit FROM asset;' >"$tmp/revoke.sql"
 ./scripts/test-migration-policy.sh "$tmp/revoke.sql"
+printf '%s\n' 'REVOKE TRUNCATE, UPDATE, DELETE ON asset_collection_acl_audit FROM asset;' >"$tmp/revoke.sql"
+./scripts/test-migration-policy.sh "$tmp/revoke.sql"
 
 for statement in \
   'DROP TABLE users;' \
   'TRUNCATE TABLE asset_collection_acl_audit;' \
+  'DO $$ BEGIN TRUNCATE TABLE asset_collection_acl_audit; END $$;' \
+  'TRUNCATE/* bypass */TABLE asset_collection_acl_audit;' \
   'ALTER TABLE users ALTER COLUMN name SET NOT NULL;' \
   'ALTER TABLE asset_content_tickets RENAME COLUMN roles TO role_ids;' \
   'DROP /* bypass */ TABLE users;' \
