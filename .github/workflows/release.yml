@@ -12,6 +12,11 @@ on:
         description: Type deploy-asset-api-production
         required: true
         type: string
+      fail_openapi_before_pointer:
+        description: Test last-good API docs pointer preservation
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -68,6 +73,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: production
+    outputs:
+      commit: ${{ steps.release_outputs.outputs.commit }}
+      image: ${{ steps.release_outputs.outputs.image }}
     permissions:
       contents: read
       id-token: write
@@ -251,6 +259,11 @@ jobs:
           [[ "$derivative_image" == "$IMAGE_REF" ]]
           [[ "$(az containerapp job show -g "$RESOURCE_GROUP" -n "$DERIVATIVE_JOB_NAME" --query properties.configuration.eventTriggerConfig.scale.minExecutions -o tsv --only-show-errors)" == "0" ]]
           [[ "$(az containerapp job show -g "$RESOURCE_GROUP" -n "$DERIVATIVE_JOB_NAME" --query properties.configuration.eventTriggerConfig.scale.maxExecutions -o tsv --only-show-errors)" == "1" ]]
+      - name: Capture healthy release
+        id: release_outputs
+        run: |
+          echo "commit=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          echo "image=$IMAGE_REF" >> "$GITHUB_OUTPUT"
       - name: Roll back failed runtime
         if: ${{ failure() && steps.deploy_runtime.outcome != 'skipped' }}
         run: |
@@ -268,3 +281,96 @@ jobs:
             sleep 10
           done
           exit 1
+
+  publish_openapi:
+    needs: deploy
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      STORAGE_ACCOUNT: hhcapidocsprod
+      CONTAINER: api-docs-asset-api
+      API_DOCS_AZURE_CLIENT_ID: ${{ vars.API_DOCS_AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      RELEASE_COMMIT: ${{ needs.deploy.outputs.commit }}
+      RELEASE_IMAGE: ${{ needs.deploy.outputs.image }}
+      FAIL_OPENAPI_BEFORE_POINTER: ${{ inputs.fail_openapi_before_pointer && github.run_attempt == 1 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Validate publication configuration
+        run: |
+          [[ "$RELEASE_COMMIT" == "$GITHUB_SHA" ]]
+          [[ "$RELEASE_IMAGE" == *@sha256:* ]]
+          for name in API_DOCS_AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID; do
+            test -n "${!name:-}" || { echo "Missing repository variable: ${name}" >&2; exit 1; }
+          done
+      - name: Sign in with API docs publisher identity
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
+        with:
+          client-id: ${{ vars.API_DOCS_AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Publish production OpenAPI contract
+        run: |
+          spec_blob="specs/${GITHUB_SHA}/openapi.yaml"
+          spec_sha256="$(sha256sum docs/openapi.yaml | cut -d " " -f 1)"
+          spec_exists="$(az storage blob exists \
+            --account-name "$STORAGE_ACCOUNT" \
+            --container-name "$CONTAINER" \
+            --name "$spec_blob" \
+            --auth-mode login \
+            --only-show-errors \
+            --query exists \
+            --output tsv)"
+          if [[ "$spec_exists" == "true" ]]; then
+            existing_spec="$(mktemp)"
+            az storage blob download \
+              --account-name "$STORAGE_ACCOUNT" \
+              --container-name "$CONTAINER" \
+              --name "$spec_blob" \
+              --file "$existing_spec" \
+              --auth-mode login \
+              --no-progress \
+              --only-show-errors \
+              --output none
+            [[ "$(sha256sum "$existing_spec" | cut -d " " -f 1)" == "$spec_sha256" ]]
+          else
+            az storage blob upload \
+              --account-name "$STORAGE_ACCOUNT" \
+              --container-name "$CONTAINER" \
+              --name "$spec_blob" \
+              --file docs/openapi.yaml \
+              --auth-mode login \
+              --overwrite false \
+              --only-show-errors \
+              --output none
+          fi
+
+          jq -n \
+            --arg service asset-api \
+            --arg commit "$RELEASE_COMMIT" \
+            --arg image "$RELEASE_IMAGE" \
+            --arg specBlob "$spec_blob" \
+            --arg specSha256 "$spec_sha256" \
+            --arg releaseUrl "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --arg publishedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{schemaVersion: 1, service: $service, commit: $commit, image: $image, specBlob: $specBlob, specSha256: $specSha256, releaseUrl: $releaseUrl, publishedAt: $publishedAt}' \
+            > current.json
+
+          if [[ "$FAIL_OPENAPI_BEFORE_POINTER" == "true" ]]; then
+            echo "Requested failure before API docs pointer upload" >&2
+            exit 1
+          fi
+
+          az storage blob upload \
+            --account-name "$STORAGE_ACCOUNT" \
+            --container-name "$CONTAINER" \
+            --name current.json \
+            --file current.json \
+            --auth-mode login \
+            --overwrite true \
+            --only-show-errors \
+            --output none
