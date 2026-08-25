@@ -2,17 +2,23 @@
 
 This procedure is a production stop gate, not a migration. Run it only after
 explicit approval with two approved read-only PostgreSQL service definitions:
-one for Account and one for Asset. It never changes data and must not be used to
-reset or recreate ACLs.
+one for Account and one for Asset. The inventory never changes data. A later
+reset requires a separately reviewed replacement file and uses only the
+existing management API.
 
 The exports contain only opaque IDs:
 
 - Account: active user UUIDs, role UUIDs, and current active-user membership
   pairs.
-- Asset: live collection IDs, active ACL IDs, subject types, and subject IDs.
+- Asset temporary export: live collection IDs, active ACL IDs, subject types,
+  and subject IDs.
+- Candidate manifest on standard output: `collection_id` and `acl_id` only for
+  active read ACLs whose subject type is `role` and whose subject ID is not a
+  UUID.
 
 They contain no email, display name, content metadata, credential, or token.
-The final command prints counts only.
+The four inventory counts go to standard error so standard output remains the
+exact opaque candidate manifest.
 
 ## Preconditions
 
@@ -25,7 +31,9 @@ The final command prints counts only.
    `APPROVED_ASSET_READ_ONLY_PGSERVICE` below with the approved non-secret
    service names. Do not add a DSN, credential, or token.
 4. Run the complete block in a dedicated Bash process. Do not split it into
-   separate shell sessions or source it into an interactive shell.
+   separate shell sessions or source it into an interactive shell. Capture
+   standard output to a private `.partial` candidate file, and rename it to the
+   reviewed filename only when the process exits zero. Remove it on any error.
 
 Do not continue if either service is not the approved read-only production
 target. The commands also force every database session and transaction to be
@@ -200,6 +208,14 @@ def has_uuid_syntax(value):
         return False
 
 
+def valid_opaque_id(value):
+    return (
+        value == value.strip()
+        and 0 < len(value.encode('utf-8')) <= 255
+        and not any(ord(character) < 32 or ord(character) == 127 for character in value)
+    )
+
+
 if not (root / '.exports-complete').is_file():
     raise SystemExit('exports are incomplete')
 
@@ -217,13 +233,19 @@ active_direct_acls = 0
 uuid_role_acls = 0
 legacy_role_name_acls = 0
 dangling_subjects = 0
+candidates = []
+candidate_keys = set()
 
 for acl in rows(
     'asset-active-acls.tsv',
     ['collection_id', 'acl_id', 'subject_type', 'subject_id'],
 ):
+    collection_id = acl['collection_id']
+    acl_id = acl['acl_id']
     subject_type = acl['subject_type']
     subject_id = acl['subject_id']
+    if not all(valid_opaque_id(value) for value in (collection_id, acl_id, subject_id)):
+        raise SystemExit('invalid active ACL identifier')
     if subject_type == 'user':
         active_direct_acls += 1
         dangling_subjects += subject_id not in account_users
@@ -233,13 +255,22 @@ for acl in rows(
             dangling_subjects += subject_id not in account_roles
         else:
             legacy_role_name_acls += 1
+            key = (collection_id, acl_id)
+            if key in candidate_keys:
+                raise SystemExit('duplicate legacy ACL candidate')
+            candidate_keys.add(key)
+            candidates.append(key)
     else:
         raise SystemExit('unexpected active ACL subject type')
 
-print(f'active_direct_acls={active_direct_acls}')
-print(f'uuid_role_acls={uuid_role_acls}')
-print(f'legacy_role_name_acls={legacy_role_name_acls}')
-print(f'dangling_subjects={dangling_subjects}')
+print(f'active_direct_acls={active_direct_acls}', file=sys.stderr)
+print(f'uuid_role_acls={uuid_role_acls}', file=sys.stderr)
+print(f'legacy_role_name_acls={legacy_role_name_acls}', file=sys.stderr)
+print(f'dangling_subjects={dangling_subjects}', file=sys.stderr)
+
+writer = csv.writer(sys.stdout, delimiter='\t', lineterminator='\n')
+writer.writerow(['collection_id', 'acl_id'])
+writer.writerows(candidates)
 PY
 ```
 
@@ -252,10 +283,137 @@ The four reported classes are:
   plus UUID role ACLs that do not match an Account role. Legacy role-name ACLs
   are reported separately and are not double-counted as dangling.
 
-The local join validates current membership pairs but prints only these four
-counts. If Account membership or ACL state changes during the run, discard the
-output and rerun. Counts and opaque exports require review before any later
-test-data reset or ACL recreation approval.
+The local join validates current membership pairs and every candidate key
+before emitting any row. If Account membership or ACL state changes during the
+run, discard the counts and candidate manifest and rerun. The raw subject IDs
+exist only in the temporary export removed by the cleanup trap; they never
+enter the candidate manifest.
+
+## Review and validate replacement UUIDs
+
+Create a separate private TSV file with this exact header:
+
+```text
+collection_id	acl_id	replacement_role_id	review_status
+```
+
+There must be exactly one row for every candidate and no other row.
+`replacement_role_id` must be the current Account role UUID explicitly chosen
+through the Account ACL-subject search. Record `approved` only after the
+candidate and UUID are reviewed in the approved operational channel. Never
+derive or auto-fill a replacement UUID from the legacy role name. Immediately
+before mutation, repeat the exact-ID Account lookup and stop if it no longer
+returns that role.
+
+Run this complete validation block with the two approved private file paths.
+It emits only a validated row count and exits nonzero before emitting output
+for a malformed file, duplicate, missing or extra candidate mapping,
+non-canonical role UUID, or a row not marked `approved`.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+set +x
+
+CANDIDATE_MANIFEST="${CANDIDATE_MANIFEST:-APPROVED_CANDIDATE_MANIFEST_PATH}"
+REVIEWED_REPLACEMENTS="${REVIEWED_REPLACEMENTS:-APPROVED_REPLACEMENTS_PATH}"
+
+[[ "$CANDIDATE_MANIFEST" != 'APPROVED_CANDIDATE_MANIFEST_PATH' ]]
+[[ "$REVIEWED_REPLACEMENTS" != 'APPROVED_REPLACEMENTS_PATH' ]]
+
+python3 - "$CANDIDATE_MANIFEST" "$REVIEWED_REPLACEMENTS" <<'PY'
+import csv
+import sys
+import uuid
+from pathlib import Path
+
+candidate_path = Path(sys.argv[1])
+replacement_path = Path(sys.argv[2])
+
+
+def rows(path, fields):
+    if not path.is_file() or path.is_symlink():
+        raise SystemExit(f'missing regular input: {path.name}')
+    with path.open(newline='', encoding='utf-8') as handle:
+        reader = csv.DictReader(handle, delimiter='\t')
+        if reader.fieldnames != fields:
+            raise SystemExit(f'invalid header in {path.name}')
+        yield from reader
+
+
+def valid_opaque_id(value):
+    return (
+        isinstance(value, str)
+        and value == value.strip()
+        and 0 < len(value.encode('utf-8')) <= 255
+        and not any(ord(character) < 32 or ord(character) == 127 for character in value)
+    )
+
+
+def canonical_uuid(value):
+    try:
+        return str(uuid.UUID(value)) == value
+    except (AttributeError, ValueError):
+        return False
+
+
+candidate_fields = ['collection_id', 'acl_id']
+replacement_fields = [
+    'collection_id',
+    'acl_id',
+    'replacement_role_id',
+    'review_status',
+]
+
+candidates = set()
+for row in rows(candidate_path, candidate_fields):
+    key = (row['collection_id'], row['acl_id'])
+    if not all(valid_opaque_id(value) for value in key) or key in candidates:
+        raise SystemExit('invalid or duplicate candidate')
+    candidates.add(key)
+
+replacements = set()
+for row in rows(replacement_path, replacement_fields):
+    key = (row['collection_id'], row['acl_id'])
+    if (
+        not all(valid_opaque_id(value) for value in key)
+        or key in replacements
+        or not canonical_uuid(row['replacement_role_id'])
+        or row['review_status'] != 'approved'
+    ):
+        raise SystemExit('invalid, duplicate, or unreviewed replacement')
+    replacements.add(key)
+
+if replacements != candidates:
+    raise SystemExit('replacement rows do not exactly match candidates')
+
+print(f'validated_reset_rows={len(candidates)}')
+PY
+```
+
+## Audited reset through the management API
+
+Proceed only after the validator exits zero and the exact-ID Account lookup is
+still current. For each validated row, use an approved authenticated client for
+the existing Admin management API:
+
+1. `POST /api/line/media-sync/collections/{collectionID}/acl` with a unique
+   idempotency key and body
+   `{"subjectType":"role","subjectId":"<replacement_role_id>"}`. Require a
+   `201` response whose active ACL has the reviewed collection and subject UUID.
+2. After the replacement is confirmed active, revoke the legacy ACL with
+   `DELETE /api/line/media-sync/collections/{collectionID}/acl/{aclID}`, a new
+   idempotency key, and the candidate `acl_id`. Require a `200` response for
+   that ACL record.
+3. Re-read the collection and require the replacement ACL to be active and the
+   candidate ACL to be revoked. Stop on any drift or response mismatch.
+
+Adding first avoids an access gap; if revoke fails, leave the replacement in
+place and retry only the idempotent revoke after review. These API mutations
+record the manager actor, request, and idempotency context in ACL audit history.
+Never update `subject_id`, physically delete ACL or audit rows, run `TRUNCATE`,
+or reuse a revoked ACL row. Revocation is a soft state change, and all prior
+audit history remains retained.
 
 ## Maintainer synthetic checks
 
@@ -263,14 +421,20 @@ Before approving changes to this procedure, extract the complete Bash block to
 a temporary script and use fake `psql` commands with dummy service names; never
 use a live database for these checks. Verify all of the following:
 
-1. A successful fake Account and Asset export produces the four expected
-   counts, exits zero, and leaves no inventory temporary directory.
+1. A successful fake Account and Asset export produces the exact two-column
+   legacy candidate manifest and four expected counts, exits zero, and leaves
+   no inventory temporary directory.
 2. A fake `psql` that writes a partial export and exits nonzero causes the unit
    to exit nonzero, prints no count, never invokes the local join, and removes
    the inventory temporary directory.
 3. A fake `psql` that interrupts the unit after writing a partial export causes
    a nonzero signal exit, prints no count, never invokes the local join, and
    removes the inventory temporary directory.
+4. Run `scripts/test-line-media-acl-inventory.sh`; its real validator fixtures
+   must accept the exact reviewed mapping and reject malformed, dangling, and
+   unreviewed mappings without output.
 
-Stop here. Do not run a production migration, delete or reactivate ACLs, push a
-branch, open or merge a PR, or deploy from this procedure.
+Stop here unless the inventory, separate mapping review, exact-ID Account
+lookup, and API reset are each explicitly approved. Do not run a production
+migration, physical delete, `TRUNCATE`, push, branch merge, or deployment from
+this procedure.
