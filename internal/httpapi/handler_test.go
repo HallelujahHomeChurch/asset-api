@@ -75,14 +75,15 @@ func TestOperationsIncludesExpiredCollectionItemsWithoutChangingPurgePending(t *
 	}
 }
 
-func TestCollectionReaderAuthorizationMatrix(t *testing.T) {
+func TestCollectionReaderAcceptsRoleIDsAndNoGlobalRole(t *testing.T) {
+	roleID := "018f0000-0000-7000-8000-000000000001"
 	tests := []struct {
-		name       string
-		mutate     func(*http.Request)
-		wantStatus int
-		wantCalls  int
-		wantUser   string
-		wantRoles  []string
+		name        string
+		mutate      func(*http.Request)
+		wantStatus  int
+		wantCalls   int
+		wantUser    string
+		wantRoleIDs []string
 	}{
 		{name: "missing caller", mutate: func(r *http.Request) { r.Header.Del("Dapr-Caller-App-Id") }, wantStatus: http.StatusForbidden},
 		{name: "forged caller", mutate: func(r *http.Request) { r.Header.Set("Dapr-Caller-App-Id", "account-api") }, wantStatus: http.StatusForbidden},
@@ -90,13 +91,8 @@ func TestCollectionReaderAuthorizationMatrix(t *testing.T) {
 		{name: "missing user", mutate: func(r *http.Request) { r.Header.Del("X-HHC-User-ID") }, wantStatus: http.StatusUnauthorized},
 		{name: "invalid expiry", mutate: func(r *http.Request) { r.Header.Set("X-HHC-Token-Expires-At", "not-unix") }, wantStatus: http.StatusUnauthorized},
 		{name: "zero expiry", mutate: func(r *http.Request) { r.Header.Set("X-HHC-Token-Expires-At", "0") }, wantStatus: http.StatusUnauthorized},
-		{name: "missing global role", mutate: func(r *http.Request) { r.Header.Set("X-HHC-Roles", "team") }, wantStatus: http.StatusForbidden},
-		{name: "user acl", wantStatus: http.StatusOK, wantCalls: 1, wantUser: "user-acl", wantRoles: []string{assets.CollectionReaderRole, "team"}},
-		{name: "role acl", mutate: func(r *http.Request) { r.Header.Set("X-HHC-User-ID", "role-user") }, wantStatus: http.StatusOK, wantCalls: 1, wantUser: "role-user", wantRoles: []string{assets.CollectionReaderRole, "team"}},
-		{name: "manager only", mutate: func(r *http.Request) {
-			r.Header.Set("X-HHC-User-ID", "manager-only")
-			r.Header.Set("X-HHC-Roles", assets.CollectionReaderRole+",manager")
-		}, wantStatus: http.StatusForbidden, wantCalls: 1},
+		{name: "user acl without role IDs", mutate: func(r *http.Request) { r.Header.Del("X-HHC-Role-IDs") }, wantStatus: http.StatusOK, wantCalls: 1, wantUser: "user-acl", wantRoleIDs: []string{}},
+		{name: "deduplicated role IDs", mutate: func(r *http.Request) { r.Header.Set("X-HHC-User-ID", "role-user") }, wantStatus: http.StatusOK, wantCalls: 1, wantUser: "role-user", wantRoleIDs: []string{roleID}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -110,7 +106,7 @@ func TestCollectionReaderAuthorizationMatrix(t *testing.T) {
 			if response.Code != test.wantStatus || repository.calls != test.wantCalls {
 				t.Fatalf("status=%d calls=%d body=%s", response.Code, repository.calls, response.Body.String())
 			}
-			if test.wantUser != "" && (repository.subject.UserID != test.wantUser || !slices.Equal(repository.subject.Roles, test.wantRoles)) {
+			if test.wantUser != "" && (repository.subject.UserID != test.wantUser || !slices.Equal(repository.subject.RoleIDs, test.wantRoleIDs)) {
 				t.Fatalf("subject=%+v", repository.subject)
 			}
 		})
@@ -123,7 +119,7 @@ func TestCollectionReaderRoutesUseLiveAuthorization(t *testing.T) {
 		wantStatus         int
 	}{
 		{name: "changes", method: http.MethodGet, path: "/api/assets/collections/collection/changes?cursor=next", wantStatus: http.StatusOK},
-		{name: "revoked acl", method: http.MethodGet, path: "/api/assets/collections/revoked/changes", wantStatus: http.StatusForbidden},
+		{name: "revoked acl", method: http.MethodGet, path: "/api/assets/collections/revoked/changes", wantStatus: http.StatusNotFound},
 		{name: "deleted collection", method: http.MethodGet, path: "/api/assets/collections/deleted/changes", wantStatus: http.StatusNotFound},
 		{name: "item", method: http.MethodGet, path: "/api/assets/collections/collection/items/item", wantStatus: http.StatusOK},
 		{name: "inaccessible item", method: http.MethodGet, path: "/api/assets/collections/collection/items/missing", wantStatus: http.StatusNotFound},
@@ -164,7 +160,7 @@ func TestCollectionContentTicketIssueRequiresVerifiedGatewayIdentity(t *testing.
 		t.Fatalf("token bytes=%d err=%v", len(raw), err)
 	}
 	hash := sha256.Sum256(raw)
-	if repository.ticket.TokenHash != hex.EncodeToString(hash[:]) || repository.ticket.UserID != "user-acl" || !slices.Equal(repository.ticket.Roles, []string{assets.CollectionReaderRole, "team"}) {
+	if repository.ticket.TokenHash != hex.EncodeToString(hash[:]) || repository.ticket.UserID != "user-acl" || !slices.Equal(repository.ticket.RoleIDs, []string{"018f0000-0000-7000-8000-000000000001"}) {
 		t.Fatalf("ticket=%+v", repository.ticket)
 	}
 
@@ -216,7 +212,7 @@ func TestManagedContentTicketsRequireInternalCallerAndReturnSafeBatch(t *testing
 	handler, repository := newCollectionManagementHandler()
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request("hhc-line-function-bot"))
-	if response.Code != http.StatusCreated || repository.managedItemCaller != "hhc-line-function-bot" || repository.ticket.AccessMode != "manager" || repository.ticket.UserID != "manager" || len(repository.ticket.Roles) != 0 {
+	if response.Code != http.StatusCreated || repository.managedItemCaller != "hhc-line-function-bot" || repository.ticket.AccessMode != "manager" || repository.ticket.UserID != "manager" || len(repository.ticket.RoleIDs) != 0 {
 		t.Fatalf("status=%d ticket=%+v body=%s", response.Code, repository.ticket, response.Body.String())
 	}
 	var batch assets.ManagedContentTicketBatch
@@ -270,7 +266,7 @@ func TestCollectionContentBearerAndTicketConditionalRanges(t *testing.T) {
 				} else {
 					request.Header.Set("Authorization", "Bearer forged")
 					request.Header.Set("X-HHC-User-ID", "attacker")
-					request.Header.Set("X-HHC-Roles", "admin")
+					request.Header.Set("X-HHC-Role-IDs", "018f0000-0000-7000-8000-000000000099")
 				}
 				request.Header.Set("Range", test.rangeValue)
 				request.Header.Set("If-None-Match", test.ifNoneMatch)
@@ -333,7 +329,7 @@ func TestCollectionTicketMiddlewareClearsExternalIdentityAndNonTicketQuery(t *te
 		if r.URL.RawQuery != "" || r.RequestURI != "/api/assets/content" {
 			t.Fatalf("query=%q requestURI=%q", r.URL.RawQuery, r.RequestURI)
 		}
-		for _, name := range []string{"Authorization", "Cookie", "X-HHC-User-ID", "X-HHC-Roles", "X-MS-CLIENT-PRINCIPAL", "X-Asset-Subject-Id", "X-Internal-Caller-App-Id", "Dapr-Caller-App-Id", "dapr-api-token"} {
+		for _, name := range []string{"Authorization", "Cookie", "X-HHC-User-ID", "X-HHC-Role-IDs", "X-MS-CLIENT-PRINCIPAL", "X-Asset-Subject-Id", "X-Internal-Caller-App-Id", "Dapr-Caller-App-Id", "dapr-api-token"} {
 			if r.Header.Get(name) != "" {
 				t.Fatalf("%s was forwarded", name)
 			}
@@ -349,7 +345,7 @@ func TestCollectionTicketMiddlewareClearsExternalIdentityAndNonTicketQuery(t *te
 	request.Header.Set("Authorization", "Bearer forged")
 	request.Header.Set("Cookie", "session=forged")
 	request.Header.Set("X-HHC-User-ID", "forged")
-	request.Header.Set("X-HHC-Roles", "admin")
+	request.Header.Set("X-HHC-Role-IDs", "018f0000-0000-7000-8000-000000000099")
 	request.Header.Set("X-MS-CLIENT-PRINCIPAL", "forged")
 	request.Header.Set("X-Asset-Subject-Id", "forged")
 	request.Header.Set("X-Internal-Caller-App-Id", "forged")
@@ -505,7 +501,7 @@ func collectionReaderRequest(method, path string) *http.Request {
 	request.Header.Set("Dapr-Caller-App-Id", "api-gateway")
 	request.Header.Set("dapr-api-token", "token")
 	request.Header.Set("X-HHC-User-ID", "user-acl")
-	request.Header.Set("X-HHC-Roles", " "+assets.CollectionReaderRole+", team, "+assets.CollectionReaderRole+" ")
+	request.Header.Set("X-HHC-Role-IDs", " 018f0000-0000-7000-8000-000000000001, 018f0000-0000-7000-8000-000000000001 ")
 	request.Header.Set("X-HHC-Token-ID", "token-id")
 	request.Header.Set("X-HHC-Token-Expires-At", "1")
 	request.Header.Set("X-HHC-Session-ID", "session-id")
@@ -541,7 +537,7 @@ func (r *collectionReaderRepository) CollectionChanges(_ context.Context, id, cu
 		return assets.CollectionChangePage{}, assets.ErrNotFound
 	}
 	if id == "revoked" || !readerTestAuthorized(subject) {
-		return assets.CollectionChangePage{}, assets.ErrForbidden
+		return assets.CollectionChangePage{}, assets.ErrNotFound
 	}
 	return assets.CollectionChangePage{
 		Collection: assets.Collection{ID: id, Revision: 2, RetentionDays: 14, CreatedByService: "owner-service"}, Cursor: cursor,
@@ -563,10 +559,7 @@ func (r *collectionReaderRepository) GetAuthorizedCollectionItem(_ context.Conte
 }
 
 func readerTestAuthorized(subject assets.CollectionSubject) bool {
-	if subject.UserID == "user-acl" || subject.UserID == "role-user" {
-		return slices.Contains(subject.Roles, assets.CollectionReaderRole) && slices.Contains(subject.Roles, "team")
-	}
-	return false
+	return subject.UserID == "user-acl" || (subject.UserID == "role-user" && slices.Contains(subject.RoleIDs, "018f0000-0000-7000-8000-000000000001"))
 }
 
 func TestCollectionManagementMutationsRequireHeaderIdempotency(t *testing.T) {
@@ -664,6 +657,63 @@ func TestCollectionManagementTrimsNamesAndUsesAuthenticatedCaller(t *testing.T) 
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusCreated || repository.create.Name != "Media" || repository.create.CallerService != "hhc-line-function-bot" || repository.create.IdempotencyKey != "request-key" {
 		t.Fatalf("status=%d input=%+v body=%s", response.Code, repository.create, response.Body.String())
+	}
+}
+
+func TestCollectionACLAuditUsesTrustedActorHeaders(t *testing.T) {
+	actorUserID := "018f0000-0000-7000-8000-000000000009"
+	for _, test := range []struct {
+		name, method, path, body string
+		wantStatus               int
+		assertInput              func(*testing.T, *collectionManagementRepository)
+	}{
+		{
+			name: "add", method: http.MethodPost, path: "/priv/assets/collections/collection/acl",
+			body: `{"subjectType":"user","subjectId":"user","permission":"read"}`, wantStatus: http.StatusCreated,
+			assertInput: func(t *testing.T, repository *collectionManagementRepository) {
+				if repository.aclAdd.ActorUserID != actorUserID || repository.aclAdd.RequestID != "request-add" {
+					t.Fatalf("add input=%+v", repository.aclAdd)
+				}
+			},
+		},
+		{
+			name: "revoke", method: http.MethodDelete, path: "/priv/assets/collections/collection/acl/acl", wantStatus: http.StatusOK,
+			assertInput: func(t *testing.T, repository *collectionManagementRepository) {
+				if repository.aclRevoke.ActorUserID != actorUserID || repository.aclRevoke.RequestID != "request-revoke" {
+					t.Fatalf("revoke input=%+v", repository.aclRevoke)
+				}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			handler, repository := newCollectionManagementHandler()
+			request := httptest.NewRequest(test.method, test.path, strings.NewReader(test.body))
+			request.Header.Set("X-Internal-Caller-App-Id", "hhc-line-function-bot")
+			request.Header.Set("Idempotency-Key", test.name)
+			request.Header.Set("X-HHC-Actor-User-ID", actorUserID)
+			request.Header.Set("X-HHC-Request-ID", "request-"+test.name)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != test.wantStatus {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			test.assertInput(t, repository)
+		})
+	}
+
+	for _, missing := range []string{"X-HHC-Actor-User-ID", "X-HHC-Request-ID"} {
+		handler, repository := newCollectionManagementHandler()
+		request := httptest.NewRequest(http.MethodPost, "/priv/assets/collections/collection/acl", strings.NewReader(`{"subjectType":"user","subjectId":"user","permission":"read"}`))
+		request.Header.Set("X-Internal-Caller-App-Id", "hhc-line-function-bot")
+		request.Header.Set("Idempotency-Key", "add")
+		request.Header.Set("X-HHC-Actor-User-ID", actorUserID)
+		request.Header.Set("X-HHC-Request-ID", "request-add")
+		request.Header.Del(missing)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest || repository.calls != 0 {
+			t.Fatalf("missing=%s status=%d calls=%d", missing, response.Code, repository.calls)
+		}
 	}
 }
 
@@ -859,6 +909,10 @@ func collectionManagementRequests() []collectionManagementRequest {
 			if mutation {
 				value.Header.Set("Idempotency-Key", "key")
 			}
+			if strings.Contains(path, "/acl") {
+				value.Header.Set("X-HHC-Actor-User-ID", "018f0000-0000-7000-8000-000000000009")
+				value.Header.Set("X-HHC-Request-ID", "request-acl")
+			}
 			return value
 		}
 	}
@@ -900,6 +954,8 @@ type collectionManagementRepository struct {
 	batchRetention                                                                  assets.SetCollectionItemsRetentionInput
 	batchDelete                                                                     assets.DeleteCollectionItemsInput
 	ticket                                                                          assets.ContentTicket
+	aclAdd                                                                          assets.AddCollectionACLInput
+	aclRevoke                                                                       assets.RevokeCollectionACLInput
 }
 
 func (r *collectionManagementRepository) GetOperations(context.Context, time.Time) (assets.Operations, error) {
@@ -925,10 +981,12 @@ func (r *collectionManagementRepository) DeleteCollection(_ context.Context, inp
 }
 func (r *collectionManagementRepository) AddCollectionACL(_ context.Context, input assets.AddCollectionACLInput, _ time.Time) (assets.CollectionACLMutation, error) {
 	r.calls++
+	r.aclAdd = input
 	return assets.CollectionACLMutation{Collection: assets.Collection{ID: input.CollectionID}, ACL: assets.CollectionACL{ID: "acl"}}, nil
 }
 func (r *collectionManagementRepository) RevokeCollectionACL(_ context.Context, input assets.RevokeCollectionACLInput, _ time.Time) (assets.CollectionACLMutation, error) {
 	r.calls++
+	r.aclRevoke = input
 	return assets.CollectionACLMutation{Collection: assets.Collection{ID: input.CollectionID}, ACL: assets.CollectionACL{ID: input.ACLID}}, nil
 }
 func (r *collectionManagementRepository) AddCollectionItem(_ context.Context, input assets.AddCollectionItemInput, _ time.Time) (assets.CollectionItemMutation, error) {

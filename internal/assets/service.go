@@ -337,14 +337,14 @@ func (s *Service) DeleteCollection(ctx context.Context, input DeleteCollectionIn
 }
 
 func (s *Service) AddCollectionACL(ctx context.Context, input AddCollectionACLInput) (CollectionACLMutation, error) {
-	if input.CollectionID == "" || (input.SubjectType != SubjectUser && input.SubjectType != SubjectRole) || input.SubjectID == "" || input.Permission != PermissionRead || !validMutationIdentity(input.CallerService, input.IdempotencyKey) {
+	if input.CollectionID == "" || (input.SubjectType != SubjectUser && input.SubjectType != SubjectRole) || input.SubjectID == "" || input.Permission != PermissionRead || input.ActorUserID == "" || input.RequestID == "" || !validMutationIdentity(input.CallerService, input.IdempotencyKey) {
 		return CollectionACLMutation{}, ErrInvalidInput
 	}
 	return s.repository.AddCollectionACL(ctx, input, s.now().UTC())
 }
 
 func (s *Service) RevokeCollectionACL(ctx context.Context, input RevokeCollectionACLInput) (CollectionACLMutation, error) {
-	if input.CollectionID == "" || input.ACLID == "" || !validMutationIdentity(input.CallerService, input.IdempotencyKey) {
+	if input.CollectionID == "" || input.ACLID == "" || input.ActorUserID == "" || input.RequestID == "" || !validMutationIdentity(input.CallerService, input.IdempotencyKey) {
 		return CollectionACLMutation{}, ErrInvalidInput
 	}
 	return s.repository.RevokeCollectionACL(ctx, input, s.now().UTC())
@@ -476,7 +476,7 @@ func (s *Service) IssueCollectionContentTicket(ctx context.Context, collectionID
 	hash := sha256.Sum256(raw)
 	ticket := ContentTicket{
 		TokenHash: hex.EncodeToString(hash[:]), CollectionID: collectionID, CollectionItemID: itemID,
-		AssetETag: item.ETag, UserID: subject.UserID, Roles: append([]string(nil), subject.Roles...),
+		AssetETag: item.ETag, UserID: subject.UserID, RoleIDs: append([]string(nil), subject.RoleIDs...),
 		ExpiresAt: expiresAt, CreatedAt: now,
 	}
 	if err := s.repository.CreateContentTicket(ctx, ticket, now); err != nil {
@@ -523,7 +523,7 @@ func (s *Service) IssueManagedContentTickets(ctx context.Context, collectionID, 
 		hash := sha256.Sum256(raw)
 		if err := s.repository.CreateContentTicket(ctx, ContentTicket{
 			TokenHash: hex.EncodeToString(hash[:]), CollectionID: collectionID, CollectionItemID: itemID,
-			AssetETag: item.ETag, UserID: "manager", Roles: []string{}, AccessMode: "manager", ExpiresAt: expiresAt, CreatedAt: now,
+			AssetETag: item.ETag, UserID: "manager", RoleIDs: []string{}, AccessMode: "manager", ExpiresAt: expiresAt, CreatedAt: now,
 		}, now); err != nil {
 			if errors.Is(err, ErrNotFound) {
 				batch.UnavailableItemIDs = append(batch.UnavailableItemIDs, itemID)
@@ -619,15 +619,7 @@ func validMutationIdentity(callerService, idempotencyKey string) bool {
 }
 
 func validCollectionSubject(subject CollectionSubject) bool {
-	if subject.UserID == "" {
-		return false
-	}
-	for _, role := range subject.Roles {
-		if role == CollectionReaderRole {
-			return true
-		}
-	}
-	return false
+	return subject.UserID != ""
 }
 
 func (s *Service) ApplyScanResult(ctx context.Context, result ScanResult) error {

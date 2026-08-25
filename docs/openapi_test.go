@@ -111,7 +111,7 @@ func TestOpenAPISecurityAndWireContracts(t *testing.T) {
 		assertContains(t, operationBlockFor(t, document, operation), "security: [ { gatewayDaprCaller: [], gatewayTrustedIdentity: [] } ]")
 	}
 	assertContains(t, operationBlockFor(t, document, documentedOperation{"GET", "/api/assets/content", ""}), "security: [ { gatewayDaprCaller: [] } ]")
-	for _, value := range []string{"name: dapr-api-token", "Dapr-Caller-App-Id exactly `api-gateway`", "name: X-HHC-User-ID", "X-HHC-Token-Expires-At", "X-HHC-Roles", "X-HHC-Token-ID", "X-HHC-Session-ID", "X-HHC-Auth-Provider"} {
+	for _, value := range []string{"name: dapr-api-token", "Dapr-Caller-App-Id exactly `api-gateway`", "name: X-HHC-User-ID", "X-HHC-Token-Expires-At", "X-HHC-Role-IDs", "X-HHC-Token-ID", "X-HHC-Session-ID", "X-HHC-Auth-Provider"} {
 		assertContains(t, document, value)
 	}
 
@@ -149,6 +149,11 @@ func TestOpenAPISecurityAndWireContracts(t *testing.T) {
 	}
 	acl := operationBlockFor(t, document, documentedOperation{"POST", "/priv/assets/collections/{collectionID}/acl", ""})
 	assertContains(t, acl, "CollectionACLRequest")
+	assertContains(t, acl, "$ref: '#/components/parameters/ACLActorUserID'")
+	assertContains(t, acl, "$ref: '#/components/parameters/RequestID'")
+	revokeACL := operationBlockFor(t, document, documentedOperation{"DELETE", "/priv/assets/collections/{collectionID}/acl/{aclID}", ""})
+	assertContains(t, revokeACL, "$ref: '#/components/parameters/ACLActorUserID'")
+	assertContains(t, revokeACL, "$ref: '#/components/parameters/RequestID'")
 	if strings.Contains(acl, "CreateGrantRequest") {
 		t.Fatal("collection ACL accepts the asset-grant request body")
 	}
@@ -167,6 +172,14 @@ func TestOpenAPISecurityAndWireContracts(t *testing.T) {
 		assertContains(t, operationBlockFor(t, document, operation), "'416': { $ref: '#/components/responses/Error' }")
 	}
 	assertContains(t, schemaBlockFor(t, document, "ErrorResponse"), "AST_INVALID_RANGE")
+	for _, operation := range []documentedOperation{
+		{"GET", "/api/assets/collections/{collectionID}/changes", ""},
+		{"GET", "/api/assets/collections/{collectionID}/items/{itemID}", ""},
+		{"POST", "/api/assets/collections/{collectionID}/items/{itemID}/content-ticket", ""},
+		{"GET", "/api/assets/collections/{collectionID}/items/{itemID}/content", ""},
+	} {
+		assertContains(t, operationBlockFor(t, document, operation), "'404': { $ref: '#/components/responses/Error' }")
+	}
 }
 
 func TestOpenAPILifecycleRequestInputs(t *testing.T) {

@@ -92,6 +92,13 @@ GRANT CONNECT ON DATABASE :"database" TO asset;
 GRANT USAGE ON SCHEMA public TO asset;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO asset;
 GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO asset;
+DO $$
+BEGIN
+  IF to_regclass('public.asset_collection_acl_audit') IS NOT NULL THEN
+    REVOKE UPDATE, DELETE, TRUNCATE ON public.asset_collection_acl_audit FROM asset;
+  END IF;
+END
+$$;
 ALTER DEFAULT PRIVILEGES FOR ROLE asset_migrate IN SCHEMA public
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO asset;
 ALTER DEFAULT PRIVILEGES FOR ROLE asset_migrate IN SCHEMA public

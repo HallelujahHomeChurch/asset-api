@@ -59,16 +59,31 @@ RESET ROLE;
 SQL
 
 printf '{"PG_ADMIN_PASSWORD":"bootstrap-password","ASSET_DB_PASSWORD":"runtime-password","ASSET_MIGRATE_DB_PASSWORD":"migration-password"}\n' >"$fixture"
-for _ in 1 2; do
-  HHC_ENV_FILE="$fixture" \
-  ASSET_DB_HOST=127.0.0.1 \
-  ASSET_DB_PORT="$test_port" \
-  ASSET_DB_NAME=asset_bootstrap_test \
-  ASSET_DB_ADMIN_USER=bootstrap_admin \
-  ASSET_DB_SSLMODE=disable \
-  ASSET_SKIP_KEY_VAULT=1 \
-  ./scripts/bootstrap-migration-role.sh >/dev/null
-done
+HHC_ENV_FILE="$fixture" \
+ASSET_DB_HOST=127.0.0.1 \
+ASSET_DB_PORT="$test_port" \
+ASSET_DB_NAME=asset_bootstrap_test \
+ASSET_DB_ADMIN_USER=bootstrap_admin \
+ASSET_DB_SSLMODE=disable \
+ASSET_SKIP_KEY_VAULT=1 \
+./scripts/bootstrap-migration-role.sh >/dev/null
+
+"$psql_bin" "$admin_dsn" --set=ON_ERROR_STOP=1 <<'SQL' >/dev/null
+\connect asset_bootstrap_test
+SET ROLE asset_migrate;
+CREATE TABLE public.asset_collection_acl_audit(id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, action text NOT NULL);
+RESET ROLE;
+REVOKE UPDATE, DELETE, TRUNCATE ON public.asset_collection_acl_audit FROM asset;
+SQL
+
+HHC_ENV_FILE="$fixture" \
+ASSET_DB_HOST=127.0.0.1 \
+ASSET_DB_PORT="$test_port" \
+ASSET_DB_NAME=asset_bootstrap_test \
+ASSET_DB_ADMIN_USER=bootstrap_admin \
+ASSET_DB_SSLMODE=disable \
+ASSET_SKIP_KEY_VAULT=1 \
+./scripts/bootstrap-migration-role.sh >/dev/null
 
 verification="$("$psql_bin" "$admin_dsn" -At <<'SQL'
 \connect asset_bootstrap_test
@@ -77,14 +92,33 @@ SELECT tableowner FROM pg_tables WHERE schemaname='public' AND tablename='owned_
 SELECT has_table_privilege('asset','public.owned_by_runtime','INSERT');
 SELECT has_schema_privilege('asset','public','CREATE');
 SELECT has_table_privilege('asset','public.schema_migrations','UPDATE');
+SELECT has_table_privilege('asset','public.asset_collection_acl_audit','INSERT');
+SELECT has_table_privilege('asset','public.asset_collection_acl_audit','UPDATE');
+SELECT has_table_privilege('asset','public.asset_collection_acl_audit','DELETE');
+SELECT has_table_privilege('asset','public.asset_collection_acl_audit','TRUNCATE');
 SQL
 )"
-verification="$(tail -n 5 <<<"$verification")"
-[[ "$verification" == $'asset_migrate\nasset_migrate\nt\nf\nf' ]]
+verification="$(tail -n 9 <<<"$verification")"
+[[ "$verification" == $'asset_migrate\nasset_migrate\nt\nf\nf\nt\nf\nf\nf' ]]
 
 PGPASSWORD=runtime-password "$psql_bin" \
   "postgres://asset@127.0.0.1:${test_port}/asset_bootstrap_test?sslmode=disable" \
   --set=ON_ERROR_STOP=1 -c 'INSERT INTO public.owned_by_runtime DEFAULT VALUES' >/dev/null
+PGPASSWORD=runtime-password "$psql_bin" \
+  "postgres://asset@127.0.0.1:${test_port}/asset_bootstrap_test?sslmode=disable" \
+  --set=ON_ERROR_STOP=1 -c "INSERT INTO public.asset_collection_acl_audit(action) VALUES('add')" >/dev/null
+if PGPASSWORD=runtime-password "$psql_bin" \
+  "postgres://asset@127.0.0.1:${test_port}/asset_bootstrap_test?sslmode=disable" \
+  --set=ON_ERROR_STOP=1 -c "UPDATE public.asset_collection_acl_audit SET action='revoke'" >/dev/null 2>&1; then
+  echo "runtime role unexpectedly updated ACL audit history" >&2
+  exit 1
+fi
+if PGPASSWORD=runtime-password "$psql_bin" \
+  "postgres://asset@127.0.0.1:${test_port}/asset_bootstrap_test?sslmode=disable" \
+  --set=ON_ERROR_STOP=1 -c 'DELETE FROM public.asset_collection_acl_audit' >/dev/null 2>&1; then
+  echo "runtime role unexpectedly deleted ACL audit history" >&2
+  exit 1
+fi
 if PGPASSWORD=runtime-password "$psql_bin" \
   "postgres://asset@127.0.0.1:${test_port}/asset_bootstrap_test?sslmode=disable" \
   --set=ON_ERROR_STOP=1 -c 'CREATE TABLE public.forbidden(id bigint)' >/dev/null 2>&1; then

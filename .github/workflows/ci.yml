@@ -41,6 +41,7 @@ jobs:
         run: npx --yes @redocly/cli@2.47.0 lint docs/openapi.yaml
       - run: |
           ./scripts/bootstrap-migration-role.test.sh
+          ./scripts/test-line-media-acl-inventory.sh
           ./scripts/test-migration-policy-test.sh
           ./scripts/test-migration-policy.sh internal/migrations/sql/*.sql
           ./scripts/test-what-if-policy.sh
