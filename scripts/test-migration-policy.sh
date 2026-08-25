@@ -11,6 +11,7 @@ fi
 for file in "$@"; do
   current_pattern="$pattern"
   legacy_hash=''
+  contract_hash=''
   case "$file" in
     internal/migrations/sql/004_policy_and_idempotency.sql)
       legacy_hash='70538d31bad777f9bac3cc563e241198e0624ac291f66f79bfb5d9046390452f'
@@ -18,7 +19,22 @@ for file in "$@"; do
     internal/migrations/sql/007_processing_retry_and_retention.sql)
       legacy_hash='a4916f5d3c4d0799f45d3ba410fd79cb49c902e3f433febfaf5a110a8771788f'
       ;;
+    internal/migrations/sql/016_drop_legacy_ticket_roles.sql)
+      contract_hash='55baa077395f0347fee354efd2998f1f31bd0a6db33ec60508ad72fe22d0bc86'
+      ;;
   esac
+  if [ -n "$contract_hash" ]; then
+    if command -v sha256sum >/dev/null 2>&1; then
+      current_hash="$(sha256sum "$file" | cut -d ' ' -f 1)"
+    else
+      current_hash="$(shasum -a 256 "$file" | cut -d ' ' -f 1)"
+    fi
+    [ "$current_hash" = "$contract_hash" ] || {
+      echo "$file is immutable; add a new migration" >&2
+      exit 1
+    }
+    continue
+  fi
   if [ -n "$legacy_hash" ]; then
     if command -v sha256sum >/dev/null 2>&1; then
       current_hash="$(sha256sum "$file" | cut -d ' ' -f 1)"

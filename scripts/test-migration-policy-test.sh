@@ -10,6 +10,7 @@ printf '%s\n' "ALTER TABLE asset_content_tickets ADD COLUMN role_ids text[] NOT 
 ./scripts/test-migration-policy.sh "$tmp/expand.sql"
 printf '%s\n' 'REVOKE UPDATE, DELETE, TRUNCATE ON asset_collection_acl_audit FROM asset;' >"$tmp/revoke.sql"
 ./scripts/test-migration-policy.sh "$tmp/revoke.sql"
+./scripts/test-migration-policy.sh internal/migrations/sql/016_drop_legacy_ticket_roles.sql
 printf '%s\n' 'REVOKE TRUNCATE, UPDATE, DELETE ON asset_collection_acl_audit FROM asset;' >"$tmp/revoke.sql"
 ./scripts/test-migration-policy.sh "$tmp/revoke.sql"
 
