@@ -4,6 +4,7 @@ set -eu
 workflow=.github/workflows/release.yml
 
 grep -q 'workflow_dispatch:' "$workflow"
+grep -q 'fail_openapi_before_pointer:' "$workflow"
 grep -q '^  push:' "$workflow"
 grep -q 'branches: \[main\]' "$workflow"
 expected_paths_ignore='docs/**
@@ -124,6 +125,24 @@ grep -q '"$derivative_image" == "$IMAGE_REF"' "$workflow"
 grep -q 'PREVIOUS_IMAGE_REF=' "$workflow"
 grep -q 'az containerapp revision copy' "$workflow"
 grep -q -- '--image "$PREVIOUS_IMAGE_REF"' "$workflow"
+grep -q '^  publish_openapi:' "$workflow"
+publish_job="$(sed -n '/^  publish_openapi:/,$p' "$workflow")"
+printf '%s\n' "$publish_job" | grep -q 'needs: deploy'
+printf '%s\n' "$publish_job" | grep -q 'environment: production'
+printf '%s\n' "$publish_job" | grep -q 'id-token: write'
+printf '%s\n' "$publish_job" | grep -q 'API_DOCS_AZURE_CLIENT_ID'
+printf '%s\n' "$publish_job" | grep -q 'api-docs-asset-api'
+printf '%s\n' "$publish_job" | grep -q 'needs.deploy.outputs.image'
+printf '%s\n' "$publish_job" | grep -q 'specs/${GITHUB_SHA}/openapi.yaml'
+printf '%s\n' "$publish_job" | grep -q 'inputs.fail_openapi_before_pointer && github.run_attempt == 1'
+printf '%s\n' "$publish_job" | grep -q -- '--overwrite false'
+printf '%s\n' "$publish_job" | grep -q -- '--name current.json'
+printf '%s\n' "$publish_job" | grep -q -- '--overwrite true'
+ready_line="$(grep -n -- '- name: Verify derivative job release' "$workflow" | cut -d: -f1)"
+publish_line="$(grep -n '^  publish_openapi:' "$workflow" | cut -d: -f1)"
+pointer_line="$(grep -n -- '--name current.json' "$workflow" | cut -d: -f1)"
+test "$ready_line" -lt "$publish_line"
+test "$publish_line" -lt "$pointer_line"
 grep -q "runtimeKeyVaultName string = 'alive-asset-runtime-kv'" infra/main.bicep
 grep -q "migrationKeyVaultName string = 'alive-asset-migrate-kv'" infra/main.bicep
 grep -q "name: 'asset-migrate'" infra/main.bicep
