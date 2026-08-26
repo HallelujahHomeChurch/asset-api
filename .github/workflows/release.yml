@@ -317,6 +317,11 @@ jobs:
         run: |
           spec_blob="specs/${GITHUB_SHA}/openapi.yaml"
           spec_sha256="$(sha256sum docs/openapi.yaml | cut -d " " -f 1)"
+          is_canonical_run_id() { [[ "$1" =~ ^[1-9][0-9]*$ ]]; }
+          if ! is_canonical_run_id "$GITHUB_RUN_ID"; then
+            echo "Invalid GITHUB_RUN_ID: expected canonical positive decimal" >&2
+            exit 1
+          fi
           spec_exists="$(az storage blob exists \
             --account-name "$STORAGE_ACCOUNT" \
             --container-name "$CONTAINER" \
@@ -363,6 +368,46 @@ jobs:
           if [[ "$FAIL_OPENAPI_BEFORE_POINTER" == "true" ]]; then
             echo "Requested failure before API docs pointer upload" >&2
             exit 1
+          fi
+
+          pointer_exists="$(az storage blob exists \
+            --account-name "$STORAGE_ACCOUNT" \
+            --container-name "$CONTAINER" \
+            --name current.json \
+            --auth-mode login \
+            --only-show-errors \
+            --query exists \
+            --output tsv)"
+          if [[ "$pointer_exists" == "true" ]]; then
+            current_pointer="$(mktemp)"
+            az storage blob download \
+              --account-name "$STORAGE_ACCOUNT" \
+              --container-name "$CONTAINER" \
+              --name current.json \
+              --file "$current_pointer" \
+              --auth-mode login \
+              --no-progress \
+              --only-show-errors \
+              --output none
+            current_run_id="$(jq -er --arg release_url_prefix "https://github.com/${GITHUB_REPOSITORY}/actions/runs/" '
+              .releaseUrl? as $release_url
+              | if ($release_url | type) == "string" and ($release_url | startswith($release_url_prefix))
+                then ($release_url | ltrimstr($release_url_prefix))
+                else empty
+                end
+            ' "$current_pointer" 2>/dev/null)" || {
+              echo "Invalid existing API docs pointer: expected canonical GitHub workflow run ID" >&2
+              exit 1
+            }
+            if ! is_canonical_run_id "$current_run_id"; then
+              echo "Invalid existing API docs pointer: expected canonical GitHub workflow run ID" >&2
+              exit 1
+            fi
+            export LC_ALL=C
+            if [[ ${#current_run_id} -gt ${#GITHUB_RUN_ID} ]] || { [[ ${#current_run_id} -eq ${#GITHUB_RUN_ID} ]] && [[ "$current_run_id" > "$GITHUB_RUN_ID" || "$current_run_id" == "$GITHUB_RUN_ID" ]]; }; then
+              echo "API docs pointer already belongs to workflow run $current_run_id; skipping stale or rerun publication"
+              exit 0
+            fi
           fi
 
           az storage blob upload \

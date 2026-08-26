@@ -138,11 +138,105 @@ printf '%s\n' "$publish_job" | grep -q 'inputs.fail_openapi_before_pointer && gi
 printf '%s\n' "$publish_job" | grep -q -- '--overwrite false'
 printf '%s\n' "$publish_job" | grep -q -- '--name current.json'
 printf '%s\n' "$publish_job" | grep -q -- '--overwrite true'
+workflow_body="$(sed -n '/^          spec_blob="specs\//,$p' "$workflow" | sed 's/^          //')"
+run_openapi_pointer_guard_case() {
+  pointer_json="$1"
+  candidate_run_id="$2"
+  expected="$3"
+  case_dir="$(mktemp -d)"
+  mkdir "$case_dir/pointer"
+  ln -s "$PWD/docs" "$case_dir/docs"
+  if [ "$pointer_json" != missing ]; then
+    printf '%s\n' "$pointer_json" > "$case_dir/pointer/current.json"
+    cp "$case_dir/pointer/current.json" "$case_dir/expected-current.json"
+  fi
+
+  if output="$(POINTER_CASE_DIR="$case_dir" WORKFLOW_BODY="$workflow_body" GITHUB_RUN_ID="$candidate_run_id" GITHUB_SHA=0123456789abcdef0123456789abcdef01234567 GITHUB_REPOSITORY=HallelujahHomeChurch/asset-api RELEASE_COMMIT=0123456789abcdef0123456789abcdef01234567 RELEASE_IMAGE=alive.azurecr.io/alive/asset-api@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef FAIL_OPENAPI_BEFORE_POINTER=false bash -e -c '
+    az() {
+      command="$1 $2 $3"
+      name=""
+      file=""
+      while [ "$#" -gt 0 ]; do
+        case "$1" in
+          --name) name="$2"; shift 2 ;;
+          --file) file="$2"; shift 2 ;;
+          *) shift ;;
+        esac
+      done
+      case "$command" in
+        "storage blob exists")
+          if [ "$name" = current.json ] && [ -f "$POINTER_CASE_DIR/pointer/current.json" ]; then printf true; else printf false; fi
+          ;;
+        "storage blob download") cp "$POINTER_CASE_DIR/pointer/current.json" "$file" ;;
+        "storage blob upload")
+          if [ "$name" = current.json ]; then
+            cp "$file" "$POINTER_CASE_DIR/pointer/current.json"
+            printf pointer-upload\\n >> "$POINTER_CASE_DIR/uploads"
+          fi
+          ;;
+      esac
+    }
+    cd "$POINTER_CASE_DIR"
+    eval "$WORKFLOW_BODY"
+  ' 2>&1)"; then
+    status=0
+  else
+    status=$?
+  fi
+
+  case "$expected" in
+    upload)
+      test "$status" -eq 0
+      test "$(wc -l < "$case_dir/uploads")" -eq 1
+      grep -Fq "/runs/$candidate_run_id\"" "$case_dir/pointer/current.json"
+      ;;
+    noop)
+      test "$status" -eq 0
+      test ! -e "$case_dir/uploads"
+      cmp "$case_dir/expected-current.json" "$case_dir/pointer/current.json"
+      ;;
+    invalid-pointer)
+      test "$status" -ne 0
+      test ! -e "$case_dir/uploads"
+      cmp "$case_dir/expected-current.json" "$case_dir/pointer/current.json"
+      printf '%s\n' "$output" | grep -Fq 'Invalid existing API docs pointer: expected canonical GitHub workflow run ID'
+      ;;
+    invalid-candidate)
+      test "$status" -ne 0
+      test ! -e "$case_dir/uploads"
+      printf '%s\n' "$output" | grep -Fq 'Invalid GITHUB_RUN_ID: expected canonical positive decimal'
+      ;;
+  esac
+  rm -rf "$case_dir"
+}
+
+valid_pointer='{"releaseUrl":"https://github.com/HallelujahHomeChurch/asset-api/actions/runs/20"}'
+run_openapi_pointer_guard_case missing 20 upload
+run_openapi_pointer_guard_case "$valid_pointer" 19 noop
+run_openapi_pointer_guard_case "$valid_pointer" 20 noop
+run_openapi_pointer_guard_case "$valid_pointer" 21 upload
+run_openapi_pointer_guard_case '{' 22 invalid-pointer
+run_openapi_pointer_guard_case '{}' 22 invalid-pointer
+run_openapi_pointer_guard_case '{"releaseUrl":null}' 22 invalid-pointer
+run_openapi_pointer_guard_case '{"releaseUrl":"https://github.com/HallelujahHomeChurch/asset-api/actions/runs/09"}' 22 invalid-pointer
+run_openapi_pointer_guard_case '{"releaseUrl":"https://github.com/HallelujahHomeChurch/asset-api/actions/runs/0"}' 22 invalid-pointer
+run_openapi_pointer_guard_case '{"releaseUrl":"https://github.com/HallelujahHomeChurch/asset-api/actions/runs/99999999999999999999"}' 100000000000000000000 upload
+run_openapi_pointer_guard_case missing 0 invalid-candidate
+run_openapi_pointer_guard_case missing 01 invalid-candidate
+printf '%s\n' "$publish_job" | grep -q 'pointer_exists="$(az storage blob exists'
+printf '%s\n' "$publish_job" | grep -q 'current_pointer="$(mktemp)"'
+printf '%s\n' "$publish_job" | grep -Fq 'Invalid GITHUB_RUN_ID: expected canonical positive decimal'
+printf '%s\n' "$publish_job" | grep -Fq 'Invalid existing API docs pointer: expected canonical GitHub workflow run ID'
+printf '%s\n' "$publish_job" | grep -Fq 'exit 0'
 ready_line="$(grep -n -- '- name: Verify derivative job release' "$workflow" | cut -d: -f1)"
 publish_line="$(grep -n '^  publish_openapi:' "$workflow" | cut -d: -f1)"
-pointer_line="$(grep -n -- '--name current.json' "$workflow" | cut -d: -f1)"
+guard_line="$(grep -nF 'pointer_exists="$(az storage blob exists' "$workflow" | cut -d: -f1)"
+guard_exit_line="$(awk '/skipping stale or rerun publication/ { getline; if ($0 ~ /^[[:space:]]*exit 0$/) print NR }' "$workflow")"
+pointer_upload_line="$(awk '/az storage blob upload/ { upload = 1 } upload && /--file current.json/ { print NR; exit }' "$workflow")"
 test "$ready_line" -lt "$publish_line"
-test "$publish_line" -lt "$pointer_line"
+test "$guard_line" -lt "$guard_exit_line"
+test "$guard_exit_line" -lt "$pointer_upload_line"
+test "$publish_line" -lt "$pointer_upload_line"
 grep -q "runtimeKeyVaultName string = 'alive-asset-runtime-kv'" infra/main.bicep
 grep -q "migrationKeyVaultName string = 'alive-asset-migrate-kv'" infra/main.bicep
 grep -q "name: 'asset-migrate'" infra/main.bicep
