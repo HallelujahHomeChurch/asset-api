@@ -44,6 +44,12 @@ done
 grep -q "replicaTimeout: 720" infra/main.bicep
 grep -q "CLAMAV_SCAN_TIMEOUT', value: '10m'" infra/main.bicep
 grep -q "ASSET_SCAN_MAX_FILE_SIZE_BYTES', value: '209715200'" infra/main.bicep
+asset_runtime_block="$(awk "/name: 'asset-api'/ { seen++; if (seen == 2) capture = 1 } capture { print } capture && /probes:/ { exit }" infra/main.bicep)"
+printf '%s\n' "${asset_runtime_block}" | grep -Fq "cpu: json('0.25')" &&
+  printf '%s\n' "${asset_runtime_block}" | grep -Fq "memory: '0.5Gi'" || {
+  echo 'asset-api runtime must remain at 0.25 CPU / 0.5Gi' >&2
+  exit 1
+}
 grep -q "CLAMAV_MAX_FILE_SIZE_BYTES', value: '209715200'" infra/main.bicep
 grep -q "CLAMAV_MAX_SCAN_SIZE_BYTES', value: '1073741824'" infra/main.bicep
 grep -q "CLAMAV_MAX_FILES', value: '10000'" infra/main.bicep

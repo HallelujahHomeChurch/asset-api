@@ -397,8 +397,8 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = if (deployRuntime) {
             { name: 'ASSET_LINE_WORKLOAD_OBJECT_ID', value: workloadAuthEnabled ? lineAttachmentObjectId : '' }
           ]
           resources: {
-            cpu: json('0.5')
-            memory: '1Gi'
+            cpu: json('0.25')
+            memory: '0.5Gi'
           }
           probes: [
             {
