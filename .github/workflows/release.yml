@@ -365,6 +365,32 @@ jobs:
             exit 1
           fi
 
+          pointer_exists="$(az storage blob exists \
+            --account-name "$STORAGE_ACCOUNT" \
+            --container-name "$CONTAINER" \
+            --name current.json \
+            --auth-mode login \
+            --only-show-errors \
+            --query exists \
+            --output tsv)"
+          if [[ "$pointer_exists" == "true" ]]; then
+            current_pointer="$(mktemp)"
+            az storage blob download \
+              --account-name "$STORAGE_ACCOUNT" \
+              --container-name "$CONTAINER" \
+              --name current.json \
+              --file "$current_pointer" \
+              --auth-mode login \
+              --no-progress \
+              --only-show-errors \
+              --output none
+            current_run_id="$(jq -r '.releaseUrl | capture("/runs/(?<runId>[0-9]+)$").runId // empty' "$current_pointer")"
+            if [[ "$current_run_id" =~ ^[0-9]+$ && "$current_run_id" -ge "$GITHUB_RUN_ID" ]]; then
+              echo "API docs pointer already belongs to workflow run $current_run_id; skipping stale or rerun publication"
+              exit 0
+            fi
+          fi
+
           az storage blob upload \
             --account-name "$STORAGE_ACCOUNT" \
             --container-name "$CONTAINER" \

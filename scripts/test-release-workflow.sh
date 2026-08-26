@@ -138,10 +138,17 @@ printf '%s\n' "$publish_job" | grep -q 'inputs.fail_openapi_before_pointer && gi
 printf '%s\n' "$publish_job" | grep -q -- '--overwrite false'
 printf '%s\n' "$publish_job" | grep -q -- '--name current.json'
 printf '%s\n' "$publish_job" | grep -q -- '--overwrite true'
+printf '%s\n' "$publish_job" | grep -q 'pointer_exists="$(az storage blob exists'
+printf '%s\n' "$publish_job" | grep -q 'current_pointer="$(mktemp)"'
+printf '%s\n' "$publish_job" | grep -Fq 'current_run_id="$(jq -r '\''.releaseUrl | capture("/runs/(?<runId>[0-9]+)$").runId // empty'\'' "$current_pointer")"'
+printf '%s\n' "$publish_job" | grep -Fq '[[ "$current_run_id" =~ ^[0-9]+$ && "$current_run_id" -ge "$GITHUB_RUN_ID" ]]'
+printf '%s\n' "$publish_job" | grep -q 'skipping stale or rerun publication'
 ready_line="$(grep -n -- '- name: Verify derivative job release' "$workflow" | cut -d: -f1)"
 publish_line="$(grep -n '^  publish_openapi:' "$workflow" | cut -d: -f1)"
-pointer_line="$(grep -n -- '--name current.json' "$workflow" | cut -d: -f1)"
+guard_line="$(grep -nF 'pointer_exists="$(az storage blob exists' "$workflow" | cut -d: -f1)"
+pointer_line="$(grep -n -- '--name current.json' "$workflow" | tail -n 1 | cut -d: -f1)"
 test "$ready_line" -lt "$publish_line"
+test "$guard_line" -lt "$pointer_line"
 test "$publish_line" -lt "$pointer_line"
 grep -q "runtimeKeyVaultName string = 'alive-asset-runtime-kv'" infra/main.bicep
 grep -q "migrationKeyVaultName string = 'alive-asset-migrate-kv'" infra/main.bicep
