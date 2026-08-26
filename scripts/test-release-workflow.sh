@@ -143,6 +143,7 @@ run_openapi_pointer_guard_case() {
   pointer_json="$1"
   candidate_run_id="$2"
   expected="$3"
+  spec_fixture="${4:-missing}"
   case_dir="$(mktemp -d)"
   mkdir "$case_dir/pointer"
   ln -s "$PWD/docs" "$case_dir/docs"
@@ -150,28 +151,51 @@ run_openapi_pointer_guard_case() {
     printf '%s\n' "$pointer_json" > "$case_dir/pointer/current.json"
     cp "$case_dir/pointer/current.json" "$case_dir/expected-current.json"
   fi
+  case "$spec_fixture" in
+    identical)
+      mkdir -p "$case_dir/blobs/specs/0123456789abcdef0123456789abcdef01234567"
+      cp docs/openapi.yaml "$case_dir/blobs/specs/0123456789abcdef0123456789abcdef01234567/openapi.yaml"
+      ;;
+    different)
+      mkdir -p "$case_dir/blobs/specs/0123456789abcdef0123456789abcdef01234567"
+      printf 'different spec\n' > "$case_dir/blobs/specs/0123456789abcdef0123456789abcdef01234567/openapi.yaml"
+      ;;
+  esac
 
   if output="$(POINTER_CASE_DIR="$case_dir" WORKFLOW_BODY="$workflow_body" GITHUB_RUN_ID="$candidate_run_id" GITHUB_SHA=0123456789abcdef0123456789abcdef01234567 GITHUB_REPOSITORY=HallelujahHomeChurch/asset-api RELEASE_COMMIT=0123456789abcdef0123456789abcdef01234567 RELEASE_IMAGE=alive.azurecr.io/alive/asset-api@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef FAIL_OPENAPI_BEFORE_POINTER=false bash -e -c '
     az() {
       command="$1 $2 $3"
       name=""
       file=""
+      overwrite=""
       while [ "$#" -gt 0 ]; do
         case "$1" in
           --name) name="$2"; shift 2 ;;
           --file) file="$2"; shift 2 ;;
+          --overwrite) overwrite="$2"; shift 2 ;;
           *) shift ;;
         esac
       done
+      blob="$POINTER_CASE_DIR/pointer/current.json"
+      if [ "$name" != current.json ]; then
+        blob="$POINTER_CASE_DIR/blobs/$name"
+      fi
       case "$command" in
         "storage blob exists")
-          if [ "$name" = current.json ] && [ -f "$POINTER_CASE_DIR/pointer/current.json" ]; then printf true; else printf false; fi
+          if [ -f "$blob" ]; then printf true; else printf false; fi
           ;;
-        "storage blob download") cp "$POINTER_CASE_DIR/pointer/current.json" "$file" ;;
+        "storage blob download")
+          cp "$blob" "$file"
+          if [ "$name" != current.json ]; then printf spec-download\\n >> "$POINTER_CASE_DIR/events"; fi
+          ;;
         "storage blob upload")
+          if [ -e "$blob" ] && [ "$overwrite" = false ]; then return 1; fi
+          mkdir -p "$(dirname "$blob")"
+          cp "$file" "$blob"
           if [ "$name" = current.json ]; then
-            cp "$file" "$POINTER_CASE_DIR/pointer/current.json"
             printf pointer-upload\\n >> "$POINTER_CASE_DIR/uploads"
+          else
+            printf spec-upload\\n >> "$POINTER_CASE_DIR/uploads"
           fi
           ;;
       esac
@@ -183,28 +207,46 @@ run_openapi_pointer_guard_case() {
   else
     status=$?
   fi
+  pointer_uploaded=false
+  if [ -e "$case_dir/uploads" ] && grep -Fxq pointer-upload "$case_dir/uploads"; then
+    pointer_uploaded=true
+  fi
 
   case "$expected" in
     upload)
       test "$status" -eq 0
-      test "$(wc -l < "$case_dir/uploads")" -eq 1
+      test "$pointer_uploaded" = true
       grep -Fq "/runs/$candidate_run_id\"" "$case_dir/pointer/current.json"
       ;;
     noop)
       test "$status" -eq 0
-      test ! -e "$case_dir/uploads"
+      test "$pointer_uploaded" = false
       cmp "$case_dir/expected-current.json" "$case_dir/pointer/current.json"
       ;;
     invalid-pointer)
       test "$status" -ne 0
-      test ! -e "$case_dir/uploads"
+      test "$pointer_uploaded" = false
       cmp "$case_dir/expected-current.json" "$case_dir/pointer/current.json"
       printf '%s\n' "$output" | grep -Fq 'Invalid existing API docs pointer: expected canonical GitHub workflow run ID'
       ;;
     invalid-candidate)
       test "$status" -ne 0
-      test ! -e "$case_dir/uploads"
+      test "$pointer_uploaded" = false
       printf '%s\n' "$output" | grep -Fq 'Invalid GITHUB_RUN_ID: expected canonical positive decimal'
+      ;;
+    spec-idempotent)
+      test "$status" -eq 0
+      grep -Fxq spec-download "$case_dir/events"
+      if [ -e "$case_dir/uploads" ] && grep -Fxq spec-upload "$case_dir/uploads"; then
+        exit 1
+      fi
+      grep -Fxq pointer-upload "$case_dir/uploads"
+      grep -Fq "/runs/$candidate_run_id\"" "$case_dir/pointer/current.json"
+      ;;
+    spec-mismatch)
+      test "$status" -ne 0
+      test "$pointer_uploaded" = false
+      cmp "$case_dir/expected-current.json" "$case_dir/pointer/current.json"
       ;;
   esac
   rm -rf "$case_dir"
@@ -212,6 +254,8 @@ run_openapi_pointer_guard_case() {
 
 valid_pointer='{"releaseUrl":"https://github.com/HallelujahHomeChurch/asset-api/actions/runs/20"}'
 run_openapi_pointer_guard_case missing 20 upload
+run_openapi_pointer_guard_case "$valid_pointer" 21 spec-idempotent identical
+run_openapi_pointer_guard_case "$valid_pointer" 21 spec-mismatch different
 run_openapi_pointer_guard_case "$valid_pointer" 19 noop
 run_openapi_pointer_guard_case "$valid_pointer" 20 noop
 run_openapi_pointer_guard_case "$valid_pointer" 21 upload

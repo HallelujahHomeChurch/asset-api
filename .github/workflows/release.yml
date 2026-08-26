@@ -341,7 +341,10 @@ jobs:
               --no-progress \
               --only-show-errors \
               --output none
-            [[ "$(sha256sum "$existing_spec" | cut -d " " -f 1)" == "$spec_sha256" ]]
+            [[ "$(sha256sum "$existing_spec" | cut -d " " -f 1)" == "$spec_sha256" ]] || {
+              echo "Existing OpenAPI spec hash does not match" >&2
+              exit 1
+            }
           else
             az storage blob upload \
               --account-name "$STORAGE_ACCOUNT" \
