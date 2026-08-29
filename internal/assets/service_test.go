@@ -388,9 +388,9 @@ func TestCompleteUploadUsesCanonicalMediaValidation(t *testing.T) {
 		payload              []byte
 		wantErr              bool
 	}{
-		{name: "LPDeck", fileName: "service.lpdeck", mime: "application/vnd.librepresenter.presentation+json", payload: []byte(" \n{\"slides\":[]}")},
-		{name: "LPDeck malformed", fileName: "service.lpdeck", mime: "application/vnd.librepresenter.presentation+json", payload: []byte("{not-json"), wantErr: true},
-		{name: "LPDeck trailing", fileName: "service.lpdeck", mime: "application/vnd.librepresenter.presentation+json", payload: []byte("{\"slides\":[]} {\"second\":true}"), wantErr: true},
+		{name: "LPDeck", fileName: "service.lpdeck", mime: "application/vnd.hhc.presenter+json", payload: []byte(" \n{\"slides\":[]}")},
+		{name: "LPDeck malformed", fileName: "service.lpdeck", mime: "application/vnd.hhc.presenter+json", payload: []byte("{not-json"), wantErr: true},
+		{name: "LPDeck trailing", fileName: "service.lpdeck", mime: "application/vnd.hhc.presenter+json", payload: []byte("{\"slides\":[]} {\"second\":true}"), wantErr: true},
 		{name: "MP4", fileName: "service.mp4", mime: "video/mp4", payload: bmff("isom")},
 		{name: "HEIC spoof", fileName: "service.mp4", mime: "video/mp4", payload: bmff("heic"), wantErr: true},
 	}
@@ -414,7 +414,7 @@ func TestCompleteUploadUsesCanonicalMediaValidation(t *testing.T) {
 			if test.mime == "video/mp4" && blobs.lastOpenRange.Count == 0 {
 				t.Fatal("exact media validation did not use a bounded header range")
 			}
-			if test.mime == "application/vnd.librepresenter.presentation+json" && blobs.lastOpenRange.Count != 0 {
+			if test.mime == "application/vnd.hhc.presenter+json" && blobs.lastOpenRange.Count != 0 {
 				t.Fatal("LPDeck validation did not request the bounded full stream")
 			}
 			if test.wantErr {

@@ -19,7 +19,7 @@ var mediaExtensions = map[string][]string{
 	"audio/mpeg": {".mp3"}, "audio/wav": {".wav"}, "audio/mp4": {".m4a"},
 	"audio/aac": {".aac"}, "audio/ogg": {".ogg"}, "application/pdf": {".pdf"},
 	"application/vnd.openxmlformats-officedocument.presentationml.presentation": {".pptx"},
-	"application/vnd.librepresenter.presentation+json":                          {".lpdeck"},
+	"application/vnd.hhc.presenter+json":                                        {".lpdeck"},
 	"application/vnd.ms-powerpoint":                                             {".ppt"},
 	"application/vnd.apple.keynote":                                             {".key"},
 	"application/vnd.oasis.opendocument.presentation":                           {".odp"},
@@ -75,7 +75,7 @@ func ValidateMedia(ctx context.Context, fileName, expectedMIME string, header []
 		valid = bytes.HasPrefix(header, []byte("OggS")) && (bytes.Contains(header, []byte("vorbis")) || bytes.Contains(header, []byte("OpusHead")) || bytes.Contains(header, []byte("Speex")) || bytes.Contains(header, []byte("fLaC")))
 	case "application/pdf":
 		valid = bytes.HasPrefix(header, []byte("%PDF-"))
-	case "application/vnd.librepresenter.presentation+json":
+	case "application/vnd.hhc.presenter+json":
 		valid = validJSONObject(ctx, content, size)
 	case "application/vnd.openxmlformats-officedocument.presentationml.presentation":
 		valid = validZIP(ctx, content, size, "[Content_Types].xml", "ppt/presentation.xml")
@@ -108,7 +108,7 @@ func requiresContentReader(mime string) bool {
 		"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 		"application/vnd.apple.keynote",
 		"application/vnd.oasis.opendocument.presentation",
-		"application/vnd.librepresenter.presentation+json":
+		"application/vnd.hhc.presenter+json":
 		return true
 	default:
 		return false

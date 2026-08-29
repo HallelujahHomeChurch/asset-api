@@ -72,7 +72,7 @@ var namespacePolicies = map[string]NamespacePolicy{
 			"audio/mpeg": true, "audio/wav": true, "audio/mp4": true, "audio/aac": true, "audio/ogg": true,
 			"application/pdf": true,
 			"application/vnd.openxmlformats-officedocument.presentationml.presentation": true,
-			"application/vnd.librepresenter.presentation+json":                          true,
+			"application/vnd.hhc.presenter+json":                                        true,
 		},
 		MaxSizeBytes:      200 << 20,
 		DefaultVisibility: VisibilityRestricted,
