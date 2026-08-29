@@ -21,6 +21,22 @@ func TestAccountAvatarPolicy(t *testing.T) {
 	}
 }
 
+func TestHomeBannerPolicy(t *testing.T) {
+	policy, ok := PolicyFor("cms.home.banner")
+	if !ok {
+		t.Fatal("cms.home.banner policy is missing")
+	}
+	if policy.OwnerService != "hhc-web-api" {
+		t.Fatalf("unexpected policy: %+v", policy)
+	}
+	if !policy.AllowsMIME("image/jpeg") || policy.AllowsMIME("image/png") || policy.AllowsMIME("image/webp") {
+		t.Fatalf("unexpected MIME policy: %#v", policy.MIMETypes)
+	}
+	if policy.Processing != ProcessingNotRequired {
+		t.Fatalf("processing = %q", policy.Processing)
+	}
+}
+
 func TestFutureDesktopNamespaceIsNotActive(t *testing.T) {
 	if _, ok := PolicyFor("desktop.cloud-folder.object"); ok {
 		t.Fatal("future desktop namespace must not be active")

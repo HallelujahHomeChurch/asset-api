@@ -9,6 +9,8 @@ type NamespacePolicy struct {
 	Visibilities      map[Visibility]bool
 	Processing        ProcessingStatus
 	CacheControl      string
+	Width             int
+	Height            int
 }
 
 func (p NamespacePolicy) AllowsMIME(value string) bool           { return p.MIMETypes[value] }
@@ -36,6 +38,11 @@ var namespacePolicies = map[string]NamespacePolicy{
 		OwnerService: "hhc-web-api", MIMETypes: map[string]bool{"image/jpeg": true, "image/png": true, "image/webp": true},
 		MaxSizeBytes: 10 << 20, DefaultVisibility: VisibilityPrivate, Visibilities: map[Visibility]bool{VisibilityPrivate: true, VisibilityPublic: true}, Processing: ProcessingPending,
 		CacheControl: "public, max-age=31536000, immutable",
+	},
+	"cms.home.banner": {
+		OwnerService: "hhc-web-api", MIMETypes: map[string]bool{"image/jpeg": true},
+		MaxSizeBytes: 10 << 20, DefaultVisibility: VisibilityPublic, Visibilities: map[Visibility]bool{VisibilityPublic: true}, Processing: ProcessingNotRequired,
+		CacheControl: "public, max-age=31536000, immutable", Width: 1900, Height: 700,
 	},
 	"cms.page.image": {
 		OwnerService: "hhc-web-api", MIMETypes: map[string]bool{"image/jpeg": true, "image/png": true, "image/webp": true},

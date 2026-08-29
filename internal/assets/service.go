@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	_ "image/jpeg"
 	"io"
 	"net/http"
 	"os"
@@ -170,6 +172,32 @@ func (s *Service) CompleteUpload(ctx context.Context, assetID string, input Comp
 			return Asset{}, rejectErr
 		}
 		return Asset{}, ErrInvalidUpload
+	}
+	if policy.Width > 0 || policy.Height > 0 {
+		download, openErr := s.blobs.Open(ctx, sourceKey, ByteRange{Offset: 0, Count: policy.MaxSizeBytes}, observed.ETag)
+		if openErr != nil {
+			if errors.Is(openErr, ErrInvalidUpload) {
+				if rejectErr := s.rejectUpload(ctx, asset, session); rejectErr != nil {
+					return Asset{}, rejectErr
+				}
+				return Asset{}, ErrInvalidUpload
+			}
+			return Asset{}, fmt.Errorf("open image dimensions: %w", openErr)
+		}
+		config, _, decodeErr := image.DecodeConfig(io.LimitReader(&contextReader{ctx: ctx, reader: download.Body}, policy.MaxSizeBytes))
+		closeErr := download.Body.Close()
+		if decodeErr != nil || config.Width != policy.Width || config.Height != policy.Height {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return Asset{}, ctxErr
+			}
+			if rejectErr := s.rejectUpload(ctx, asset, session); rejectErr != nil {
+				return Asset{}, rejectErr
+			}
+			return Asset{}, ErrInvalidUpload
+		}
+		if closeErr != nil {
+			return Asset{}, fmt.Errorf("close image dimensions: %w", closeErr)
+		}
 	}
 	if observed.Size != metadata.Size || (metadata.ETag != "" && observed.ETag != metadata.ETag) || observed.Size != input.SizeBytes || observed.DetectedMIMEType == "" || observed.DetectedMIMEType != input.MIMEType || !strings.EqualFold(observed.ChecksumSHA256, input.ChecksumSHA256) {
 		if err := s.rejectUpload(ctx, asset, session); err != nil {

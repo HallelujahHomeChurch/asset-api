@@ -418,7 +418,7 @@ paths:
     post:
       summary: Asset API operation
       tags: [Private]
-      description: Validates completed upload bytes and queues the scan lifecycle.
+      description: Validates completed upload bytes, including namespace-specific detected MIME and decoded image dimensions, then queues the scan lifecycle.
       x-hhc-visibility: private
       x-hhc-callers: [account-api, hhc-web-api, hhc-line-function-bot]
       security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
@@ -617,6 +617,7 @@ components:
         uploadTarget: { $ref: '#/components/schemas/UploadTarget' }
     CreateUploadRequest:
       type: object
+      description: For `cms.home.banner`, ownerService=hhc-web-api, expected and detected MIME must be image/jpeg, decoded dimensions must be exactly 1900x700, and successful completion returns processingStatus=not_required. After a clean scan and public grant, the granted original is served directly without derivatives.
       required: [namespace, ownerService, ownerType, ownerId, purpose, originalFileName, expectedMimeType, maxSizeBytes, visibility]
       properties:
         namespace: { type: string }
