@@ -71,7 +71,7 @@ func TestLineGroupMediaSyncPolicy(t *testing.T) {
 		"image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp",
 		"video/mp4", "video/quicktime", "video/webm", "video/ogg", "video/x-msvideo", "video/x-matroska", "video/x-ms-wmv",
 		"audio/mpeg", "audio/wav", "audio/mp4", "audio/aac", "audio/ogg",
-		"application/pdf", "application/vnd.openxmlformats-officedocument.presentationml.presentation", "application/vnd.librepresenter.presentation+json",
+		"application/pdf", "application/vnd.openxmlformats-officedocument.presentationml.presentation", "application/vnd.hhc.presenter+json",
 	}
 	for _, mime := range allowed {
 		if !policy.AllowsMIME(mime) {

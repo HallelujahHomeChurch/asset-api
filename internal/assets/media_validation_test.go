@@ -36,7 +36,7 @@ func TestValidateMediaCanonicalFormats(t *testing.T) {
 		{"ogg vorbis", "audio.ogg", "audio/ogg", append([]byte("OggS"), append(make([]byte, 24), []byte("\x01vorbis")...)...)},
 		{"pdf", "slides.pdf", "application/pdf", []byte("%PDF-1.7")},
 		{"pptx", "slides.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation", zipPayload},
-		{"lpdeck", "slides.lpdeck", "application/vnd.librepresenter.presentation+json", []byte(" \n{\"version\":1}")},
+		{"lpdeck", "slides.lpdeck", "application/vnd.hhc.presenter+json", []byte(" \n{\"version\":1}")},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -61,6 +61,7 @@ func TestValidateMediaRejectsAliasesSpoofsAndUnsupportedFormats(t *testing.T) {
 	}{
 		{"wrong extension", "photo.png", "image/jpeg", []byte{0xff, 0xd8, 0xff}},
 		{"MIME alias", "audio.mp3", "audio/mp3", []byte("ID3\x04")},
+		{"retired lpdeck MIME", "slides.lpdeck", "application/vnd.librepresenter.presentation+json", []byte("{\"version\":1}")},
 		{"jpeg spoof", "photo.jpg", "image/jpeg", []byte("<svg>")},
 		{"AAC spoofed as MP3", "audio.mp3", "audio/mpeg", []byte{0xff, 0xf1, 0x50, 0x80}},
 		{"svg", "image.svg", "image/svg+xml", []byte("<svg>")},
@@ -70,12 +71,12 @@ func TestValidateMediaRejectsAliasesSpoofsAndUnsupportedFormats(t *testing.T) {
 		{"M4A not MP4 video", "audio.mp4", "video/mp4", m4aAsMP4},
 		{"EBML text is not DocType", "movie.webm", "video/webm", []byte("\x1a\x45\xdf\xa3xxxxwebm")},
 		{"pptx missing content types", "slides.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation", testZIP(t, "ppt/presentation.xml")},
-		{"lpdeck zip", "slides.lpdeck", "application/vnd.librepresenter.presentation+json", testZIP(t, "deck.json")},
-		{"lpdeck malformed", "slides.lpdeck", "application/vnd.librepresenter.presentation+json", []byte("{not-json")},
-		{"lpdeck trailing value", "slides.lpdeck", "application/vnd.librepresenter.presentation+json", []byte("{\"slides\":[]} {\"second\":true}")},
-		{"lpdeck trailing garbage", "slides.lpdeck", "application/vnd.librepresenter.presentation+json", []byte("{\"slides\":[]} garbage")},
-		{"lpdeck array", "slides.lpdeck", "application/vnd.librepresenter.presentation+json", []byte("[{\"slides\":[]}]")},
-		{"lpdeck scalar", "slides.lpdeck", "application/vnd.librepresenter.presentation+json", []byte("\"slides\"")},
+		{"lpdeck zip", "slides.lpdeck", "application/vnd.hhc.presenter+json", testZIP(t, "deck.json")},
+		{"lpdeck malformed", "slides.lpdeck", "application/vnd.hhc.presenter+json", []byte("{not-json")},
+		{"lpdeck trailing value", "slides.lpdeck", "application/vnd.hhc.presenter+json", []byte("{\"slides\":[]} {\"second\":true}")},
+		{"lpdeck trailing garbage", "slides.lpdeck", "application/vnd.hhc.presenter+json", []byte("{\"slides\":[]} garbage")},
+		{"lpdeck array", "slides.lpdeck", "application/vnd.hhc.presenter+json", []byte("[{\"slides\":[]}]")},
+		{"lpdeck scalar", "slides.lpdeck", "application/vnd.hhc.presenter+json", []byte("\"slides\"")},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -120,8 +121,8 @@ func TestValidateMediaPPTXIsBoundedCancelableAndDoesNotOwnCleanup(t *testing.T) 
 func TestValidateMediaLPDeckIsBoundedAndCancelable(t *testing.T) {
 	payload := []byte("{\"slides\":[{\"name\":\"one\"}]}")
 	limited := &boundedReaderAt{value: append(payload, []byte(" {\"second\":true}")...), maxEnd: int64(len(payload))}
-	got, err := ValidateMedia(context.Background(), "slides.lpdeck", "application/vnd.librepresenter.presentation+json", payload, limited, int64(len(payload)))
-	if err != nil || got != "application/vnd.librepresenter.presentation+json" {
+	got, err := ValidateMedia(context.Background(), "slides.lpdeck", "application/vnd.hhc.presenter+json", payload, limited, int64(len(payload)))
+	if err != nil || got != "application/vnd.hhc.presenter+json" {
 		t.Fatalf("ValidateMedia() = %q, %v", got, err)
 	}
 	if limited.exceeded {
@@ -129,7 +130,7 @@ func TestValidateMediaLPDeckIsBoundedAndCancelable(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	canceling := &cancelingReaderAt{value: payload, cancel: cancel}
-	if _, err := ValidateMedia(ctx, "slides.lpdeck", "application/vnd.librepresenter.presentation+json", payload, canceling, int64(len(payload))); !errors.Is(err, context.Canceled) {
+	if _, err := ValidateMedia(ctx, "slides.lpdeck", "application/vnd.hhc.presenter+json", payload, canceling, int64(len(payload))); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled error = %v", err)
 	}
 }

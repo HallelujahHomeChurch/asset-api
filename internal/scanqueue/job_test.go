@@ -60,7 +60,7 @@ func TestScanJobRevalidatesCanonicalMediaAndCleansTemporaryFile(t *testing.T) {
 		name, fileName, mime string
 		payload              []byte
 	}{
-		{name: "LPDeck", fileName: "deck.lpdeck", mime: "application/vnd.librepresenter.presentation+json", payload: []byte(`{"slides":[]}`)},
+		{name: "LPDeck", fileName: "deck.lpdeck", mime: "application/vnd.hhc.presenter+json", payload: []byte(`{"slides":[]}`)},
 		{name: "PPTX", fileName: "deck.pptx", mime: "application/vnd.openxmlformats-officedocument.presentationml.presentation", payload: testScanZIP(t, "[Content_Types].xml", "ppt/presentation.xml")},
 	}
 	for _, test := range tests {
@@ -94,8 +94,8 @@ func TestScanJobPoisonsCanonicalMediaMismatchWithoutScanning(t *testing.T) {
 		payload              []byte
 	}{
 		{name: "HEIC as MP4", fileName: "spoof.mp4", mime: "video/mp4", payload: bmffScan("heic")},
-		{name: "LPDeck malformed", fileName: "spoof.lpdeck", mime: "application/vnd.librepresenter.presentation+json", payload: []byte("{not-json")},
-		{name: "LPDeck trailing", fileName: "spoof.lpdeck", mime: "application/vnd.librepresenter.presentation+json", payload: []byte("{\"slides\":[]} {\"second\":true}")},
+		{name: "LPDeck malformed", fileName: "spoof.lpdeck", mime: "application/vnd.hhc.presenter+json", payload: []byte("{not-json")},
+		{name: "LPDeck trailing", fileName: "spoof.lpdeck", mime: "application/vnd.hhc.presenter+json", payload: []byte("{\"slides\":[]} {\"second\":true}")},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
