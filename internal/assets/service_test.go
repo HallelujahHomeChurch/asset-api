@@ -10,6 +10,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/jpeg"
+	"image/png"
 	"io"
 	"slices"
 	"strings"
@@ -65,6 +68,152 @@ func TestCompleteUploadValidatesObservedBlobAndLeavesDownloadPending(t *testing.
 	if _, err := service.OpenPublic(ctx, asset.ID, ByteRange{}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("public download before clean scan: %v", err)
 	}
+}
+
+func TestCreateHomeBannerUploadRejectsWrongOwnerAndUncroppedMIME(t *testing.T) {
+	service := NewService(newMemoryRepository(), newMemoryBlobStore(), "https://www.alive.org.tw/api/assets", time.Now)
+	base := CreateUploadInput{
+		Namespace: "cms.home.banner", OwnerService: "hhc-web-api", OwnerType: "page", OwnerID: "home-1", Purpose: "home_banner",
+		OriginalFileName: "banner.jpg", ExpectedMIMEType: "image/jpeg", MaxSizeBytes: 10 << 20, Visibility: VisibilityPublic,
+	}
+	for _, test := range []struct {
+		name  string
+		input CreateUploadInput
+	}{
+		{name: "owner mismatch", input: func() CreateUploadInput { value := base; value.OwnerService = "account-api"; return value }()},
+		{name: "PNG", input: func() CreateUploadInput {
+			value := base
+			value.OriginalFileName = "banner.png"
+			value.ExpectedMIMEType = "image/png"
+			return value
+		}()},
+		{name: "WebP", input: func() CreateUploadInput {
+			value := base
+			value.OriginalFileName = "banner.webp"
+			value.ExpectedMIMEType = "image/webp"
+			return value
+		}()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := service.CreateUploadSession(context.Background(), test.input, "home-banner-"+test.name); !errors.Is(err, ErrInvalidInput) {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
+
+func TestCompleteHomeBannerValidatesJPEGDimensionsFromByteZero(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		payload   func(*testing.T) []byte
+		wantError bool
+	}{
+		{name: "invalid JPEG", payload: func(*testing.T) []byte { return []byte{0xff, 0xd8, 0xff, 0xe0} }, wantError: true},
+		{name: "MIME spoofed PNG", payload: func(t *testing.T) []byte { return encodePNG(t, 1900, 700) }, wantError: true},
+		{name: "MIME spoofed WebP", payload: func(*testing.T) []byte { return []byte("RIFF\x08\x00\x00\x00WEBPVP8 ") }, wantError: true},
+		{name: "1899x700", payload: func(t *testing.T) []byte { return encodeJPEG(t, 1899, 700, false) }, wantError: true},
+		{name: "1900x699", payload: func(t *testing.T) []byte { return encodeJPEG(t, 1900, 699, false) }, wantError: true},
+		{name: "1900x700", payload: func(t *testing.T) []byte { return encodeJPEG(t, 1900, 700, false) }},
+		{name: "1900x700 with SOF after byte 512", payload: func(t *testing.T) []byte { return encodeJPEG(t, 1900, 700, true) }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			repo := newMemoryRepository()
+			blobs := newMemoryBlobStore()
+			service := NewService(repo, blobs, "https://www.alive.org.tw/api/assets", time.Now)
+			created, err := service.CreateUploadSession(ctx, CreateUploadInput{
+				Namespace: "cms.home.banner", OwnerService: "hhc-web-api", OwnerType: "page", OwnerID: "home-1", Purpose: "home_banner",
+				OriginalFileName: "banner.jpg", ExpectedMIMEType: "image/jpeg", MaxSizeBytes: 10 << 20, Visibility: VisibilityPublic,
+			}, "home-banner-complete-"+test.name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			payload := test.payload(t)
+			blobs.objects[created.Session.StagingObjectKey] = payload
+			sum := sha256.Sum256(payload)
+			asset, err := service.CompleteUpload(ctx, created.Asset.ID, CompleteUploadInput{
+				SizeBytes: int64(len(payload)), ChecksumSHA256: hex.EncodeToString(sum[:]), MIMEType: "image/jpeg",
+			})
+			if test.wantError {
+				if !errors.Is(err, ErrInvalidUpload) {
+					t.Fatalf("error = %v", err)
+				}
+				if _, ok := blobs.objects[created.Session.StagingObjectKey]; ok || repo.assets[created.Asset.ID].UploadStatus != UploadFailed {
+					t.Fatal("invalid banner was not rejected and cleaned up")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if asset.UploadStatus != UploadCompleted || asset.DetectedMIMEType != "image/jpeg" || asset.ProcessingStatus != ProcessingNotRequired {
+				t.Fatalf("asset = %+v", asset)
+			}
+			if blobs.lastOpenRange != (ByteRange{Offset: 0, Count: 10 << 20}) || blobs.lastOpenETag == "" {
+				t.Fatalf("dimension read range=%+v etag=%q", blobs.lastOpenRange, blobs.lastOpenETag)
+			}
+		})
+	}
+}
+
+func TestCompleteHomeBannerRejectsDimensionReadETagMismatchAndCleansUp(t *testing.T) {
+	ctx := context.Background()
+	repo := newMemoryRepository()
+	blobs := newMemoryBlobStore()
+	service := NewService(repo, blobs, "https://www.alive.org.tw/api/assets", time.Now)
+	created, err := service.CreateUploadSession(ctx, CreateUploadInput{
+		Namespace: "cms.home.banner", OwnerService: "hhc-web-api", OwnerType: "page", OwnerID: "home-1", Purpose: "home_banner",
+		OriginalFileName: "banner.jpg", ExpectedMIMEType: "image/jpeg", MaxSizeBytes: 10 << 20, Visibility: VisibilityPublic,
+	}, "home-banner-etag-mismatch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := encodeJPEG(t, 1900, 700, false)
+	blobs.objects[created.Session.StagingObjectKey] = payload
+	blobs.openETagMismatchAt = 2
+	sum := sha256.Sum256(payload)
+
+	_, err = service.CompleteUpload(ctx, created.Asset.ID, CompleteUploadInput{
+		SizeBytes: int64(len(payload)), ChecksumSHA256: hex.EncodeToString(sum[:]), MIMEType: "image/jpeg",
+	})
+	if !errors.Is(err, ErrInvalidUpload) {
+		t.Fatalf("error = %v", err)
+	}
+	if repo.assets[created.Asset.ID].UploadStatus != UploadFailed {
+		t.Fatal("ETag mismatch did not mark upload failed")
+	}
+	if _, ok := blobs.objects[created.Session.StagingObjectKey]; ok {
+		t.Fatal("ETag mismatch did not clean up staging object")
+	}
+}
+
+func encodeJPEG(t *testing.T, width, height int, delaySOF bool) []byte {
+	t.Helper()
+	var output bytes.Buffer
+	if err := jpeg.Encode(&output, image.NewGray(image.Rect(0, 0, width, height)), &jpeg.Options{Quality: 80}); err != nil {
+		t.Fatal(err)
+	}
+	payload := output.Bytes()
+	if !delaySOF {
+		return payload
+	}
+	padding := make([]byte, 600)
+	segment := []byte{0xff, 0xe1, 0x02, 0x5a}
+	delayed := append(append(append([]byte{}, payload[:2]...), segment...), padding...)
+	delayed = append(delayed, payload[2:]...)
+	if offset := bytes.Index(delayed, []byte{0xff, 0xc0}); offset <= 512 {
+		t.Fatalf("SOF offset = %d", offset)
+	}
+	return delayed
+}
+
+func encodePNG(t *testing.T, width, height int) []byte {
+	t.Helper()
+	var output bytes.Buffer
+	if err := png.Encode(&output, image.NewGray(image.Rect(0, 0, width, height))); err != nil {
+		t.Fatal(err)
+	}
+	return output.Bytes()
 }
 
 func TestCompleteUploadRejectsOversizeBeforeRead(t *testing.T) {
@@ -1296,6 +1445,9 @@ type memoryBlobStore struct {
 	commitLeavesStaging        bool
 	commitConflictCreatesFinal bool
 	lastOpenRange              ByteRange
+	lastOpenETag               string
+	openCalls                  int
+	openETagMismatchAt         int
 }
 
 func newMemoryBlobStore() *memoryBlobStore { return &memoryBlobStore{objects: map[string][]byte{}} }
@@ -1344,7 +1496,12 @@ func (b *memoryBlobStore) Commit(ctx context.Context, stagingObjectKey, finalObj
 	return b.Inspect(ctx, finalObjectKey, "", 0)
 }
 func (b *memoryBlobStore) Open(ctx context.Context, objectKey string, requested ByteRange, expectedETag string) (BlobDownload, error) {
+	b.openCalls++
 	b.lastOpenRange = requested
+	b.lastOpenETag = expectedETag
+	if b.openCalls == b.openETagMismatchAt {
+		return BlobDownload{}, ErrInvalidUpload
+	}
 	value, ok := b.objects[objectKey]
 	if !ok {
 		return BlobDownload{}, ErrNotFound

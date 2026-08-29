@@ -63,6 +63,20 @@ func TestOpenAPIContract(t *testing.T) {
 	}
 }
 
+func TestOpenAPIHomeBannerContract(t *testing.T) {
+	raw, err := os.ReadFile("openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := string(raw)
+	upload := schemaBlockFor(t, document, "CreateUploadRequest")
+	for _, value := range []string{"cms.home.banner", "ownerService=hhc-web-api", "image/jpeg", "1900x700", "processingStatus=not_required", "granted original"} {
+		assertContains(t, upload, value)
+	}
+	complete := operationBlockFor(t, document, documentedOperation{"POST", "/priv/assets/{assetID}/complete", ""})
+	assertContains(t, complete, "namespace-specific detected MIME and decoded image dimensions")
+}
+
 func TestOpenAPISecurityAndWireContracts(t *testing.T) {
 	raw, err := os.ReadFile("openapi.yaml")
 	if err != nil {
