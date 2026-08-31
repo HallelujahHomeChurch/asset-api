@@ -1,0 +1,10 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Synthetic release commit hash in the immutable workflow test fixture"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "line"
+regexes = ['''\bRELEASE_COMMIT=[0-9a-f]{40}\b''']
+paths = ['''^scripts/test-release-workflow\.sh$''']
