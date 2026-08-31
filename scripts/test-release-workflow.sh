@@ -35,6 +35,20 @@ fi
 grep -q 'IMAGE_REF=.*@${digest}' "$workflow"
 grep -q 'SCAN_IMAGE_REF=.*@${scan_digest}' "$workflow"
 grep -q 'Dockerfile.scan' "$workflow"
+trivy_image='ghcr.io/aquasecurity/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969'
+grep -Fq "$trivy_image" .github/workflows/ci.yml
+grep -Fq "$trivy_image" "$workflow"
+grep -Fq 'fs --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1' .github/workflows/ci.yml
+grep -Fq 'fs --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1' "$workflow"
+grep -Fq 'image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 asset-api:verify' .github/workflows/ci.yml
+grep -Fq 'image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 asset-scan:verify' .github/workflows/ci.yml
+grep -Fq 'docker pull "$IMAGE_REF"' "$workflow"
+grep -Fq 'docker pull "$SCAN_IMAGE_REF"' "$workflow"
+grep -Fq 'image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 "$IMAGE_REF"' "$workflow"
+grep -Fq 'image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 "$SCAN_IMAGE_REF"' "$workflow"
+scan_line="$(grep -n 'name: Scan immutable images' "$workflow" | cut -d: -f1)"
+what_if_line="$(grep -n 'name: Reject destructive infrastructure changes' "$workflow" | cut -d: -f1)"
+test "$scan_line" -lt "$what_if_line"
 grep -Fq "docker export \"\$(docker create asset-api:verify)\" | tar -tf - | grep -Fxq 'asset-derivative-worker'" "$workflow"
 grep -Fq "docker export \"\$(docker create asset-api:verify)\" | tar -tf - | grep -Fxq 'asset-derivative-worker'" .github/workflows/ci.yml
 grep -Fq 'docker run --rm --entrypoint clamscan asset-scan:verify --help' "$workflow"

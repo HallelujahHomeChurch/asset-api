@@ -52,6 +52,16 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Scan dependencies
+        run: |
+          trivy_cache="$RUNNER_TEMP/trivy-cache"
+          mkdir -p "$trivy_cache"
+          docker run --rm \
+            -v "$PWD:/workspace:ro" \
+            -v "$trivy_cache:/root/.cache/trivy" \
+            ghcr.io/aquasecurity/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 \
+            fs --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
+            --skip-dirs /workspace/.git --skip-dirs /workspace/node_modules /workspace
       - run: |
           ./scripts/bootstrap-migration-role.test.sh
           ./scripts/test-migration-policy-test.sh
@@ -195,6 +205,59 @@ jobs:
           scan_digest="$(az acr repository show --name "$ACR_NAME" --image "${SCAN_IMAGE_REPOSITORY}:${IMAGE_TAG}" --query digest -o tsv --only-show-errors)"
           [[ "$scan_digest" == sha256:* ]]
           echo "SCAN_IMAGE_REF=${ACR_LOGIN_SERVER}/${SCAN_IMAGE_REPOSITORY}@${scan_digest}" >> "$GITHUB_ENV"
+      - name: Scan immutable images
+        run: |
+          trivy_cache="$RUNNER_TEMP/trivy-cache"
+          runtime_report="$RUNNER_TEMP/trivy-asset-api.json"
+          scan_report="$RUNNER_TEMP/trivy-asset-scan.json"
+          trap 'test ! -e "$runtime_report" || unlink "$runtime_report"; test ! -e "$scan_report" || unlink "$scan_report"' EXIT
+          mkdir -p "$trivy_cache"
+          az acr login --name "$ACR_NAME" --only-show-errors
+          docker pull "$IMAGE_REF"
+          docker pull "$SCAN_IMAGE_REF"
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$trivy_cache:/root/.cache/trivy" \
+            ghcr.io/aquasecurity/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 \
+            image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 "$IMAGE_REF"
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$trivy_cache:/root/.cache/trivy" \
+            ghcr.io/aquasecurity/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 \
+            image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 "$SCAN_IMAGE_REF"
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$trivy_cache:/root/.cache/trivy" \
+            -v "$RUNNER_TEMP:/evidence" \
+            ghcr.io/aquasecurity/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 \
+            image --severity HIGH,CRITICAL --format json \
+            --output /evidence/trivy-asset-api.json "$IMAGE_REF"
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$trivy_cache:/root/.cache/trivy" \
+            -v "$RUNNER_TEMP:/evidence" \
+            ghcr.io/aquasecurity/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 \
+            image --severity HIGH,CRITICAL --format json \
+            --output /evidence/trivy-asset-scan.json "$SCAN_IMAGE_REF"
+          runtime_fixable="$(jq '[.Results[]?.Vulnerabilities[]? | select((.Severity == "HIGH" or .Severity == "CRITICAL") and (.FixedVersion // "") != "")] | unique_by(.VulnerabilityID,.PkgName,.InstalledVersion,.FixedVersion) | length' "$runtime_report")"
+          runtime_unfixed="$(jq '[.Results[]?.Vulnerabilities[]? | select((.Severity == "HIGH" or .Severity == "CRITICAL") and (.FixedVersion // "") == "")] | unique_by(.VulnerabilityID,.PkgName,.InstalledVersion) | length' "$runtime_report")"
+          scan_fixable="$(jq '[.Results[]?.Vulnerabilities[]? | select((.Severity == "HIGH" or .Severity == "CRITICAL") and (.FixedVersion // "") != "")] | unique_by(.VulnerabilityID,.PkgName,.InstalledVersion,.FixedVersion) | length' "$scan_report")"
+          scan_unfixed="$(jq '[.Results[]?.Vulnerabilities[]? | select((.Severity == "HIGH" or .Severity == "CRITICAL") and (.FixedVersion // "") == "")] | unique_by(.VulnerabilityID,.PkgName,.InstalledVersion) | length' "$scan_report")"
+          {
+            echo '### Trivy image summary'
+            echo '- Scanner: `ghcr.io/aquasecurity/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969`'
+            echo "- Runtime artifact: \`$IMAGE_REF\`"
+            echo "- Runtime fixable High/Critical: $runtime_fixable"
+            echo "- Runtime unfixed High/Critical: $runtime_unfixed"
+            echo "- Scan worker artifact: \`$SCAN_IMAGE_REF\`"
+            echo "- Scan worker fixable High/Critical: $scan_fixable"
+            echo "- Scan worker unfixed High/Critical: $scan_unfixed"
+            docker run --rm -v "$trivy_cache:/root/.cache/trivy" \
+              ghcr.io/aquasecurity/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 \
+              version --format json | jq -r '"- Trivy: " + .Version, "- Vulnerability DB updated: " + .VulnerabilityDB.UpdatedAt'
+          } >> "$GITHUB_STEP_SUMMARY"
+          test "$runtime_fixable" -eq 0
+          test "$scan_fixable" -eq 0
       - name: Reject destructive infrastructure changes
         run: |
           az deployment group what-if \
