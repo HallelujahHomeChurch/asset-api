@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:17-alpine
+        image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
         env:
           POSTGRES_DB: asset_test
           POSTGRES_USER: postgres
@@ -30,6 +30,8 @@ jobs:
       ASSET_ALLOW_DESTRUCTIVE_TEST: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -50,6 +52,8 @@ jobs:
             --skip-dirs /workspace/.git --skip-dirs /workspace/node_modules /workspace
       - name: Lint OpenAPI
         run: npx --yes @redocly/cli@2.47.0 lint docs/openapi.yaml
+      - name: Scan complete Git history
+        run: ./scripts/test-gitleaks.sh
       - run: |
           ./scripts/bootstrap-migration-role.test.sh
           ./scripts/test-line-media-acl-inventory.sh
