@@ -45,8 +45,10 @@ custom caller fallback is accepted only when the development setting is enabled.
 ## Scan lifecycle
 
 After upload completion, the runtime dispatches a durable queue message. The
-event-triggered Azure scan Job downloads the immutable private Blob and scans
-it with a local ClamAV process and a validated signature snapshot. Clean
+queue-scaled `asset-scan-worker` Container App downloads the immutable private
+Blob and scans it with a local ClamAV process and a validated signature
+snapshot. It scales from zero on scan work or a short-lived warm pulse, drains
+the durable scan queue until empty, then returns to zero. Clean
 results enable the existing grant checks; infected, pending, and failed assets
 remain unavailable. Transient failures use bounded retries before becoming
 `failed`.
@@ -73,10 +75,11 @@ and retried independently of the database transaction.
 ## Azure deployment
 
 `infra/main.bicep` provisions the internal Dapr-enabled Container App, migration
-job, scan and derivative event Jobs, isolated Key Vault access, and scoped
+job, queue-scaled scan worker, derivative event Job, isolated Key Vault access, and scoped
 storage RBAC. The manual GitHub Actions release workflow runs DB-backed tests,
 builds an immutable image, applies migrations, and then replaces the runtime
-and Jobs. A failed release rolls the API back; the schema-compatible derivative
+and workers. The legacy `asset-scan` Job remains Manual for one compatibility
+release and has no queue trigger. A failed release rolls the API back; the schema-compatible derivative
 Job stays on the new immutable image so it can drain events already committed
 by that revision. Complete the reviewed one-time cutover in `infra/README.md`
 first.

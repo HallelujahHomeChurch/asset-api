@@ -466,6 +466,14 @@ func (s *Service) GetAuthorizedCollectionItem(ctx context.Context, collectionID,
 	return s.repository.GetAuthorizedCollectionItem(ctx, collectionID, itemID, subject)
 }
 
+func (s *Service) RecordSyncReceipt(ctx context.Context, receipt SyncReceipt, subject CollectionSubject) error {
+	if receipt.State != "available-offline" || !validReceiptValue(receipt.CollectionItemID, 255) || !validReceiptValue(receipt.ContentVersion, 255) || !validReceiptValue(receipt.AppVersion, 64) || !validCollectionSubject(subject) {
+		return ErrInvalidInput
+	}
+	_, err := s.repository.GetAuthorizedCollectionItemByID(ctx, receipt.CollectionItemID, subject)
+	return err
+}
+
 func (s *Service) AuthorizedCollectionContentMetadata(ctx context.Context, collectionID, itemID string, subject CollectionSubject) (PublicDownloadMetadata, error) {
 	item, err := s.GetAuthorizedCollectionItem(ctx, collectionID, itemID, subject)
 	if err != nil {
@@ -633,6 +641,10 @@ func validManagedCollectionItemQuery(query string) bool {
 
 func validCollectionItemDisplayName(value string) bool {
 	return value != "" && len(value) <= 255 && !strings.ContainsAny(value, "/\\\\") && !strings.ContainsFunc(value, unicode.IsControl)
+}
+
+func validReceiptValue(value string, limit int) bool {
+	return strings.TrimSpace(value) != "" && len(value) <= limit && utf8.ValidString(value) && !strings.ContainsFunc(value, unicode.IsControl)
 }
 
 func (s *Service) UpdateCollectionRetention(ctx context.Context, input UpdateCollectionRetentionInput) (Collection, error) {

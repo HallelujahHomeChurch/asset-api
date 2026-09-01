@@ -57,6 +57,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /api/assets/public/{assetID}", h.publicDownload)
 	mux.HandleFunc("GET /api/assets/public/{assetID}/{variant}", h.publicDerivativeDownload)
 	mux.Handle("GET /api/assets/collections", h.collectionReader(http.HandlerFunc(h.listAuthorizedCollections)))
+	mux.Handle("POST /api/assets/sync-receipts", h.collectionReader(http.HandlerFunc(h.recordSyncReceipt)))
 	mux.Handle("GET /api/assets/collections/{collectionID}/changes", h.collectionReader(http.HandlerFunc(h.collectionChanges)))
 	mux.Handle("GET /api/assets/collections/{collectionID}/items/{itemID}", h.collectionReader(http.HandlerFunc(h.getAuthorizedCollectionItem)))
 	mux.Handle("POST /api/assets/collections/{collectionID}/items/{itemID}/content-ticket", h.collectionReader(http.HandlerFunc(h.issueCollectionContentTicket)))
@@ -90,6 +91,20 @@ func (h *Handler) Routes() http.Handler {
 		mux.Handle("/dev/uploads/{token}", localUploadCORS(http.HandlerFunc(h.localUpload)))
 	}
 	return requestID(mux)
+}
+
+func (h *Handler) recordSyncReceipt(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "private, no-store")
+	var receipt assets.SyncReceipt
+	if !decodeJSON(w, r, &receipt) {
+		return
+	}
+	if err := h.service.RecordSyncReceipt(r.Context(), receipt, collectionReaderSubject(r)); err != nil {
+		handleError(w, err)
+		return
+	}
+	slog.Info("asset sync receipt", "collection_item_id", receipt.CollectionItemID, "content_version", receipt.ContentVersion, "state", receipt.State, "app_version", receipt.AppVersion, "received_at", time.Now().UTC())
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handler) assetAction(w http.ResponseWriter, r *http.Request) {

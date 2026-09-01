@@ -13,4 +13,5 @@ RUN apt-get update \
 COPY --from=build /asset-scan-worker /asset-scan-worker
 COPY --from=build /asset-signature-refresh /asset-signature-refresh
 USER 65532:65532
+STOPSIGNAL SIGTERM
 ENTRYPOINT ["/asset-scan-worker"]

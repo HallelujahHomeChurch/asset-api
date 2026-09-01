@@ -22,6 +22,7 @@ func TestOpenAPIContract(t *testing.T) {
 		{"GET", "/api/assets/public/{assetID}", "[api-gateway]"},
 		{"GET", "/api/assets/public/{assetID}/{variant}", "[api-gateway]"},
 		{"GET", "/api/assets/collections", "[api-gateway]"},
+		{"POST", "/api/assets/sync-receipts", "[api-gateway]"},
 		{"GET", "/api/assets/collections/{collectionID}/changes", "[api-gateway]"},
 		{"GET", "/api/assets/collections/{collectionID}/items/{itemID}", "[api-gateway]"},
 		{"POST", "/api/assets/collections/{collectionID}/items/{itemID}/content-ticket", "[api-gateway]"},
@@ -117,12 +118,20 @@ func TestOpenAPISecurityAndWireContracts(t *testing.T) {
 
 	for _, operation := range []documentedOperation{
 		{"GET", "/api/assets/collections", ""},
+		{"POST", "/api/assets/sync-receipts", ""},
 		{"GET", "/api/assets/collections/{collectionID}/changes", ""},
 		{"GET", "/api/assets/collections/{collectionID}/items/{itemID}", ""},
 		{"POST", "/api/assets/collections/{collectionID}/items/{itemID}/content-ticket", ""},
 		{"GET", "/api/assets/collections/{collectionID}/items/{itemID}/content", ""},
 	} {
 		assertContains(t, operationBlockFor(t, document, operation), "security: [ { gatewayDaprCaller: [], gatewayTrustedIdentity: [] } ]")
+	}
+	receipt := operationBlockFor(t, document, documentedOperation{"POST", "/api/assets/sync-receipts", ""})
+	for _, value := range []string{"SyncReceipt", "Receipt recorded", "no user, filename, path, meeting, or body data"} {
+		assertContains(t, receipt, value)
+	}
+	for _, value := range []string{"additionalProperties: false", "required: [collectionItemId, contentVersion, state, appVersion]", "enum: [available-offline]", "maxLength: 64"} {
+		assertContains(t, schemaBlockFor(t, document, "SyncReceipt"), value)
 	}
 	assertContains(t, operationBlockFor(t, document, documentedOperation{"GET", "/api/assets/content", ""}), "security: [ { gatewayDaprCaller: [] } ]")
 	for _, value := range []string{"name: dapr-api-token", "Dapr-Caller-App-Id exactly `api-gateway`", "name: X-HHC-User-ID", "X-HHC-Token-Expires-At", "X-HHC-Role-IDs", "X-HHC-Token-ID", "X-HHC-Session-ID", "X-HHC-Auth-Provider"} {

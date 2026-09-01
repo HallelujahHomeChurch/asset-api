@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"hhc/asset-api/internal/clamav"
@@ -19,7 +21,9 @@ import (
 )
 
 func main() {
-	if err := run(context.Background()); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := run(ctx); err != nil {
 		slog.Error("asset scan worker failed", "error", err)
 		os.Exit(1)
 	}
@@ -75,6 +79,10 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	idle, err := positiveDuration("ASSET_SCAN_IDLE_POLL", time.Second)
+	if err != nil {
+		return err
+	}
 
 	signatures, err := clamav.NewAzureSignatures(accountURL, signatureContainer)
 	if err != nil {
@@ -102,11 +110,36 @@ func run(ctx context.Context) error {
 	}
 	scanner := clamav.NewLocalScanner(signatureDirectory, timeout, maxFileSize, maxScanSize, maxFiles, maxRecursion)
 	job := scanqueue.NewScanJob(postgres.New(db), blobs, scanner, queue, manifest.SignatureVersion, maxSize, maxAttempts, timeout)
-	processed, err := job.RunOnce(ctx)
-	if err == nil {
-		slog.Info("asset scan worker finished", "processed", processed)
+	return runLoop(ctx, job.RunOnce, idle)
+}
+
+type scanOnce func(context.Context) (bool, error)
+
+func runLoop(ctx context.Context, run scanOnce, idle time.Duration) error {
+	for {
+		if ctx.Err() != nil {
+			return nil
+		}
+		processed, err := run(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return err
+		}
+		if processed {
+			continue
+		}
+		timer := time.NewTimer(idle)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return nil
+		case <-timer.C:
+		}
 	}
-	return err
 }
 
 func required(key string) (string, error) {

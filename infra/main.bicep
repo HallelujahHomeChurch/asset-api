@@ -17,6 +17,9 @@ param manageSharedInfrastructure bool = true
 param scanDispatchEnabled bool = true
 param embeddedScanEnabled bool = false
 param deployScanJob bool = false
+param deployScanWorker bool = false
+param deployScanWarmer bool = false
+param provisionScanWarmInfrastructure bool = false
 param deploySignatureRefreshJob bool = false
 param deployRetentionJob bool = false
 param deployDerivativeJob bool = false
@@ -28,6 +31,8 @@ param workloadAuthAudience string = ''
 param lineAttachmentClientId string = ''
 param lineAttachmentObjectId string = ''
 param readerCallerAppId string = 'api-gateway'
+param meetingApiBaseUrl string = ''
+param meetingApiAudience string = ''
 
 param publicBaseUrl string = 'https://www.alive.org.tw/assets'
 param uploadAllowedOrigins array = [
@@ -117,6 +122,11 @@ resource scanIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-
   location: location
 }
 
+resource scanWarmerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: 'asset-scan-warmer-identity'
+  location: location
+}
+
 resource signatureRefreshIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: 'asset-signature-refresh-identity'
   location: location
@@ -196,6 +206,11 @@ resource scanPoisonQueue 'Microsoft.Storage/storageAccounts/queueServices/queues
   name: 'asset-scan-poison'
 }
 
+resource scanWarmQueue 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' = if (provisionScanWarmInfrastructure) {
+  parent: queueServiceScope
+  name: 'asset-scan-warm'
+}
+
 resource derivativeQueue 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' = if (manageSharedInfrastructure) {
   parent: queueService
   name: 'asset-derivative'
@@ -219,6 +234,11 @@ resource scanQueueScope 'Microsoft.Storage/storageAccounts/queueServices/queues@
 resource scanPoisonQueueScope 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' existing = {
   parent: queueServiceScope
   name: 'asset-scan-poison'
+}
+
+resource scanWarmQueueScope 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' existing = {
+  parent: queueServiceScope
+  name: 'asset-scan-warm'
 }
 
 resource derivativeQueueScope 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' existing = {
@@ -572,6 +592,28 @@ resource scanQueueReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
   }
 }
 
+resource scanWarmQueueReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (provisionScanWarmInfrastructure) {
+  name: guid(scanWarmQueueScope.id, scanIdentity.id, 'storage-queue-data-reader', 'warm-v1')
+  scope: scanWarmQueueScope
+  properties: {
+    principalId: scanIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '19e7f393-937e-4f77-808e-94535e297925')
+  }
+  dependsOn: [scanWarmQueue]
+}
+
+resource scanWarmQueueSender 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (provisionScanWarmInfrastructure) {
+  name: guid(scanWarmQueueScope.id, scanWarmerIdentity.id, 'storage-queue-data-message-sender', 'warm-v1')
+  scope: scanWarmQueueScope
+  properties: {
+    principalId: scanWarmerIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'c6a89b2d-59bc-44d0-9896-0f6e12d7b80a')
+  }
+  dependsOn: [scanWarmQueue]
+}
+
 resource scanPoisonQueueContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (manageSharedInfrastructure) {
   name: guid(scanPoisonQueueScope.id, scanIdentity.id, 'storage-queue-data-message-contributor', 'scoped-v2')
   scope: scanPoisonQueueScope
@@ -626,29 +668,12 @@ resource scanJob 'Microsoft.App/jobs@2025-07-01' = if (deployScanJob) {
     environmentId: environment.id
     workloadProfileName: 'Consumption'
     configuration: {
-      triggerType: 'Event'
+      triggerType: 'Manual'
       replicaTimeout: 720
       replicaRetryLimit: 0
-      eventTriggerConfig: {
+      manualTriggerConfig: {
         parallelism: 1
         replicaCompletionCount: 1
-        scale: {
-          pollingInterval: 10
-          minExecutions: 0
-          maxExecutions: 5
-          rules: [
-            {
-              name: 'asset-scan-queue'
-              type: 'azure-queue'
-              metadata: {
-                accountName: storageAccount.name
-                queueName: 'asset-scan'
-                queueLength: '1'
-              }
-              identity: scanIdentity.id
-            }
-          ]
-        }
       }
       registries: [
         { server: registry.properties.loginServer, identity: pullIdentity.id }
@@ -686,6 +711,141 @@ resource scanJob 'Microsoft.App/jobs@2025-07-01' = if (deployScanJob) {
     }
   }
   dependsOn: [acrPull, scanSecretAccess, scanQueueProcessor, scanQueueReader, scanPoisonQueueContributor, scanBlobReader, scanSignatureReader]
+}
+
+resource scanWorker 'Microsoft.App/containerApps@2025-01-01' = if (deployScanWorker) {
+  name: 'asset-scan-worker'
+  location: location
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${pullIdentity.id}': {}
+      '${scanIdentity.id}': {}
+    }
+  }
+  properties: {
+    managedEnvironmentId: environment.id
+    workloadProfileName: 'Consumption'
+    configuration: {
+      activeRevisionsMode: 'Single'
+      registries: [
+        { server: registry.properties.loginServer, identity: pullIdentity.id }
+      ]
+      secrets: [
+        { name: 'database-url', keyVaultUrl: '${runtimeVault.properties.vaultUri}secrets/database-url', identity: scanIdentity.id }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'asset-scan-worker'
+          image: scanWorkerImage
+          command: ['/asset-scan-worker']
+          env: [
+            { name: 'DATABASE_URL', secretRef: 'database-url' }
+            { name: 'ASSET_AZURE_ACCOUNT_URL', value: 'https://${storageAccount.name}.blob.${az.environment().suffixes.storage}' }
+            { name: 'ASSET_AZURE_CONTAINER', value: 'assets' }
+            { name: 'AZURE_CLIENT_ID', value: scanIdentity.properties.clientId }
+            { name: 'ASSET_SCAN_QUEUE_URL', value: 'https://${storageAccount.name}.queue.${az.environment().suffixes.storage}/asset-scan' }
+            { name: 'ASSET_SCAN_POISON_QUEUE_URL', value: 'https://${storageAccount.name}.queue.${az.environment().suffixes.storage}/asset-scan-poison' }
+            { name: 'ASSET_SCAN_IDLE_POLL', value: '1s' }
+            { name: 'CLAMAV_SIGNATURE_CONTAINER', value: 'asset-signatures' }
+            { name: 'CLAMAV_SIGNATURE_MAX_AGE', value: '168h' }
+            { name: 'CLAMAV_SCAN_TIMEOUT', value: '10m' }
+            { name: 'ASSET_SCAN_MAX_FILE_SIZE_BYTES', value: '209715200' }
+            { name: 'CLAMAV_MAX_FILE_SIZE_BYTES', value: '209715200' }
+            { name: 'CLAMAV_MAX_SCAN_SIZE_BYTES', value: '1073741824' }
+            { name: 'CLAMAV_MAX_FILES', value: '10000' }
+            { name: 'CLAMAV_MAX_RECURSION', value: '32' }
+            { name: 'CLAMAV_MAX_RETRIES', value: '5' }
+          ]
+          resources: { cpu: json('2.0'), memory: '4Gi' }
+        }
+      ]
+      scale: {
+        pollingInterval: 1
+        cooldownPeriod: 120
+        minReplicas: 0
+        maxReplicas: 5
+        rules: [
+          {
+            name: 'asset-scan-queue'
+            custom: {
+              type: 'azure-queue'
+              metadata: {
+                accountName: storageAccount.name
+                queueName: 'asset-scan'
+                queueLength: '1'
+              }
+              identity: scanIdentity.id
+            }
+          }
+          {
+            name: 'asset-scan-warm'
+            custom: {
+              type: 'azure-queue'
+              metadata: {
+                accountName: storageAccount.name
+                queueName: 'asset-scan-warm'
+                queueLength: '1'
+              }
+              identity: scanIdentity.id
+            }
+          }
+        ]
+      }
+    }
+  }
+  dependsOn: [acrPull, scanSecretAccess, scanQueueProcessor, scanQueueReader, scanWarmQueueReader, scanPoisonQueueContributor, scanBlobReader, scanSignatureReader]
+}
+
+resource scanWarmer 'Microsoft.App/jobs@2025-07-01' = if (deployScanWarmer) {
+  name: 'asset-scan-warmer'
+  location: location
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${pullIdentity.id}': {}
+      '${scanWarmerIdentity.id}': {}
+    }
+  }
+  properties: {
+    environmentId: environment.id
+    workloadProfileName: 'Consumption'
+    configuration: {
+      triggerType: 'Schedule'
+      replicaTimeout: 30
+      replicaRetryLimit: 1
+      scheduleTriggerConfig: {
+        cronExpression: '*/1 * * * *'
+        parallelism: 1
+        replicaCompletionCount: 1
+      }
+      registries: [
+        { server: registry.properties.loginServer, identity: pullIdentity.id }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'asset-scan-warmer'
+          image: runtimeImage
+          command: ['/asset-scan-warmer']
+          env: [
+            { name: 'AZURE_CLIENT_ID', value: scanWarmerIdentity.properties.clientId }
+            { name: 'MEETING_API_BASE_URL', value: meetingApiBaseUrl }
+            { name: 'MEETING_API_AUDIENCE', value: meetingApiAudience }
+            { name: 'ASSET_SCAN_WARM_QUEUE_URL', value: 'https://${storageAccount.name}.queue.${az.environment().suffixes.storage}/asset-scan-warm' }
+            { name: 'ASSET_SCAN_WARM_LEAD', value: '5m' }
+            { name: 'ASSET_SCAN_WARM_TAIL', value: '10m' }
+            { name: 'ASSET_SCAN_WARM_HTTP_TIMEOUT', value: '10s' }
+          ]
+          resources: { cpu: json('0.25'), memory: '0.5Gi' }
+        }
+      ]
+    }
+  }
+  dependsOn: [acrPull, scanWarmQueueSender]
 }
 
 resource signatureRefreshJob 'Microsoft.App/jobs@2025-07-01' = if (deploySignatureRefreshJob) {
@@ -905,7 +1065,12 @@ output assetContainerName string = 'assets'
 output signatureContainerName string = 'asset-signatures'
 output scanQueueName string = 'asset-scan'
 output scanPoisonQueueName string = 'asset-scan-poison'
+output scanWarmQueueName string = 'asset-scan-warm'
 output scanJobName string = 'asset-scan'
+output scanWorkerAppName string = 'asset-scan-worker'
+output scanWarmerJobName string = 'asset-scan-warmer'
+output scanWarmerClientId string = scanWarmerIdentity.properties.clientId
+output scanWarmerObjectId string = scanWarmerIdentity.properties.principalId
 output signatureRefreshJobName string = 'asset-clamav-signature-refresh'
 output retentionJobName string = 'asset-retention'
 output derivativeJobName string = 'asset-derivative'

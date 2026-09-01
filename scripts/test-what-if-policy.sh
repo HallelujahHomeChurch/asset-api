@@ -11,6 +11,12 @@ printf '%s\n' '{"changes":[
   {"resourceId":"/subscriptions/test/resourceGroups/alive/providers/Microsoft.App/jobs/asset-derivative","changeType":"Modify","delta":[]},
   {"resourceId":"/subscriptions/test/resourceGroups/alive/providers/Microsoft.App/jobs/asset-clamav-signature-refresh","changeType":"Create","delta":[]},
   {"resourceId":"/subscriptions/test/resourceGroups/alive/providers/Microsoft.App/jobs/asset-retention","changeType":"Create","delta":[]},
+  {"resourceId":"/subscriptions/test/resourceGroups/alive/providers/Microsoft.App/jobs/asset-scan-warmer","changeType":"Create","delta":[]},
+  {"resourceId":"/subscriptions/test/resourceGroups/alive/providers/Microsoft.ManagedIdentity/userAssignedIdentities/asset-scan-warmer-identity","changeType":"Create","delta":[]},
+  {"resourceId":"/subscriptions/test/resourceGroups/alive/providers/Microsoft.App/containerApps/asset-scan-worker","changeType":"Create","delta":[]},
+  {"resourceId":"/subscriptions/test/resourceGroups/alive/providers/Microsoft.Storage/storageAccounts/alive/queueServices/default/queues/asset-scan-warm","changeType":"Create","delta":[]},
+  {"resourceId":"/subscriptions/test/resourceGroups/alive/providers/Microsoft.Storage/storageAccounts/alive/queueServices/default/queues/asset-scan-warm/providers/Microsoft.Authorization/roleAssignments/scan-warm-reader","changeType":"Create","delta":[]},
+  {"resourceId":"/subscriptions/test/resourceGroups/alive/providers/Microsoft.Storage/storageAccounts/alive/queueServices/default/queues/asset-scan-warm/providers/Microsoft.Authorization/roleAssignments/scan-warm-sender","changeType":"Create","delta":[]},
   {"resourceId":"/subscriptions/test/resourceGroups/alive/providers/Microsoft.App/containerApps/asset-api/authConfigs/current","changeType":"Create","delta":[]}
 ]}' >"$tmp/safe.json"
 ./scripts/check-what-if.sh "$tmp/safe.json"

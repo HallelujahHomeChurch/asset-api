@@ -2163,6 +2163,10 @@ func TestCollectionItemACLAuthority(t *testing.T) {
 		if err != nil || item.ID != "reader-item" || item.RemoteItemID != "remote-reader" || item.ETag != "etag-reader-item-asset" {
 			t.Fatalf("subject=%+v item=%+v err=%v", subject, item, err)
 		}
+		byID, err := store.GetAuthorizedCollectionItemByID(ctx, "reader-item", subject)
+		if err != nil || byID.ID != item.ID || byID.CollectionID != item.CollectionID {
+			t.Fatalf("subject=%+v item-by-id=%+v err=%v", subject, byID, err)
+		}
 	}
 	for _, subject := range []assets.CollectionSubject{
 		{UserID: "wrong-role-user", RoleIDs: []string{testWrongCollectionRoleID}},

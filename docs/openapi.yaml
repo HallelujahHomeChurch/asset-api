@@ -74,6 +74,24 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/ReaderCollectionPage' }
         '401': { $ref: '#/components/responses/Error' }
+  /api/assets/sync-receipts:
+    post:
+      summary: Record Presenter sync completion
+      tags: [Public]
+      description: Records privacy-bounded operational telemetry only after an authorized collection item is available offline. The server receipt time is authoritative; no user, filename, path, meeting, or body data is retained.
+      x-hhc-visibility: public
+      x-hhc-callers: [api-gateway]
+      security: [ { gatewayDaprCaller: [], gatewayTrustedIdentity: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SyncReceipt' }
+      responses:
+        '204': { description: Receipt recorded. }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
   /api/assets/collections/{collectionID}/changes:
     parameters: [ { $ref: '#/components/parameters/CollectionID' } ]
     get:
@@ -551,6 +569,15 @@ components:
     DeleteCollectionItems: { description: Collection deletion result., content: { application/json: { schema: { $ref: '#/components/schemas/DeleteCollectionItemsResult' } } } }
   schemas:
     OpaqueID: { type: string, minLength: 1, maxLength: 255, description: Opaque Asset API identifier. }
+    SyncReceipt:
+      type: object
+      additionalProperties: false
+      required: [collectionItemId, contentVersion, state, appVersion]
+      properties:
+        collectionItemId: { $ref: '#/components/schemas/OpaqueID' }
+        contentVersion: { type: string, minLength: 1, maxLength: 255 }
+        state: { type: string, enum: [available-offline] }
+        appVersion: { type: string, minLength: 1, maxLength: 64 }
     Health: { type: object, required: [status], properties: { status: { type: string, enum: [healthy, ready] } } }
     ErrorResponse:
       type: object

@@ -1050,6 +1050,14 @@ func (s *Store) GetAuthorizedCollection(ctx context.Context, id string, subject 
 }
 
 func (s *Store) GetAuthorizedCollectionItem(ctx context.Context, collectionID, itemID string, subject assets.CollectionSubject) (assets.CollectionItem, error) {
+	return s.getAuthorizedCollectionItem(ctx, collectionID, itemID, subject)
+}
+
+func (s *Store) GetAuthorizedCollectionItemByID(ctx context.Context, itemID string, subject assets.CollectionSubject) (assets.CollectionItem, error) {
+	return s.getAuthorizedCollectionItem(ctx, "", itemID, subject)
+}
+
+func (s *Store) getAuthorizedCollectionItem(ctx context.Context, collectionID, itemID string, subject assets.CollectionSubject) (assets.CollectionItem, error) {
 	var allowed bool
 	var id, itemCollectionID, assetID, remoteItemID, displayName, sourceRevision, mimeType, etag sql.NullString
 	var createdRevision, updatedRevision, sizeBytes sql.NullInt64
@@ -1072,7 +1080,7 @@ func (s *Store) GetAuthorizedCollectionItem(ctx context.Context, collectionID, i
 		  ON a.id=i.asset_id AND a.deleted_at IS NULL AND a.purged_at IS NULL
 		 AND a.upload_status='completed' AND a.scan_status='clean'
 		 AND a.processing_status IN ('ready','not_required')
-		WHERE c.id=$1 AND c.deleted_at IS NULL`, collectionID, itemID, subject.RoleIDs, subject.UserID).Scan(
+		WHERE ($1='' OR c.id=$1) AND c.deleted_at IS NULL`, collectionID, itemID, subject.RoleIDs, subject.UserID).Scan(
 		&allowed, &id, &itemCollectionID, &assetID, &remoteItemID, &displayName, &sourceRevision, &createdRevision, &retentionExempt, &updatedRevision, &createdAt, &updatedAt, &mimeType, &sizeBytes, &etag,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
