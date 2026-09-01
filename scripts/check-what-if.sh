@@ -11,9 +11,14 @@ jq -e '
     | ..
     | objects
     | select(.propertyChangeType? == "Delete")
-    | select(
+      | select(
         ((.path == "properties.runningStatus" or .path == "properties.template.revisionSuffix")
           and ($resourceId | contains("/Microsoft.App/containerApps/")))
+        or ((.path == "properties.configuration.eventTriggerConfig.parallelism"
+            or .path == "properties.configuration.eventTriggerConfig.replicaCompletionCount"
+            or .path == "properties.configuration.eventTriggerConfig.scale.pollingInterval"
+            or .path == "properties.configuration.eventTriggerConfig.scale.rules")
+          and ($resourceId | endswith("/Microsoft.App/jobs/asset-scan")))
         | not
       )
   ] | length == 0)
