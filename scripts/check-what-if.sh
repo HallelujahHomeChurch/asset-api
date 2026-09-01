@@ -19,6 +19,8 @@ jq -e '
             or .path == "properties.configuration.eventTriggerConfig.scale.pollingInterval"
             or .path == "properties.configuration.eventTriggerConfig.scale.rules")
           and ($resourceId | endswith("/Microsoft.App/jobs/asset-scan")))
+        or ((.path == "properties.configuration.maxInactiveRevisions" or .path == "azureQueue")
+          and ($resourceId | endswith("/Microsoft.App/containerApps/asset-scan-worker")))
         | not
       )
   ] | length == 0)
