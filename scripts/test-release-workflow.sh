@@ -62,7 +62,7 @@ grep -q "name: 'asset-scan-worker'" infra/main.bicep
 grep -q "name: 'asset-scan-warmer'" infra/main.bicep
 grep -q "name: 'asset-scan-warmer-identity'" infra/main.bicep
 grep -q "cronExpression: '\*/1 \* \* \* \*'" infra/main.bicep
-grep -q 'deployScanWarmer=false' "$workflow"
+test "$(grep -c 'deployScanWarmer=true' "$workflow")" = 2
 grep -q "name: 'ASSET_SCAN_IDLE_POLL', value: '1s'" infra/main.bicep
 grep -q 'pollingInterval: 1' infra/main.bicep
 grep -q 'cooldownPeriod: 120' infra/main.bicep
@@ -100,6 +100,12 @@ test "$(grep -c 'deployRetentionJob="$DEPLOY_RETENTION_JOB"' "$workflow")" = 2
 test "$(grep -c 'deployDerivativeJob=true' "$workflow")" = 2
 test "$(grep -c 'deployScanWorker=true' "$workflow")" = 2
 test "$(grep -c 'provisionScanWarmInfrastructure=false' "$workflow")" = 2
+test "$(grep -c 'meetingApiBaseUrl="$MEETING_API_BASE_URL"' "$workflow")" = 2
+test "$(grep -c 'meetingApiAudience="$MEETING_API_AUDIENCE"' "$workflow")" = 2
+grep -Fq 'MEETING_API_BASE_URL: ${{ vars.MEETING_API_BASE_URL }}' "$workflow"
+grep -Fq 'MEETING_API_AUDIENCE: ${{ vars.MEETING_API_AUDIENCE }}' "$workflow"
+grep -Fq 'ASSET_WORKLOAD_AUDIENCE LINE_ATTACHMENT_CLIENT_ID LINE_ATTACHMENT_OBJECT_ID MEETING_API_BASE_URL MEETING_API_AUDIENCE' "$workflow"
+grep -q 'name: Verify scan warmer release' "$workflow"
 test "$(grep -c 'retentionScheduleEnabled="$RETENTION_SCHEDULE_ENABLED"' "$workflow")" = 2
 test "$(grep -c 'retentionApplyEnabled="$RETENTION_APPLY_ENABLED"' "$workflow")" = 2
 grep -Fq 'for name in RETENTION_SCHEDULE_ENABLED RETENTION_APPLY_ENABLED; do' "$workflow"
