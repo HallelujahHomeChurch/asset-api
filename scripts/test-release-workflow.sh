@@ -99,7 +99,7 @@ test "$(grep -c 'embeddedScanEnabled="$EMBEDDED_SCAN_ENABLED"' "$workflow")" = 2
 test "$(grep -c 'deployRetentionJob="$DEPLOY_RETENTION_JOB"' "$workflow")" = 2
 test "$(grep -c 'deployDerivativeJob=true' "$workflow")" = 2
 test "$(grep -c 'deployScanWorker=true' "$workflow")" = 2
-test "$(grep -c 'provisionScanWarmInfrastructure=true' "$workflow")" = 2
+test "$(grep -c 'provisionScanWarmInfrastructure=false' "$workflow")" = 2
 test "$(grep -c 'retentionScheduleEnabled="$RETENTION_SCHEDULE_ENABLED"' "$workflow")" = 2
 test "$(grep -c 'retentionApplyEnabled="$RETENTION_APPLY_ENABLED"' "$workflow")" = 2
 grep -Fq 'for name in RETENTION_SCHEDULE_ENABLED RETENTION_APPLY_ENABLED; do' "$workflow"
