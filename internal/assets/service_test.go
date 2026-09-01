@@ -978,6 +978,25 @@ func TestCollectionReaderServiceGetsAuthorizedItem(t *testing.T) {
 	}
 }
 
+func TestRecordSyncReceiptAuthorizesItemAndValidatesBody(t *testing.T) {
+	repository := &collectionServiceRepository{}
+	service := NewService(repository, newMemoryBlobStore(), "", time.Now)
+	receipt := SyncReceipt{CollectionItemID: "item", ContentVersion: "etag", State: "available-offline", AppVersion: "2.3.9"}
+	if err := service.RecordSyncReceipt(context.Background(), receipt, CollectionSubject{UserID: "user"}); err != nil || repository.receiptCalls != 1 {
+		t.Fatalf("calls=%d err=%v", repository.receiptCalls, err)
+	}
+	for _, invalid := range []SyncReceipt{
+		{},
+		{CollectionItemID: "item", ContentVersion: "etag", State: "queued", AppVersion: "2.3.9"},
+		{CollectionItemID: strings.Repeat("i", 256), ContentVersion: "etag", State: "available-offline", AppVersion: "2.3.9"},
+		{CollectionItemID: "item", ContentVersion: "etag", State: "available-offline", AppVersion: strings.Repeat("v", 65)},
+	} {
+		if err := service.RecordSyncReceipt(context.Background(), invalid, CollectionSubject{UserID: "user"}); !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("receipt=%+v err=%v", invalid, err)
+		}
+	}
+}
+
 func TestCollectionContentTicketUsesOpaqueHashAndBoundedExpiry(t *testing.T) {
 	now := time.Date(2026, 8, 16, 6, 0, 0, 0, time.UTC)
 	repository := &collectionServiceRepository{}
@@ -1174,6 +1193,7 @@ type collectionServiceRepository struct {
 	managedCollectionNamespace                                                      string
 	managedRetentionCalls                                                           int
 	readerItemCalls                                                                 int
+	receiptCalls                                                                    int
 	managedItemCollectionID, managedItemCaller, managedItemQuery, managedItemCursor string
 	managedItemLimit                                                                int
 	managedItemCalls                                                                int
@@ -1192,6 +1212,11 @@ func (r *collectionServiceRepository) RenameCollectionItem(_ context.Context, in
 func (r *collectionServiceRepository) GetAuthorizedCollectionItem(_ context.Context, _, itemID string, _ CollectionSubject) (CollectionItem, error) {
 	r.readerItemCalls++
 	return CollectionItem{ID: itemID, CollectionID: "collection", AssetID: "asset", ETag: `"asset-version"`}, nil
+}
+
+func (r *collectionServiceRepository) GetAuthorizedCollectionItemByID(_ context.Context, itemID string, _ CollectionSubject) (CollectionItem, error) {
+	r.receiptCalls++
+	return CollectionItem{ID: itemID, CollectionID: "collection", AssetID: "asset", ETag: "etag"}, nil
 }
 
 func (r *collectionServiceRepository) GetManagedCollectionItem(_ context.Context, collectionID, itemID, callerService string) (CollectionItem, error) {

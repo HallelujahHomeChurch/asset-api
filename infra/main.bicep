@@ -18,6 +18,7 @@ param scanDispatchEnabled bool = true
 param embeddedScanEnabled bool = false
 param deployScanJob bool = false
 param deployScanWorker bool = false
+param deployScanWarmer bool = false
 param provisionScanWarmInfrastructure bool = false
 param deploySignatureRefreshJob bool = false
 param deployRetentionJob bool = false
@@ -30,6 +31,8 @@ param workloadAuthAudience string = ''
 param lineAttachmentClientId string = ''
 param lineAttachmentObjectId string = ''
 param readerCallerAppId string = 'api-gateway'
+param meetingApiBaseUrl string = ''
+param meetingApiAudience string = ''
 
 param publicBaseUrl string = 'https://www.alive.org.tw/assets'
 param uploadAllowedOrigins array = [
@@ -116,6 +119,11 @@ resource migrationIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@202
 
 resource scanIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: 'asset-scan-identity'
+  location: location
+}
+
+resource scanWarmerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: 'asset-scan-warmer-identity'
   location: location
 }
 
@@ -595,6 +603,17 @@ resource scanWarmQueueReader 'Microsoft.Authorization/roleAssignments@2022-04-01
   dependsOn: [scanWarmQueue]
 }
 
+resource scanWarmQueueSender 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (provisionScanWarmInfrastructure) {
+  name: guid(scanWarmQueueScope.id, scanWarmerIdentity.id, 'storage-queue-data-message-sender', 'warm-v1')
+  scope: scanWarmQueueScope
+  properties: {
+    principalId: scanWarmerIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'c6a89b2d-59bc-44d0-9896-0f6e12d7b80a')
+  }
+  dependsOn: [scanWarmQueue]
+}
+
 resource scanPoisonQueueContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (manageSharedInfrastructure) {
   name: guid(scanPoisonQueueScope.id, scanIdentity.id, 'storage-queue-data-message-contributor', 'scoped-v2')
   scope: scanPoisonQueueScope
@@ -778,6 +797,55 @@ resource scanWorker 'Microsoft.App/containerApps@2025-01-01' = if (deployScanWor
     }
   }
   dependsOn: [acrPull, scanSecretAccess, scanQueueProcessor, scanQueueReader, scanWarmQueueReader, scanPoisonQueueContributor, scanBlobReader, scanSignatureReader]
+}
+
+resource scanWarmer 'Microsoft.App/jobs@2025-07-01' = if (deployScanWarmer) {
+  name: 'asset-scan-warmer'
+  location: location
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${pullIdentity.id}': {}
+      '${scanWarmerIdentity.id}': {}
+    }
+  }
+  properties: {
+    environmentId: environment.id
+    workloadProfileName: 'Consumption'
+    configuration: {
+      triggerType: 'Schedule'
+      replicaTimeout: 30
+      replicaRetryLimit: 1
+      scheduleTriggerConfig: {
+        cronExpression: '*/1 * * * *'
+        parallelism: 1
+        replicaCompletionCount: 1
+      }
+      registries: [
+        { server: registry.properties.loginServer, identity: pullIdentity.id }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'asset-scan-warmer'
+          image: runtimeImage
+          command: ['/asset-scan-warmer']
+          env: [
+            { name: 'AZURE_CLIENT_ID', value: scanWarmerIdentity.properties.clientId }
+            { name: 'MEETING_API_BASE_URL', value: meetingApiBaseUrl }
+            { name: 'MEETING_API_AUDIENCE', value: meetingApiAudience }
+            { name: 'ASSET_SCAN_WARM_QUEUE_URL', value: 'https://${storageAccount.name}.queue.${az.environment().suffixes.storage}/asset-scan-warm' }
+            { name: 'ASSET_SCAN_WARM_LEAD', value: '5m' }
+            { name: 'ASSET_SCAN_WARM_TAIL', value: '10m' }
+            { name: 'ASSET_SCAN_WARM_HTTP_TIMEOUT', value: '10s' }
+          ]
+          resources: { cpu: json('0.25'), memory: '0.5Gi' }
+        }
+      ]
+    }
+  }
+  dependsOn: [acrPull, scanWarmQueueSender]
 }
 
 resource signatureRefreshJob 'Microsoft.App/jobs@2025-07-01' = if (deploySignatureRefreshJob) {
@@ -1000,6 +1068,9 @@ output scanPoisonQueueName string = 'asset-scan-poison'
 output scanWarmQueueName string = 'asset-scan-warm'
 output scanJobName string = 'asset-scan'
 output scanWorkerAppName string = 'asset-scan-worker'
+output scanWarmerJobName string = 'asset-scan-warmer'
+output scanWarmerClientId string = scanWarmerIdentity.properties.clientId
+output scanWarmerObjectId string = scanWarmerIdentity.properties.principalId
 output signatureRefreshJobName string = 'asset-clamav-signature-refresh'
 output retentionJobName string = 'asset-retention'
 output derivativeJobName string = 'asset-derivative'

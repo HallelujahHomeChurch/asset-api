@@ -461,6 +461,74 @@ func TestCollectionReaderMetadataIsSyncSafe(t *testing.T) {
 	}
 }
 
+func TestSyncReceiptRequiresCollectionReaderAndReturnsNoStore204(t *testing.T) {
+	handler, repository := newCollectionReaderHandler()
+	request := collectionReaderRequest(http.MethodPost, "/api/assets/sync-receipts")
+	request.Body = io.NopCloser(strings.NewReader(`{"collectionItemId":"item","contentVersion":"etag","state":"available-offline","appVersion":"2.3.9"}`))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent || response.Header().Get("Cache-Control") != "private, no-store" || repository.itemID != "item" || !readerTestAuthorized(repository.subject) {
+		t.Fatalf("status=%d cache=%q item=%q subject=%+v body=%s", response.Code, response.Header().Get("Cache-Control"), repository.itemID, repository.subject, response.Body.String())
+	}
+
+	for _, mutate := range []func(*http.Request){
+		func(r *http.Request) { r.Header.Del("Dapr-Caller-App-Id") },
+		func(r *http.Request) { r.Header.Del("dapr-api-token") },
+		func(r *http.Request) { r.Header.Del("X-HHC-User-ID") },
+	} {
+		request := collectionReaderRequest(http.MethodPost, "/api/assets/sync-receipts")
+		request.Body = io.NopCloser(strings.NewReader(`{"collectionItemId":"item","contentVersion":"etag","state":"available-offline","appVersion":"2.3.9"}`))
+		mutate(request)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusForbidden && response.Code != http.StatusUnauthorized {
+			t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+		}
+	}
+}
+
+func TestSyncReceiptRejectsInvalidOrExpandedBodies(t *testing.T) {
+	handler, _ := newCollectionReaderHandler()
+	for _, body := range []string{
+		`{"collectionItemId":"item","contentVersion":"etag","state":"queued","appVersion":"2.3.9"}`,
+		`{"collectionItemId":"item","contentVersion":"etag","state":"available-offline","appVersion":"2.3.9","user":"leak"}`,
+		`{"collectionItemId":"` + strings.Repeat("i", 256) + `","contentVersion":"etag","state":"available-offline","appVersion":"2.3.9"}`,
+		`{"collectionItemId":"item","contentVersion":"` + strings.Repeat("e", 256) + `","state":"available-offline","appVersion":"2.3.9"}`,
+		`{"collectionItemId":"item","contentVersion":"etag","state":"available-offline","appVersion":"` + strings.Repeat("v", 65) + `"}`,
+	} {
+		request := collectionReaderRequest(http.MethodPost, "/api/assets/sync-receipts")
+		request.Body = io.NopCloser(strings.NewReader(body))
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest || response.Header().Get("Cache-Control") != "private, no-store" {
+			t.Fatalf("body=%s status=%d cache=%q response=%s", body, response.Code, response.Header().Get("Cache-Control"), response.Body.String())
+		}
+	}
+}
+
+func TestSyncReceiptLogsOnlyApprovedDimensions(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	handler, _ := newCollectionReaderHandler()
+	request := collectionReaderRequest(http.MethodPost, "/api/assets/sync-receipts")
+	request.Body = io.NopCloser(strings.NewReader(`{"collectionItemId":"item","contentVersion":"etag","state":"available-offline","appVersion":"2.3.9"}`))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	logText := logs.String()
+	for _, want := range []string{"asset sync receipt", "collection_item_id=item", "content_version=etag", "state=available-offline", "app_version=2.3.9", "received_at="} {
+		if !strings.Contains(logText, want) {
+			t.Fatalf("missing %q in %s", want, logText)
+		}
+	}
+	for _, forbidden := range []string{"user-acl", "session-id", "token-id", "018f0000", "filename", "meeting"} {
+		if strings.Contains(logText, forbidden) {
+			t.Fatalf("log leaked %q: %s", forbidden, logText)
+		}
+	}
+}
+
 func TestCollectionReaderCollectionDTOExcludesManagementMetadata(t *testing.T) {
 	handler, _ := newCollectionReaderHandler()
 	for _, path := range []string{"/api/assets/collections", "/api/assets/collections/collection/changes"} {
@@ -519,6 +587,7 @@ type collectionReaderRepository struct {
 	assets.Repository
 	calls   int
 	subject assets.CollectionSubject
+	itemID  string
 }
 
 func (r *collectionReaderRepository) ListAuthorizedCollections(_ context.Context, subject assets.CollectionSubject, _ string, _ int) (assets.CollectionPage, error) {
@@ -556,6 +625,16 @@ func (r *collectionReaderRepository) GetAuthorizedCollectionItem(_ context.Conte
 		return assets.CollectionItem{}, assets.ErrNotFound
 	}
 	return assets.CollectionItem{ID: itemID, CollectionID: collectionID, AssetID: "secret-asset", RemoteItemID: "remote-item", DisplayName: "Media", SourceRevision: "source", CreatedRevision: 2, UpdatedRevision: 3, MIMEType: "video/mp4", SizeBytes: 20, ETag: "etag", UpdatedAt: time.Date(2026, 8, 16, 1, 0, 0, 0, time.UTC)}, nil
+}
+
+func (r *collectionReaderRepository) GetAuthorizedCollectionItemByID(_ context.Context, itemID string, subject assets.CollectionSubject) (assets.CollectionItem, error) {
+	r.calls++
+	r.itemID = itemID
+	r.subject = subject
+	if itemID != "item" || !readerTestAuthorized(subject) {
+		return assets.CollectionItem{}, assets.ErrNotFound
+	}
+	return assets.CollectionItem{ID: itemID, CollectionID: "collection", ETag: "etag"}, nil
 }
 
 func readerTestAuthorized(subject assets.CollectionSubject) bool {

@@ -59,6 +59,10 @@ grep -q "replicaTimeout: 720" infra/main.bicep
 grep -q 'param deployScanWorker bool = false' infra/main.bicep
 grep -q 'param provisionScanWarmInfrastructure bool = false' infra/main.bicep
 grep -q "name: 'asset-scan-worker'" infra/main.bicep
+grep -q "name: 'asset-scan-warmer'" infra/main.bicep
+grep -q "name: 'asset-scan-warmer-identity'" infra/main.bicep
+grep -q "cronExpression: '\*/1 \* \* \* \*'" infra/main.bicep
+grep -q 'deployScanWarmer=false' "$workflow"
 grep -q "name: 'ASSET_SCAN_IDLE_POLL', value: '1s'" infra/main.bicep
 grep -q 'pollingInterval: 1' infra/main.bicep
 grep -q 'cooldownPeriod: 120' infra/main.bicep

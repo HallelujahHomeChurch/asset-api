@@ -191,6 +191,13 @@ type CompleteUploadInput struct {
 	MIMEType       string `json:"mimeType"`
 }
 
+type SyncReceipt struct {
+	CollectionItemID string `json:"collectionItemId"`
+	ContentVersion   string `json:"contentVersion"`
+	State            string `json:"state"`
+	AppVersion       string `json:"appVersion"`
+}
+
 type ScanRequest struct {
 	EventID   string
 	AssetID   string
@@ -554,6 +561,7 @@ type Repository interface {
 	ListAuthorizedCollections(context.Context, CollectionSubject, string, int) (CollectionPage, error)
 	GetAuthorizedCollection(context.Context, string, CollectionSubject) (Collection, error)
 	GetAuthorizedCollectionItem(context.Context, string, string, CollectionSubject) (CollectionItem, error)
+	GetAuthorizedCollectionItemByID(context.Context, string, CollectionSubject) (CollectionItem, error)
 	GetManagedCollectionItem(context.Context, string, string, string) (CollectionItem, error)
 	CollectionChanges(context.Context, string, string, CollectionSubject) (CollectionChangePage, error)
 	CreateContentTicket(context.Context, ContentTicket, time.Time) error

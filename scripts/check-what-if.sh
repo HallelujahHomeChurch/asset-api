@@ -28,6 +28,8 @@ jq -e '
         or ((.changeType == "Create" or .changeType == "Modify")
           and (.resourceId | endswith("/Microsoft.App/jobs/asset-retention")))
         or ((.changeType == "Create" or .changeType == "Modify")
+          and (.resourceId | endswith("/Microsoft.App/jobs/asset-scan-warmer")))
+        or ((.changeType == "Create" or .changeType == "Modify")
           and (.resourceId | endswith("/Microsoft.App/containerApps/asset-api/authConfigs/current")))
         or ((.changeType == "Create" or .changeType == "Modify")
           and (.resourceId | endswith("/Microsoft.App/containerApps/asset-scan-worker")))
@@ -35,6 +37,8 @@ jq -e '
           and (.resourceId | endswith("/queueServices/default/queues/asset-scan-warm")))
         or ((.changeType == "Create")
           and (.resourceId | contains("/queueServices/default/queues/asset-scan-warm/providers/Microsoft.Authorization/roleAssignments/")))
+        or ((.changeType == "Create")
+          and (.resourceId | endswith("/Microsoft.ManagedIdentity/userAssignedIdentities/asset-scan-warmer-identity")))
         | not
       )
   ] | length == 0)

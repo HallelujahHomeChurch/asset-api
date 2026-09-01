@@ -12,6 +12,10 @@ second while active, and returns to zero after the 120-second cooldown. The
 warm queue is a scale signal only; the worker consumes only `asset-scan`.
 Warm messages expire after 120 seconds. The legacy `asset-scan` Job remains
 Manual with its queue trigger disabled for one compatibility release.
+The `asset-scan-warmer` scheduled Job runs once per minute, reads meeting windows
+through hhc-web-api internal ingress using its dedicated managed identity, and
+can only enqueue the warm queue. It has no Dapr app-channel secret, database,
+Blob, business queue, or Azure management-plane access.
 Clean supported images are processed only through the queue-triggered
 `asset-derivative` Job. Terraform owns its stable queues, identity, RBAC, and
 job configuration; the service release updates the job to the same immutable
