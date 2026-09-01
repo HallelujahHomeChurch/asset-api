@@ -97,6 +97,7 @@ jobs:
       RESOURCE_GROUP: alive
       STORAGE_ACCOUNT_NAME: alivestoragebb99ee6e
       MIGRATION_JOB_NAME: asset-migrate
+      SCAN_WORKER_APP_NAME: asset-scan-worker
       DERIVATIVE_JOB_NAME: asset-derivative
       API_APP_NAME: asset-api
       API_GATEWAY_APP_NAME: api-gateway
@@ -263,7 +264,7 @@ jobs:
           az deployment group what-if \
             --resource-group "$RESOURCE_GROUP" \
             --template-file infra/main.bicep \
-            --parameters storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" scanWorkerImage="$SCAN_IMAGE_REF" deployRuntime=true deployMigrationJob=true deployScanJob=true deploySignatureRefreshJob=true deployDerivativeJob=true deployRetentionJob="$DEPLOY_RETENTION_JOB" retentionScheduleEnabled="$RETENTION_SCHEDULE_ENABLED" retentionApplyEnabled="$RETENTION_APPLY_ENABLED" scanDispatchEnabled="$ACTIVATE_QUEUE_SCANNING" embeddedScanEnabled="$EMBEDDED_SCAN_ENABLED" workloadAuthClientId="$ASSET_WORKLOAD_CLIENT_ID" workloadAuthAudience="$ASSET_WORKLOAD_AUDIENCE" lineAttachmentClientId="$LINE_ATTACHMENT_CLIENT_ID" lineAttachmentObjectId="$LINE_ATTACHMENT_OBJECT_ID" readerCallerAppId="$ASSET_READER_CALLER_APP_ID" provisionPermissions=false manageSharedInfrastructure=false \
+            --parameters storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" scanWorkerImage="$SCAN_IMAGE_REF" deployRuntime=true deployMigrationJob=true deployScanJob=true deployScanWorker=true provisionScanWarmInfrastructure=true deploySignatureRefreshJob=true deployDerivativeJob=true deployRetentionJob="$DEPLOY_RETENTION_JOB" retentionScheduleEnabled="$RETENTION_SCHEDULE_ENABLED" retentionApplyEnabled="$RETENTION_APPLY_ENABLED" scanDispatchEnabled="$ACTIVATE_QUEUE_SCANNING" embeddedScanEnabled="$EMBEDDED_SCAN_ENABLED" workloadAuthClientId="$ASSET_WORKLOAD_CLIENT_ID" workloadAuthAudience="$ASSET_WORKLOAD_AUDIENCE" lineAttachmentClientId="$LINE_ATTACHMENT_CLIENT_ID" lineAttachmentObjectId="$LINE_ATTACHMENT_OBJECT_ID" readerCallerAppId="$ASSET_READER_CALLER_APP_ID" provisionPermissions=false manageSharedInfrastructure=false \
             --validation-level Provider --result-format FullResourcePayloads --no-pretty-print --only-show-errors \
             --output json > what-if.json
           ./scripts/check-what-if.sh what-if.json
@@ -296,7 +297,7 @@ jobs:
           az deployment group create \
             --name "asset-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --resource-group "$RESOURCE_GROUP" --template-file infra/main.bicep \
-            --parameters storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" scanWorkerImage="$SCAN_IMAGE_REF" deployRuntime=true deployMigrationJob=true deployScanJob=true deploySignatureRefreshJob=true deployDerivativeJob=true deployRetentionJob="$DEPLOY_RETENTION_JOB" retentionScheduleEnabled="$RETENTION_SCHEDULE_ENABLED" retentionApplyEnabled="$RETENTION_APPLY_ENABLED" scanDispatchEnabled="$ACTIVATE_QUEUE_SCANNING" embeddedScanEnabled="$EMBEDDED_SCAN_ENABLED" workloadAuthClientId="$ASSET_WORKLOAD_CLIENT_ID" workloadAuthAudience="$ASSET_WORKLOAD_AUDIENCE" lineAttachmentClientId="$LINE_ATTACHMENT_CLIENT_ID" lineAttachmentObjectId="$LINE_ATTACHMENT_OBJECT_ID" readerCallerAppId="$ASSET_READER_CALLER_APP_ID" provisionPermissions=false manageSharedInfrastructure=false \
+            --parameters storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" scanWorkerImage="$SCAN_IMAGE_REF" deployRuntime=true deployMigrationJob=true deployScanJob=true deployScanWorker=true provisionScanWarmInfrastructure=true deploySignatureRefreshJob=true deployDerivativeJob=true deployRetentionJob="$DEPLOY_RETENTION_JOB" retentionScheduleEnabled="$RETENTION_SCHEDULE_ENABLED" retentionApplyEnabled="$RETENTION_APPLY_ENABLED" scanDispatchEnabled="$ACTIVATE_QUEUE_SCANNING" embeddedScanEnabled="$EMBEDDED_SCAN_ENABLED" workloadAuthClientId="$ASSET_WORKLOAD_CLIENT_ID" workloadAuthAudience="$ASSET_WORKLOAD_AUDIENCE" lineAttachmentClientId="$LINE_ATTACHMENT_CLIENT_ID" lineAttachmentObjectId="$LINE_ATTACHMENT_OBJECT_ID" readerCallerAppId="$ASSET_READER_CALLER_APP_ID" provisionPermissions=false manageSharedInfrastructure=false \
             --only-show-errors --output none
       - name: Wait for API revision
         run: |
@@ -316,6 +317,15 @@ jobs:
           output="${output//$'\r'/}"
           grep -Eq 'HTTP/1\.[01][[:space:]]+200' <<<"$output"
           grep -Eq '"status"[[:space:]]*:[[:space:]]*"ready"' <<<"$output"
+      - name: Verify scan worker release
+        run: |
+          worker_image="$(az containerapp show -g "$RESOURCE_GROUP" -n "$SCAN_WORKER_APP_NAME" --query properties.template.containers[0].image -o tsv --only-show-errors)"
+          [[ "$worker_image" == "$SCAN_IMAGE_REF" ]]
+          [[ "$(az containerapp show -g "$RESOURCE_GROUP" -n "$SCAN_WORKER_APP_NAME" --query properties.template.scale.minReplicas -o tsv --only-show-errors)" == "0" ]]
+          [[ "$(az containerapp show -g "$RESOURCE_GROUP" -n "$SCAN_WORKER_APP_NAME" --query properties.template.scale.maxReplicas -o tsv --only-show-errors)" == "5" ]]
+          [[ "$(az containerapp show -g "$RESOURCE_GROUP" -n "$SCAN_WORKER_APP_NAME" --query properties.template.scale.pollingInterval -o tsv --only-show-errors)" == "1" ]]
+          [[ "$(az containerapp show -g "$RESOURCE_GROUP" -n "$SCAN_WORKER_APP_NAME" --query properties.template.scale.cooldownPeriod -o tsv --only-show-errors)" == "120" ]]
+          [[ "$(az containerapp job show -g "$RESOURCE_GROUP" -n asset-scan --query properties.configuration.triggerType -o tsv --only-show-errors)" == "Manual" ]]
       - name: Verify derivative job release
         run: |
           derivative_image="$(az containerapp job show -g "$RESOURCE_GROUP" -n "$DERIVATIVE_JOB_NAME" --query properties.template.containers[0].image -o tsv --only-show-errors)"

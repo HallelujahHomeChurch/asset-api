@@ -56,6 +56,21 @@ for flag in --max-filesize --max-scansize --max-files --max-recursion --alert-ex
   grep -Fq -- "$flag" "$workflow"
 done
 grep -q "replicaTimeout: 720" infra/main.bicep
+grep -q 'param deployScanWorker bool = false' infra/main.bicep
+grep -q 'param provisionScanWarmInfrastructure bool = false' infra/main.bicep
+grep -q "name: 'asset-scan-worker'" infra/main.bicep
+grep -q "name: 'ASSET_SCAN_IDLE_POLL', value: '1s'" infra/main.bicep
+grep -q 'pollingInterval: 1' infra/main.bicep
+grep -q 'cooldownPeriod: 120' infra/main.bicep
+grep -q 'minReplicas: 0' infra/main.bicep
+grep -q 'maxReplicas: 5' infra/main.bicep
+grep -q "queueName: 'asset-scan-warm'" infra/main.bicep
+scan_job_block="$(sed -n '/resource scanJob /,/^}/p' infra/main.bicep)"
+printf '%s\n' "$scan_job_block" | grep -q "triggerType: 'Manual'"
+if printf '%s\n' "$scan_job_block" | grep -q 'eventTriggerConfig'; then
+  echo 'compatibility scan Job queue trigger must stay disabled' >&2
+  exit 1
+fi
 grep -q "CLAMAV_SCAN_TIMEOUT', value: '10m'" infra/main.bicep
 grep -q "ASSET_SCAN_MAX_FILE_SIZE_BYTES', value: '209715200'" infra/main.bicep
 asset_runtime_block="$(awk "/name: 'asset-api'/ { seen++; if (seen == 2) capture = 1 } capture { print } capture && /probes:/ { exit }" infra/main.bicep)"
@@ -79,6 +94,8 @@ fi
 test "$(grep -c 'embeddedScanEnabled="$EMBEDDED_SCAN_ENABLED"' "$workflow")" = 2
 test "$(grep -c 'deployRetentionJob="$DEPLOY_RETENTION_JOB"' "$workflow")" = 2
 test "$(grep -c 'deployDerivativeJob=true' "$workflow")" = 2
+test "$(grep -c 'deployScanWorker=true' "$workflow")" = 2
+test "$(grep -c 'provisionScanWarmInfrastructure=true' "$workflow")" = 2
 test "$(grep -c 'retentionScheduleEnabled="$RETENTION_SCHEDULE_ENABLED"' "$workflow")" = 2
 test "$(grep -c 'retentionApplyEnabled="$RETENTION_APPLY_ENABLED"' "$workflow")" = 2
 grep -Fq 'for name in RETENTION_SCHEDULE_ENABLED RETENTION_APPLY_ENABLED; do' "$workflow"
@@ -140,6 +157,8 @@ grep -q 'latestRevision: true' infra/main.bicep
 grep -q 'isAutoProvisioned: false' infra/main.bicep
 grep -q 'az containerapp job start' "$workflow"
 grep -q 'DERIVATIVE_JOB_NAME: asset-derivative' "$workflow"
+grep -q 'SCAN_WORKER_APP_NAME: asset-scan-worker' "$workflow"
+grep -q 'az containerapp show.*"$SCAN_WORKER_APP_NAME"' "$workflow"
 grep -q 'az containerapp job show.*"$DERIVATIVE_JOB_NAME"' "$workflow"
 grep -q '"$derivative_image" == "$IMAGE_REF"' "$workflow"
 grep -q 'PREVIOUS_IMAGE_REF=' "$workflow"

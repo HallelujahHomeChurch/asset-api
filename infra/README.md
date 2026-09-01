@@ -6,7 +6,12 @@ dedicated pull identity ACR pull, plus its system identity container-scoped
 Blob contributor and account-scoped Blob delegator roles. Owner services use
 Dapr; the dedicated LINE attachment Job uses authenticated internal ingress
 with an Entra application audience and the `Asset.Invoke` app role.
-Production scanning runs only through the Azure queue-triggered scan Job.
+Production scanning runs through the `asset-scan-worker` Container App. It
+scales from zero on either `asset-scan` or `asset-scan-warm`, polls once per
+second while active, and returns to zero after the 120-second cooldown. The
+warm queue is a scale signal only; the worker consumes only `asset-scan`.
+Warm messages expire after 120 seconds. The legacy `asset-scan` Job remains
+Manual with its queue trigger disabled for one compatibility release.
 Clean supported images are processed only through the queue-triggered
 `asset-derivative` Job. Terraform owns its stable queues, identity, RBAC, and
 job configuration; the service release updates the job to the same immutable
@@ -25,7 +30,7 @@ Upload completion and an `asset.scan.requested.v1` outbox row commit in one
 PostgreSQL transaction. The runtime sends that event to the `asset-scan`
 Storage Queue with managed identity. Queue delivery is at-least-once; the
 message contains only version, event ID, asset ID, and immutable Blob ETag.
-The event-triggered `asset-scan` Job consumes the queue with managed identity,
+The queue-scaled `asset-scan-worker` consumes the queue with managed identity,
 validates the immutable Blob, and runs local `clamscan` against a read-only
 signature snapshot. PostgreSQL records poison work before it is forwarded to
 `asset-scan-poison`. Queue messages use an infinite TTL.
