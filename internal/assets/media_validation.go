@@ -27,7 +27,7 @@ var mediaExtensions = map[string][]string{
 	"application/vnd.openxmlformats-officedocument.wordprocessingml.document":   {".docx"},
 	"application/vnd.ms-excel":                                                  {".xls"},
 	"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":         {".xlsx"},
-	"text/plain": {".txt"}, "text/markdown": {".md", ".markdown"},
+	"application/zip":                                                           {".zip"}, "text/plain": {".txt"}, "text/markdown": {".md", ".markdown"},
 }
 
 func ValidateMedia(ctx context.Context, fileName, expectedMIME string, header []byte, content io.ReaderAt, size int64) (string, error) {
@@ -83,6 +83,8 @@ func ValidateMedia(ctx context.Context, fileName, expectedMIME string, header []
 		valid = validZIP(ctx, content, size, "[Content_Types].xml", "word/document.xml")
 	case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
 		valid = validZIP(ctx, content, size, "[Content_Types].xml", "xl/workbook.xml")
+	case "application/zip":
+		valid = validZIP(ctx, content, size)
 	case "application/vnd.apple.keynote":
 		valid = validZIPAny(ctx, content, size, "Index/Document.iwa", "index.apxl")
 	case "application/vnd.oasis.opendocument.presentation":
@@ -108,6 +110,7 @@ func requiresContentReader(mime string) bool {
 		"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 		"application/vnd.apple.keynote",
 		"application/vnd.oasis.opendocument.presentation",
+		"application/zip",
 		"application/vnd.hhc.presenter+json":
 		return true
 	default:
