@@ -814,7 +814,7 @@ resource scanWarmer 'Microsoft.App/jobs@2025-07-01' = if (deployScanWarmer) {
     workloadProfileName: 'Consumption'
     configuration: {
       triggerType: 'Schedule'
-      replicaTimeout: 30
+      replicaTimeout: 60
       replicaRetryLimit: 1
       scheduleTriggerConfig: {
         cronExpression: '*/1 * * * *'
