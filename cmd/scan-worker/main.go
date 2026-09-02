@@ -165,15 +165,12 @@ func runLoop(ctx context.Context, run, consumeWarm scanOnce, idle time.Duration)
 		if processed {
 			continue
 		}
-		processed, err = consumeWarm(ctx)
+		_, err = consumeWarm(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
 			return err
-		}
-		if processed {
-			continue
 		}
 		timer := time.NewTimer(idle)
 		select {
