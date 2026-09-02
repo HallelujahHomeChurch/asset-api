@@ -17,7 +17,10 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azqueue"
 )
 
-const pulseTTL = 120 * time.Second
+const (
+	pulseDepth = 20
+	pulseTTL   = 120 * time.Second
+)
 
 func main() {
 	if err := execute(context.Background()); err != nil {
@@ -71,7 +74,12 @@ func run(ctx context.Context, now time.Time, lead, tail time.Duration, list func
 	}
 	for _, window := range windows {
 		if !now.Before(window.StartsAt.Add(-lead)) && !now.After(window.EndsAt.Add(tail)) {
-			return pulse(ctx)
+			for range pulseDepth {
+				if err := pulse(ctx); err != nil {
+					return err
+				}
+			}
+			return nil
 		}
 	}
 	return nil

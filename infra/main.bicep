@@ -800,7 +800,7 @@ resource scanWorker 'Microsoft.App/containerApps@2025-01-01' = if (deployScanWor
               metadata: {
                 accountName: storageAccount.name
                 queueName: 'asset-scan-warm'
-                queueLength: '1'
+                queueLength: '20'
               }
               identity: scanIdentity.id
             }

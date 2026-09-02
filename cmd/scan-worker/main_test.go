@@ -67,6 +67,7 @@ func TestRunLoopConsumesWarmPulseAfterEmptyScan(t *testing.T) {
 	defer cancel()
 	var scans, pulses atomic.Int32
 
+	started := time.Now()
 	err := runLoop(ctx,
 		func(context.Context) (bool, error) { scans.Add(1); return false, nil },
 		func(context.Context) (bool, error) {
@@ -75,11 +76,11 @@ func TestRunLoopConsumesWarmPulseAfterEmptyScan(t *testing.T) {
 			}
 			return true, nil
 		},
-		time.Hour,
+		20*time.Millisecond,
 	)
 
-	if err != nil || scans.Load() != 2 || pulses.Load() != 2 {
-		t.Fatalf("runLoop() = %v after scans=%d pulses=%d, want two immediate pulse drains", err, scans.Load(), pulses.Load())
+	if err != nil || scans.Load() != 2 || pulses.Load() != 2 || time.Since(started) < 20*time.Millisecond {
+		t.Fatalf("runLoop() = %v after scans=%d pulses=%d in %s, want an idle wait between pulse drains", err, scans.Load(), pulses.Load(), time.Since(started))
 	}
 }
 
@@ -93,5 +94,8 @@ func TestDeploymentPassesWarmQueueToWorker(t *testing.T) {
 	}
 	if !strings.Contains(string(template), "resource scanWarmQueueProcessor") || strings.Count(string(template), "dependsOn: [acrPull, scanSecretAccess, scanQueueProcessor, scanQueueReader, scanWarmQueueReader, scanWarmQueueProcessor") != 2 {
 		t.Fatal("asset-scan-worker must be allowed to delete warm pulses")
+	}
+	if !strings.Contains(string(template), "queueName: 'asset-scan-warm'\n                queueLength: '20'") {
+		t.Fatal("twenty warm pulses must hold exactly one worker replica")
 	}
 }

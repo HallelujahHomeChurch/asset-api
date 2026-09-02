@@ -9,7 +9,7 @@ import (
 	"hhc/asset-api/internal/meetingclient"
 )
 
-func TestRunSendsOnePulseInsideLeadAndTail(t *testing.T) {
+func TestRunSendsPulseBatchInsideLeadAndTail(t *testing.T) {
 	now := time.Date(2026, 9, 2, 10, 0, 0, 0, time.UTC)
 	for _, window := range []meetingclient.Window{
 		{StartsAt: now.Add(5 * time.Minute), EndsAt: now.Add(time.Hour)},
@@ -21,7 +21,7 @@ func TestRunSendsOnePulseInsideLeadAndTail(t *testing.T) {
 				return []meetingclient.Window{window, window}, nil
 			},
 			func(context.Context) error { sent++; return nil })
-		if err != nil || sent != 1 {
+		if err != nil || sent != pulseDepth {
 			t.Fatalf("window=%+v sent=%d err=%v", window, sent, err)
 		}
 	}
