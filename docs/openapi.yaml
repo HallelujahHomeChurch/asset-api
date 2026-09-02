@@ -644,7 +644,7 @@ components:
         uploadTarget: { $ref: '#/components/schemas/UploadTarget' }
     CreateUploadRequest:
       type: object
-      description: For `cms.home.banner`, ownerService=hhc-web-api, expected and detected MIME must be image/jpeg, decoded dimensions must be exactly 1900x700, and successful completion returns processingStatus=not_required. After a clean scan and public grant, the granted original is served directly without derivatives.
+      description: For `cms.home.banner`, ownerService=hhc-web-api, expected and detected MIME must be image/jpeg, decoded dimensions must be exactly 1900x700, and successful completion returns processingStatus=not_required. After a clean scan and public grant, the granted original is served directly without derivatives. For `account.dsr-export`, ownerService=account-api, expected and detected MIME must be application/zip, max size is 50 MiB, visibility must be private, and successful completion returns processingStatus=not_required; bytes remain private after clean scan with no public endpoint or derivative.
       required: [namespace, ownerService, ownerType, ownerId, purpose, originalFileName, expectedMimeType, maxSizeBytes, visibility]
       properties:
         namespace: { type: string }

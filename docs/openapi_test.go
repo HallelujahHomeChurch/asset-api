@@ -78,6 +78,25 @@ func TestOpenAPIHomeBannerContract(t *testing.T) {
 	assertContains(t, complete, "namespace-specific detected MIME and decoded image dimensions")
 }
 
+func TestOpenAPIAccountDSRExportContract(t *testing.T) {
+	raw, err := os.ReadFile("openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	upload := schemaBlockFor(t, string(raw), "CreateUploadRequest")
+	for _, value := range []string{
+		"account.dsr-export",
+		"ownerService=account-api",
+		"application/zip",
+		"50 MiB",
+		"visibility must be private",
+		"processingStatus=not_required",
+		"no public endpoint or derivative",
+	} {
+		assertContains(t, upload, value)
+	}
+}
+
 func TestOpenAPISecurityAndWireContracts(t *testing.T) {
 	raw, err := os.ReadFile("openapi.yaml")
 	if err != nil {
