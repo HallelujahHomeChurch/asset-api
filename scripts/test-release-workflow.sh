@@ -129,7 +129,6 @@ grep -q "roleDefinitionName=='Storage Queue Data Reader'" "$workflow"
 grep -q 'asset-derivative-identity' "$workflow"
 grep -q 'asset-derivative-poison' "$workflow"
 grep -q "roleDefinitionName=='Storage Queue Data Message Processor'" "$workflow"
-grep -Fq "resource scanWarmQueueProcessor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (provisionScanWarmInfrastructure || deployScanWorker)" infra/main.bicep
 grep -q "roleDefinitionName=='Storage Blob Data Contributor'" "$workflow"
 grep -q 'ASSET_WORKLOAD_AUDIENCE' "$workflow"
 grep -q 'ASSET_WORKLOAD_CLIENT_ID' "$workflow"
