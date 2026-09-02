@@ -603,6 +603,17 @@ resource scanWarmQueueReader 'Microsoft.Authorization/roleAssignments@2022-04-01
   dependsOn: [scanWarmQueue]
 }
 
+resource scanWarmQueueProcessor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (provisionScanWarmInfrastructure) {
+  name: guid(scanWarmQueueScope.id, scanIdentity.id, 'storage-queue-data-message-processor', 'warm-v1')
+  scope: scanWarmQueueScope
+  properties: {
+    principalId: scanIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '8a0f0c08-91a1-4084-bc3d-661d67233fed')
+  }
+  dependsOn: [scanWarmQueue]
+}
+
 resource scanWarmQueueSender 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (provisionScanWarmInfrastructure) {
   name: guid(scanWarmQueueScope.id, scanWarmerIdentity.id, 'storage-queue-data-message-sender', 'warm-v1')
   scope: scanWarmQueueScope
@@ -694,6 +705,7 @@ resource scanJob 'Microsoft.App/jobs@2025-07-01' = if (deployScanJob) {
             { name: 'ASSET_AZURE_CONTAINER', value: 'assets' }
             { name: 'AZURE_CLIENT_ID', value: scanIdentity.properties.clientId }
             { name: 'ASSET_SCAN_QUEUE_URL', value: 'https://${storageAccount.name}.queue.${az.environment().suffixes.storage}/asset-scan' }
+            { name: 'ASSET_SCAN_WARM_QUEUE_URL', value: 'https://${storageAccount.name}.queue.${az.environment().suffixes.storage}/asset-scan-warm' }
             { name: 'ASSET_SCAN_POISON_QUEUE_URL', value: 'https://${storageAccount.name}.queue.${az.environment().suffixes.storage}/asset-scan-poison' }
             { name: 'CLAMAV_SIGNATURE_CONTAINER', value: 'asset-signatures' }
             { name: 'CLAMAV_SIGNATURE_MAX_AGE', value: '168h' }
@@ -710,7 +722,7 @@ resource scanJob 'Microsoft.App/jobs@2025-07-01' = if (deployScanJob) {
       ]
     }
   }
-  dependsOn: [acrPull, scanSecretAccess, scanQueueProcessor, scanQueueReader, scanPoisonQueueContributor, scanBlobReader, scanSignatureReader]
+  dependsOn: [acrPull, scanSecretAccess, scanQueueProcessor, scanQueueReader, scanWarmQueueReader, scanWarmQueueProcessor, scanPoisonQueueContributor, scanBlobReader, scanSignatureReader]
 }
 
 resource scanWorker 'Microsoft.App/containerApps@2025-01-01' = if (deployScanWorker) {
@@ -747,6 +759,7 @@ resource scanWorker 'Microsoft.App/containerApps@2025-01-01' = if (deployScanWor
             { name: 'ASSET_AZURE_CONTAINER', value: 'assets' }
             { name: 'AZURE_CLIENT_ID', value: scanIdentity.properties.clientId }
             { name: 'ASSET_SCAN_QUEUE_URL', value: 'https://${storageAccount.name}.queue.${az.environment().suffixes.storage}/asset-scan' }
+            { name: 'ASSET_SCAN_WARM_QUEUE_URL', value: 'https://${storageAccount.name}.queue.${az.environment().suffixes.storage}/asset-scan-warm' }
             { name: 'ASSET_SCAN_POISON_QUEUE_URL', value: 'https://${storageAccount.name}.queue.${az.environment().suffixes.storage}/asset-scan-poison' }
             { name: 'ASSET_SCAN_IDLE_POLL', value: '1s' }
             { name: 'CLAMAV_SIGNATURE_CONTAINER', value: 'asset-signatures' }
@@ -796,7 +809,7 @@ resource scanWorker 'Microsoft.App/containerApps@2025-01-01' = if (deployScanWor
       }
     }
   }
-  dependsOn: [acrPull, scanSecretAccess, scanQueueProcessor, scanQueueReader, scanWarmQueueReader, scanPoisonQueueContributor, scanBlobReader, scanSignatureReader]
+  dependsOn: [acrPull, scanSecretAccess, scanQueueProcessor, scanQueueReader, scanWarmQueueReader, scanWarmQueueProcessor, scanPoisonQueueContributor, scanBlobReader, scanSignatureReader]
 }
 
 resource scanWarmer 'Microsoft.App/jobs@2025-07-01' = if (deployScanWarmer) {

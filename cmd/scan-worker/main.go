@@ -17,6 +17,8 @@ import (
 	"hhc/asset-api/internal/scanqueue"
 	azurestorage "hhc/asset-api/internal/storage/azure"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
+	"github.com/Azure/azure-sdk-for-go/sdk/storage/azqueue"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -39,6 +41,10 @@ func run(ctx context.Context) error {
 		return err
 	}
 	queueURL, err := required("ASSET_SCAN_QUEUE_URL")
+	if err != nil {
+		return err
+	}
+	warmQueueURL, err := required("ASSET_SCAN_WARM_QUEUE_URL")
 	if err != nil {
 		return err
 	}
@@ -108,19 +114,58 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	credential, err := azidentity.NewDefaultAzureCredential(nil)
+	if err != nil {
+		return err
+	}
+	warmQueue, err := azqueue.NewQueueClient(warmQueueURL, credential, nil)
+	if err != nil {
+		return err
+	}
 	scanner := clamav.NewLocalScanner(signatureDirectory, timeout, maxFileSize, maxScanSize, maxFiles, maxRecursion)
 	job := scanqueue.NewScanJob(postgres.New(db), blobs, scanner, queue, manifest.SignatureVersion, maxSize, maxAttempts, timeout)
-	return runLoop(ctx, job.RunOnce, idle)
+	return runLoop(ctx, job.RunOnce, warmPulseConsumer(warmQueue), idle)
 }
 
 type scanOnce func(context.Context) (bool, error)
 
-func runLoop(ctx context.Context, run scanOnce, idle time.Duration) error {
+func warmPulseConsumer(queue *azqueue.QueueClient) scanOnce {
+	return func(ctx context.Context) (bool, error) {
+		visibility := int32(30)
+		response, err := queue.DequeueMessage(ctx, &azqueue.DequeueMessageOptions{VisibilityTimeout: &visibility})
+		if err != nil {
+			return false, fmt.Errorf("dequeue warm pulse: %w", err)
+		}
+		if len(response.Messages) == 0 {
+			return false, nil
+		}
+		message := response.Messages[0]
+		if message.MessageID == nil || message.PopReceipt == nil {
+			return false, fmt.Errorf("invalid warm pulse")
+		}
+		if _, err := queue.DeleteMessage(ctx, *message.MessageID, *message.PopReceipt, nil); err != nil {
+			return false, fmt.Errorf("delete warm pulse: %w", err)
+		}
+		return true, nil
+	}
+}
+
+func runLoop(ctx context.Context, run, consumeWarm scanOnce, idle time.Duration) error {
 	for {
 		if ctx.Err() != nil {
 			return nil
 		}
 		processed, err := run(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return err
+		}
+		if processed {
+			continue
+		}
+		processed, err = consumeWarm(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
