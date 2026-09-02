@@ -603,7 +603,7 @@ resource scanWarmQueueReader 'Microsoft.Authorization/roleAssignments@2022-04-01
   dependsOn: [scanWarmQueue]
 }
 
-resource scanWarmQueueProcessor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (provisionScanWarmInfrastructure) {
+resource scanWarmQueueProcessor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (provisionScanWarmInfrastructure || deployScanWorker) {
   name: guid(scanWarmQueueScope.id, scanIdentity.id, 'storage-queue-data-message-processor', 'warm-v1')
   scope: scanWarmQueueScope
   properties: {
