@@ -2145,8 +2145,8 @@ func TestCollectionItemACLAuthority(t *testing.T) {
 	store := New(db)
 	ctx := context.Background()
 	now := time.Date(2026, 8, 16, 5, 30, 0, 0, time.UTC)
-	insertAuthorizedCollection(t, db, "reader-item-collection", 2, "user", now)
 	insertAuthorizedCollection(t, db, "other-reader-collection", 2, "other", now)
+	insertAuthorizedCollection(t, db, "reader-item-collection", 2, "user", now)
 	insertAsset(t, db, "reader-item-asset", assets.UploadCompleted, assets.ScanClean, assets.ProcessingReady, now, time.Time{})
 	if _, err := db.Exec(`INSERT INTO asset_collection_items(id,collection_id,asset_id,remote_item_id,display_name,source_revision,created_revision,retention_exempt,updated_revision,created_at,updated_at) VALUES('reader-item','reader-item-collection','reader-item-asset','remote-reader','Reader','source',2,false,2,$1,$1)`, now); err != nil {
 		t.Fatal(err)
