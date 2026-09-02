@@ -9,8 +9,9 @@ with an Entra application audience and the `Asset.Invoke` app role.
 Production scanning runs through the `asset-scan-worker` Container App. It
 scales from zero on either `asset-scan` or `asset-scan-warm`, polls once per
 second while active, and returns to zero after the 120-second cooldown. The
-warm queue is a scale signal only; the worker consumes only `asset-scan`.
-Warm messages expire after 120 seconds. The legacy `asset-scan` Job remains
+worker deletes warm pulses after the scan queue is empty so the queue scaler
+does not retain a stale approximate count. Warm messages also expire after
+120 seconds. The legacy `asset-scan` Job remains
 Manual with its queue trigger disabled for one compatibility release.
 The `asset-scan-warmer` scheduled Job runs once per minute, reads meeting windows
 through hhc-web-api internal ingress using its dedicated managed identity, and
