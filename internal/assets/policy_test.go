@@ -21,6 +21,25 @@ func TestAccountAvatarPolicy(t *testing.T) {
 	}
 }
 
+func TestAccountDSRExportPolicy(t *testing.T) {
+	policy, ok := PolicyFor("account.dsr-export")
+	if !ok {
+		t.Fatal("account.dsr-export policy is missing")
+	}
+	if !policy.AllowsMIME("application/zip") {
+		t.Fatal("ZIP MIME type is not allowed")
+	}
+	if policy.MaxSizeBytes != 50<<20 {
+		t.Fatalf("max size = %d", policy.MaxSizeBytes)
+	}
+	if policy.DefaultVisibility != VisibilityPrivate {
+		t.Fatalf("default visibility = %q", policy.DefaultVisibility)
+	}
+	if policy.AllowsVisibility(VisibilityPublic) {
+		t.Fatal("public visibility must not be allowed")
+	}
+}
+
 func TestHomeBannerPolicy(t *testing.T) {
 	policy, ok := PolicyFor("cms.home.banner")
 	if !ok {

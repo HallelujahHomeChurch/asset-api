@@ -476,6 +476,109 @@ func TestCreateUploadSessionEnforcesNamespaceOwnerSizeAndVisibility(t *testing.T
 	}
 }
 
+func TestAccountDSRExportUploadAndCompletion(t *testing.T) {
+	ctx := context.Background()
+	newService := func() (*Service, *memoryRepository, *memoryBlobStore) {
+		repo := newMemoryRepository()
+		blobs := newMemoryBlobStore()
+		return NewService(repo, blobs, "https://www.alive.org.tw/api/assets", time.Now), repo, blobs
+	}
+	base := CreateUploadInput{
+		Namespace: "account.dsr-export", OwnerService: "account-api", OwnerType: "dsr_export", OwnerID: "user-1",
+		Purpose: "account_export", OriginalFileName: "export.zip", ExpectedMIMEType: "application/zip",
+		MaxSizeBytes: 50 << 20, Visibility: VisibilityPrivate,
+	}
+
+	t.Run("accepts ZIP at the 50 MiB policy boundary and stays scan-gated", func(t *testing.T) {
+		service, repo, blobs := newService()
+		created, err := service.CreateUploadSession(ctx, base, "dsr-valid")
+		if err != nil {
+			t.Fatal(err)
+		}
+		payload := testZIP(t, "export.json")
+		blobs.objects[created.Session.StagingObjectKey] = payload
+		sum := sha256.Sum256(payload)
+		asset, err := service.CompleteUpload(ctx, created.Asset.ID, CompleteUploadInput{
+			SizeBytes: int64(len(payload)), ChecksumSHA256: hex.EncodeToString(sum[:]), MIMEType: "application/zip",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if asset.UploadStatus != UploadCompleted || asset.ScanStatus != ScanPending || asset.ProcessingStatus != ProcessingNotRequired || asset.DetectedMIMEType != "application/zip" {
+			t.Fatalf("asset = %+v", asset)
+		}
+		if _, err := service.AuthorizedMetadata(ctx, asset.ID, SubjectService, "account-api"); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("pre-clean download metadata error = %v", err)
+		}
+		if err := service.ApplyScanResult(ctx, ScanResult{EventID: "dsr-scan", AssetID: asset.ID, Status: ScanClean}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := service.CreateGrant(ctx, asset.ID, CreateGrantInput{SubjectType: SubjectService, SubjectID: "account-api", Permission: PermissionRead, IdempotencyKey: "dsr-grant"}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := service.AuthorizedMetadata(ctx, asset.ID, SubjectService, "account-api"); err != nil {
+			t.Fatalf("clean download metadata error = %v", err)
+		}
+		if repo.assets[asset.ID].ScanStatus != ScanClean {
+			t.Fatalf("scan status = %s", repo.assets[asset.ID].ScanStatus)
+		}
+	})
+
+	for _, test := range []struct {
+		name    string
+		input   CreateUploadInput
+		payload []byte
+	}{
+		{name: "wrong MIME", input: func() CreateUploadInput { value := base; value.ExpectedMIMEType = "application/pdf"; return value }(), payload: []byte("%PDF-1.7")},
+		{name: "wrong extension", input: func() CreateUploadInput { value := base; value.OriginalFileName = "export.pdf"; return value }(), payload: testZIP(t, "export.json")},
+		{name: "non-ZIP bytes", input: base, payload: []byte("not a ZIP")},
+		{name: "malformed ZIP", input: base, payload: []byte("PK\x03\x04malformed")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service, _, blobs := newService()
+			created, err := service.CreateUploadSession(ctx, test.input, "dsr-invalid-"+test.name)
+			if test.name == "wrong MIME" || test.name == "wrong extension" {
+				if !errors.Is(err, ErrInvalidInput) {
+					t.Fatalf("create error = %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			blobs.objects[created.Session.StagingObjectKey] = test.payload
+			sum := sha256.Sum256(test.payload)
+			if _, err := service.CompleteUpload(ctx, created.Asset.ID, CompleteUploadInput{
+				SizeBytes: int64(len(test.payload)), ChecksumSHA256: hex.EncodeToString(sum[:]), MIMEType: "application/zip",
+			}); !errors.Is(err, ErrInvalidUpload) {
+				t.Fatalf("complete error = %v", err)
+			}
+		})
+	}
+
+	for _, test := range []struct {
+		name    string
+		maxSize int64
+		wantErr bool
+	}{
+		{name: "exact boundary", maxSize: 50 << 20},
+		{name: "over boundary", maxSize: (50 << 20) + 1, wantErr: true},
+	} {
+		input := base
+		input.MaxSizeBytes = test.maxSize
+		t.Run("max-size-"+test.name, func(t *testing.T) {
+			service, _, _ := newService()
+			_, err := service.CreateUploadSession(ctx, input, "dsr-size-"+test.name)
+			if test.wantErr && !errors.Is(err, ErrInvalidInput) {
+				t.Fatalf("create error = %v", err)
+			}
+			if !test.wantErr && err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestCreateUploadSessionEnforcesLinePerTypeLimit(t *testing.T) {
 	service := NewService(newMemoryRepository(), newMemoryBlobStore(), "https://www.alive.org.tw/api/assets", time.Now)
 	_, err := service.CreateUploadSession(context.Background(), CreateUploadInput{
