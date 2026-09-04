@@ -24,8 +24,28 @@ datasets:
       - {name: blob.bytes, purpose: Account avatar or DSR export bytes, necessity: required, data_classes: [content]}
     attribution: {mode: direct, explanation: assets.owner_id identifies the Account artifact subject.}
     legal_basis: {status: pending_legal, reference: null}
-    retention: {status: pending_legal, rule: null, action: none}
-    cleanup: {mode: none, implementation: [], evidence: []}
+    retention:
+      status: enforced
+      rule:
+        trigger: age_since
+        field: assets.purged_at
+        source: {path: internal/postgres/store.go, symbol: Store.DeleteExpiredPurge}
+        duration_source: {path: internal/lifecycle/worker.go, symbol: Worker.ProcessOne}
+        predicate: purged_at < now-180d
+        description: Physical Blob deletion is completed before purged_at; the worker later removes only the associated metadata strictly older than 180 days, bounded to 100 rows.
+      action: delete
+    cleanup:
+      mode: existing_worker
+      implementation:
+        - {path: internal/assets/service.go, symbol: Service.SoftDelete}
+        - {path: internal/lifecycle/worker.go, symbol: Worker.ProcessOne}
+        - {path: internal/storage/azure/store.go, symbol: Store.Delete}
+        - {path: internal/postgres/store.go, symbol: Store.DeleteExpiredPurge}
+      evidence:
+        - {kind: go_test, path: internal/assets/service_test.go, test_name: TestSoftDeleteImmediatelyBlocksPublicDownload}
+        - {kind: go_test, path: internal/lifecycle/worker_test.go, test_name: TestWorkerRetriesBlobFailure}
+        - {kind: go_test, path: internal/storage/azure/store_test.go, test_name: TestDeleteMissingBlobIsRepeatSafe}
+        - {kind: go_test, path: internal/postgres/store_integration_test.go, test_name: TestDeleteExpiredPurgeIsBoundedAndPreservesRecentOrActiveAssets}
   - id: asset.account-artifact-metadata
     owner: asset-api
     purpose: Identify and safely serve Account avatar and DSR-export assets.

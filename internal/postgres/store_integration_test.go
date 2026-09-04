@@ -808,6 +808,9 @@ func TestAccountUploadExpiryEligibilityIsStrictAndLeaseBounded(t *testing.T) {
 	if err != nil || found {
 		t.Fatalf("leased repeat found=%v err=%v", found, err)
 	}
+	if _, err := db.Exec(`UPDATE assets SET upload_status='completed',updated_at=$2 WHERE id=$1`, "account-upload-boundary", now); err != nil {
+		t.Fatal(err)
+	}
 	candidate, found, err = store.ClaimPurge(ctx, now.Add(2*time.Minute), time.Minute)
 	if err != nil || !found || candidate.AssetID != "account-upload-expired" {
 		t.Fatalf("expired lease candidate=%+v found=%v err=%v", candidate, found, err)
