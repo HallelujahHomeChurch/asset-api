@@ -54,13 +54,29 @@ for candidate in .github/workflows/ci.yml "$workflow"; do
   grep -Fq "go test ./internal/governance -run '^TestDataGovernanceExport\$' -count=1" "$candidate"
   grep -Fq 'bash scripts/test-publish-data-governance.sh' "$candidate"
 done
-grep -Fq 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a' .github/workflows/ci.yml
-grep -Fq 'name: data-governance-${{ github.sha }}' .github/workflows/ci.yml
-grep -Fq 'if-no-files-found: error' .github/workflows/ci.yml
-grep -Fq 'include-hidden-files: true' .github/workflows/ci.yml
-grep -Fq 'overwrite: true' .github/workflows/ci.yml
-grep -Fq '.artifacts/data-governance/export/data-governance.yaml' .github/workflows/ci.yml
-grep -Fq '.artifacts/data-governance/export/data-governance.json' .github/workflows/ci.yml
+expected_governance_artifact_step='      - name: Store verified governance manifest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: data-governance-${{ github.sha }}
+          if-no-files-found: error
+          include-hidden-files: true
+          overwrite: true
+          path: |
+            .artifacts/data-governance/export/data-governance.yaml
+            .artifacts/data-governance/export/data-governance.json'
+assert_governance_artifact_step() {
+  actual="$(awk '
+    $0 == "      - name: Store verified governance manifest" { capture = 1 }
+    capture && $0 != "      - name: Store verified governance manifest" && (/^      - / || /^  [[:alnum:]_]+:/) { exit }
+    capture { print }
+  ' "$1")"
+  if [ "$actual" != "$expected_governance_artifact_step" ]; then
+    echo "verified governance artifact step mismatch: $1" >&2
+    return 1
+  fi
+}
+assert_governance_artifact_step .github/workflows/ci.yml
+assert_governance_artifact_step "$workflow"
 grep -Fq 'docker pull "$IMAGE_REF"' "$workflow"
 grep -Fq 'docker pull "$SCAN_IMAGE_REF"' "$workflow"
 grep -Fq 'image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 "$IMAGE_REF"' "$workflow"
