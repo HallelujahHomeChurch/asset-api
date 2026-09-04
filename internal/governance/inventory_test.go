@@ -62,30 +62,33 @@ func TestDataGovernanceManifest(t *testing.T) {
 	poison := manifestDataset(t, document, "asset.account-poison-events")
 	require.Equal(t, "manual", poison["attribution"].(map[string]any)["mode"])
 	content := manifestDataset(t, document, "asset.account-artifact-content")
-	contentCleanup := content["cleanup"].(map[string]any)
 	contentRetention := content["retention"].(map[string]any)
-	contentRule := contentRetention["rule"].(map[string]any)
-	require.Equal(t, "enforced", contentRetention["status"])
-	require.Equal(t, "assets.purged_at", contentRule["field"])
-	require.Equal(t, "purged_at < now-180d", contentRule["predicate"])
-	require.Equal(t, map[string]any{"path": "internal/postgres/store.go", "symbol": "Store.DeleteExpiredPurge"}, contentRule["source"])
-	require.Equal(t, map[string]any{"path": "internal/lifecycle/worker.go", "symbol": "Worker.ProcessOne"}, contentRule["duration_source"])
-	require.Equal(t, "existing_worker", contentCleanup["mode"])
+	require.Equal(t, "pending_legal", contentRetention["status"])
+	require.Nil(t, contentRetention["rule"])
+	require.Equal(t, "none", contentRetention["action"])
+	require.Equal(t, "none", content["cleanup"].(map[string]any)["mode"])
+	lifecycle := manifestDataset(t, document, "asset.account-purge-lifecycle")
+	lifecycleCleanup := lifecycle["cleanup"].(map[string]any)
+	lifecycleRetention := lifecycle["retention"].(map[string]any)
+	lifecycleRule := lifecycleRetention["rule"].(map[string]any)
+	require.Equal(t, "assets.purged_at", lifecycleRule["field"])
+	require.Equal(t, "purged_at < now-180d", lifecycleRule["predicate"])
+	require.Equal(t, map[string]any{"path": "internal/postgres/store.go", "symbol": "Store.DeleteExpiredPurge"}, lifecycleRule["source"])
+	require.Equal(t, map[string]any{"path": "internal/lifecycle/worker.go", "symbol": "Worker.ProcessOne"}, lifecycleRule["duration_source"])
+	require.Equal(t, "existing_worker", lifecycleCleanup["mode"])
 	require.Equal(t, map[string]bool{
 		"internal/assets/service.go:Service.SoftDelete":       true,
 		"internal/lifecycle/worker.go:Worker.ProcessOne":      true,
 		"internal/storage/azure/store.go:Store.Delete":        true,
 		"internal/postgres/store.go:Store.DeleteExpiredPurge": true,
-	}, manifestReferences(t, contentCleanup["implementation"]))
+	}, manifestReferences(t, lifecycleCleanup["implementation"]))
 	require.Equal(t, map[string]bool{
 		"internal/assets/service_test.go:TestSoftDeleteImmediatelyBlocksPublicDownload":                               true,
 		"internal/lifecycle/worker_test.go:TestWorkerRetriesBlobFailure":                                              true,
 		"internal/storage/azure/store_test.go:TestDeleteMissingBlobIsRepeatSafe":                                      true,
 		"internal/postgres/store_integration_test.go:TestDeleteExpiredPurgeIsBoundedAndPreservesRecentOrActiveAssets": true,
-	}, manifestEvidence(t, contentCleanup["evidence"]))
-	lifecycle := manifestDataset(t, document, "asset.account-purge-lifecycle")
-	require.Equal(t, "purged_at < now-180d", lifecycle["retention"].(map[string]any)["rule"].(map[string]any)["predicate"])
-	require.Equal(t, "delete", lifecycle["retention"].(map[string]any)["action"])
+	}, manifestEvidence(t, lifecycleCleanup["evidence"]))
+	require.Equal(t, "delete", lifecycleRetention["action"])
 	nonActivityFields := 0
 	for _, value := range document["datasets"].([]any) {
 		for _, value := range value.(map[string]any)["fields"].([]any) {
