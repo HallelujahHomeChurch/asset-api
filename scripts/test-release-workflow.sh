@@ -7,17 +7,23 @@ grep -q 'workflow_dispatch:' "$workflow"
 grep -q 'fail_openapi_before_pointer:' "$workflow"
 grep -q '^  push:' "$workflow"
 grep -q 'branches: \[main\]' "$workflow"
-expected_paths_ignore='docs/**
-.github/workflows/ci.yml'
-actual_paths_ignore="$(awk '
-  $0 == "    paths-ignore:" { in_paths_ignore = 1; next }
+expected_paths="'**'
+'!docs/**'
+'docs/data-governance.yaml'
+'!.github/workflows/ci.yml'"
+actual_paths="$(awk '
+  $0 == "    paths:" { in_paths_ignore = 1; next }
   in_paths_ignore && /^      - / { sub(/^      - /, ""); print; next }
   in_paths_ignore { exit }
 ' "$workflow")"
-if [ "$actual_paths_ignore" != "$expected_paths_ignore" ]; then
-  echo 'release docs-only paths-ignore policy mismatch' >&2
+if [ "$actual_paths" != "$expected_paths" ]; then
+  echo 'release path trigger policy mismatch' >&2
   exit 1
 fi
+grep -Fq "      - '**'" "$workflow"
+grep -Fq "      - '!docs/**'" "$workflow"
+grep -Fq "      - 'docs/data-governance.yaml'" "$workflow"
+grep -Fq "      - '!.github/workflows/ci.yml'" "$workflow"
 grep -Fq "github.event_name == 'push' && 'deploy-asset-api-production' || inputs.confirmation" "$workflow"
 grep -q 'ACTIVATE_QUEUE_SCANNING: "true"' "$workflow"
 grep -q 'EMBEDDED_SCAN_ENABLED: "false"' "$workflow"
@@ -42,6 +48,19 @@ grep -Fq 'fs --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-co
 grep -Fq 'fs --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1' "$workflow"
 grep -Fq 'image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 asset-api:verify' .github/workflows/ci.yml
 grep -Fq 'image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 asset-scan:verify' .github/workflows/ci.yml
+for candidate in .github/workflows/ci.yml "$workflow"; do
+  grep -Fq 'go test -race -json ./... -count=1 -p=1 | tee .artifacts/data-governance/test-events.jsonl' "$candidate"
+  grep -Fq "GOVERNANCE_TEST_EVENTS=\"\$PWD/.artifacts/data-governance/test-events.jsonl\"" "$candidate"
+  grep -Fq "go test ./internal/governance -run '^TestDataGovernanceExport\$' -count=1" "$candidate"
+  grep -Fq 'bash scripts/test-publish-data-governance.sh' "$candidate"
+done
+grep -Fq 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a' .github/workflows/ci.yml
+grep -Fq 'name: data-governance-${{ github.sha }}' .github/workflows/ci.yml
+grep -Fq 'if-no-files-found: error' .github/workflows/ci.yml
+grep -Fq 'include-hidden-files: true' .github/workflows/ci.yml
+grep -Fq 'overwrite: true' .github/workflows/ci.yml
+grep -Fq '.artifacts/data-governance/export/data-governance.yaml' .github/workflows/ci.yml
+grep -Fq '.artifacts/data-governance/export/data-governance.json' .github/workflows/ci.yml
 grep -Fq 'docker pull "$IMAGE_REF"' "$workflow"
 grep -Fq 'docker pull "$SCAN_IMAGE_REF"' "$workflow"
 grep -Fq 'image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 "$IMAGE_REF"' "$workflow"
@@ -183,6 +202,13 @@ printf '%s\n' "$publish_job" | grep -q 'id-token: write'
 printf '%s\n' "$publish_job" | grep -q 'API_DOCS_AZURE_CLIENT_ID'
 printf '%s\n' "$publish_job" | grep -q 'api-docs-asset-api'
 printf '%s\n' "$publish_job" | grep -q 'needs.deploy.outputs.image'
+printf '%s\n' "$publish_job" | grep -Fq 'actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c'
+printf '%s\n' "$publish_job" | grep -Fq 'name: data-governance-${{ needs.deploy.outputs.commit }}'
+printf '%s\n' "$publish_job" | grep -Fq 'path: .artifacts/data-governance/export'
+printf '%s\n' "$publish_job" | grep -Fq 'digest-mismatch: error'
+printf '%s\n' "$publish_job" | grep -Fq 'SERVICE: asset-api'
+printf '%s\n' "$publish_job" | grep -Fq 'GOVERNANCE_DIR: ${{ github.workspace }}/.artifacts/data-governance/export'
+printf '%s\n' "$publish_job" | grep -Fq 'run: bash scripts/publish-data-governance.sh'
 printf '%s\n' "$publish_job" | grep -q 'specs/${GITHUB_SHA}/openapi.yaml'
 printf '%s\n' "$publish_job" | grep -q 'inputs.fail_openapi_before_pointer && github.run_attempt == 1'
 printf '%s\n' "$publish_job" | grep -q -- '--overwrite false'
@@ -331,6 +357,8 @@ test "$ready_line" -lt "$publish_line"
 test "$guard_line" -lt "$guard_exit_line"
 test "$guard_exit_line" -lt "$pointer_upload_line"
 test "$publish_line" -lt "$pointer_upload_line"
+governance_publish_line="$(grep -n -- '- name: Publish verified governance manifest' "$workflow" | cut -d: -f1)"
+test "$pointer_upload_line" -lt "$governance_publish_line"
 grep -q "runtimeKeyVaultName string = 'alive-asset-runtime-kv'" infra/main.bicep
 grep -q "migrationKeyVaultName string = 'alive-asset-migrate-kv'" infra/main.bicep
 grep -q "name: 'asset-migrate'" infra/main.bicep

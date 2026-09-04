@@ -3,9 +3,11 @@ name: Production Release
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - docs/**
-      - .github/workflows/ci.yml
+    paths:
+      - '**'
+      - '!docs/**'
+      - 'docs/data-governance.yaml'
+      - '!.github/workflows/ci.yml'
   workflow_dispatch:
     inputs:
       confirmation:
@@ -67,7 +69,13 @@ jobs:
           ./scripts/test-migration-policy-test.sh
           ./scripts/test-migration-policy.sh internal/migrations/sql/*.sql
           ./scripts/test-what-if-policy.sh
-          go test -race ./... -count=1 -p=1
+          mkdir -p .artifacts/data-governance
+          set -o pipefail
+          go test -race -json ./... -count=1 -p=1 | tee .artifacts/data-governance/test-events.jsonl
+          GOVERNANCE_TEST_EVENTS="$PWD/.artifacts/data-governance/test-events.jsonl" \
+          GOVERNANCE_OUTPUT_DIR="$PWD/.artifacts/data-governance/export" \
+            go test ./internal/governance -run '^TestDataGovernanceExport$' -count=1
+          bash scripts/test-publish-data-governance.sh
           go vet ./...
           ./scripts/test-release-workflow.sh
           docker build -t asset-api:verify .
@@ -78,6 +86,16 @@ jobs:
           for flag in --max-filesize --max-scansize --max-files --max-recursion --alert-exceeds-max --alert-encrypted; do
             grep -Fq -- "$flag" <<<"$clam_help"
           done
+      - name: Store verified governance manifest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: data-governance-${{ github.sha }}
+          if-no-files-found: error
+          include-hidden-files: true
+          overwrite: true
+          path: |
+            .artifacts/data-governance/export/data-governance.yaml
+            .artifacts/data-governance/export/data-governance.json
 
   deploy:
     needs: verify
@@ -388,6 +406,12 @@ jobs:
       FAIL_OPENAPI_BEFORE_POINTER: ${{ inputs.fail_openapi_before_pointer && github.run_attempt == 1 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Download verified governance manifest
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: data-governance-${{ needs.deploy.outputs.commit }}
+          path: .artifacts/data-governance/export
+          digest-mismatch: error
       - name: Validate publication configuration
         run: |
           [[ "$RELEASE_COMMIT" == "$GITHUB_SHA" ]]
@@ -510,3 +534,9 @@ jobs:
             --overwrite true \
             --only-show-errors \
             --output none
+      - name: Publish verified governance manifest
+        env:
+          SERVICE: asset-api
+          RELEASE_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          GOVERNANCE_DIR: ${{ github.workspace }}/.artifacts/data-governance/export
+        run: bash scripts/publish-data-governance.sh
