@@ -1,5 +1,5 @@
 .env
-.artifacts/
+/.artifacts/
 .data/
 bin/
 /server

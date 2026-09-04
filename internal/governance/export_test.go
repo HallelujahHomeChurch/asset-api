@@ -64,6 +64,9 @@ func verifyEvidence(document map[string]any, events io.Reader, module string) er
 		if expected[item] {
 			switch event.Action {
 			case "pass":
+				if passed[item] {
+					rejected[item] = true
+				}
 				passed[item] = true
 			case "skip", "fail":
 				rejected[item] = true
@@ -170,6 +173,8 @@ func TestDataGovernanceEvidence(t *testing.T) {
 		{"failed then passed", strings.ReplaceAll(passed, `"pass"`, `"fail"`) + passed, false},
 		{"skipped then passed", strings.ReplaceAll(passed, `"pass"`, `"skip"`) + passed, false},
 		{"package failed then passed", passed + strings.ReplaceAll(postgresPackage, `"pass"`, `"fail"`) + postgresPackage, false},
+		{"duplicate test pass", passed + postgresUpload, false},
+		{"duplicate package pass", passed + postgresPackage, false},
 		{"truncated", passed + `{"Action":`, false},
 		{"non JSON", passed + "broken", false},
 	} {
