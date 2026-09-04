@@ -1,0 +1,831 @@
+{
+  "version": 1,
+  "base": {
+    "schema_version": 1,
+    "service": "account-api",
+    "datasets": [
+      {
+        "id": "account.fixture",
+        "owner": "account-api",
+        "purpose": "Exercise the shared contract.",
+        "necessity": "required",
+        "storage": {
+          "kind": "postgres",
+          "resource": "fixture",
+          "sources": [
+            {
+              "path": "go.mod",
+              "symbol": "module"
+            }
+          ]
+        },
+        "subject_keys": [
+          {
+            "kind": "user_id",
+            "field": "id",
+            "evidence": [
+              {
+                "path": "go.mod",
+                "symbol": "module"
+              }
+            ]
+          }
+        ],
+        "data_classes": [
+          "identity"
+        ],
+        "fields": [
+          {
+            "name": "id",
+            "purpose": "Identify the subject.",
+            "necessity": "required",
+            "data_classes": [
+              "identity"
+            ]
+          }
+        ],
+        "attribution": {
+          "mode": "direct",
+          "explanation": "Fixture ID is the subject ID."
+        },
+        "legal_basis": {
+          "status": "pending_legal",
+          "reference": null
+        },
+        "retention": {
+          "status": "pending_legal",
+          "rule": null,
+          "action": "none"
+        },
+        "cleanup": {
+          "mode": "none",
+          "implementation": [],
+          "evidence": []
+        }
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "valid-base-purpose",
+      "path": [
+        "datasets",
+        "0",
+        "purpose"
+      ],
+      "value": "Different documented purpose.",
+      "valid": true
+    },
+    {
+      "name": "valid-optional-field",
+      "path": [
+        "datasets",
+        "0",
+        "fields",
+        "0",
+        "necessity"
+      ],
+      "value": "optional",
+      "valid": true
+    },
+    {
+      "name": "unknown-root",
+      "path": [
+        "unknown"
+      ],
+      "value": true,
+      "valid": false
+    },
+    {
+      "name": "unknown-nested-property",
+      "path": [
+        "datasets",
+        "0",
+        "storage",
+        "unknown"
+      ],
+      "value": true,
+      "valid": false
+    },
+    {
+      "name": "wrong-service",
+      "path": [
+        "service"
+      ],
+      "value": "engagement-api",
+      "valid": false
+    },
+    {
+      "name": "wrong-owner",
+      "path": [
+        "datasets",
+        "0",
+        "owner"
+      ],
+      "value": "engagement-api",
+      "valid": false
+    },
+    {
+      "name": "wrong-prefix",
+      "path": [
+        "datasets",
+        "0",
+        "id"
+      ],
+      "value": "engagement.fixture",
+      "valid": false
+    },
+    {
+      "name": "empty-stable-name",
+      "path": [
+        "datasets",
+        "0",
+        "id"
+      ],
+      "value": "account.",
+      "valid": false
+    },
+    {
+      "name": "wrong-version",
+      "path": [
+        "schema_version"
+      ],
+      "value": 2,
+      "valid": false
+    },
+    {
+      "name": "string-version",
+      "path": [
+        "schema_version"
+      ],
+      "value": "1",
+      "valid": false
+    },
+    {
+      "name": "missing-field-metadata",
+      "path": [
+        "datasets",
+        "0",
+        "fields"
+      ],
+      "value": [
+        {
+          "name": "id",
+          "necessity": "required",
+          "data_classes": [
+            "identity"
+          ]
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "missing-nullable-key",
+      "path": [
+        "datasets",
+        "0",
+        "legal_basis"
+      ],
+      "value": {
+        "status": "pending_legal"
+      },
+      "valid": false
+    },
+    {
+      "name": "duplicate-dataset",
+      "path": [
+        "datasets"
+      ],
+      "value": [
+        {
+          "id": "account.fixture",
+          "owner": "account-api",
+          "purpose": "Exercise the shared contract.",
+          "necessity": "required",
+          "storage": {
+            "kind": "postgres",
+            "resource": "fixture",
+            "sources": [
+              {
+                "path": "go.mod",
+                "symbol": "module"
+              }
+            ]
+          },
+          "subject_keys": [
+            {
+              "kind": "user_id",
+              "field": "id",
+              "evidence": [
+                {
+                  "path": "go.mod",
+                  "symbol": "module"
+                }
+              ]
+            }
+          ],
+          "data_classes": [
+            "identity"
+          ],
+          "fields": [
+            {
+              "name": "id",
+              "purpose": "Identify the subject.",
+              "necessity": "required",
+              "data_classes": [
+                "identity"
+              ]
+            }
+          ],
+          "attribution": {
+            "mode": "direct",
+            "explanation": "Fixture ID is the subject ID."
+          },
+          "legal_basis": {
+            "status": "pending_legal",
+            "reference": null
+          },
+          "retention": {
+            "status": "pending_legal",
+            "rule": null,
+            "action": "none"
+          },
+          "cleanup": {
+            "mode": "none",
+            "implementation": [],
+            "evidence": []
+          }
+        },
+        {
+          "id": "account.fixture",
+          "owner": "account-api",
+          "purpose": "Exercise the shared contract.",
+          "necessity": "required",
+          "storage": {
+            "kind": "postgres",
+            "resource": "fixture",
+            "sources": [
+              {
+                "path": "go.mod",
+                "symbol": "module"
+              }
+            ]
+          },
+          "subject_keys": [
+            {
+              "kind": "user_id",
+              "field": "id",
+              "evidence": [
+                {
+                  "path": "go.mod",
+                  "symbol": "module"
+                }
+              ]
+            }
+          ],
+          "data_classes": [
+            "identity"
+          ],
+          "fields": [
+            {
+              "name": "id",
+              "purpose": "Identify the subject.",
+              "necessity": "required",
+              "data_classes": [
+                "identity"
+              ]
+            }
+          ],
+          "attribution": {
+            "mode": "direct",
+            "explanation": "Fixture ID is the subject ID."
+          },
+          "legal_basis": {
+            "status": "pending_legal",
+            "reference": null
+          },
+          "retention": {
+            "status": "pending_legal",
+            "rule": null,
+            "action": "none"
+          },
+          "cleanup": {
+            "mode": "none",
+            "implementation": [],
+            "evidence": []
+          }
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "duplicate-field",
+      "path": [
+        "datasets",
+        "0",
+        "fields"
+      ],
+      "value": [
+        {
+          "name": "id",
+          "purpose": "Identify the subject.",
+          "necessity": "required",
+          "data_classes": [
+            "identity"
+          ]
+        },
+        {
+          "name": "id",
+          "purpose": "Identify the subject.",
+          "necessity": "required",
+          "data_classes": [
+            "identity"
+          ]
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "forbidden-subject-key",
+      "path": [
+        "datasets",
+        "0",
+        "subject_keys",
+        "0",
+        "kind"
+      ],
+      "value": "email",
+      "valid": false
+    },
+    {
+      "name": "empty-subject-evidence",
+      "path": [
+        "datasets",
+        "0",
+        "subject_keys",
+        "0",
+        "evidence"
+      ],
+      "value": [],
+      "valid": false
+    },
+    {
+      "name": "empty-classes",
+      "path": [
+        "datasets",
+        "0",
+        "data_classes"
+      ],
+      "value": [],
+      "valid": false
+    },
+    {
+      "name": "empty-field-classes",
+      "path": [
+        "datasets",
+        "0",
+        "fields",
+        "0",
+        "data_classes"
+      ],
+      "value": [],
+      "valid": false
+    },
+    {
+      "name": "duplicate-classes",
+      "path": [
+        "datasets",
+        "0",
+        "data_classes"
+      ],
+      "value": [
+        "identity",
+        "identity"
+      ],
+      "valid": false
+    },
+    {
+      "name": "unknown-class",
+      "path": [
+        "datasets",
+        "0",
+        "data_classes"
+      ],
+      "value": [
+        "personal"
+      ],
+      "valid": false
+    },
+    {
+      "name": "empty-fields",
+      "path": [
+        "datasets",
+        "0",
+        "fields"
+      ],
+      "value": [],
+      "valid": false
+    },
+    {
+      "name": "empty-datasets",
+      "path": [
+        "datasets"
+      ],
+      "value": [],
+      "valid": false
+    },
+    {
+      "name": "unsafe-reference",
+      "path": [
+        "datasets",
+        "0",
+        "storage",
+        "sources",
+        "0",
+        "path"
+      ],
+      "value": "../go.mod",
+      "valid": false
+    },
+    {
+      "name": "empty-sources",
+      "path": [
+        "datasets",
+        "0",
+        "storage",
+        "sources"
+      ],
+      "value": [],
+      "valid": false
+    },
+    {
+      "name": "command-symbol",
+      "path": [
+        "datasets",
+        "0",
+        "storage",
+        "sources",
+        "0",
+        "symbol"
+      ],
+      "value": "rm -rf data",
+      "valid": false
+    },
+    {
+      "name": "blank-purpose",
+      "path": [
+        "datasets",
+        "0",
+        "purpose"
+      ],
+      "value": "  ",
+      "valid": false
+    },
+    {
+      "name": "invalid-necessity",
+      "path": [
+        "datasets",
+        "0",
+        "necessity"
+      ],
+      "value": "useful",
+      "valid": false
+    },
+    {
+      "name": "invalid-storage",
+      "path": [
+        "datasets",
+        "0",
+        "storage",
+        "kind"
+      ],
+      "value": "s3",
+      "valid": false
+    },
+    {
+      "name": "invalid-retention-status",
+      "path": [
+        "datasets",
+        "0",
+        "retention",
+        "status"
+      ],
+      "value": "approved",
+      "valid": false
+    },
+    {
+      "name": "pending-action",
+      "path": [
+        "datasets",
+        "0",
+        "retention",
+        "action"
+      ],
+      "value": "delete",
+      "valid": false
+    },
+    {
+      "name": "pending-rule",
+      "path": [
+        "datasets",
+        "0",
+        "retention",
+        "rule"
+      ],
+      "value": {
+        "trigger": "expires_at",
+        "field": "expires_at",
+        "source": {
+          "path": "go.mod",
+          "symbol": "module"
+        },
+        "duration_source": null,
+        "predicate": "expired",
+        "description": "Expired fixture."
+      },
+      "valid": false
+    },
+    {
+      "name": "pending-mode",
+      "path": [
+        "datasets",
+        "0",
+        "cleanup",
+        "mode"
+      ],
+      "value": "existing_worker",
+      "valid": false
+    },
+    {
+      "name": "pending-implementation",
+      "path": [
+        "datasets",
+        "0",
+        "cleanup",
+        "implementation"
+      ],
+      "value": [
+        {
+          "path": "go.mod",
+          "symbol": "module"
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "pending-evidence",
+      "path": [
+        "datasets",
+        "0",
+        "cleanup",
+        "evidence"
+      ],
+      "value": [
+        {
+          "kind": "shell_test",
+          "path": "go.mod",
+          "test_name": null
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "enforced-without-proof",
+      "path": [
+        "datasets",
+        "0",
+        "retention",
+        "status"
+      ],
+      "value": "enforced",
+      "valid": false
+    },
+    {
+      "name": "none-with-deterministic-key",
+      "path": [
+        "datasets",
+        "0",
+        "attribution",
+        "mode"
+      ],
+      "value": "none",
+      "valid": false
+    },
+    {
+      "name": "manual-with-deterministic-key",
+      "path": [
+        "datasets",
+        "0",
+        "attribution",
+        "mode"
+      ],
+      "value": "manual",
+      "valid": false
+    },
+    {
+      "name": "direct-without-user-id",
+      "path": [
+        "datasets",
+        "0",
+        "subject_keys"
+      ],
+      "value": [],
+      "valid": false
+    },
+    {
+      "name": "lookup-without-verified-email",
+      "path": [
+        "datasets",
+        "0",
+        "attribution",
+        "mode"
+      ],
+      "value": "verified_lookup",
+      "valid": false
+    },
+    {
+      "name": "legal-approval-not-in-scope",
+      "path": [
+        "datasets",
+        "0",
+        "legal_basis",
+        "status"
+      ],
+      "value": "approved",
+      "valid": false
+    },
+    {
+      "name": "missing-duration-source",
+      "path": [
+        "datasets",
+        "0"
+      ],
+      "value": {
+        "id": "account.fixture",
+        "owner": "account-api",
+        "purpose": "Exercise the shared contract.",
+        "necessity": "required",
+        "storage": {
+          "kind": "postgres",
+          "resource": "fixture",
+          "sources": [
+            {
+              "path": "go.mod",
+              "symbol": "module"
+            }
+          ]
+        },
+        "subject_keys": [
+          {
+            "kind": "user_id",
+            "field": "id",
+            "evidence": [
+              {
+                "path": "go.mod",
+                "symbol": "module"
+              }
+            ]
+          }
+        ],
+        "data_classes": [
+          "identity"
+        ],
+        "fields": [
+          {
+            "name": "id",
+            "purpose": "Identify the subject.",
+            "necessity": "required",
+            "data_classes": [
+              "identity"
+            ]
+          }
+        ],
+        "attribution": {
+          "mode": "direct",
+          "explanation": "Fixture ID is the subject ID."
+        },
+        "legal_basis": {
+          "status": "pending_legal",
+          "reference": null
+        },
+        "retention": {
+          "status": "enforced",
+          "rule": {
+            "trigger": "age_since",
+            "field": "created_at",
+            "source": {
+              "path": "go.mod",
+              "symbol": "module"
+            },
+            "duration_source": null,
+            "predicate": "expired",
+            "description": "On request, remove expired fixture."
+          },
+          "action": "delete"
+        },
+        "cleanup": {
+          "mode": "existing_command",
+          "implementation": [
+            {
+              "path": "go.mod",
+              "symbol": "module"
+            }
+          ],
+          "evidence": [
+            {
+              "kind": "shell_test",
+              "path": "go.mod",
+              "test_name": null
+            }
+          ]
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "missing-evidence",
+      "path": [
+        "datasets",
+        "0"
+      ],
+      "value": {
+        "id": "account.fixture",
+        "owner": "account-api",
+        "purpose": "Exercise the shared contract.",
+        "necessity": "required",
+        "storage": {
+          "kind": "postgres",
+          "resource": "fixture",
+          "sources": [
+            {
+              "path": "go.mod",
+              "symbol": "module"
+            }
+          ]
+        },
+        "subject_keys": [
+          {
+            "kind": "user_id",
+            "field": "id",
+            "evidence": [
+              {
+                "path": "go.mod",
+                "symbol": "module"
+              }
+            ]
+          }
+        ],
+        "data_classes": [
+          "identity"
+        ],
+        "fields": [
+          {
+            "name": "id",
+            "purpose": "Identify the subject.",
+            "necessity": "required",
+            "data_classes": [
+              "identity"
+            ]
+          }
+        ],
+        "attribution": {
+          "mode": "direct",
+          "explanation": "Fixture ID is the subject ID."
+        },
+        "legal_basis": {
+          "status": "pending_legal",
+          "reference": null
+        },
+        "retention": {
+          "status": "enforced",
+          "rule": {
+            "trigger": "age_since",
+            "field": "created_at",
+            "source": {
+              "path": "go.mod",
+              "symbol": "module"
+            },
+            "duration_source": {
+              "path": "go.mod",
+              "symbol": "module"
+            },
+            "predicate": "expired",
+            "description": "On request, remove expired fixture."
+          },
+          "action": "delete"
+        },
+        "cleanup": {
+          "mode": "existing_command",
+          "implementation": [
+            {
+              "path": "go.mod",
+              "symbol": "module"
+            }
+          ],
+          "evidence": []
+        }
+      },
+      "valid": false
+    }
+  ]
+}
