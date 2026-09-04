@@ -1,0 +1,255 @@
+schema_version: 1
+service: asset-api
+datasets:
+  - id: asset.account-artifact-content
+    owner: asset-api
+    purpose: Store Account avatar and DSR-export Blob bytes.
+    necessity: required
+    storage:
+      kind: blob
+      resource: Azure Blob Storage
+      sources:
+        - path: internal/storage/azure/store.go
+          symbol: Store.Delete
+    subject_keys:
+      - kind: user_id
+        field: assets.owner_id
+        evidence:
+          - path: internal/assets/service.go
+            symbol: Service.CreateUploadSession
+    data_classes: [identity, content]
+    fields:
+      - {name: blob.bytes, purpose: Account avatar or DSR export bytes, necessity: required, data_classes: [content]}
+    attribution: {mode: direct, explanation: assets.owner_id identifies the Account artifact subject.}
+    legal_basis: {status: pending_legal, reference: null}
+    retention:
+      status: enforced
+      rule:
+        trigger: age_since
+        field: assets.deleted_at
+        source: {path: internal/lifecycle/worker.go, symbol: Worker.ProcessOne}
+        duration_source: {path: internal/lifecycle/worker.go, symbol: Worker.ProcessOne}
+        predicate: deleted_at is eligible for a purge claim
+        description: The lifecycle worker claims eligible soft-deleted Account assets.
+      action: purge
+    cleanup:
+      mode: existing_worker
+      implementation:
+        - path: internal/lifecycle/worker.go
+          symbol: Worker.ProcessOne
+      evidence:
+        - {kind: go_test, path: internal/lifecycle/worker_test.go, test_name: TestWorkerPurgesEveryCandidateObjectAndCompletes}
+        - {kind: go_test, path: internal/storage/azure/store_test.go, test_name: TestDeleteMissingBlobIsRepeatSafe}
+  - id: asset.account-artifact-metadata
+    owner: asset-api
+    purpose: Identify and safely serve Account avatar and DSR-export assets.
+    necessity: required
+    storage: {kind: postgres, resource: assets, sources: [{path: internal/postgres/store.go, symbol: Store.CreateUpload}]}
+    subject_keys: [{kind: user_id, field: assets.owner_id, evidence: [{path: internal/assets/service.go, symbol: Service.CreateUploadSession}]}]
+    data_classes: [identity, content, security, activity]
+    fields:
+      - {name: assets.id, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: assets.namespace, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: assets.owner_service, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: assets.owner_type, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: assets.owner_id, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: assets.purpose, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: assets.locale, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: assets.original_file_name, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: assets.object_key, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: assets.expected_mime_type, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: assets.detected_mime_type, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: assets.size_bytes, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: assets.checksum_sha256, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: assets.etag, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: assets.upload_status, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: assets.scan_status, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: assets.scan_details, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: assets.processing_status, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: assets.visibility, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: assets.created_at, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: assets.updated_at, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: assets.scan_attempts, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: assets.scan_next_attempt_at, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: assets.scan_claimed_until, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: assets.processing_error, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: assets.processing_claimed_until, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: assets.processing_attempts, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: assets.processing_next_attempt_at, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: assets.scan_signature_version, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: assets.scan_failure_category, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: assets.scan_event_id, purpose: Governed field, necessity: required, data_classes: [activity]}
+    attribution: {mode: direct, explanation: Only account.avatar and account.dsr-export use assets.owner_id as the Account subject.}
+    legal_basis: {status: pending_legal, reference: null}
+    retention: {status: pending_legal, rule: null, action: none}
+    cleanup: {mode: none, implementation: [], evidence: []}
+  - id: asset.account-upload-sessions
+    owner: asset-api
+    purpose: Create and complete Account artifact uploads safely and idempotently.
+    necessity: required
+    storage: {kind: postgres, resource: upload_sessions, sources: [{path: internal/postgres/store.go, symbol: Store.CreateUpload}]}
+    subject_keys: [{kind: user_id, field: upload_sessions.asset_id via assets.owner_id, evidence: [{path: internal/postgres/store.go, symbol: Store.ClaimPurge}]}]
+    data_classes: [identity, security, activity, content]
+    fields:
+      - {name: upload_sessions.id, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: upload_sessions.asset_id, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: upload_sessions.idempotency_key, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: upload_sessions.max_size_bytes, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: upload_sessions.status, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: upload_sessions.expires_at, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: upload_sessions.created_at, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: upload_sessions.completed_at, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: upload_sessions.caller_service, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: upload_sessions.operation, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: upload_sessions.request_fingerprint, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: upload_sessions.staging_object_key, purpose: Governed field, necessity: required, data_classes: [activity]}
+    attribution: {mode: direct, explanation: asset_id joins the session to assets.owner_id.}
+    legal_basis: {status: pending_legal, reference: null}
+    retention:
+      status: enforced
+      rule:
+        trigger: expires_at
+        field: upload_sessions.expires_at
+        source: {path: internal/postgres/store.go, symbol: Store.ClaimPurge}
+        duration_source: null
+        predicate: expires_at < now
+        description: An uncompleted upload is purge-eligible only after its expiry.
+      action: purge
+    cleanup:
+      mode: existing_worker
+      implementation: [{path: internal/lifecycle/worker.go, symbol: Worker.ProcessOne}]
+      evidence: [{kind: go_test, path: internal/lifecycle/worker_test.go, test_name: TestWorkerPurgesEveryCandidateObjectAndCompletes}]
+  - id: asset.account-grants
+    owner: asset-api
+    purpose: Authorize a reader to access an Account artifact.
+    necessity: required
+    storage: {kind: postgres, resource: asset_grants, sources: [{path: internal/postgres/store.go, symbol: Store.CreateGrant}]}
+    subject_keys: [{kind: user_id, field: asset_grants.asset_id via assets.owner_id, evidence: [{path: internal/postgres/store.go, symbol: Store.HasActiveGrant}]}]
+    data_classes: [identity, security, activity]
+    fields:
+      - {name: asset_grants.id, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_grants.asset_id, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_grants.subject_type, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_grants.subject_id, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_grants.permission, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_grants.idempotency_key, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_grants.expires_at, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_grants.created_at, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_grants.revoked_at, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_grants.caller_service, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_grants.operation, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_grants.request_fingerprint, purpose: Governed field, necessity: required, data_classes: [activity]}
+    attribution: {mode: direct, explanation: "asset_id joins the grant to assets.owner_id; subject_id is a reader, not the artifact owner."}
+    legal_basis: {status: pending_legal, reference: null}
+    retention: {status: pending_legal, rule: null, action: none}
+    cleanup: {mode: none, implementation: [], evidence: []}
+  - id: asset.account-scan-and-derivative-state
+    owner: asset-api
+    purpose: Process, scan, retry, and derive Account artifacts.
+    necessity: required
+    storage: {kind: postgres, resource: asset processing tables, sources: [{path: internal/postgres/store.go, symbol: Store.ClaimPurge}]}
+    subject_keys: [{kind: user_id, field: asset_id via assets.owner_id, evidence: [{path: internal/postgres/store.go, symbol: Store.ClaimPurge}]}]
+    data_classes: [identity, content, security, activity]
+    fields:
+      - {name: asset_scan_events.event_id, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_scan_events.asset_id, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_scan_events.status, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_scan_events.details, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_scan_events.etag, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_scan_events.created_at, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_derivatives.asset_id, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_derivatives.variant, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_derivatives.object_key, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_derivatives.mime_type, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_derivatives.width, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_derivatives.height, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_derivatives.size_bytes, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_derivatives.etag, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_derivatives.created_at, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_scan_outbox.event_id, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_scan_outbox.asset_id, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_scan_outbox.asset_etag, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_scan_outbox.attempts, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_scan_outbox.available_at, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_scan_outbox.claimed_until, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_scan_outbox.delivered_at, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_scan_outbox.last_error, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_scan_outbox.created_at, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_derivative_outbox.event_id, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_derivative_outbox.asset_id, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_derivative_outbox.asset_etag, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_derivative_outbox.attempts, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_derivative_outbox.available_at, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_derivative_outbox.claimed_until, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_derivative_outbox.delivered_at, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_derivative_outbox.last_error, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_derivative_outbox.created_at, purpose: Governed field, necessity: required, data_classes: [activity]}
+    attribution: {mode: direct, explanation: Every row has an FK-linked asset_id that joins to assets.owner_id.}
+    legal_basis: {status: pending_legal, reference: null}
+    retention: {status: pending_legal, rule: null, action: none}
+    cleanup: {mode: none, implementation: [], evidence: []}
+  - id: asset.account-poison-events
+    owner: asset-api
+    purpose: Retain poison-message metadata for manual incident handling.
+    necessity: required
+    storage: {kind: postgres, resource: poison event tables, sources: [{path: internal/postgres/store.go, symbol: Store.RecordScanPoison}]}
+    subject_keys: []
+    data_classes: [identity, security, activity]
+    fields:
+      - {name: asset_scan_poison_events.poison_id, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_scan_poison_events.event_id, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_scan_poison_events.asset_id, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_scan_poison_events.asset_etag, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_scan_poison_events.reason, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_scan_poison_events.details, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_scan_poison_events.dequeue_count, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_scan_poison_events.source_message_id, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_scan_poison_events.body_sha256, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_scan_poison_events.created_at, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_scan_poison_events.forwarded_at, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_scan_poison_events.replayed_at, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_scan_poison_events.replay_event_id, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_derivative_poison_events.poison_id, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_derivative_poison_events.event_id, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_derivative_poison_events.asset_id, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_derivative_poison_events.asset_etag, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_derivative_poison_events.reason, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_derivative_poison_events.details, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_derivative_poison_events.dequeue_count, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_derivative_poison_events.source_message_id, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_derivative_poison_events.body_sha256, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_derivative_poison_events.created_at, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: asset_derivative_poison_events.forwarded_at, purpose: Governed field, necessity: required, data_classes: [activity]}
+    attribution: {mode: manual, explanation: "asset_id is textual and has no parent FK, so attribution and retention require manual review."}
+    legal_basis: {status: pending_legal, reference: null}
+    retention: {status: pending_legal, rule: null, action: none}
+    cleanup: {mode: none, implementation: [], evidence: []}
+  - id: asset.account-purge-lifecycle
+    owner: asset-api
+    purpose: Deny access, retry Blob removal, and remove retained Account metadata.
+    necessity: required
+    storage: {kind: postgres, resource: assets lifecycle fields, sources: [{path: internal/postgres/store.go, symbol: Store.DeleteExpiredPurge}]}
+    subject_keys: [{kind: user_id, field: assets.owner_id, evidence: [{path: internal/assets/service.go, symbol: Service.SoftDelete}]}]
+    data_classes: [identity, security, activity]
+    fields:
+      - {name: assets.deleted_at, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: assets.purge_claimed_until, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: assets.purge_next_attempt_at, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: assets.purge_error, purpose: Governed field, necessity: required, data_classes: [activity]}
+      - {name: assets.purged_at, purpose: Governed field, necessity: required, data_classes: [activity]}
+    attribution: {mode: direct, explanation: Lifecycle is owned by Account asset metadata identified by assets.owner_id.}
+    legal_basis: {status: pending_legal, reference: null}
+    retention:
+      status: enforced
+      rule:
+        trigger: age_since
+        field: assets.purged_at
+        source: {path: internal/postgres/store.go, symbol: Store.DeleteExpiredPurge}
+        duration_source: {path: internal/lifecycle/worker.go, symbol: Worker.ProcessOne}
+        predicate: purged_at < now-180d
+        description: Hard deletion is strictly older than 180 days and is bounded to 100 rows.
+      action: delete
+    cleanup:
+      mode: existing_worker
+      implementation: [{path: internal/lifecycle/worker.go, symbol: Worker.ProcessOne}]
+      evidence: [{kind: go_test, path: internal/postgres/store_integration_test.go, test_name: TestDeleteExpiredPurgeIsBoundedAndPreservesRecentOrActiveAssets}]

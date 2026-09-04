@@ -755,6 +755,20 @@ func TestDeleteExpiredPurgeIsBoundedAndPreservesRecentOrActiveAssets(t *testing.
 	if oldAsset != 0 || oldGrant != 0 {
 		t.Fatalf("old asset=%d grant=%d", oldAsset, oldGrant)
 	}
+	deleted, err = store.DeleteExpiredPurge(ctx, cutoff, 1)
+	if err != nil || deleted != 1 {
+		t.Fatalf("second deleted=%d err=%v", deleted, err)
+	}
+	deleted, err = store.DeleteExpiredPurge(ctx, cutoff, 1)
+	if err != nil || deleted != 0 {
+		t.Fatalf("third deleted=%d err=%v", deleted, err)
+	}
+	for _, id := range []string{"recent", "active"} {
+		var count int
+		if err := db.QueryRow("SELECT count(*) FROM assets WHERE id=$1", id).Scan(&count); err != nil || count != 1 {
+			t.Fatalf("%s count=%d err=%v", id, count, err)
+		}
+	}
 
 	var retentionIndex bool
 	if err := db.QueryRow(`SELECT EXISTS(SELECT 1 FROM pg_indexes WHERE schemaname=current_schema() AND indexname='assets_purged_retention_idx')`).Scan(&retentionIndex); err != nil {
