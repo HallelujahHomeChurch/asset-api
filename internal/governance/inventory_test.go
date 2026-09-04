@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -24,6 +25,18 @@ var operationalColumnExclusions = map[string]string{
 	"schema_migrations.version":    "migration version is operational metadata",
 	"schema_migrations.checksum":   "migration checksum is operational metadata",
 	"schema_migrations.applied_at": "migration application time is operational metadata",
+}
+
+var governedTables = map[string]bool{
+	"assets":                         true,
+	"upload_sessions":                true,
+	"asset_grants":                   true,
+	"asset_scan_events":              true,
+	"asset_derivatives":              true,
+	"asset_scan_outbox":              true,
+	"asset_scan_poison_events":       true,
+	"asset_derivative_outbox":        true,
+	"asset_derivative_poison_events": true,
 }
 
 func TestDataGovernanceManifest(t *testing.T) {
@@ -51,11 +64,31 @@ func TestDataGovernanceManifest(t *testing.T) {
 	lifecycle := manifestDataset(t, document, "asset.account-purge-lifecycle")
 	require.Equal(t, "purged_at < now-180d", lifecycle["retention"].(map[string]any)["rule"].(map[string]any)["predicate"])
 	require.Equal(t, "delete", lifecycle["retention"].(map[string]any)["action"])
+	nonActivityFields := 0
+	for _, value := range document["datasets"].([]any) {
+		for _, value := range value.(map[string]any)["fields"].([]any) {
+			field := value.(map[string]any)
+			require.NotEqual(t, "Governed field", field["purpose"], "field=%s", field["name"])
+			if !reflect.DeepEqual([]any{"activity"}, field["data_classes"]) {
+				nonActivityFields++
+			}
+		}
+	}
+	require.Greater(t, nonActivityFields, 0)
 	store, err := os.ReadFile("../postgres/store.go")
 	require.NoError(t, err)
+	require.Contains(t, string(store), "func (s *Store) CreateUpload")
+	require.Contains(t, string(store), "func (s *Store) CreateGrant")
+	require.Contains(t, string(store), "owner_id")
+	require.Contains(t, string(store), "LEFT JOIN upload_sessions u ON u.asset_id=a.id")
+	require.Contains(t, string(store), "SELECT object_key FROM asset_derivatives WHERE asset_id=$1")
+	require.Contains(t, string(store), "a.deleted_at IS NOT NULL")
 	require.Contains(t, string(store), "u.expires_at < $1")
 	require.Contains(t, string(store), "purged_at < $1")
 	require.Contains(t, string(store), "LIMIT $2")
+	azure, err := os.ReadFile("../storage/azure/store.go")
+	require.NoError(t, err)
+	require.Contains(t, string(azure), "errors.Is(err, assets.ErrNotFound)")
 	bicep, err := os.ReadFile("../../infra/main.bicep")
 	require.NoError(t, err)
 	require.Contains(t, string(bicep), "param retentionScheduleEnabled bool = false")
@@ -90,7 +123,9 @@ func TestDataGovernanceMigratedColumnCoverage(t *testing.T) {
 	require.NoError(t, err)
 
 	covered := manifestFieldNames(t, document)
-	for column := range migratedColumns(t) {
+	columns, tables := migratedColumns(t)
+	require.Equal(t, governedTables, tables)
+	for column := range columns {
 		if _, ok := covered[column]; !ok {
 			if reason := operationalColumnExclusions[column]; strings.TrimSpace(reason) == "" {
 				t.Errorf("missing data-governance classification for %s", column)
@@ -100,6 +135,14 @@ func TestDataGovernanceMigratedColumnCoverage(t *testing.T) {
 	if len(operationalColumnExclusions) != 3 {
 		t.Fatalf("operational exclusions=%v", operationalColumnExclusions)
 	}
+	require.Subset(t, migratedForeignKeys(t), map[string]bool{
+		"upload_sessions.asset_id->assets.id":         true,
+		"asset_grants.asset_id->assets.id":            true,
+		"asset_scan_events.asset_id->assets.id":       true,
+		"asset_derivatives.asset_id->assets.id":       true,
+		"asset_scan_outbox.asset_id->assets.id":       true,
+		"asset_derivative_outbox.asset_id->assets.id": true,
+	})
 }
 
 func manifestFieldNames(t *testing.T, document map[string]any) map[string]struct{} {
@@ -114,28 +157,30 @@ func manifestFieldNames(t *testing.T, document map[string]any) map[string]struct
 	return covered
 }
 
-func migratedColumns(t *testing.T) map[string]struct{} {
+func migratedColumns(t *testing.T) (map[string]struct{}, map[string]bool) {
 	t.Helper()
 	db := governanceDB(t)
 	if err := migrations.Run(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
-	tables := []string{
+	tableNames := []string{
 		"assets", "upload_sessions", "asset_grants", "asset_scan_events", "asset_derivatives",
 		"asset_scan_outbox", "asset_scan_poison_events", "asset_derivative_outbox", "asset_derivative_poison_events",
 	}
-	rows, err := db.Query(`SELECT table_name,column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name = ANY($1) ORDER BY table_name,column_name`, tables)
+	rows, err := db.Query(`SELECT table_name,column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name = ANY($1) ORDER BY table_name,column_name`, tableNames)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rows.Close()
 	columns := map[string]struct{}{}
+	observedTables := map[string]bool{}
 	for rows.Next() {
 		var table, column string
 		if err := rows.Scan(&table, &column); err != nil {
 			t.Fatal(err)
 		}
 		columns[table+"."+column] = struct{}{}
+		observedTables[table] = true
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
@@ -143,7 +188,30 @@ func migratedColumns(t *testing.T) map[string]struct{} {
 	if len(columns) == 0 {
 		t.Fatal("migrations exposed no governed columns")
 	}
-	return columns
+	return columns, observedTables
+}
+
+func migratedForeignKeys(t *testing.T) map[string]bool {
+	t.Helper()
+	db := governanceDB(t)
+	require.NoError(t, migrations.Run(context.Background(), db))
+	rows, err := db.Query(`SELECT kcu.table_name,kcu.column_name,ccu.table_name,ccu.column_name
+		FROM information_schema.table_constraints tc
+		JOIN information_schema.key_column_usage kcu
+		  ON tc.constraint_name=kcu.constraint_name AND tc.table_schema=kcu.table_schema
+		JOIN information_schema.constraint_column_usage ccu
+		  ON ccu.constraint_name=tc.constraint_name AND ccu.table_schema=tc.table_schema
+		WHERE tc.table_schema=current_schema() AND tc.constraint_type='FOREIGN KEY'`)
+	require.NoError(t, err)
+	defer rows.Close()
+	keys := map[string]bool{}
+	for rows.Next() {
+		var childTable, childColumn, parentTable, parentColumn string
+		require.NoError(t, rows.Scan(&childTable, &childColumn, &parentTable, &parentColumn))
+		keys[childTable+"."+childColumn+"->"+parentTable+"."+parentColumn] = true
+	}
+	require.NoError(t, rows.Err())
+	return keys
 }
 
 func governanceDB(t *testing.T) *sql.DB {

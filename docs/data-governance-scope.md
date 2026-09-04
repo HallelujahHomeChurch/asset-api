@@ -10,4 +10,6 @@ asset_collections, asset_collection_items, asset_collection_acl, asset_collectio
 
 Both collection-retention enablement flags remain false: retentionScheduleEnabled=false and retentionApplyEnabled=false.
 
+Checksums, hashes, and public visibility do not anonymize an artifact or remove its Account-artifact classification.
+
 schema_migrations.version, schema_migrations.checksum, and schema_migrations.applied_at are excluded operational metadata.

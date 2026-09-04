@@ -779,6 +779,48 @@ func TestDeleteExpiredPurgeIsBoundedAndPreservesRecentOrActiveAssets(t *testing.
 	}
 }
 
+func TestAccountUploadExpiryEligibilityIsStrictAndLeaseBounded(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	for _, fixture := range []struct {
+		id        string
+		expiresAt time.Time
+	}{
+		{id: "account-upload-expired", expiresAt: now.Add(-time.Second)},
+		{id: "account-upload-boundary", expiresAt: now},
+	} {
+		insertAsset(t, db, fixture.id, assets.UploadCreated, assets.ScanPending, assets.ProcessingNotRequired, now, time.Time{})
+		if _, err := db.Exec(`UPDATE assets SET namespace='account.avatar',owner_service='account-api',owner_type='user',owner_id=$2 WHERE id=$1`, fixture.id, "user-"+fixture.id); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`INSERT INTO upload_sessions(id,asset_id,idempotency_key,caller_service,operation,request_fingerprint,staging_object_key,max_size_bytes,status,expires_at,created_at) VALUES($1,$1,$1,'account-api','create_upload',$1,$1,1,'created',$2,$3)`, fixture.id, fixture.expiresAt, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	candidate, found, err := store.ClaimPurge(ctx, now, time.Minute)
+	if err != nil || !found || candidate.AssetID != "account-upload-expired" {
+		t.Fatalf("first candidate=%+v found=%v err=%v", candidate, found, err)
+	}
+	_, found, err = store.ClaimPurge(ctx, now, time.Minute)
+	if err != nil || found {
+		t.Fatalf("leased repeat found=%v err=%v", found, err)
+	}
+	candidate, found, err = store.ClaimPurge(ctx, now.Add(2*time.Minute), time.Minute)
+	if err != nil || !found || candidate.AssetID != "account-upload-expired" {
+		t.Fatalf("expired lease candidate=%+v found=%v err=%v", candidate, found, err)
+	}
+	var claimed bool
+	if err := db.QueryRow(`SELECT purge_claimed_until IS NOT NULL FROM assets WHERE id='account-upload-boundary'`).Scan(&claimed); err != nil {
+		t.Fatal(err)
+	}
+	if claimed {
+		t.Fatal("exact expiry boundary was claimed")
+	}
+}
+
 func TestAssetStateConstraintsRejectUnknownValues(t *testing.T) {
 	db := integrationDB(t)
 	now := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
