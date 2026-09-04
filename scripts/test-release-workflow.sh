@@ -230,7 +230,11 @@ printf '%s\n' "$publish_job" | grep -q 'inputs.fail_openapi_before_pointer && gi
 printf '%s\n' "$publish_job" | grep -q -- '--overwrite false'
 printf '%s\n' "$publish_job" | grep -q -- '--name current.json'
 printf '%s\n' "$publish_job" | grep -q -- '--overwrite true'
-workflow_body="$(sed -n '/^          spec_blob="specs\//,$p' "$workflow" | sed 's/^          //')"
+workflow_body="$(awk '
+  /^          spec_blob="specs\// { capture = 1 }
+  capture && /^      - / { exit }
+  capture { sub(/^          /, ""); print }
+' "$workflow")"
 run_openapi_pointer_guard_case() {
   pointer_json="$1"
   candidate_run_id="$2"
