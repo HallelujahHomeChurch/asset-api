@@ -57,6 +57,13 @@ func TestDataGovernanceManifest(t *testing.T) {
 	}
 	upload := manifestDataset(t, document, "asset.account-upload-sessions")
 	require.Equal(t, "expires_at < now", upload["retention"].(map[string]any)["rule"].(map[string]any)["predicate"])
+	uploadCleanup := upload["cleanup"].(map[string]any)
+	require.Equal(t, map[string]bool{
+		"internal/postgres/store_integration_test.go:TestAccountUploadExpiryEligibilityIsStrictAndLeaseBounded": true,
+		"internal/lifecycle/worker_test.go:TestWorkerPurgesEveryCandidateObjectAndCompletes":                     true,
+		"internal/lifecycle/worker_test.go:TestWorkerRetriesBlobFailure":                                          true,
+		"internal/storage/azure/store_test.go:TestDeleteMissingBlobIsRepeatSafe":                                  true,
+	}, manifestEvidence(t, uploadCleanup["evidence"]))
 	grants := manifestDataset(t, document, "asset.account-grants")
 	require.Contains(t, grants["attribution"].(map[string]any)["explanation"], "reader")
 	poison := manifestDataset(t, document, "asset.account-poison-events")
@@ -84,9 +91,11 @@ func TestDataGovernanceManifest(t *testing.T) {
 	}, manifestReferences(t, lifecycleCleanup["implementation"]))
 	require.Equal(t, map[string]bool{
 		"internal/assets/service_test.go:TestSoftDeleteImmediatelyBlocksPublicDownload":                               true,
+		"internal/lifecycle/worker_test.go:TestWorkerPurgesEveryCandidateObjectAndCompletes":                         true,
 		"internal/lifecycle/worker_test.go:TestWorkerRetriesBlobFailure":                                              true,
 		"internal/storage/azure/store_test.go:TestDeleteMissingBlobIsRepeatSafe":                                      true,
 		"internal/postgres/store_integration_test.go:TestDeleteExpiredPurgeIsBoundedAndPreservesRecentOrActiveAssets": true,
+		"internal/postgres/store_integration_test.go:TestPurgeIncludesAttemptSpecificDerivativeKeys":                  true,
 	}, manifestEvidence(t, lifecycleCleanup["evidence"]))
 	require.Equal(t, "delete", lifecycleRetention["action"])
 	nonActivityFields := 0

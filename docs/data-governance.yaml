@@ -99,12 +99,16 @@ datasets:
         source: {path: internal/postgres/store.go, symbol: Store.ClaimPurge}
         duration_source: null
         predicate: expires_at < now
-        description: An uncompleted upload is purge-eligible only after its expiry.
+        description: An uncompleted upload is purge-eligible only after expiry; the lifecycle worker removes its staging Blob before completion and retries Blob failures.
       action: purge
     cleanup:
       mode: existing_worker
       implementation: [{path: internal/lifecycle/worker.go, symbol: Worker.ProcessOne}]
-      evidence: [{kind: go_test, path: internal/postgres/store_integration_test.go, test_name: TestAccountUploadExpiryEligibilityIsStrictAndLeaseBounded}]
+      evidence:
+        - {kind: go_test, path: internal/postgres/store_integration_test.go, test_name: TestAccountUploadExpiryEligibilityIsStrictAndLeaseBounded}
+        - {kind: go_test, path: internal/lifecycle/worker_test.go, test_name: TestWorkerPurgesEveryCandidateObjectAndCompletes}
+        - {kind: go_test, path: internal/lifecycle/worker_test.go, test_name: TestWorkerRetriesBlobFailure}
+        - {kind: go_test, path: internal/storage/azure/store_test.go, test_name: TestDeleteMissingBlobIsRepeatSafe}
   - id: asset.account-grants
     owner: asset-api
     purpose: Authorize a reader to access an Account artifact.
@@ -244,6 +248,8 @@ datasets:
         - {path: internal/postgres/store.go, symbol: Store.DeleteExpiredPurge}
       evidence:
         - {kind: go_test, path: internal/assets/service_test.go, test_name: TestSoftDeleteImmediatelyBlocksPublicDownload}
+        - {kind: go_test, path: internal/lifecycle/worker_test.go, test_name: TestWorkerPurgesEveryCandidateObjectAndCompletes}
         - {kind: go_test, path: internal/lifecycle/worker_test.go, test_name: TestWorkerRetriesBlobFailure}
         - {kind: go_test, path: internal/storage/azure/store_test.go, test_name: TestDeleteMissingBlobIsRepeatSafe}
         - {kind: go_test, path: internal/postgres/store_integration_test.go, test_name: TestDeleteExpiredPurgeIsBoundedAndPreservesRecentOrActiveAssets}
+        - {kind: go_test, path: internal/postgres/store_integration_test.go, test_name: TestPurgeIncludesAttemptSpecificDerivativeKeys}

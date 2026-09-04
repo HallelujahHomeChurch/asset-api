@@ -21,14 +21,19 @@
           "source": {"path": "internal/postgres/store.go", "symbol": "Store.ClaimPurge"},
           "duration_source": null,
           "predicate": "expires_at < now",
-          "description": "Fixture references strict expired-upload eligibility."
+          "description": "Fixture references strict expired-upload eligibility and worker Blob completion."
         },
         "action": "purge"
       },
       "cleanup": {
         "mode": "existing_worker",
         "implementation": [{"path": "internal/lifecycle/worker.go", "symbol": "Worker.ProcessOne"}],
-        "evidence": [{"kind": "go_test", "path": "internal/postgres/store_integration_test.go", "test_name": "TestAccountUploadExpiryEligibilityIsStrictAndLeaseBounded"}]
+        "evidence": [
+          {"kind": "go_test", "path": "internal/postgres/store_integration_test.go", "test_name": "TestAccountUploadExpiryEligibilityIsStrictAndLeaseBounded"},
+          {"kind": "go_test", "path": "internal/lifecycle/worker_test.go", "test_name": "TestWorkerPurgesEveryCandidateObjectAndCompletes"},
+          {"kind": "go_test", "path": "internal/lifecycle/worker_test.go", "test_name": "TestWorkerRetriesBlobFailure"},
+          {"kind": "go_test", "path": "internal/storage/azure/store_test.go", "test_name": "TestDeleteMissingBlobIsRepeatSafe"}
+        ]
       }
     },
     {
@@ -59,9 +64,11 @@
         "implementation": [{"path": "internal/lifecycle/worker.go", "symbol": "Worker.ProcessOne"}],
         "evidence": [
           {"kind": "go_test", "path": "internal/assets/service_test.go", "test_name": "TestSoftDeleteImmediatelyBlocksPublicDownload"},
+          {"kind": "go_test", "path": "internal/lifecycle/worker_test.go", "test_name": "TestWorkerPurgesEveryCandidateObjectAndCompletes"},
           {"kind": "go_test", "path": "internal/lifecycle/worker_test.go", "test_name": "TestWorkerRetriesBlobFailure"},
           {"kind": "go_test", "path": "internal/storage/azure/store_test.go", "test_name": "TestDeleteMissingBlobIsRepeatSafe"},
-          {"kind": "go_test", "path": "internal/postgres/store_integration_test.go", "test_name": "TestDeleteExpiredPurgeIsBoundedAndPreservesRecentOrActiveAssets"}
+          {"kind": "go_test", "path": "internal/postgres/store_integration_test.go", "test_name": "TestDeleteExpiredPurgeIsBoundedAndPreservesRecentOrActiveAssets"},
+          {"kind": "go_test", "path": "internal/postgres/store_integration_test.go", "test_name": "TestPurgeIncludesAttemptSpecificDerivativeKeys"}
         ]
       }
     }

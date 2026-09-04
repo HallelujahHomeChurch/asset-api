@@ -143,14 +143,16 @@ func TestDataGovernanceEvidence(t *testing.T) {
 	require.NoError(t, err)
 	const postgresUpload = `{"Action":"pass","Package":"hhc/asset-api/internal/postgres","Test":"TestAccountUploadExpiryEligibilityIsStrictAndLeaseBounded"}` + "\n"
 	const assetsDelete = `{"Action":"pass","Package":"hhc/asset-api/internal/assets","Test":"TestSoftDeleteImmediatelyBlocksPublicDownload"}` + "\n"
+	const lifecycleEveryObject = `{"Action":"pass","Package":"hhc/asset-api/internal/lifecycle","Test":"TestWorkerPurgesEveryCandidateObjectAndCompletes"}` + "\n"
 	const lifecycleRetry = `{"Action":"pass","Package":"hhc/asset-api/internal/lifecycle","Test":"TestWorkerRetriesBlobFailure"}` + "\n"
 	const azureMissing = `{"Action":"pass","Package":"hhc/asset-api/internal/storage/azure","Test":"TestDeleteMissingBlobIsRepeatSafe"}` + "\n"
 	const postgresExpiry = `{"Action":"pass","Package":"hhc/asset-api/internal/postgres","Test":"TestDeleteExpiredPurgeIsBoundedAndPreservesRecentOrActiveAssets"}` + "\n"
+	const postgresDerivativeKeys = `{"Action":"pass","Package":"hhc/asset-api/internal/postgres","Test":"TestPurgeIncludesAttemptSpecificDerivativeKeys"}` + "\n"
 	const assetsPackage = `{"Action":"pass","Package":"hhc/asset-api/internal/assets"}` + "\n"
 	const lifecyclePackage = `{"Action":"pass","Package":"hhc/asset-api/internal/lifecycle"}` + "\n"
 	const azurePackage = `{"Action":"pass","Package":"hhc/asset-api/internal/storage/azure"}` + "\n"
 	const postgresPackage = `{"Action":"pass","Package":"hhc/asset-api/internal/postgres"}` + "\n"
-	testsPassed := postgresUpload + assetsDelete + lifecycleRetry + azureMissing + postgresExpiry
+	testsPassed := postgresUpload + assetsDelete + lifecycleEveryObject + lifecycleRetry + azureMissing + postgresExpiry + postgresDerivativeKeys
 	packagesPassed := assetsPackage + lifecyclePackage + azurePackage + postgresPackage
 	passed := testsPassed + packagesPassed
 	for _, test := range []struct {
@@ -158,7 +160,7 @@ func TestDataGovernanceEvidence(t *testing.T) {
 		valid        bool
 	}{
 		{"passed tests and packages", passed, true},
-		{"integration event absent", assetsDelete + lifecycleRetry + azureMissing + postgresExpiry + packagesPassed, false},
+		{"integration event absent", assetsDelete + lifecycleEveryObject + lifecycleRetry + azureMissing + postgresExpiry + postgresDerivativeKeys + packagesPassed, false},
 		{"missing", packagesPassed, false},
 		{"empty", "", false},
 		{"integration skipped without database", strings.ReplaceAll(passed, `"pass"`, `"skip"`), false},
@@ -194,9 +196,11 @@ func TestDataGovernanceExportPayload(t *testing.T) {
 	require.NoError(t, err)
 	const events = `{"Action":"pass","Package":"hhc/asset-api/internal/postgres","Test":"TestAccountUploadExpiryEligibilityIsStrictAndLeaseBounded"}
 {"Action":"pass","Package":"hhc/asset-api/internal/assets","Test":"TestSoftDeleteImmediatelyBlocksPublicDownload"}
+{"Action":"pass","Package":"hhc/asset-api/internal/lifecycle","Test":"TestWorkerPurgesEveryCandidateObjectAndCompletes"}
 {"Action":"pass","Package":"hhc/asset-api/internal/lifecycle","Test":"TestWorkerRetriesBlobFailure"}
 {"Action":"pass","Package":"hhc/asset-api/internal/storage/azure","Test":"TestDeleteMissingBlobIsRepeatSafe"}
 {"Action":"pass","Package":"hhc/asset-api/internal/postgres","Test":"TestDeleteExpiredPurgeIsBoundedAndPreservesRecentOrActiveAssets"}
+{"Action":"pass","Package":"hhc/asset-api/internal/postgres","Test":"TestPurgeIncludesAttemptSpecificDerivativeKeys"}
 {"Action":"pass","Package":"hhc/asset-api/internal/assets"}
 {"Action":"pass","Package":"hhc/asset-api/internal/lifecycle"}
 {"Action":"pass","Package":"hhc/asset-api/internal/storage/azure"}
