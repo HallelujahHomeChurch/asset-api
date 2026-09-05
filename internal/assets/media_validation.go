@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"io"
 	"path"
@@ -68,7 +69,8 @@ func ValidateMedia(ctx context.Context, fileName, expectedMIME string, header []
 	case "audio/wav":
 		valid = len(header) >= 12 && bytes.Equal(header[:4], []byte("RIFF")) && bytes.Equal(header[8:12], []byte("WAVE"))
 	case "audio/mp4":
-		valid = bmffHasBrand(header, "M4A ", "M4B ") && !bmffHasHEIFBrand(header)
+		valid = !bmffHasHEIFBrand(header) && (bmffHasBrand(header, "M4A ", "M4B ") ||
+			bmffHasBrand(header, "isom", "iso2", "mp41", "mp42") && bmffHasOnlyAudioTracks(ctx, content, size))
 	case "audio/aac":
 		valid = bytes.HasPrefix(header, []byte("ADIF")) || len(header) >= 2 && header[0] == 0xff && header[1]&0xf6 == 0xf0
 	case "audio/ogg":
@@ -105,7 +107,7 @@ func ValidateMedia(ctx context.Context, fileName, expectedMIME string, header []
 
 func requiresContentReader(mime string) bool {
 	switch mime {
-	case "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+	case "audio/mp4", "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 		"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 		"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 		"application/vnd.apple.keynote",
@@ -178,10 +180,17 @@ func extensionAllowed(fileName, mime string) bool {
 }
 
 func bmffHasBrand(header []byte, allowed ...string) bool {
-	if len(header) < 12 || !bytes.Equal(header[4:8], []byte("ftyp")) {
+	if len(header) < 16 || !bytes.Equal(header[4:8], []byte("ftyp")) {
 		return false
 	}
-	for offset := 8; offset+4 <= len(header); offset += 4 {
+	end := int64(binary.BigEndian.Uint32(header[:4]))
+	if end < 16 || end > int64(len(header)) || end%4 != 0 {
+		return false
+	}
+	for offset := 8; int64(offset+4) <= end; offset += 4 {
+		if offset == 12 {
+			continue
+		}
 		brand := string(header[offset : offset+4])
 		for _, candidate := range allowed {
 			if brand == candidate {
@@ -190,6 +199,69 @@ func bmffHasBrand(header []byte, allowed ...string) bool {
 		}
 	}
 	return false
+}
+
+// Generic ISO brands identify a container, so verify its declared media handlers.
+// Read box headers only; media payload is skipped and box sizes stay within parents.
+func bmffHasOnlyAudioTracks(ctx context.Context, content io.ReaderAt, size int64) bool {
+	if content == nil {
+		return false
+	}
+	audioTracks, boxes := 0, 0
+	path := []string{"moov", "trak", "mdia", "hdlr"}
+	var walk func(int64, int64, int) bool
+	walk = func(start, end int64, depth int) bool {
+		found := false
+		for offset := start; offset < end; {
+			boxes++
+			if ctx.Err() != nil || boxes > 10000 || end-offset < 8 {
+				return false
+			}
+			var header [16]byte
+			if _, err := content.ReadAt(header[:8], offset); err != nil {
+				return false
+			}
+			length, headerSize := uint64(binary.BigEndian.Uint32(header[:4])), int64(8)
+			if length == 1 {
+				if end-offset < 16 {
+					return false
+				}
+				if _, err := content.ReadAt(header[8:], offset+8); err != nil {
+					return false
+				}
+				length, headerSize = binary.BigEndian.Uint64(header[8:]), 16
+			} else if length == 0 {
+				length = uint64(end - offset)
+			}
+			if length < uint64(headerSize) || length > uint64(end-offset) {
+				return false
+			}
+			next := offset + int64(length)
+			if string(header[4:8]) == path[depth] {
+				found = true
+				if depth < len(path)-1 {
+					if !walk(offset+headerSize, next, depth+1) {
+						return false
+					}
+				} else {
+					var handler [12]byte
+					if next-offset-headerSize < int64(len(handler)) {
+						return false
+					}
+					if _, err := content.ReadAt(handler[:], offset+headerSize); err != nil {
+						return false
+					}
+					if string(handler[8:]) != "soun" {
+						return false
+					}
+					audioTracks++
+				}
+			}
+			offset = next
+		}
+		return found
+	}
+	return walk(0, size, 0) && audioTracks > 0
 }
 
 func bmffHasHEIFBrand(header []byte) bool {
