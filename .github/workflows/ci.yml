@@ -70,8 +70,8 @@ jobs:
           go vet ./...
           ./scripts/test-release-workflow.sh
           docker build -t asset-api:verify .
-          docker export "$(docker create asset-api:verify)" | tar -tf - | grep -Fxq 'asset-derivative-worker'
-          docker export "$(docker create asset-api:verify)" | tar -tf - | grep -Fxq 'asset-scan-warmer'
+          docker export "$(docker create asset-api:verify)" | tar -tf - | grep -Fx 'asset-derivative-worker' >/dev/null
+          docker export "$(docker create asset-api:verify)" | tar -tf - | grep -Fx 'asset-scan-warmer' >/dev/null
           docker build -f Dockerfile.scan -t asset-scan:verify .
           docker run --rm \
             -v /var/run/docker.sock:/var/run/docker.sock \

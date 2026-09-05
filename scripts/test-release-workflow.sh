@@ -84,8 +84,11 @@ grep -Fq 'image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 "$SCAN_I
 scan_line="$(grep -n 'name: Scan immutable images' "$workflow" | cut -d: -f1)"
 what_if_line="$(grep -n 'name: Reject destructive infrastructure changes' "$workflow" | cut -d: -f1)"
 test "$scan_line" -lt "$what_if_line"
-grep -Fq "docker export \"\$(docker create asset-api:verify)\" | tar -tf - | grep -Fxq 'asset-derivative-worker'" "$workflow"
-grep -Fq "docker export \"\$(docker create asset-api:verify)\" | tar -tf - | grep -Fxq 'asset-derivative-worker'" .github/workflows/ci.yml
+for image_check_workflow in .github/workflows/ci.yml "$workflow"; do
+  for binary in asset-derivative-worker asset-scan-warmer; do
+    grep -Fq "docker export \"\$(docker create asset-api:verify)\" | tar -tf - | grep -Fx '$binary' >/dev/null" "$image_check_workflow"
+  done
+done
 grep -Fq 'docker run --rm --entrypoint clamscan asset-scan:verify --help' "$workflow"
 for flag in --max-filesize --max-scansize --max-files --max-recursion --alert-exceeds-max --alert-encrypted; do
   grep -Fq -- "$flag" "$workflow"
