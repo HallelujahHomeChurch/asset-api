@@ -14,6 +14,7 @@ import (
 	"image/jpeg"
 	"image/png"
 	"io"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -1657,4 +1658,38 @@ func (b *memoryBlobStore) Put(_ context.Context, objectKey string, reader io.Rea
 	properties := inspectBytes(value)
 	properties.ETag = "etag-derivative"
 	return properties, nil
+}
+
+func TestCompleteUploadLINETranscodedAudioStaysScanGated(t *testing.T) {
+	ctx := context.Background()
+	repo := newMemoryRepository()
+	blobs := newMemoryBlobStore()
+	service := NewService(repo, blobs, "https://www.alive.org.tw/api/assets", time.Now)
+	// Synthetic two-second WAV tone sent through LINE; returned as AAC in generic ISO BMFF.
+	payload, err := os.ReadFile("testdata/line-transcoded-tone.m4a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := service.CreateUploadSession(ctx, CreateUploadInput{
+		Namespace: "line.group.media-sync", OwnerService: "hhc-line-function-bot", OwnerType: "media_sync_ingest",
+		OwnerID: "test-audio", Purpose: "media-sync", OriginalFileName: "audio.m4a",
+		ExpectedMIMEType: "audio/mp4", MaxSizeBytes: int64(len(payload)), Visibility: VisibilityRestricted,
+	}, "line-audio")
+	if err != nil {
+		t.Fatal(err)
+	}
+	blobs.objects[created.Session.StagingObjectKey] = payload
+	sum := sha256.Sum256(payload)
+	asset, err := service.CompleteUpload(ctx, created.Asset.ID, CompleteUploadInput{
+		SizeBytes: int64(len(payload)), ChecksumSHA256: hex.EncodeToString(sum[:]), MIMEType: "audio/mp4",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if asset.UploadStatus != UploadCompleted || asset.ScanStatus != ScanPending || asset.DetectedMIMEType != "audio/mp4" {
+		t.Fatalf("unexpected completed audio: %+v", asset)
+	}
+	if _, err := service.OpenPublic(ctx, asset.ID, ByteRange{}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("download before clean scan: %v", err)
+	}
 }

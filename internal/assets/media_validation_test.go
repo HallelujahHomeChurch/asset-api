@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"io"
 	"os"
@@ -196,4 +197,60 @@ func (r *boundedReaderAt) ReadAt(p []byte, off int64) (int, error) {
 		return n, io.EOF
 	}
 	return n, nil
+}
+
+// LINE returns audio/mp4 content with isom/iso2/mp41 brands, rather than M4A.
+func TestValidateMediaGenericMP4Audio(t *testing.T) {
+	box := func(kind string, body []byte) []byte {
+		value := make([]byte, 8+len(body))
+		binary.BigEndian.PutUint32(value, uint32(len(value)))
+		copy(value[4:8], kind)
+		copy(value[8:], body)
+		return value
+	}
+	track := func(handler string) []byte {
+		return box("trak", box("mdia", box("hdlr", append(make([]byte, 8), []byte(handler)...))))
+	}
+	ftyp := box("ftyp", []byte("isom\x00\x00\x02\x00isomiso2mp41"))
+	audio := append(append([]byte{}, ftyp...), box("moov", track("soun"))...)
+	extended := make([]byte, 16)
+	binary.BigEndian.PutUint32(extended, 1)
+	copy(extended[4:8], "moov")
+	binary.BigEndian.PutUint64(extended[8:], uint64(16+len(track("soun"))))
+	extended = append(extended, track("soun")...)
+	toEnd := box("moov", track("soun"))
+	clear(toEnd[:4])
+	oversized := append([]byte{}, extended...)
+	binary.BigEndian.PutUint64(oversized[8:], ^uint64(0))
+
+	cases := []struct {
+		name  string
+		body  []byte
+		valid bool
+	}{
+		{"LINE audio", audio, true},
+		{"extended box", append(append([]byte{}, ftyp...), extended...), true},
+		{"box to end", append(append([]byte{}, ftyp...), toEnd...), true},
+		{"overflowing box", append(append([]byte{}, ftyp...), oversized...), false},
+		{"box work limit", append(bytes.Repeat(box("free", nil), 10001), audio...), false},
+		{"video", append(append([]byte{}, ftyp...), box("moov", track("vide"))...), false},
+		{"mixed tracks", append(append([]byte{}, ftyp...), box("moov", append(track("soun"), track("vide")...))...), false},
+		{"missing tracks", ftyp, false},
+		{"empty extra track", append(append([]byte{}, ftyp...), box("moov", append(track("soun"), box("trak", nil)...))...), false},
+		{"handler text in media data", append(append([]byte{}, ftyp...), box("mdat", track("soun"))...), false},
+		{"truncated box", audio[:len(audio)-1], false},
+		{"brand text outside ftyp", append(box("ftyp", []byte("xxxx\x00\x00\x00\x00")), box("mdat", []byte("M4A "))...), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			reader := &boundedReaderAt{value: tc.body, maxEnd: int64(len(tc.body))}
+			_, err := ValidateMedia(context.Background(), "audio.m4a", "audio/mp4", tc.body[:min(len(tc.body), 512)], reader, int64(len(tc.body)))
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid=%v, error=%v", tc.valid, err)
+			}
+			if reader.exceeded {
+				t.Fatal("read beyond content")
+			}
+		})
+	}
 }
