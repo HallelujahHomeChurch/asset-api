@@ -14,7 +14,7 @@ func TestWorkerPurgesEveryCandidateObjectAndCompletes(t *testing.T) {
 		AssetID: "asset-1",
 		Keys:    []string{"staging", "original", "small", "medium", "large"},
 	}}
-	blobs := &blobStub{failures: map[string]int{}}
+	blobs := &blobStub{failures: map[string]int{}, completed: &repository.completed}
 	worker := NewWorker(repository, blobs)
 	worker.now = func() time.Time { return time.Date(2026, 7, 26, 0, 0, 0, 0, time.UTC) }
 
@@ -32,7 +32,7 @@ func TestWorkerPurgesEveryCandidateObjectAndCompletes(t *testing.T) {
 
 func TestWorkerRetriesBlobFailure(t *testing.T) {
 	repository := &repositoryStub{candidate: Candidate{AssetID: "asset-1", Keys: []string{"original"}}}
-	blobs := &blobStub{failures: map[string]int{"original": 1}}
+	blobs := &blobStub{failures: map[string]int{"original": 1}, completed: &repository.completed}
 	worker := NewWorker(repository, blobs)
 
 	processed, err := worker.ProcessOne(context.Background())
@@ -41,6 +41,13 @@ func TestWorkerRetriesBlobFailure(t *testing.T) {
 	}
 	if repository.retry == "" || repository.completed {
 		t.Fatalf("retry=%q completed=%v", repository.retry, repository.completed)
+	}
+	processed, err = worker.ProcessOne(context.Background())
+	if err != nil || !processed || !repository.completed {
+		t.Fatalf("retry processed=%v completed=%v err=%v", processed, repository.completed, err)
+	}
+	if len(blobs.deleted) != 1 || blobs.deleted[0] != "original" {
+		t.Fatalf("completed deletes=%v", blobs.deleted)
 	}
 }
 
@@ -122,11 +129,15 @@ func (r *repositoryStub) DeleteExpiredPurge(_ context.Context, before time.Time,
 }
 
 type blobStub struct {
-	deleted  []string
-	failures map[string]int
+	deleted   []string
+	failures  map[string]int
+	completed *bool
 }
 
 func (b *blobStub) Delete(_ context.Context, key string) error {
+	if b.completed != nil && *b.completed {
+		return errors.New("purge completed before Blob deletion")
+	}
 	if b.failures[key] > 0 {
 		b.failures[key]--
 		return assets.ErrInvalidUpload

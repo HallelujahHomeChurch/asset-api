@@ -1,0 +1,255 @@
+schema_version: 1
+service: asset-api
+datasets:
+  - id: asset.account-artifact-content
+    owner: asset-api
+    purpose: Store Account avatar and DSR-export Blob bytes; physically delete them idempotently only after Store.ClaimPurge finds an eligible asset.
+    necessity: required
+    storage:
+      kind: blob
+      resource: Azure Blob Storage
+      sources:
+        - path: internal/storage/azure/store.go
+          symbol: Store.Delete
+        - path: internal/postgres/store.go
+          symbol: Store.ClaimPurge
+    subject_keys:
+      - kind: user_id
+        field: assets.owner_id
+        evidence:
+          - path: internal/assets/service.go
+            symbol: Service.CreateUploadSession
+    data_classes: [identity, content]
+    fields:
+      - {name: blob.bytes, purpose: Account avatar or DSR export bytes, necessity: required, data_classes: [content]}
+    attribution: {mode: direct, explanation: assets.owner_id identifies the Account artifact subject.}
+    legal_basis: {status: pending_legal, reference: null}
+    retention: {status: pending_legal, rule: null, action: none}
+    cleanup: {mode: none, implementation: [], evidence: []}
+  - id: asset.account-artifact-metadata
+    owner: asset-api
+    purpose: Identify and safely serve Account avatar and DSR-export assets.
+    necessity: required
+    storage: {kind: postgres, resource: assets, sources: [{path: internal/postgres/store.go, symbol: Store.CreateUpload}]}
+    subject_keys: [{kind: user_id, field: assets.owner_id, evidence: [{path: internal/assets/service.go, symbol: Service.CreateUploadSession}]}]
+    data_classes: [identity, content, security, activity]
+    fields:
+      - {name: assets.id, purpose: Asset record identifier, necessity: required, data_classes: [identity]}
+      - {name: assets.namespace, purpose: Asset artifact namespace, necessity: required, data_classes: [identity]}
+      - {name: assets.owner_service, purpose: Asset artifact owning service, necessity: required, data_classes: [identity]}
+      - {name: assets.owner_type, purpose: Asset artifact owner type, necessity: required, data_classes: [identity]}
+      - {name: assets.owner_id, purpose: Asset Account artifact owner identifier, necessity: required, data_classes: [identity]}
+      - {name: assets.purpose, purpose: Asset business purpose label, necessity: required, data_classes: [content]}
+      - {name: assets.locale, purpose: Asset artifact locale, necessity: required, data_classes: [identity]}
+      - {name: assets.original_file_name, purpose: Asset original artifact filename, necessity: required, data_classes: [content]}
+      - {name: assets.object_key, purpose: Asset Blob object locator, necessity: required, data_classes: [content]}
+      - {name: assets.expected_mime_type, purpose: Asset declared media type, necessity: required, data_classes: [content]}
+      - {name: assets.detected_mime_type, purpose: Asset validated media type, necessity: required, data_classes: [content]}
+      - {name: assets.size_bytes, purpose: Asset byte size, necessity: required, data_classes: [content]}
+      - {name: assets.checksum_sha256, purpose: Asset content integrity checksum, necessity: required, data_classes: [security]}
+      - {name: assets.etag, purpose: Asset immutable object version, necessity: required, data_classes: [security]}
+      - {name: assets.upload_status, purpose: Asset upload lifecycle status, necessity: required, data_classes: [activity]}
+      - {name: assets.scan_status, purpose: Asset malware scan status, necessity: required, data_classes: [security]}
+      - {name: assets.scan_details, purpose: Asset malware scan details, necessity: required, data_classes: [security]}
+      - {name: assets.processing_status, purpose: Asset derivative lifecycle status, necessity: required, data_classes: [activity]}
+      - {name: assets.visibility, purpose: Asset access visibility policy, necessity: required, data_classes: [security]}
+      - {name: assets.created_at, purpose: Asset creation timestamp, necessity: required, data_classes: [activity]}
+      - {name: assets.updated_at, purpose: Asset update timestamp, necessity: required, data_classes: [activity]}
+      - {name: assets.scan_attempts, purpose: Asset scan attempt count, necessity: required, data_classes: [activity]}
+      - {name: assets.scan_next_attempt_at, purpose: Asset next scan attempt timestamp, necessity: required, data_classes: [activity]}
+      - {name: assets.scan_claimed_until, purpose: Asset scan worker lease expiry, necessity: required, data_classes: [activity]}
+      - {name: assets.processing_error, purpose: Asset derivative processing error, necessity: required, data_classes: [security]}
+      - {name: assets.processing_claimed_until, purpose: Asset derivative worker lease expiry, necessity: required, data_classes: [activity]}
+      - {name: assets.processing_attempts, purpose: Asset derivative attempt count, necessity: required, data_classes: [activity]}
+      - {name: assets.processing_next_attempt_at, purpose: Asset next derivative attempt timestamp, necessity: required, data_classes: [activity]}
+      - {name: assets.scan_signature_version, purpose: Asset scanner signature version, necessity: required, data_classes: [security]}
+      - {name: assets.scan_failure_category, purpose: Asset scan failure category, necessity: required, data_classes: [security]}
+      - {name: assets.scan_event_id, purpose: Asset active scan event identifier, necessity: required, data_classes: [identity, activity]}
+    attribution: {mode: direct, explanation: Only account.avatar and account.dsr-export use assets.owner_id as the Account subject.}
+    legal_basis: {status: pending_legal, reference: null}
+    retention: {status: pending_legal, rule: null, action: none}
+    cleanup: {mode: none, implementation: [], evidence: []}
+  - id: asset.account-upload-sessions
+    owner: asset-api
+    purpose: Create and complete Account artifact uploads safely and idempotently.
+    necessity: required
+    storage: {kind: postgres, resource: upload_sessions, sources: [{path: internal/postgres/store.go, symbol: Store.CreateUpload}]}
+    subject_keys: [{kind: user_id, field: upload_sessions.asset_id via assets.owner_id, evidence: [{path: internal/postgres/store.go, symbol: Store.ClaimPurge}]}]
+    data_classes: [identity, security, activity, content]
+    fields:
+      - {name: upload_sessions.id, purpose: Upload session record identifier, necessity: required, data_classes: [identity]}
+      - {name: upload_sessions.asset_id, purpose: Upload session linkage to the Account asset, necessity: required, data_classes: [identity]}
+      - {name: upload_sessions.idempotency_key, purpose: Upload session idempotent request key, necessity: required, data_classes: [security]}
+      - {name: upload_sessions.max_size_bytes, purpose: Upload session maximum permitted byte size, necessity: required, data_classes: [content]}
+      - {name: upload_sessions.status, purpose: Upload session processing lifecycle status, necessity: required, data_classes: [activity]}
+      - {name: upload_sessions.expires_at, purpose: Upload session expiry timestamp, necessity: required, data_classes: [activity]}
+      - {name: upload_sessions.created_at, purpose: Upload session creation timestamp, necessity: required, data_classes: [activity]}
+      - {name: upload_sessions.completed_at, purpose: Upload session completion timestamp, necessity: required, data_classes: [activity]}
+      - {name: upload_sessions.caller_service, purpose: Upload session calling service identity, necessity: required, data_classes: [identity]}
+      - {name: upload_sessions.operation, purpose: Upload session requested operation, necessity: required, data_classes: [activity]}
+      - {name: upload_sessions.request_fingerprint, purpose: Upload session idempotent request fingerprint, necessity: required, data_classes: [security]}
+      - {name: upload_sessions.staging_object_key, purpose: Upload session staging Blob object locator, necessity: required, data_classes: [content]}
+    attribution: {mode: direct, explanation: asset_id joins the session to assets.owner_id.}
+    legal_basis: {status: pending_legal, reference: null}
+    retention:
+      status: enforced
+      rule:
+        trigger: expires_at
+        field: upload_sessions.expires_at
+        source: {path: internal/postgres/store.go, symbol: Store.ClaimPurge}
+        duration_source: null
+        predicate: expires_at < now
+        description: An uncompleted upload is purge-eligible only after expiry; the lifecycle worker removes its staging Blob before completion and retries Blob failures.
+      action: purge
+    cleanup:
+      mode: existing_worker
+      implementation: [{path: internal/lifecycle/worker.go, symbol: Worker.ProcessOne}]
+      evidence:
+        - {kind: go_test, path: internal/postgres/store_integration_test.go, test_name: TestAccountUploadExpiryEligibilityIsStrictAndLeaseBounded}
+        - {kind: go_test, path: internal/lifecycle/worker_test.go, test_name: TestWorkerPurgesEveryCandidateObjectAndCompletes}
+        - {kind: go_test, path: internal/lifecycle/worker_test.go, test_name: TestWorkerRetriesBlobFailure}
+        - {kind: go_test, path: internal/storage/azure/store_test.go, test_name: TestDeleteMissingBlobIsRepeatSafe}
+  - id: asset.account-grants
+    owner: asset-api
+    purpose: Authorize a reader to access an Account artifact.
+    necessity: required
+    storage: {kind: postgres, resource: asset_grants, sources: [{path: internal/postgres/store.go, symbol: Store.CreateGrant}]}
+    subject_keys: [{kind: user_id, field: asset_grants.asset_id via assets.owner_id, evidence: [{path: internal/postgres/store.go, symbol: Store.HasActiveGrant}]}]
+    data_classes: [identity, security, activity]
+    fields:
+      - {name: asset_grants.id, purpose: Asset grant record identifier, necessity: required, data_classes: [identity]}
+      - {name: asset_grants.asset_id, purpose: Asset grant linkage to the Account asset, necessity: required, data_classes: [identity]}
+      - {name: asset_grants.subject_type, purpose: Asset grant reader subject type, necessity: required, data_classes: [identity]}
+      - {name: asset_grants.subject_id, purpose: Asset grant authorized reader identifier, necessity: required, data_classes: [identity]}
+      - {name: asset_grants.permission, purpose: Asset grant granted access permission, necessity: required, data_classes: [security]}
+      - {name: asset_grants.idempotency_key, purpose: Asset grant idempotent request key, necessity: required, data_classes: [security]}
+      - {name: asset_grants.expires_at, purpose: Asset grant expiry timestamp, necessity: required, data_classes: [activity]}
+      - {name: asset_grants.created_at, purpose: Asset grant creation timestamp, necessity: required, data_classes: [activity]}
+      - {name: asset_grants.revoked_at, purpose: Asset grant revocation timestamp, necessity: required, data_classes: [activity]}
+      - {name: asset_grants.caller_service, purpose: Asset grant calling service identity, necessity: required, data_classes: [identity]}
+      - {name: asset_grants.operation, purpose: Asset grant requested operation, necessity: required, data_classes: [activity]}
+      - {name: asset_grants.request_fingerprint, purpose: Asset grant idempotent request fingerprint, necessity: required, data_classes: [security]}
+    attribution: {mode: direct, explanation: "asset_id joins the grant to assets.owner_id; subject_id is a reader, not the artifact owner."}
+    legal_basis: {status: pending_legal, reference: null}
+    retention: {status: pending_legal, rule: null, action: none}
+    cleanup: {mode: none, implementation: [], evidence: []}
+  - id: asset.account-scan-and-derivative-state
+    owner: asset-api
+    purpose: Process, scan, retry, and derive Account artifacts.
+    necessity: required
+    storage: {kind: postgres, resource: asset processing tables, sources: [{path: internal/postgres/store.go, symbol: Store.ClaimPurge}]}
+    subject_keys: [{kind: user_id, field: asset_id via assets.owner_id, evidence: [{path: internal/postgres/store.go, symbol: Store.ClaimPurge}]}]
+    data_classes: [identity, content, security, activity]
+    fields:
+      - {name: asset_scan_events.event_id, purpose: Scan event source event identifier, necessity: required, data_classes: [identity, activity]}
+      - {name: asset_scan_events.asset_id, purpose: Scan event linkage to the Account asset, necessity: required, data_classes: [identity]}
+      - {name: asset_scan_events.status, purpose: Scan event processing lifecycle status, necessity: required, data_classes: [activity]}
+      - {name: asset_scan_events.details, purpose: Scan event processing failure details, necessity: required, data_classes: [security]}
+      - {name: asset_scan_events.etag, purpose: Scan event immutable object version, necessity: required, data_classes: [security]}
+      - {name: asset_scan_events.created_at, purpose: Scan event creation timestamp, necessity: required, data_classes: [activity]}
+      - {name: asset_derivatives.asset_id, purpose: Derivative linkage to the Account asset, necessity: required, data_classes: [identity]}
+      - {name: asset_derivatives.variant, purpose: Derivative derivative variant, necessity: required, data_classes: [content]}
+      - {name: asset_derivatives.object_key, purpose: Derivative Blob object locator, necessity: required, data_classes: [content]}
+      - {name: asset_derivatives.mime_type, purpose: Derivative derivative media type, necessity: required, data_classes: [content]}
+      - {name: asset_derivatives.width, purpose: Derivative derivative width, necessity: required, data_classes: [content]}
+      - {name: asset_derivatives.height, purpose: Derivative derivative height, necessity: required, data_classes: [content]}
+      - {name: asset_derivatives.size_bytes, purpose: Derivative byte size, necessity: required, data_classes: [content]}
+      - {name: asset_derivatives.etag, purpose: Derivative immutable object version, necessity: required, data_classes: [security]}
+      - {name: asset_derivatives.created_at, purpose: Derivative creation timestamp, necessity: required, data_classes: [activity]}
+      - {name: asset_scan_outbox.event_id, purpose: Scan outbox message source event identifier, necessity: required, data_classes: [identity, activity]}
+      - {name: asset_scan_outbox.asset_id, purpose: Scan outbox message linkage to the Account asset, necessity: required, data_classes: [identity]}
+      - {name: asset_scan_outbox.asset_etag, purpose: Scan outbox message immutable asset version, necessity: required, data_classes: [security]}
+      - {name: asset_scan_outbox.attempts, purpose: Scan outbox message delivery attempt count, necessity: required, data_classes: [activity]}
+      - {name: asset_scan_outbox.available_at, purpose: Scan outbox message next delivery availability timestamp, necessity: required, data_classes: [activity]}
+      - {name: asset_scan_outbox.claimed_until, purpose: Scan outbox message worker lease expiry, necessity: required, data_classes: [activity]}
+      - {name: asset_scan_outbox.delivered_at, purpose: Scan outbox message delivery completion timestamp, necessity: required, data_classes: [activity]}
+      - {name: asset_scan_outbox.last_error, purpose: Scan outbox message outbox delivery error, necessity: required, data_classes: [security]}
+      - {name: asset_scan_outbox.created_at, purpose: Scan outbox message creation timestamp, necessity: required, data_classes: [activity]}
+      - {name: asset_derivative_outbox.event_id, purpose: Derivative outbox message source event identifier, necessity: required, data_classes: [identity, activity]}
+      - {name: asset_derivative_outbox.asset_id, purpose: Derivative outbox message linkage to the Account asset, necessity: required, data_classes: [identity]}
+      - {name: asset_derivative_outbox.asset_etag, purpose: Derivative outbox message immutable asset version, necessity: required, data_classes: [security]}
+      - {name: asset_derivative_outbox.attempts, purpose: Derivative outbox message delivery attempt count, necessity: required, data_classes: [activity]}
+      - {name: asset_derivative_outbox.available_at, purpose: Derivative outbox message next delivery availability timestamp, necessity: required, data_classes: [activity]}
+      - {name: asset_derivative_outbox.claimed_until, purpose: Derivative outbox message worker lease expiry, necessity: required, data_classes: [activity]}
+      - {name: asset_derivative_outbox.delivered_at, purpose: Derivative outbox message delivery completion timestamp, necessity: required, data_classes: [activity]}
+      - {name: asset_derivative_outbox.last_error, purpose: Derivative outbox message outbox delivery error, necessity: required, data_classes: [security]}
+      - {name: asset_derivative_outbox.created_at, purpose: Derivative outbox message creation timestamp, necessity: required, data_classes: [activity]}
+    attribution: {mode: direct, explanation: Every row has an FK-linked asset_id that joins to assets.owner_id.}
+    legal_basis: {status: pending_legal, reference: null}
+    retention: {status: pending_legal, rule: null, action: none}
+    cleanup: {mode: none, implementation: [], evidence: []}
+  - id: asset.account-poison-events
+    owner: asset-api
+    purpose: Retain poison-message metadata for manual incident handling.
+    necessity: required
+    storage: {kind: postgres, resource: poison event tables, sources: [{path: internal/postgres/store.go, symbol: Store.RecordScanPoison}]}
+    subject_keys: []
+    data_classes: [identity, security, activity]
+    fields:
+      - {name: asset_scan_poison_events.poison_id, purpose: Scan poison event poison record identifier, necessity: required, data_classes: [identity, activity]}
+      - {name: asset_scan_poison_events.event_id, purpose: Scan poison event source event identifier, necessity: required, data_classes: [identity, activity]}
+      - {name: asset_scan_poison_events.asset_id, purpose: Scan poison event linkage to the Account asset, necessity: required, data_classes: [identity]}
+      - {name: asset_scan_poison_events.asset_etag, purpose: Scan poison event immutable asset version, necessity: required, data_classes: [security]}
+      - {name: asset_scan_poison_events.reason, purpose: Scan poison event failure reason, necessity: required, data_classes: [security]}
+      - {name: asset_scan_poison_events.details, purpose: Scan poison event processing failure details, necessity: required, data_classes: [security]}
+      - {name: asset_scan_poison_events.dequeue_count, purpose: Scan poison event queue dequeue count, necessity: required, data_classes: [activity]}
+      - {name: asset_scan_poison_events.source_message_id, purpose: Scan poison event source queue message identifier, necessity: required, data_classes: [identity, activity]}
+      - {name: asset_scan_poison_events.body_sha256, purpose: Scan poison event message integrity hash, necessity: required, data_classes: [security]}
+      - {name: asset_scan_poison_events.created_at, purpose: Scan poison event creation timestamp, necessity: required, data_classes: [activity]}
+      - {name: asset_scan_poison_events.forwarded_at, purpose: Scan poison event incident forwarding timestamp, necessity: required, data_classes: [activity]}
+      - {name: asset_scan_poison_events.replayed_at, purpose: Scan poison event message replay timestamp, necessity: required, data_classes: [activity]}
+      - {name: asset_scan_poison_events.replay_event_id, purpose: Scan poison event replay event identifier, necessity: required, data_classes: [identity, activity]}
+      - {name: asset_derivative_poison_events.poison_id, purpose: Derivative poison event poison record identifier, necessity: required, data_classes: [identity, activity]}
+      - {name: asset_derivative_poison_events.event_id, purpose: Derivative poison event source event identifier, necessity: required, data_classes: [identity, activity]}
+      - {name: asset_derivative_poison_events.asset_id, purpose: Derivative poison event linkage to the Account asset, necessity: required, data_classes: [identity]}
+      - {name: asset_derivative_poison_events.asset_etag, purpose: Derivative poison event immutable asset version, necessity: required, data_classes: [security]}
+      - {name: asset_derivative_poison_events.reason, purpose: Derivative poison event failure reason, necessity: required, data_classes: [security]}
+      - {name: asset_derivative_poison_events.details, purpose: Derivative poison event processing failure details, necessity: required, data_classes: [security]}
+      - {name: asset_derivative_poison_events.dequeue_count, purpose: Derivative poison event queue dequeue count, necessity: required, data_classes: [activity]}
+      - {name: asset_derivative_poison_events.source_message_id, purpose: Derivative poison event source queue message identifier, necessity: required, data_classes: [identity, activity]}
+      - {name: asset_derivative_poison_events.body_sha256, purpose: Derivative poison event message integrity hash, necessity: required, data_classes: [security]}
+      - {name: asset_derivative_poison_events.created_at, purpose: Derivative poison event creation timestamp, necessity: required, data_classes: [activity]}
+      - {name: asset_derivative_poison_events.forwarded_at, purpose: Derivative poison event incident forwarding timestamp, necessity: required, data_classes: [activity]}
+    attribution: {mode: manual, explanation: "asset_id is textual and has no parent FK, so attribution and retention require manual review."}
+    legal_basis: {status: pending_legal, reference: null}
+    retention: {status: pending_legal, rule: null, action: none}
+    cleanup: {mode: none, implementation: [], evidence: []}
+  - id: asset.account-purge-lifecycle
+    owner: asset-api
+    purpose: Deny access, retry Blob removal, and remove retained Account metadata.
+    necessity: required
+    storage: {kind: postgres, resource: assets lifecycle fields, sources: [{path: internal/postgres/store.go, symbol: Store.DeleteExpiredPurge}]}
+    subject_keys: [{kind: user_id, field: assets.owner_id, evidence: [{path: internal/assets/service.go, symbol: Service.SoftDelete}]}]
+    data_classes: [identity, security, activity]
+    fields:
+      - {name: assets.deleted_at, purpose: Asset soft-deletion timestamp, necessity: required, data_classes: [activity]}
+      - {name: assets.purge_claimed_until, purpose: Asset purge worker lease expiry, necessity: required, data_classes: [activity]}
+      - {name: assets.purge_next_attempt_at, purpose: Asset next purge attempt timestamp, necessity: required, data_classes: [activity]}
+      - {name: assets.purge_error, purpose: Asset Blob purge error, necessity: required, data_classes: [security]}
+      - {name: assets.purged_at, purpose: Asset physical Blob purge completion timestamp, necessity: required, data_classes: [activity]}
+    attribution: {mode: direct, explanation: Lifecycle is owned by Account asset metadata identified by assets.owner_id.}
+    legal_basis: {status: pending_legal, reference: null}
+    retention:
+      status: enforced
+      rule:
+        trigger: age_since
+        field: assets.purged_at
+        source: {path: internal/postgres/store.go, symbol: Store.DeleteExpiredPurge}
+        duration_source: {path: internal/lifecycle/worker.go, symbol: Worker.ProcessOne}
+        predicate: purged_at < now-180d
+        description: After soft deletion denies reads and the worker completes repeat-safe Blob deletion, hard metadata deletion is strictly older than 180 days and bounded to 100 rows.
+      action: delete
+    cleanup:
+      mode: existing_worker
+      implementation:
+        - {path: internal/assets/service.go, symbol: Service.SoftDelete}
+        - {path: internal/lifecycle/worker.go, symbol: Worker.ProcessOne}
+        - {path: internal/storage/azure/store.go, symbol: Store.Delete}
+        - {path: internal/postgres/store.go, symbol: Store.DeleteExpiredPurge}
+      evidence:
+        - {kind: go_test, path: internal/assets/service_test.go, test_name: TestSoftDeleteImmediatelyBlocksPublicDownload}
+        - {kind: go_test, path: internal/lifecycle/worker_test.go, test_name: TestWorkerPurgesEveryCandidateObjectAndCompletes}
+        - {kind: go_test, path: internal/lifecycle/worker_test.go, test_name: TestWorkerRetriesBlobFailure}
+        - {kind: go_test, path: internal/storage/azure/store_test.go, test_name: TestDeleteMissingBlobIsRepeatSafe}
+        - {kind: go_test, path: internal/postgres/store_integration_test.go, test_name: TestDeleteExpiredPurgeIsBoundedAndPreservesRecentOrActiveAssets}
+        - {kind: go_test, path: internal/postgres/store_integration_test.go, test_name: TestPurgeIncludesAttemptSpecificDerivativeKeys}

@@ -60,12 +60,18 @@ jobs:
           ./scripts/test-migration-policy-test.sh
           ./scripts/test-migration-policy.sh internal/migrations/sql/*.sql
           ./scripts/test-what-if-policy.sh
-          go test -race ./... -count=1 -p=1
+          mkdir -p .artifacts/data-governance
+          set -o pipefail
+          go test -race -json ./... -count=1 -p=1 | tee .artifacts/data-governance/test-events.jsonl
+          GOVERNANCE_TEST_EVENTS="$PWD/.artifacts/data-governance/test-events.jsonl" \
+          GOVERNANCE_OUTPUT_DIR="$PWD/.artifacts/data-governance/export" \
+            go test ./internal/governance -run '^TestDataGovernanceExport$' -count=1
+          bash scripts/test-publish-data-governance.sh
           go vet ./...
           ./scripts/test-release-workflow.sh
           docker build -t asset-api:verify .
-          docker export "$(docker create asset-api:verify)" | tar -tf - | grep -Fxq 'asset-derivative-worker'
-          docker export "$(docker create asset-api:verify)" | tar -tf - | grep -Fxq 'asset-scan-warmer'
+          docker export "$(docker create asset-api:verify)" | tar -tf - | grep -Fx 'asset-derivative-worker' >/dev/null
+          docker export "$(docker create asset-api:verify)" | tar -tf - | grep -Fx 'asset-scan-warmer' >/dev/null
           docker build -f Dockerfile.scan -t asset-scan:verify .
           docker run --rm \
             -v /var/run/docker.sock:/var/run/docker.sock \
@@ -77,3 +83,13 @@ jobs:
             -v "$TRIVY_CACHE:/root/.cache/trivy" \
             ghcr.io/aquasecurity/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 \
             image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 asset-scan:verify
+      - name: Store verified governance manifest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: data-governance-${{ github.sha }}
+          if-no-files-found: error
+          include-hidden-files: true
+          overwrite: true
+          path: |
+            .artifacts/data-governance/export/data-governance.yaml
+            .artifacts/data-governance/export/data-governance.json
