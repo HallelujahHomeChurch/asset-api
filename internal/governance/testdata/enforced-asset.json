@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "service": "asset-api",
+  "datasets": [
+    {
+      "id": "asset.upload-fixture",
+      "owner": "asset-api",
+      "purpose": "Exercise expired Account upload evidence.",
+      "necessity": "required",
+      "storage": {"kind": "postgres", "resource": "upload_sessions", "sources": [{"path": "internal/postgres/store.go", "symbol": "Store.ClaimPurge"}]},
+      "subject_keys": [{"kind": "user_id", "field": "assets.owner_id", "evidence": [{"path": "internal/assets/service.go", "symbol": "Service.CreateUploadSession"}]}],
+      "data_classes": ["identity", "security"],
+      "fields": [{"name": "expires_at", "purpose": "Identify the upload expiry fixture.", "necessity": "required", "data_classes": ["security"]}],
+      "attribution": {"mode": "direct", "explanation": "The Account owner identifies the fixture subject."},
+      "legal_basis": {"status": "pending_legal", "reference": null},
+      "retention": {
+        "status": "enforced",
+        "rule": {
+          "trigger": "expires_at",
+          "field": "upload_sessions.expires_at",
+          "source": {"path": "internal/postgres/store.go", "symbol": "Store.ClaimPurge"},
+          "duration_source": null,
+          "predicate": "expires_at < now",
+          "description": "Fixture references strict expired-upload eligibility and worker Blob completion."
+        },
+        "action": "purge"
+      },
+      "cleanup": {
+        "mode": "existing_worker",
+        "implementation": [{"path": "internal/lifecycle/worker.go", "symbol": "Worker.ProcessOne"}],
+        "evidence": [
+          {"kind": "go_test", "path": "internal/postgres/store_integration_test.go", "test_name": "TestAccountUploadExpiryEligibilityIsStrictAndLeaseBounded"},
+          {"kind": "go_test", "path": "internal/lifecycle/worker_test.go", "test_name": "TestWorkerPurgesEveryCandidateObjectAndCompletes"},
+          {"kind": "go_test", "path": "internal/lifecycle/worker_test.go", "test_name": "TestWorkerRetriesBlobFailure"},
+          {"kind": "go_test", "path": "internal/storage/azure/store_test.go", "test_name": "TestDeleteMissingBlobIsRepeatSafe"}
+        ]
+      }
+    },
+    {
+      "id": "asset.purge-fixture",
+      "owner": "asset-api",
+      "purpose": "Exercise Account purge lifecycle evidence.",
+      "necessity": "required",
+      "storage": {"kind": "postgres", "resource": "assets", "sources": [{"path": "internal/postgres/store.go", "symbol": "Store.DeleteExpiredPurge"}]},
+      "subject_keys": [{"kind": "user_id", "field": "assets.owner_id", "evidence": [{"path": "internal/assets/service.go", "symbol": "Service.SoftDelete"}]}],
+      "data_classes": ["identity", "security"],
+      "fields": [{"name": "purged_at", "purpose": "Identify the purge lifecycle fixture.", "necessity": "required", "data_classes": ["security"]}],
+      "attribution": {"mode": "direct", "explanation": "The Account owner identifies the fixture subject."},
+      "legal_basis": {"status": "pending_legal", "reference": null},
+      "retention": {
+        "status": "enforced",
+        "rule": {
+          "trigger": "age_since",
+          "field": "assets.purged_at",
+          "source": {"path": "internal/postgres/store.go", "symbol": "Store.DeleteExpiredPurge"},
+          "duration_source": {"path": "internal/lifecycle/worker.go", "symbol": "Worker.ProcessOne"},
+          "predicate": "purged_at < now-180d",
+          "description": "Fixture references strict retained metadata deletion."
+        },
+        "action": "delete"
+      },
+      "cleanup": {
+        "mode": "existing_worker",
+        "implementation": [{"path": "internal/lifecycle/worker.go", "symbol": "Worker.ProcessOne"}],
+        "evidence": [
+          {"kind": "go_test", "path": "internal/assets/service_test.go", "test_name": "TestSoftDeleteImmediatelyBlocksPublicDownload"},
+          {"kind": "go_test", "path": "internal/lifecycle/worker_test.go", "test_name": "TestWorkerPurgesEveryCandidateObjectAndCompletes"},
+          {"kind": "go_test", "path": "internal/lifecycle/worker_test.go", "test_name": "TestWorkerRetriesBlobFailure"},
+          {"kind": "go_test", "path": "internal/storage/azure/store_test.go", "test_name": "TestDeleteMissingBlobIsRepeatSafe"},
+          {"kind": "go_test", "path": "internal/postgres/store_integration_test.go", "test_name": "TestDeleteExpiredPurgeIsBoundedAndPreservesRecentOrActiveAssets"},
+          {"kind": "go_test", "path": "internal/postgres/store_integration_test.go", "test_name": "TestPurgeIncludesAttemptSpecificDerivativeKeys"}
+        ]
+      }
+    }
+  ]
+}
