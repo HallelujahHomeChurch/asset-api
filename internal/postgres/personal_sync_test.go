@@ -194,7 +194,7 @@ func TestPersonalFilesAndNameIsolation(t *testing.T) {
 	if _, err = store.PersonalContentAssetID(ctx, "bob", "file", first.NodeRevision, now); !errors.Is(err, assets.ErrNotFound) {
 		t.Fatalf("foreign download=%v", err)
 	}
-	if _, err = db.Exec(`UPDATE assets SET deleted_at=$1 WHERE id='pending'`, now); err != nil {
+	if _, err = db.Exec(`UPDATE assets SET deleted_at=$1,created_at=$1::timestamptz-interval '25 hours' WHERE id='pending'`, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, found, err := store.ClaimPurge(ctx, now.Add(time.Minute), time.Minute); err != nil || found {

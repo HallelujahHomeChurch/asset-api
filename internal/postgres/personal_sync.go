@@ -107,6 +107,7 @@ func (s *Store) ApplyPersonalMutation(ctx context.Context, owner string, m asset
 			return result, assets.ErrConflict
 		}
 	}
+	previousAssetID := node.AssetID
 	switch m.Type {
 	case "create-file", "replace-content":
 		if node.Kind != "file" {
@@ -127,6 +128,9 @@ func (s *Store) ApplyPersonalMutation(ctx context.Context, owner string, m asset
 		}
 		if upload != "completed" || scan != "clean" || (processing != "ready" && processing != "not_required") {
 			return result, assets.ErrPersonalAssetNotReady
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE assets SET personal_download_until=GREATEST(personal_download_until,$2::timestamptz+interval '10 minutes') WHERE id=$1 OR id=NULLIF($3,'')`, node.AssetID, now, previousAssetID); err != nil {
+			return result, err
 		}
 	case "rename":
 		node.Name = norm.NFC.String(m.Name)
@@ -183,6 +187,22 @@ func (s *Store) ApplyPersonalMutation(ctx context.Context, owner string, m asset
 				nodes[i].DeletedAt = &now
 				nodes[i].DeletionOperationID = m.OperationID
 			} else {
+				if nodes[i].DeletedAt == nil || !nodes[i].DeletedAt.After(now.Add(-30*24*time.Hour)) {
+					return result, assets.ErrNotFound
+				}
+				if nodes[i].Kind == "file" {
+					updated, e := tx.ExecContext(ctx, `UPDATE assets SET personal_download_until=GREATEST(personal_download_until,$2::timestamptz+interval '10 minutes') WHERE id=$1 AND deleted_at IS NULL AND purged_at IS NULL AND upload_status='completed' AND scan_status='clean' AND processing_status IN('ready','not_required') AND (purge_claimed_until IS NULL OR purge_claimed_until<$2)`, nodes[i].AssetID, now)
+					if e != nil {
+						return result, e
+					}
+					count, e := updated.RowsAffected()
+					if e != nil {
+						return result, e
+					}
+					if count != 1 {
+						return result, assets.ErrNotFound
+					}
+				}
 				nodes[i].DeletedAt = nil
 				nodes[i].DeletionOperationID = ""
 			}

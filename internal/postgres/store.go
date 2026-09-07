@@ -2114,10 +2114,17 @@ func (s *Store) ClaimPurge(ctx context.Context, now time.Time, lease time.Durati
     SELECT 1 FROM asset_collection_items i WHERE i.asset_id=a.id AND i.node_kind='file'
     AND (i.deleted_at IS NULL OR i.deleted_at>$1-interval '30 days')
    ))
+   AND (a.namespace<>'presenter.personal' OR (
+    a.created_at<$1::timestamptz-interval '24 hours'
+    AND (u.status<>'created' OR u.expires_at<$1)
+    AND (a.scan_claimed_until IS NULL OR a.scan_claimed_until<$1)
+    AND (a.processing_claimed_until IS NULL OR a.processing_claimed_until<$1)
+   ))
 		  AND (a.purge_next_attempt_at IS NULL OR a.purge_next_attempt_at <= $1)
 		  AND (a.purge_claimed_until IS NULL OR a.purge_claimed_until < $1)
 			  AND (
 			    a.deleted_at IS NOT NULL OR
+            (a.namespace='presenter.personal' AND a.upload_status='completed' AND a.scan_status IN('clean','infected','failed') AND a.processing_status IN('ready','not_required','failed')) OR
 			    (a.upload_status='created' AND u.expires_at < $1) OR
 			    a.upload_status='failed' OR
 			    (a.scan_status IN ('infected','failed') AND a.updated_at < $1 - interval '7 days') OR
