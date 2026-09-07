@@ -111,7 +111,7 @@ paths:
       operationId: personalMutation
       summary: Commit an atomic personal directory mutation
       tags: [Public]
-      description: Locks one owner collection and atomically writes the node, immutable changes and operation receipt. Non-create operations require expectedRevision; folder delete and restore also require expectedCollectionRevision. File mutations only accept an owner-matching completed, clean upload. A 409 with code asset-not-ready is retryable processing state, not a content conflict. Reusing operationId with different content returns 409.
+      description: Locks one owner collection and atomically writes the node, immutable changes and operation receipt. Non-create operations require expectedRevision; folder delete and restore also require expectedCollectionRevision. Restore optionally accepts name to resolve a name collision atomically with the subtree restoration. File mutations only accept an owner-matching completed, clean upload. A 409 with code asset-not-ready is retryable processing state, not a content conflict. Reusing operationId with different content returns 409.
       x-hhc-visibility: public
       x-hhc-callers: [api-gateway]
       security: [ { gatewayDaprCaller: [], gatewayTrustedIdentity: [] } ]

@@ -53,13 +53,14 @@ func (m PersonalMutation) Validate() error {
 		return ErrInvalidInput
 	}
 	switch m.Type {
-	case "create-folder", "create-file", "rename":
+	case "create-folder", "create-file", "rename", "replace-content", "move", "delete", "restore":
+	default:
+		return ErrInvalidInput
+	}
+	if m.Type == "create-folder" || m.Type == "create-file" || m.Type == "rename" || m.Name != "" {
 		if !utf8.ValidString(m.Name) || strings.TrimSpace(m.Name) == "" || utf8.RuneCountInString(m.Name) > 255 || strings.ContainsAny(m.Name, "/\\") || strings.ContainsFunc(m.Name, unicode.IsControl) {
 			return ErrInvalidInput
 		}
-	case "replace-content", "move", "delete", "restore":
-	default:
-		return ErrInvalidInput
 	}
 	if m.Type != "create-folder" && m.Type != "create-file" && m.ExpectedRevision <= 0 {
 		return ErrInvalidInput

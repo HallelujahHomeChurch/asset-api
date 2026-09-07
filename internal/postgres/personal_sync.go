@@ -134,6 +134,10 @@ func (s *Store) ApplyPersonalMutation(ctx context.Context, owner string, m asset
 		}
 	case "rename":
 		node.Name = norm.NFC.String(m.Name)
+	case "restore":
+		if m.Name != "" {
+			node.Name = norm.NFC.String(m.Name)
+		}
 	case "move":
 		node.ParentID = m.ParentID
 		var cycle bool
