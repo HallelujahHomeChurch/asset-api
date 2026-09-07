@@ -173,6 +173,26 @@ func (s *Service) CompleteUpload(ctx context.Context, assetID string, input Comp
 		}
 		return Asset{}, ErrInvalidUpload
 	}
+	if asset.Namespace == PersonalNamespace && asset.ExpectedMIMEType == "application/vnd.hhc.presenter+json" {
+		download, openErr := s.blobs.Open(ctx, sourceKey, ByteRange{}, observed.ETag)
+		if openErr != nil {
+			return Asset{}, openErr
+		}
+		validationErr := ValidatePersonalDeck(ctx, download.Body)
+		closeErr := download.Body.Close()
+		if validationErr != nil {
+			if ctx.Err() != nil {
+				return Asset{}, ctx.Err()
+			}
+			if err := s.rejectUpload(ctx, asset, session); err != nil {
+				return Asset{}, err
+			}
+			return Asset{}, ErrInvalidUpload
+		}
+		if closeErr != nil {
+			return Asset{}, closeErr
+		}
+	}
 	if policy.Width > 0 || policy.Height > 0 {
 		download, openErr := s.blobs.Open(ctx, sourceKey, ByteRange{Offset: 0, Count: policy.MaxSizeBytes}, observed.ETag)
 		if openErr != nil {

@@ -2109,6 +2109,11 @@ func (s *Store) ClaimPurge(ctx context.Context, now time.Time, lease time.Durati
 		FROM assets a
 		LEFT JOIN upload_sessions u ON u.asset_id=a.id
 		WHERE a.purged_at IS NULL
+   AND (a.personal_download_until IS NULL OR a.personal_download_until < $1)
+   AND (a.namespace<>'presenter.personal' OR NOT EXISTS (
+    SELECT 1 FROM asset_collection_items i WHERE i.asset_id=a.id AND i.node_kind='file'
+    AND (i.deleted_at IS NULL OR i.deleted_at>$1-interval '30 days')
+   ))
 		  AND (a.purge_next_attempt_at IS NULL OR a.purge_next_attempt_at <= $1)
 		  AND (a.purge_claimed_until IS NULL OR a.purge_claimed_until < $1)
 			  AND (

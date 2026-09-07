@@ -122,6 +122,9 @@ func (s *Store) ApplyPersonalMutation(ctx context.Context, owner string, m asset
 		if err != nil {
 			return result, err
 		}
+		if upload == "failed" || scan == "infected" || scan == "failed" || processing == "failed" {
+			return result, assets.ErrInvalidUpload
+		}
 		if upload != "completed" || scan != "clean" || (processing != "ready" && processing != "not_required") {
 			return result, assets.ErrPersonalAssetNotReady
 		}
@@ -279,4 +282,36 @@ func (s *Store) PersonalChanges(ctx context.Context, owner, cursor string, limit
 	}
 	page.Cursor = encodeChangeCursor(c)
 	return page, nil
+}
+
+func (s *Store) PersonalUploadAssetID(ctx context.Context, owner, uploadID string) (string, error) {
+	var id string
+	err := s.db.QueryRowContext(ctx, `SELECT a.id FROM assets a JOIN upload_sessions u ON u.asset_id=a.id WHERE u.id=$1 AND a.namespace='presenter.personal' AND a.owner_service='presenter.personal' AND a.owner_type='user' AND a.owner_id=$2 AND a.deleted_at IS NULL AND a.purged_at IS NULL`, uploadID, owner).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", assets.ErrNotFound
+	}
+	return id, err
+}
+
+// A lease and the purge claim compete for the same asset row before any Blob I/O.
+func (s *Store) PersonalContentAssetID(ctx context.Context, owner, item string, revision int64, now time.Time) (string, error) {
+	var id string
+	err := s.db.QueryRowContext(ctx, `WITH owned AS (
+  SELECT i.id,i.collection_id,i.asset_id FROM asset_collection_items i JOIN asset_collections c ON c.id=i.collection_id
+  WHERE i.id=$1 AND c.owner_user_id=$2 AND c.namespace='presenter.personal' AND c.deleted_at IS NULL AND i.node_kind='file'
+  AND (i.deleted_at IS NULL OR i.deleted_at>$4::timestamptz-interval '30 days')
+ ), selected AS (
+  SELECT asset_id FROM owned WHERE $3::bigint=0
+  UNION ALL
+  SELECT ch.snapshot->>'assetId' FROM personal_sync_changes ch JOIN owned o ON o.id=ch.item_id AND o.collection_id=ch.collection_id
+  WHERE ch.revision=$3::bigint AND NOT ch.snapshot ? 'deletedAt'
+ ) UPDATE assets a SET personal_download_until=GREATEST(a.personal_download_until,$4::timestamptz+interval '10 minutes')
+ WHERE a.id IN(SELECT asset_id FROM selected) AND a.owner_id=$2 AND a.namespace='presenter.personal'
+ AND a.upload_status='completed' AND a.scan_status='clean' AND a.processing_status IN('ready','not_required')
+ AND a.deleted_at IS NULL AND a.purged_at IS NULL AND (a.purge_claimed_until IS NULL OR a.purge_claimed_until<$4)
+ RETURNING a.id`, item, owner, revision, now).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", assets.ErrNotFound
+	}
+	return id, err
 }

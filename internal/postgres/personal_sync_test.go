@@ -187,6 +187,22 @@ func TestPersonalFilesAndNameIsolation(t *testing.T) {
 	if head.AssetID != "replacement" {
 		t.Fatalf("new head missing: %+v", head)
 	}
+	oldID, err := store.PersonalContentAssetID(ctx, "alice", "file", first.NodeRevision, now)
+	if err != nil || oldID != "pending" {
+		t.Fatalf("old revision=%s %v", oldID, err)
+	}
+	if _, err = store.PersonalContentAssetID(ctx, "bob", "file", first.NodeRevision, now); !errors.Is(err, assets.ErrNotFound) {
+		t.Fatalf("foreign download=%v", err)
+	}
+	if _, err = db.Exec(`UPDATE assets SET deleted_at=$1 WHERE id='pending'`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := store.ClaimPurge(ctx, now.Add(time.Minute), time.Minute); err != nil || found {
+		t.Fatalf("leased purge=%v %v", found, err)
+	}
+	if _, found, err := store.ClaimPurge(ctx, now.Add(11*time.Minute), time.Minute); err != nil || !found {
+		t.Fatalf("expired lease purge=%v %v", found, err)
+	}
 	if _, err = store.GetPersonalNode(ctx, "bob", "file"); !errors.Is(err, assets.ErrNotFound) {
 		t.Fatalf("owner read: %v", err)
 	}

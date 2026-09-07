@@ -223,6 +223,7 @@ datasets:
     data_classes: [identity, security, activity]
     fields:
       - {name: assets.deleted_at, purpose: Asset soft-deletion timestamp, necessity: required, data_classes: [activity]}
+      - {name: assets.personal_download_until, purpose: Personal content download lease preventing concurrent Blob purge, necessity: required, data_classes: [activity]}
       - {name: assets.purge_claimed_until, purpose: Asset purge worker lease expiry, necessity: required, data_classes: [activity]}
       - {name: assets.purge_next_attempt_at, purpose: Asset next purge attempt timestamp, necessity: required, data_classes: [activity]}
       - {name: assets.purge_error, purpose: Asset Blob purge error, necessity: required, data_classes: [security]}

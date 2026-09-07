@@ -45,3 +45,27 @@ func (s *Service) ApplyPersonalMutation(ctx context.Context, owner string, m Per
 	}
 	return repository.ApplyPersonalMutation(ctx, owner, m, s.now().UTC())
 }
+
+func (s *Service) PersonalContentMetadata(ctx context.Context, owner, item string, revision int64) (PublicDownloadMetadata, error) {
+	if owner == "" {
+		return PublicDownloadMetadata{}, ErrUnauthorized
+	}
+	if revision < 0 {
+		return PublicDownloadMetadata{}, ErrInvalidInput
+	}
+	repository, ok := s.repository.(interface {
+		PersonalContentAssetID(context.Context, string, string, int64, time.Time) (string, error)
+	})
+	if !ok {
+		return PublicDownloadMetadata{}, fmt.Errorf("personal content repository unavailable")
+	}
+	id, err := repository.PersonalContentAssetID(ctx, owner, item, revision, s.now().UTC())
+	if err != nil {
+		return PublicDownloadMetadata{}, err
+	}
+	asset, err := s.repository.GetAsset(ctx, id)
+	if err != nil {
+		return PublicDownloadMetadata{}, err
+	}
+	return collectionContentMetadata(asset, asset.ETag)
+}

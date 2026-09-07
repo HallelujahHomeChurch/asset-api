@@ -131,6 +131,154 @@ paths:
         '403': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
+  /api/assets/personal-space/uploads:
+    post:
+      operationId: createPersonalUpload
+      summary: Create an immutable personal upload
+      tags: [Public]
+      x-hhc-visibility: public
+      x-hhc-callers: [api-gateway]
+      security: [ { gatewayDaprCaller: [], gatewayTrustedIdentity: [] } ]
+      description: Maximum 200 MiB. Idempotency-Key is scoped to the verified owner. Returns only a same-origin content path; no Blob credentials are exposed.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 128 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PersonalUploadInput' }
+      responses:
+        '201':
+          description: Owner-scoped upload state.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PersonalUploadState' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '413': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /api/assets/personal-space/uploads/{uploadID}:
+    get:
+      operationId: personalUploadStatus
+      summary: Read owner-scoped upload and scanning status
+      tags: [Public]
+      x-hhc-visibility: public
+      x-hhc-callers: [api-gateway]
+      security: [ { gatewayDaprCaller: [], gatewayTrustedIdentity: [] } ]
+      parameters:
+        - name: uploadID
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 128 }
+      responses:
+        '200':
+          description: Owner-scoped upload state.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PersonalUploadState' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '413': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /api/assets/personal-space/uploads/{uploadID}/content:
+    put:
+      operationId: putPersonalUpload
+      summary: Stream private staging bytes once
+      tags: [Public]
+      x-hhc-visibility: public
+      x-hhc-callers: [api-gateway]
+      security: [ { gatewayDaprCaller: [], gatewayTrustedIdentity: [] } ]
+      description: Streams up to 200 MiB with a five-minute deadline. A second write returns 409; query upload status and complete using the original checksum after an uncertain response. Expired uploads require a new upload ID.
+      parameters:
+        - name: uploadID
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 128 }
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        '204': { description: Bytes stored without replacing prior content. }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '413': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /api/assets/personal-space/uploads/{uploadID}/complete:
+    post:
+      operationId: completePersonalUpload
+      summary: Validate and seal an owner-scoped upload
+      tags: [Public]
+      x-hhc-visibility: public
+      x-hhc-callers: [api-gateway]
+      security: [ { gatewayDaprCaller: [], gatewayTrustedIdentity: [] } ]
+      parameters:
+        - name: uploadID
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 128 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CompleteUploadRequest' }
+      responses:
+        '200':
+          description: Owner-scoped upload state.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PersonalUploadState' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '413': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /api/assets/personal-space/items/{itemID}/content:
+    get:
+      operationId: personalContent
+      summary: Download the current or a specified personal revision
+      tags: [Public]
+      x-hhc-visibility: public
+      x-hhc-callers: [api-gateway]
+      security: [ { gatewayDaprCaller: [], gatewayTrustedIdentity: [] } ]
+      description: Owner identity is always required. Downloads acquire a ten-minute purge exclusion lease and finish within five minutes. Missing, expired, unscanned and other-owner content returns 404.
+      parameters:
+        - name: itemID
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 128 }
+        - name: revision
+          in: query
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: Range
+          in: header
+          schema: { type: string }
+      responses:
+        '200': { $ref: '#/components/responses/Download' }
+        '206': { $ref: '#/components/responses/Download' }
+        '416': { $ref: '#/components/responses/Error' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '413': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
   /api/assets/collections:
     get:
       summary: Asset API operation
@@ -636,6 +784,24 @@ components:
     CollectionACLMutation: { description: Collection ACL mutation., content: { application/json: { schema: { $ref: '#/components/schemas/CollectionACLMutation' } } } }
     DeleteCollectionItems: { description: Collection deletion result., content: { application/json: { schema: { $ref: '#/components/schemas/DeleteCollectionItemsResult' } } } }
   schemas:
+    PersonalUploadInput:
+      type: object
+      additionalProperties: false
+      required: [fileName, mimeType, sizeBytes]
+      properties:
+        fileName: { type: string, minLength: 1, maxLength: 1024 }
+        mimeType: { type: string }
+        sizeBytes: { type: integer, format: int64, minimum: 1, maximum: 209715200 }
+    PersonalUploadState:
+      type: object
+      required: [id, contentPath, expiresAt, uploadStatus, scanStatus, processingStatus]
+      properties:
+        id: { type: string }
+        contentPath: { type: string }
+        expiresAt: { type: string, format: date-time }
+        uploadStatus: { type: string, enum: [created, completed, failed] }
+        scanStatus: { type: string, enum: [pending, clean, infected, failed] }
+        processingStatus: { type: string, enum: [pending, ready, not_required, failed] }
     PersonalSpace:
       type: object
       required: [id, revision]
