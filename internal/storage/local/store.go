@@ -240,7 +240,16 @@ func (s *Store) Delete(_ context.Context, objectKey string) error {
 	}
 	return err
 }
-func (s *Store) Put(_ context.Context, objectKey string, reader io.Reader, size int64, _ string) (assets.BlobProperties, error) {
+func (s *Store) Put(ctx context.Context, objectKey string, reader io.Reader, size int64, _ string) (assets.BlobProperties, error) {
+	return s.put(ctx, objectKey, reader, size, false)
+}
+func (s *Store) PutOnce(ctx context.Context, objectKey string, reader io.Reader, size int64, _ string) (assets.BlobProperties, error) {
+	return s.put(ctx, objectKey, reader, size, true)
+}
+func (s *Store) put(ctx context.Context, objectKey string, reader io.Reader, size int64, once bool) (assets.BlobProperties, error) {
+	if err := ctx.Err(); err != nil {
+		return assets.BlobProperties{}, err
+	}
 	filePath, err := s.safePath(objectKey)
 	if err != nil {
 		return assets.BlobProperties{}, err
@@ -259,7 +268,17 @@ func (s *Store) Put(_ context.Context, objectKey string, reader io.Reader, size 
 	if copyErr != nil || closeErr != nil || written != size {
 		return assets.BlobProperties{}, assets.ErrInvalidUpload
 	}
-	if err := os.Rename(temporaryName, filePath); err != nil {
+	if err := ctx.Err(); err != nil {
+		return assets.BlobProperties{}, err
+	}
+	if once {
+		if err := os.Link(temporaryName, filePath); err != nil {
+			if os.IsExist(err) {
+				return assets.BlobProperties{}, assets.ErrConflict
+			}
+			return assets.BlobProperties{}, err
+		}
+	} else if err := os.Rename(temporaryName, filePath); err != nil {
 		return assets.BlobProperties{}, err
 	}
 	return s.Inspect(context.Background(), objectKey, "", 0)

@@ -125,3 +125,30 @@ func writeLocalUpload(t *testing.T, store *Store, key, value string) {
 		t.Fatalf("upload status = %d", response.Code)
 	}
 }
+
+func TestPersonalPutOncePreservesOriginal(t *testing.T) {
+	store, err := New(t.TempDir(), "http://asset.test/dev/uploads", "0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := []byte("%PDF-1.7\noriginal")
+	first, err := store.PutOnce(context.Background(), "personal/staging", bytes.NewReader(original), int64(len(original)), "application/pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.PutOnce(context.Background(), "personal/staging", bytes.NewBufferString("changed"), 7, "application/pdf"); err == nil {
+		t.Fatal("overwrote immutable upload")
+	}
+	after, err := store.Inspect(context.Background(), "personal/staging", "", 0)
+	if err != nil || after.ChecksumSHA256 != first.ChecksumSHA256 {
+		t.Fatalf("changed=%+v %v", after, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err = store.PutOnce(ctx, "personal/canceled", bytes.NewReader(original), int64(len(original)), "application/pdf"); err == nil {
+		t.Fatal("accepted canceled upload")
+	}
+	if _, err = store.InspectProperties(context.Background(), "personal/canceled"); err == nil {
+		t.Fatal("canceled upload published")
+	}
+}
