@@ -63,6 +63,74 @@ paths:
         '200': { $ref: '#/components/responses/Download' }
         '404': { $ref: '#/components/responses/Error' }
         '416': { $ref: '#/components/responses/Error' }
+  /api/assets/personal-space:
+    post:
+      operationId: ensurePersonalSpace
+      summary: Ensure the authenticated user's personal cloud space
+      tags: [Public]
+      description: Creates or returns one permanent personal collection using the trusted gateway user identity. No owner or namespace is accepted from the request body.
+      x-hhc-visibility: public
+      x-hhc-callers: [api-gateway]
+      security: [ { gatewayDaprCaller: [], gatewayTrustedIdentity: [] } ]
+      responses:
+        '200':
+          description: Personal collection.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PersonalSpace' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+  /api/assets/personal-space/changes:
+    get:
+      operationId: personalChanges
+      summary: Replay owner-scoped immutable personal changes
+      tags: [Public]
+      description: Each cursor binds the collection and a fixed high-water revision. Reset pages return the latest snapshot for every item at that revision, including tombstones. Clients must preserve dirty local nodes when resetting and commit each page with its cursor atomically.
+      x-hhc-visibility: public
+      x-hhc-callers: [api-gateway]
+      security: [ { gatewayDaprCaller: [], gatewayTrustedIdentity: [] } ]
+      parameters:
+        - name: cursor
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100 }
+      responses:
+        '200':
+          description: Fixed-revision snapshot or incremental page.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PersonalChangePage' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /api/assets/personal-space/mutations:
+    post:
+      operationId: personalMutation
+      summary: Commit an atomic personal directory mutation
+      tags: [Public]
+      description: Locks one owner collection and atomically writes the node, immutable changes and operation receipt. Non-create operations require expectedRevision; folder delete and restore also require expectedCollectionRevision. File mutations only accept an owner-matching completed, clean upload. A 409 with code asset-not-ready is retryable processing state, not a content conflict. Reusing operationId with different content returns 409.
+      x-hhc-visibility: public
+      x-hhc-callers: [api-gateway]
+      security: [ { gatewayDaprCaller: [], gatewayTrustedIdentity: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PersonalMutation' }
+      responses:
+        '200':
+          description: Original committed result, including on an identical retry.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PersonalMutationResult' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
   /api/assets/collections:
     get:
       summary: Asset API operation
@@ -568,6 +636,55 @@ components:
     CollectionACLMutation: { description: Collection ACL mutation., content: { application/json: { schema: { $ref: '#/components/schemas/CollectionACLMutation' } } } }
     DeleteCollectionItems: { description: Collection deletion result., content: { application/json: { schema: { $ref: '#/components/schemas/DeleteCollectionItemsResult' } } } }
   schemas:
+    PersonalSpace:
+      type: object
+      required: [id, revision]
+      properties:
+        id: { type: string }
+        revision: { type: integer, format: int64, minimum: 1 }
+    PersonalNode:
+      type: object
+      required: [id, collectionId, kind, name, revision]
+      properties:
+        id: { type: string }
+        collectionId: { type: string }
+        parentId: { type: string, description: Omitted for a root child. }
+        kind: { type: string, enum: [folder, file] }
+        name: { type: string }
+        assetId: { type: string }
+        revision: { type: integer, format: int64 }
+        deletedAt: { type: string, format: date-time }
+    PersonalChangePage:
+      type: object
+      required: [collection, items, nextCursor, hasMore, reset]
+      properties:
+        collection: { $ref: '#/components/schemas/PersonalSpace' }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/PersonalNode' }
+        nextCursor: { type: string }
+        hasMore: { type: boolean }
+        reset: { type: boolean }
+    PersonalMutation:
+      type: object
+      additionalProperties: false
+      required: [operationId, type, itemId]
+      properties:
+        operationId: { type: string, minLength: 1, maxLength: 128 }
+        type: { type: string, enum: [create-folder, create-file, replace-content, rename, move, delete, restore] }
+        itemId: { type: string, minLength: 1, maxLength: 128 }
+        parentId: { type: [string, 'null'], maxLength: 128 }
+        name: { type: string, minLength: 1, maxLength: 255 }
+        uploadId: { type: string, maxLength: 128 }
+        expectedRevision: { type: integer, format: int64, minimum: 1 }
+        expectedCollectionRevision: { type: integer, format: int64, minimum: 1 }
+    PersonalMutationResult:
+      type: object
+      required: [itemId, nodeRevision, collectionRevision]
+      properties:
+        itemId: { type: string }
+        nodeRevision: { type: integer, format: int64 }
+        collectionRevision: { type: integer, format: int64 }
     OpaqueID: { type: string, minLength: 1, maxLength: 255, description: Opaque Asset API identifier. }
     SyncReceipt:
       type: object
