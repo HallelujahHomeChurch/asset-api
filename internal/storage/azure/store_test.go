@@ -1,8 +1,10 @@
 package azure
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -58,5 +60,32 @@ func TestDeleteMissingBlobIsRepeatSafe(t *testing.T) {
 	}
 	if deletes != 2 {
 		t.Fatalf("deletes=%d", deletes)
+	}
+}
+
+func TestPersonalPutOnceUsesAtomicPrecondition(t *testing.T) {
+	committed := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		if r.URL.Query().Get("comp") == "block" {
+			w.WriteHeader(http.StatusCreated)
+			return
+		}
+		committed = true
+		if r.Header.Get("If-None-Match") != "*" {
+			t.Errorf("missing atomic precondition: %v", r.Header)
+		}
+		w.Header().Set("x-ms-error-code", "ConditionNotMet")
+		w.WriteHeader(http.StatusPreconditionFailed)
+	}))
+	defer server.Close()
+	client, err := azblob.NewClientWithNoCredential(server.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &Store{client: client, container: "private"}
+	_, err = store.PutOnce(context.Background(), "personal/staging", bytes.NewBufferString("immutable"), 9, "application/pdf")
+	if !committed || !errors.Is(err, assets.ErrConflict) {
+		t.Fatalf("commit=%v err=%v", committed, err)
 	}
 }

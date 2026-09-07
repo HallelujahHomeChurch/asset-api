@@ -202,6 +202,23 @@ func (s *Store) Put(ctx context.Context, objectKey string, reader io.Reader, _ i
 	return s.Inspect(ctx, objectKey, "", 0)
 }
 
+// PutOnce atomically publishes staging bytes without replacing an existing upload.
+func (s *Store) PutOnce(ctx context.Context, objectKey string, reader io.Reader, _ int64, mimeType string) (assets.BlobProperties, error) {
+	anyETag := azcore.ETagAny
+	_, err := s.client.UploadStream(ctx, s.container, objectKey, reader, &azblob.UploadStreamOptions{
+		HTTPHeaders:      &blob.HTTPHeaders{BlobContentType: &mimeType},
+		AccessConditions: &blob.AccessConditions{ModifiedAccessConditions: &blob.ModifiedAccessConditions{IfNoneMatch: &anyETag}},
+	})
+	var responseError *azcore.ResponseError
+	if errors.As(err, &responseError) && responseError.StatusCode == http.StatusPreconditionFailed {
+		return assets.BlobProperties{}, assets.ErrConflict
+	}
+	if err != nil {
+		return assets.BlobProperties{}, mapError(err)
+	}
+	return s.Inspect(ctx, objectKey, "", 0)
+}
+
 func (s *Store) userDelegationCredential(ctx context.Context) (*service.UserDelegationCredential, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

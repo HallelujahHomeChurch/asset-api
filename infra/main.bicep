@@ -356,6 +356,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = if (deployRuntime) {
       dapr: {
         enabled: true
         appId: 'asset-api'
+        httpMaxRequestSize: 210
         appPort: 8080
         appProtocol: 'http'
         logLevel: 'warn'
