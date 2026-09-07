@@ -303,3 +303,44 @@ func TestPersonalRestorePreservesEarlierTrashAndFallsBackToRoot(t *testing.T) {
 		t.Fatalf("root fallback=%+v err=%v", node, err)
 	}
 }
+
+func TestPersonalRestoreWithNameIsAtomicAndReplayable(t *testing.T) {
+	store := New(integrationDB(t))
+	ctx, now := context.Background(), time.Now().UTC()
+	if _, err := store.EnsurePersonalSpace(ctx, "alice", now); err != nil {
+		t.Fatal(err)
+	}
+	apply := func(m assets.PersonalMutation) assets.PersonalMutationResult {
+		t.Helper()
+		result, err := store.ApplyPersonalMutation(ctx, "alice", m, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	parent := apply(assets.PersonalMutation{OperationID: "parent", Type: "create-folder", ItemID: "parent", Name: "Sunday"})
+	child := apply(assets.PersonalMutation{OperationID: "child", Type: "create-folder", ItemID: "child", ParentID: "parent", Name: "Child"})
+	deleted := apply(assets.PersonalMutation{OperationID: "delete", Type: "delete", ItemID: "parent", ExpectedRevision: parent.NodeRevision, ExpectedCollectionRevision: child.CollectionRevision})
+	collision := apply(assets.PersonalMutation{OperationID: "collision", Type: "create-folder", ItemID: "collision", Name: "Sunday"})
+	mutation := assets.PersonalMutation{OperationID: "restore", Type: "restore", ItemID: "parent", ExpectedRevision: deleted.NodeRevision, ExpectedCollectionRevision: collision.CollectionRevision}
+	if _, err := store.ApplyPersonalMutation(ctx, "alice", mutation, now); !errors.Is(err, assets.ErrConflict) {
+		t.Fatalf("expected name conflict: %v", err)
+	}
+	mutation.Name = "Sunday restored"
+	restored := apply(mutation)
+	if replay := apply(mutation); replay != restored {
+		t.Fatalf("replay=%+v want=%+v", replay, restored)
+	}
+	page, err := store.PersonalChanges(ctx, "alice", "", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, node := range page.Items {
+		if node.ID == "parent" && (node.Name != mutation.Name || node.DeletedAt != nil) {
+			t.Fatalf("parent=%+v", node)
+		}
+		if node.ID == "child" && (node.DeletedAt != nil || node.Revision != restored.NodeRevision) {
+			t.Fatalf("child=%+v", node)
+		}
+	}
+}

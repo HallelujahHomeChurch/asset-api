@@ -16,3 +16,16 @@ func TestPersonalMutationValidation(t *testing.T) {
 		t.Fatal("accepted missing revision")
 	}
 }
+
+func TestPersonalRestoreNameValidation(t *testing.T) {
+	for _, name := range []string{" ", "a/b", "a\\b", "a\x00b"} {
+		if err := (PersonalMutation{OperationID: "op", Type: "restore", ItemID: "node", Name: name, ExpectedRevision: 1}).Validate(); err == nil {
+			t.Errorf("accepted restore name %q", name)
+		}
+	}
+	for _, name := range []string{"", "Sunday restored"} {
+		if err := (PersonalMutation{OperationID: "op", Type: "restore", ItemID: "node", Name: name, ExpectedRevision: 1}).Validate(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
