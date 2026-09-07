@@ -49,6 +49,8 @@ func TestPersonalRoutesRequireTrustedIdentity(t *testing.T) {
 			status int
 		}{
 			{"trusted", func(*http.Request) {}, 200},
+			{"missing-permission", func(r *http.Request) { r.Header.Del("X-HHC-Scopes") }, 403},
+			{"unrelated-permission", func(r *http.Request) { r.Header.Set("X-HHC-Scopes", "cms:read") }, 403},
 			{"forged-user", func(r *http.Request) { r.Header.Del("dapr-api-token") }, 403},
 			{"wrong-caller", func(r *http.Request) { r.Header.Set("Dapr-Caller-App-Id", "account-api") }, 403},
 			{"missing-user", func(r *http.Request) { r.Header.Del("X-HHC-User-ID") }, 401},
@@ -56,7 +58,7 @@ func TestPersonalRoutesRequireTrustedIdentity(t *testing.T) {
 			t.Run(route.path+"/"+test.name, func(t *testing.T) {
 				repo := &personalRepository{}
 				handler := New(assets.NewService(repo, nil, "", time.Now), nil, nil, false, "token", WorkloadAuthConfig{ReaderCallerAppID: "api-gateway"}, nil).Routes()
-				request := collectionReaderRequest(route.method, route.path)
+				request := personalReaderRequest(route.method, route.path)
 				request.Body = io.NopCloser(strings.NewReader(route.body))
 				test.alter(request)
 				response := httptest.NewRecorder()
@@ -92,7 +94,7 @@ func TestPersonalMutationRejectsOwnerAndDistinguishesPendingScan(t *testing.T) {
 	} {
 		repo := &personalRepository{err: test.err}
 		handler := New(assets.NewService(repo, nil, "", time.Now), nil, nil, false, "token", WorkloadAuthConfig{ReaderCallerAppID: "api-gateway"}, nil).Routes()
-		request := collectionReaderRequest("POST", "/api/assets/personal-space/mutations")
+		request := personalReaderRequest("POST", "/api/assets/personal-space/mutations")
 		request.Body = io.NopCloser(strings.NewReader(test.body))
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, request)
@@ -102,5 +104,29 @@ func TestPersonalMutationRejectsOwnerAndDistinguishesPendingScan(t *testing.T) {
 		if test.status == 400 && repo.calls != 0 {
 			t.Fatal("invalid mutation reached store")
 		}
+	}
+}
+
+func personalReaderRequest(method, path string) *http.Request {
+	r := collectionReaderRequest(method, path)
+	r.Header.Set("X-HHC-Scopes", "openid profile presenter:cloud:use")
+	return r
+}
+
+func TestAllPersonalRoutesDenyMissingPermission(t *testing.T) {
+	for _, route := range []struct{ method, path string }{
+		{"POST", "/api/assets/personal-space"}, {"GET", "/api/assets/personal-space/changes"},
+		{"POST", "/api/assets/personal-space/mutations"}, {"POST", "/api/assets/personal-space/uploads"},
+		{"GET", "/api/assets/personal-space/uploads/upload"}, {"PUT", "/api/assets/personal-space/uploads/upload/content"},
+		{"POST", "/api/assets/personal-space/uploads/upload/complete"}, {"GET", "/api/assets/personal-space/items/item/content"},
+	} {
+		t.Run(route.path, func(t *testing.T) {
+			handler := New(assets.NewService(&personalRepository{}, nil, "", time.Now), nil, nil, false, "token", WorkloadAuthConfig{ReaderCallerAppID: "api-gateway"}, nil).Routes()
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, collectionReaderRequest(route.method, route.path))
+			if response.Code != http.StatusForbidden {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
 	}
 }
