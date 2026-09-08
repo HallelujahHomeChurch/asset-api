@@ -56,14 +56,14 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /ready", h.ready)
 	mux.HandleFunc("GET /api/assets/public/{assetID}", h.publicDownload)
 	mux.HandleFunc("GET /api/assets/public/{assetID}/{variant}", h.publicDerivativeDownload)
-	mux.Handle("POST /api/assets/personal-space/uploads", h.collectionReader(http.HandlerFunc(h.createPersonalUpload)))
-	mux.Handle("GET /api/assets/personal-space/uploads/{uploadID}", h.collectionReader(http.HandlerFunc(h.personalUploadStatus)))
-	mux.Handle("PUT /api/assets/personal-space/uploads/{uploadID}/content", h.collectionReader(http.HandlerFunc(h.putPersonalUpload)))
-	mux.Handle("POST /api/assets/personal-space/uploads/{uploadID}/complete", h.collectionReader(http.HandlerFunc(h.completePersonalUpload)))
-	mux.Handle("GET /api/assets/personal-space/items/{itemID}/content", h.collectionReader(http.HandlerFunc(h.personalContent)))
-	mux.Handle("POST /api/assets/personal-space", h.collectionReader(http.HandlerFunc(h.ensurePersonalSpace)))
-	mux.Handle("GET /api/assets/personal-space/changes", h.collectionReader(http.HandlerFunc(h.personalChanges)))
-	mux.Handle("POST /api/assets/personal-space/mutations", h.collectionReader(http.HandlerFunc(h.personalMutation)))
+	mux.Handle("POST /api/assets/personal-space/uploads", h.personalReader(http.HandlerFunc(h.createPersonalUpload)))
+	mux.Handle("GET /api/assets/personal-space/uploads/{uploadID}", h.personalReader(http.HandlerFunc(h.personalUploadStatus)))
+	mux.Handle("PUT /api/assets/personal-space/uploads/{uploadID}/content", h.personalReader(http.HandlerFunc(h.putPersonalUpload)))
+	mux.Handle("POST /api/assets/personal-space/uploads/{uploadID}/complete", h.personalReader(http.HandlerFunc(h.completePersonalUpload)))
+	mux.Handle("GET /api/assets/personal-space/items/{itemID}/content", h.personalReader(http.HandlerFunc(h.personalContent)))
+	mux.Handle("POST /api/assets/personal-space", h.personalReader(http.HandlerFunc(h.ensurePersonalSpace)))
+	mux.Handle("GET /api/assets/personal-space/changes", h.personalReader(http.HandlerFunc(h.personalChanges)))
+	mux.Handle("POST /api/assets/personal-space/mutations", h.personalReader(http.HandlerFunc(h.personalMutation)))
 	mux.Handle("GET /api/assets/collections", h.collectionReader(http.HandlerFunc(h.listAuthorizedCollections)))
 	mux.Handle("POST /api/assets/sync-receipts", h.collectionReader(http.HandlerFunc(h.recordSyncReceipt)))
 	mux.Handle("GET /api/assets/collections/{collectionID}/changes", h.collectionReader(http.HandlerFunc(h.collectionChanges)))
@@ -159,6 +159,18 @@ func (h *Handler) internal(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), callerContextKey{}, caller)))
 	})
+}
+
+func (h *Handler) personalReader(next http.Handler) http.Handler {
+	return h.collectionReader(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, scope := range strings.Fields(r.Header.Get("X-HHC-Scopes")) {
+			if scope == "presenter:cloud:use" {
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+		writeError(w, http.StatusForbidden, "AST_FORBIDDEN", "personal cloud permission is required")
+	}))
 }
 
 func (h *Handler) collectionReader(next http.Handler) http.Handler {

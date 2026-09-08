@@ -31,6 +31,7 @@ func TestPersonalHTTPTransferAndRange(t *testing.T) {
 		r.Header.Set("Dapr-Caller-App-Id", "api-gateway")
 		r.Header.Set("dapr-api-token", "token")
 		r.Header.Set("X-HHC-User-ID", owner)
+		r.Header.Set("X-HHC-Scopes", "presenter:cloud:use")
 		r.Header.Set("X-HHC-Token-ID", "session-token")
 		r.Header.Set("X-HHC-Token-Expires-At", strconv.FormatInt(now.Add(time.Hour).Unix(), 10))
 		r.Header.Set("X-HHC-Session-ID", "session")
