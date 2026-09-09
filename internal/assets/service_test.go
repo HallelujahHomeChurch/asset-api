@@ -912,7 +912,7 @@ func TestPublicDownloadUsesNamespaceCachePolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = download.Body.Close()
-	if download.CacheControl != "public, max-age=31536000, immutable" {
+	if download.CacheControl != "private, no-store" {
 		t.Fatalf("weekly cache = %q", download.CacheControl)
 	}
 

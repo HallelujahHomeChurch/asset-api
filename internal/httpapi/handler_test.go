@@ -1388,6 +1388,32 @@ func TestPublicDownloadHeadMatchesGetWithoutOpeningBlob(t *testing.T) {
 	}
 }
 
+func TestRevokedPublicGrantRejectsEveryDownloadShapeBeforeCacheOrRangeHandling(t *testing.T) {
+	tests := []struct {
+		name, method, rangeValue, ifNoneMatch string
+	}{
+		{name: "get", method: http.MethodGet},
+		{name: "head", method: http.MethodHead},
+		{name: "range", method: http.MethodGet, rangeValue: "bytes=1-2"},
+		{name: "conditional", method: http.MethodGet, ifNoneMatch: `"original"`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			handler, blobs := publicDownloadHandlerWithGrant(t, false)
+			request := httptest.NewRequest(test.method, "/api/assets/public/asset-1", nil)
+			request.Header.Set("Range", test.rangeValue)
+			request.Header.Set("If-None-Match", test.ifNoneMatch)
+			response := httptest.NewRecorder()
+
+			handler.ServeHTTP(response, request)
+
+			if response.Code != http.StatusNotFound || blobs.openCalls != 0 {
+				t.Fatalf("status=%d openCalls=%d", response.Code, blobs.openCalls)
+			}
+		})
+	}
+}
+
 func TestPublicDownloadPreservesOriginalFileName(t *testing.T) {
 	handler, _ := publicDownloadHandler(t)
 	response := httptest.NewRecorder()
@@ -1560,6 +1586,7 @@ func TestAssetErrorsAreNotCacheable(t *testing.T) {
 func TestRestrictedDownloadRequiresOwnerAndSubjectGrant(t *testing.T) {
 	modified := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
 	repository := &downloadRepository{
+		grantActive: true,
 		asset: assets.Asset{
 			ID: "asset-1", Namespace: "line.group.file", OwnerService: "hhc-line-function-bot",
 			ObjectKey: "original", DetectedMIMEType: "application/pdf", SizeBytes: 6, ETag: `"original"`,
@@ -1594,8 +1621,19 @@ func publicDownloadHandler(t *testing.T) (http.Handler, *downloadBlobStore) {
 
 func publicDownloadHandlerWithOriginal(t *testing.T, original []byte) (http.Handler, *downloadBlobStore) {
 	t.Helper()
+	return publicDownloadHandlerWithOriginalAndGrant(t, original, true)
+}
+
+func publicDownloadHandlerWithGrant(t *testing.T, grantActive bool) (http.Handler, *downloadBlobStore) {
+	t.Helper()
+	return publicDownloadHandlerWithOriginalAndGrant(t, []byte("abcdef"), grantActive)
+}
+
+func publicDownloadHandlerWithOriginalAndGrant(t *testing.T, original []byte, grantActive bool) (http.Handler, *downloadBlobStore) {
+	t.Helper()
 	modified := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
 	repository := &downloadRepository{
+		grantActive: grantActive,
 		asset: assets.Asset{
 			ID: "asset-1", Namespace: "cms.news.cover", ObjectKey: "original", DetectedMIMEType: "image/jpeg",
 			OriginalFileName: "更新1732期週報.pdf",
@@ -1614,8 +1652,9 @@ func publicDownloadHandlerWithOriginal(t *testing.T, original []byte) (http.Hand
 
 type downloadRepository struct {
 	assets.Repository
-	asset      assets.Asset
-	derivative assets.Derivative
+	asset       assets.Asset
+	derivative  assets.Derivative
+	grantActive bool
 }
 
 func (r *downloadRepository) GetAsset(_ context.Context, id string) (assets.Asset, error) {
@@ -1625,7 +1664,7 @@ func (r *downloadRepository) GetAsset(_ context.Context, id string) (assets.Asse
 	return r.asset, nil
 }
 func (r *downloadRepository) HasActiveGrant(context.Context, string, assets.SubjectType, string, assets.Permission, time.Time) (bool, error) {
-	return true, nil
+	return r.grantActive, nil
 }
 func (r *downloadRepository) GetDerivative(_ context.Context, assetID, variant string) (assets.Derivative, error) {
 	if assetID != r.derivative.AssetID || variant != r.derivative.Variant {
