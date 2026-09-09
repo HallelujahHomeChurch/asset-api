@@ -49,6 +49,7 @@ func TestPersonalRoutesRequireTrustedIdentity(t *testing.T) {
 			status int
 		}{
 			{"trusted", func(*http.Request) {}, 200},
+			{"legacy-permission", func(r *http.Request) { r.Header.Set("X-HHC-Scopes", "presenter:cloud:use") }, 200},
 			{"missing-permission", func(r *http.Request) { r.Header.Del("X-HHC-Scopes") }, 403},
 			{"unrelated-permission", func(r *http.Request) { r.Header.Set("X-HHC-Scopes", "cms:read") }, 403},
 			{"forged-user", func(r *http.Request) { r.Header.Del("dapr-api-token") }, 403},
@@ -109,7 +110,7 @@ func TestPersonalMutationRejectsOwnerAndDistinguishesPendingScan(t *testing.T) {
 
 func personalReaderRequest(method, path string) *http.Request {
 	r := collectionReaderRequest(method, path)
-	r.Header.Set("X-HHC-Scopes", "openid profile presenter:cloud:use")
+	r.Header.Set("X-HHC-Scopes", "openid profile presenter:cloud:manage")
 	return r
 }
 
