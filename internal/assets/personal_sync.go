@@ -72,6 +72,9 @@ type PersonalNode struct {
 	Kind                string     `json:"kind"`
 	Name                string     `json:"name"`
 	AssetID             string     `json:"assetId,omitempty"`
+	MimeType            string     `json:"mimeType,omitempty"`
+	SizeBytes           int64      `json:"sizeBytes,omitempty"`
+	ETag                string     `json:"etag,omitempty"`
 	Revision            int64      `json:"revision"`
 	DeletedAt           *time.Time `json:"deletedAt,omitempty"`
 	DeletionOperationID string     `json:"-"`
