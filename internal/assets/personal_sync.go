@@ -9,13 +9,62 @@ import (
 )
 
 const PersonalNamespace = "presenter.personal"
+const DefaultPersonalQuotaBytes int64 = 100 << 30
 
-var ErrPersonalAssetNotReady = errors.New("personal asset not ready")
+var (
+	ErrPersonalAssetNotReady = errors.New("personal asset not ready")
+	ErrPersonalQuotaExceeded = errors.New("personal quota exceeded")
+)
 
 type PersonalSpace struct {
-	ID       string `json:"id"`
-	Revision int64  `json:"revision"`
+	ID         string `json:"id"`
+	Revision   int64  `json:"revision"`
+	UsedBytes  int64  `json:"usedBytes"`
+	QuotaBytes int64  `json:"quotaBytes"`
 }
+type PersonalUsage struct {
+	ActiveBytes    int64  `json:"activeBytes"`
+	TrashBytes     int64  `json:"trashBytes"`
+	ProtectedBytes int64  `json:"protectedBytes"`
+	UsedBytes      int64  `json:"usedBytes"`
+	QuotaBytes     int64  `json:"quotaBytes"`
+	OverrideBytes  *int64 `json:"overrideBytes"`
+}
+type PersonalQuotaExceeded struct {
+	UsedBytes     int64 `json:"usedBytes"`
+	QuotaBytes    int64 `json:"quotaBytes"`
+	RequiredBytes int64 `json:"requiredBytes"`
+}
+
+func (e *PersonalQuotaExceeded) Error() string { return ErrPersonalQuotaExceeded.Error() }
+func (e *PersonalQuotaExceeded) Unwrap() error { return ErrPersonalQuotaExceeded }
+
+type PersonalTrashPurgeInput struct {
+	OperationID string   `json:"operationId"`
+	ItemIDs     []string `json:"itemIds,omitempty"`
+	All         bool     `json:"all,omitempty"`
+}
+type PersonalTrashPurgeResult struct {
+	PurgedItemIDs []string `json:"purgedItemIds"`
+}
+
+func (p PersonalTrashPurgeInput) Validate() error {
+	if strings.TrimSpace(p.OperationID) == "" || len(p.OperationID) > 128 || strings.ContainsFunc(p.OperationID, unicode.IsControl) || p.All == (len(p.ItemIDs) > 0) || len(p.ItemIDs) > 1000 {
+		return ErrInvalidInput
+	}
+	seen := make(map[string]struct{}, len(p.ItemIDs))
+	for _, id := range p.ItemIDs {
+		if strings.TrimSpace(id) == "" || len(id) > 128 || strings.ContainsFunc(id, unicode.IsControl) {
+			return ErrInvalidInput
+		}
+		if _, ok := seen[id]; ok {
+			return ErrInvalidInput
+		}
+		seen[id] = struct{}{}
+	}
+	return nil
+}
+
 type PersonalNode struct {
 	ID                  string     `json:"id"`
 	CollectionID        string     `json:"collectionId"`
@@ -26,6 +75,7 @@ type PersonalNode struct {
 	Revision            int64      `json:"revision"`
 	DeletedAt           *time.Time `json:"deletedAt,omitempty"`
 	DeletionOperationID string     `json:"-"`
+	Purged              bool       `json:"purged,omitempty"`
 }
 type PersonalMutation struct {
 	OperationID                string `json:"operationId"`

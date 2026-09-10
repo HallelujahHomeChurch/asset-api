@@ -21,8 +21,110 @@ func (s *Store) EnsurePersonalSpace(ctx context.Context, owner string, now time.
 	err := s.db.QueryRowContext(ctx, `INSERT INTO asset_collections(id,namespace,name,revision,created_by_service,created_at,updated_at,owner_user_id,permanent_retention)
  VALUES($1,'presenter.personal','Personal',1,'presenter.personal',$2,$2,$3,true)
  ON CONFLICT(owner_user_id) WHERE namespace='presenter.personal' DO UPDATE SET owner_user_id=EXCLUDED.owner_user_id
- RETURNING id,revision`, newStoreID(), now, owner).Scan(&space.ID, &space.Revision)
+	 RETURNING id,revision`, newStoreID(), now, owner).Scan(&space.ID, &space.Revision)
+	if err != nil {
+		return space, err
+	}
+	usage, err := s.PersonalUsage(ctx, owner, now)
+	space.UsedBytes, space.QuotaBytes = usage.UsedBytes, usage.QuotaBytes
 	return space, err
+}
+
+type personalUsageQuerier interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func personalUsage(ctx context.Context, query personalUsageQuerier, owner string, now time.Time) (assets.PersonalUsage, error) {
+	var usage assets.PersonalUsage
+	var override sql.NullInt64
+	err := query.QueryRowContext(ctx, `WITH owner_collection AS (
+  SELECT id FROM asset_collections WHERE owner_user_id=$1 AND namespace='presenter.personal' AND deleted_at IS NULL
+), current_refs AS (
+  SELECT i.asset_id,
+         bool_or(i.deleted_at IS NULL) AS active,
+         bool_or(i.deleted_at>$2::timestamptz-interval '30 days') AS trash
+  FROM asset_collection_items i JOIN owner_collection c ON c.id=i.collection_id
+  WHERE i.node_kind='file' AND i.asset_id IS NOT NULL
+  GROUP BY i.asset_id
+), protected_refs AS (
+  SELECT DISTINCT ch.snapshot->>'assetId' AS asset_id
+  FROM personal_sync_changes ch JOIN owner_collection c ON c.id=ch.collection_id
+  WHERE COALESCE(ch.snapshot->>'assetId','')<>''
+), active AS (
+  SELECT COALESCE(SUM(a.size_bytes),0)::bigint AS bytes
+  FROM current_refs r JOIN assets a ON a.id=r.asset_id AND a.purged_at IS NULL
+  WHERE r.active
+), trash AS (
+  SELECT COALESCE(SUM(a.size_bytes),0)::bigint AS bytes
+  FROM current_refs r JOIN assets a ON a.id=r.asset_id AND a.purged_at IS NULL
+  WHERE NOT r.active AND r.trash
+), protected AS (
+  SELECT COALESCE(SUM(a.size_bytes),0)::bigint AS bytes
+  FROM protected_refs r JOIN assets a ON a.id=r.asset_id AND a.purged_at IS NULL
+  WHERE NOT EXISTS (SELECT 1 FROM current_refs current WHERE current.asset_id=r.asset_id)
+)
+SELECT active.bytes,trash.bytes,protected.bytes,
+       active.bytes+trash.bytes+protected.bytes,
+       COALESCE(q.quota_bytes,$3::bigint),q.quota_bytes
+FROM active CROSS JOIN trash CROSS JOIN protected
+LEFT JOIN personal_cloud_quotas q ON q.owner_user_id=$1`, owner, now, assets.DefaultPersonalQuotaBytes).Scan(
+		&usage.ActiveBytes, &usage.TrashBytes, &usage.ProtectedBytes, &usage.UsedBytes, &usage.QuotaBytes, &override)
+	if override.Valid {
+		usage.OverrideBytes = &override.Int64
+	}
+	return usage, err
+}
+
+func (s *Store) PersonalUsage(ctx context.Context, owner string, now time.Time) (assets.PersonalUsage, error) {
+	if strings.TrimSpace(owner) == "" || len(owner) > 128 {
+		return assets.PersonalUsage{}, assets.ErrUnauthorized
+	}
+	return personalUsage(ctx, s.db, owner, now)
+}
+
+func (s *Store) SetPersonalQuota(ctx context.Context, actor, owner string, quota *int64, requestID string, now time.Time) (assets.PersonalUsage, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return assets.PersonalUsage{}, err
+	}
+	defer tx.Rollback()
+	var collectionID string
+	err = tx.QueryRowContext(ctx, `SELECT id FROM asset_collections WHERE owner_user_id=$1 AND namespace='presenter.personal' AND deleted_at IS NULL FOR UPDATE`, owner).Scan(&collectionID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return assets.PersonalUsage{}, err
+	}
+	var old sql.NullInt64
+	err = tx.QueryRowContext(ctx, `SELECT quota_bytes FROM personal_cloud_quotas WHERE owner_user_id=$1 FOR UPDATE`, owner).Scan(&old)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return assets.PersonalUsage{}, err
+	}
+	if quota == nil {
+		_, err = tx.ExecContext(ctx, `DELETE FROM personal_cloud_quotas WHERE owner_user_id=$1`, owner)
+	} else {
+		_, err = tx.ExecContext(ctx, `INSERT INTO personal_cloud_quotas(owner_user_id,quota_bytes,updated_at,updated_by) VALUES($1,$2,$3,$4)
+ ON CONFLICT(owner_user_id) DO UPDATE SET quota_bytes=EXCLUDED.quota_bytes,updated_at=EXCLUDED.updated_at,updated_by=EXCLUDED.updated_by`, owner, *quota, now, actor)
+	}
+	if err != nil {
+		return assets.PersonalUsage{}, err
+	}
+	var oldValue, newValue any
+	if old.Valid {
+		oldValue = old.Int64
+	}
+	if quota != nil {
+		newValue = *quota
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO personal_cloud_quota_audit(id,owner_user_id,actor_user_id,request_id,old_quota_bytes,new_quota_bytes,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)`, newStoreID(), owner, actor, requestID, oldValue, newValue, now); err != nil {
+		return assets.PersonalUsage{}, err
+	}
+	usage, err := personalUsage(ctx, tx, owner, now)
+	if err != nil {
+		return assets.PersonalUsage{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return assets.PersonalUsage{}, err
+	}
+	return usage, nil
 }
 
 const personalNodeColumns = `id,collection_id,COALESCE(parent_item_id,''),node_kind,display_name,COALESCE(asset_id,''),updated_revision,deleted_at,COALESCE(deletion_operation_id,'')`
@@ -128,6 +230,32 @@ func (s *Store) ApplyPersonalMutation(ctx context.Context, owner string, m asset
 		}
 		if upload != "completed" || scan != "clean" || (processing != "ready" && processing != "not_required") {
 			return result, assets.ErrPersonalAssetNotReady
+		}
+		usage, e := personalUsage(ctx, tx, owner, now)
+		if e != nil {
+			return result, e
+		}
+		var size int64
+		if e = tx.QueryRowContext(ctx, `SELECT size_bytes FROM assets WHERE id=$1`, node.AssetID).Scan(&size); e != nil {
+			return result, e
+		}
+		var counted bool
+		e = tx.QueryRowContext(ctx, `SELECT EXISTS(
+  SELECT 1 FROM asset_collection_items i WHERE i.collection_id=$1 AND i.asset_id=$2 AND i.node_kind='file'
+    AND (i.deleted_at IS NULL OR i.deleted_at>$3::timestamptz-interval '30 days')
+  UNION ALL
+  SELECT 1 FROM personal_sync_changes ch WHERE ch.collection_id=$1 AND ch.snapshot->>'assetId'=$2
+    AND NOT EXISTS (SELECT 1 FROM asset_collection_items current WHERE current.collection_id=$1 AND current.asset_id=$2 AND current.node_kind='file')
+)`, space.ID, node.AssetID, now).Scan(&counted)
+		if e != nil {
+			return result, e
+		}
+		required := size
+		if counted {
+			required = 0
+		}
+		if required > usage.QuotaBytes-usage.UsedBytes {
+			return result, &assets.PersonalQuotaExceeded{UsedBytes: usage.UsedBytes, QuotaBytes: usage.QuotaBytes, RequiredBytes: required}
 		}
 		if _, err = tx.ExecContext(ctx, `UPDATE assets SET personal_download_until=GREATEST(personal_download_until,$2::timestamptz+interval '10 minutes') WHERE id=$1 OR id=NULLIF($3,'')`, node.AssetID, now, previousAssetID); err != nil {
 			return result, err
@@ -246,6 +374,111 @@ func (s *Store) ApplyPersonalMutation(ctx context.Context, owner string, m asset
 	}
 	if err = tx.Commit(); err != nil {
 		return assets.PersonalMutationResult{}, err
+	}
+	return result, nil
+}
+
+func (s *Store) PurgePersonalTrash(ctx context.Context, owner string, input assets.PersonalTrashPurgeInput, now time.Time) (assets.PersonalTrashPurgeResult, error) {
+	var result assets.PersonalTrashPurgeResult
+	if err := input.Validate(); err != nil {
+		return result, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return result, err
+	}
+	defer tx.Rollback()
+	var space assets.PersonalSpace
+	err = tx.QueryRowContext(ctx, `SELECT id,revision FROM asset_collections WHERE owner_user_id=$1 AND namespace='presenter.personal' AND deleted_at IS NULL FOR UPDATE`, owner).Scan(&space.ID, &space.Revision)
+	if errors.Is(err, sql.ErrNoRows) {
+		return result, assets.ErrNotFound
+	}
+	if err != nil {
+		return result, err
+	}
+	receiptID := "purge:" + input.OperationID
+	fingerprint := mutationFingerprint(input)
+	var savedHash string
+	var saved []byte
+	err = tx.QueryRowContext(ctx, `SELECT request_fingerprint,response_json FROM personal_sync_receipts WHERE owner_user_id=$1 AND operation_id=$2`, owner, receiptID).Scan(&savedHash, &saved)
+	if err == nil {
+		if savedHash != fingerprint {
+			return result, assets.ErrConflict
+		}
+		err = json.Unmarshal(saved, &result)
+		return result, err
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return result, err
+	}
+	if !input.All {
+		var count int
+		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM asset_collection_items WHERE collection_id=$1 AND id=ANY($2::text[]) AND node_kind<>'legacy' AND deleted_at IS NOT NULL`, space.ID, input.ItemIDs).Scan(&count); err != nil {
+			return result, err
+		}
+		if count != len(input.ItemIDs) {
+			return result, assets.ErrNotFound
+		}
+	}
+	rows, err := tx.QueryContext(ctx, `WITH RECURSIVE selected AS (
+  SELECT id FROM asset_collection_items WHERE collection_id=$1 AND deleted_at IS NOT NULL
+    AND ($2::boolean OR id=ANY($3::text[]))
+  UNION
+  SELECT child.id FROM asset_collection_items child JOIN selected parent ON child.parent_item_id=parent.id
+  WHERE child.collection_id=$1 AND child.deleted_at IS NOT NULL
+)
+SELECT `+personalNodeColumns+` FROM asset_collection_items WHERE collection_id=$1 AND id IN(SELECT id FROM selected) ORDER BY id`, space.ID, input.All, input.ItemIDs)
+	if err != nil {
+		return result, err
+	}
+	var nodes []assets.PersonalNode
+	for rows.Next() {
+		node, scanErr := scanPersonalNode(rows)
+		if scanErr != nil {
+			rows.Close()
+			return result, scanErr
+		}
+		nodes = append(nodes, node)
+		result.PurgedItemIDs = append(result.PurgedItemIDs, node.ID)
+	}
+	if err = finishRows(rows); err != nil {
+		return result, err
+	}
+	if len(nodes) > 0 {
+		revision := space.Revision + 1
+		if _, err = tx.ExecContext(ctx, `UPDATE asset_collection_items SET parent_item_id=NULL WHERE collection_id=$1 AND deleted_at IS NULL AND parent_item_id=ANY($2::text[])`, space.ID, result.PurgedItemIDs); err != nil {
+			return result, err
+		}
+		if _, err = tx.ExecContext(ctx, `DELETE FROM personal_sync_changes WHERE collection_id=$1 AND item_id=ANY($2::text[])`, space.ID, result.PurgedItemIDs); err != nil {
+			return result, err
+		}
+		if _, err = tx.ExecContext(ctx, `DELETE FROM asset_collection_items WHERE collection_id=$1 AND id=ANY($2::text[])`, space.ID, result.PurgedItemIDs); err != nil {
+			return result, err
+		}
+		for _, node := range nodes {
+			node.AssetID, node.ParentID, node.DeletionOperationID = "", "", ""
+			node.Revision, node.Purged = revision, true
+			snapshot, encodeErr := json.Marshal(node)
+			if encodeErr != nil {
+				return result, encodeErr
+			}
+			if _, err = tx.ExecContext(ctx, `INSERT INTO personal_sync_changes(collection_id,revision,item_id,snapshot,created_at) VALUES($1,$2,$3,$4,$5)`, space.ID, revision, node.ID, snapshot, now); err != nil {
+				return result, err
+			}
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE asset_collections SET revision=$2,updated_at=$3 WHERE id=$1`, space.ID, revision, now); err != nil {
+			return result, err
+		}
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		return result, err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO personal_sync_receipts(owner_user_id,operation_id,request_fingerprint,response_json,created_at) VALUES($1,$2,$3,$4,$5)`, owner, receiptID, fingerprint, encoded, now); err != nil {
+		return result, err
+	}
+	if err = tx.Commit(); err != nil {
+		return assets.PersonalTrashPurgeResult{}, err
 	}
 	return result, nil
 }

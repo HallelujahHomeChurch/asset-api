@@ -1,6 +1,39 @@
 package assets
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
+
+func TestPersonalTrashPurgeValidation(t *testing.T) {
+	valid := []PersonalTrashPurgeInput{
+		{OperationID: "purge-one", ItemIDs: []string{"item"}},
+		{OperationID: "purge-all", All: true},
+	}
+	for _, input := range valid {
+		if err := input.Validate(); err != nil {
+			t.Fatalf("valid input %+v: %v", input, err)
+		}
+	}
+	invalid := []PersonalTrashPurgeInput{
+		{},
+		{OperationID: "both", ItemIDs: []string{"item"}, All: true},
+		{OperationID: "empty"},
+		{OperationID: "duplicate", ItemIDs: []string{"item", "item"}},
+	}
+	for _, input := range invalid {
+		if !errors.Is(input.Validate(), ErrInvalidInput) {
+			t.Fatalf("invalid input accepted: %+v", input)
+		}
+	}
+}
+
+func TestPersonalQuotaExceededError(t *testing.T) {
+	err := &PersonalQuotaExceeded{UsedBytes: 90, QuotaBytes: 100, RequiredBytes: 20}
+	if !errors.Is(err, ErrPersonalQuotaExceeded) {
+		t.Fatal("typed quota error must match sentinel")
+	}
+}
 
 func TestPersonalMutationValidation(t *testing.T) {
 	for _, name := range []string{"", " ", "a/b", "a\\b", "a\x00b", "a\nb"} {
