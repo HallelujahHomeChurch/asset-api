@@ -341,6 +341,109 @@ paths:
         '409': { $ref: '#/components/responses/Error' }
         '413': { $ref: '#/components/responses/Error' }
         '422': { $ref: '#/components/responses/Error' }
+  /api/assets/personal-space/items/{itemID}/shares:
+    parameters: [ { $ref: '#/components/parameters/ItemID' } ]
+    get:
+      operationId: listPersonalFolderShares
+      summary: List direct active shares for an owned folder
+      tags: [Public]
+      x-hhc-visibility: public
+      x-hhc-callers: [api-gateway]
+      security: [ { gatewayDaprCaller: [], gatewayTrustedIdentity: [] } ]
+      responses:
+        '200': { description: Active direct grants., content: { application/json: { schema: { type: object, required: [shares], properties: { shares: { type: array, items: { $ref: '#/components/schemas/PersonalFolderGrant' } } } } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createPersonalFolderShare
+      summary: Share an owned non-root folder read-only
+      tags: [Public]
+      x-hhc-visibility: public
+      x-hhc-callers: [api-gateway]
+      security: [ { gatewayDaprCaller: [], gatewayTrustedIdentity: [] } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreatePersonalFolderGrant' } } } }
+      responses:
+        '201': { description: New or existing active grant., content: { application/json: { schema: { $ref: '#/components/schemas/PersonalFolderGrant' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /api/assets/personal-space/items/{itemID}/shares/{grantID}:
+    delete:
+      operationId: revokePersonalFolderShare
+      summary: Revoke one owned folder grant idempotently
+      tags: [Public]
+      x-hhc-visibility: public
+      x-hhc-callers: [api-gateway]
+      security: [ { gatewayDaprCaller: [], gatewayTrustedIdentity: [] } ]
+      parameters: [ { $ref: '#/components/parameters/ItemID' }, { $ref: '#/components/parameters/GrantID' } ]
+      responses:
+        '204': { description: Revoked or already revoked. }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /api/assets/shared-folders:
+    get:
+      operationId: listSharedFolders
+      summary: List highest effective read-only shared roots
+      tags: [Public]
+      x-hhc-visibility: public
+      x-hhc-callers: [api-gateway]
+      security: [ { gatewayDaprCaller: [], gatewayTrustedIdentity: [] } ]
+      responses:
+        '200': { description: Effective shared roots., content: { application/json: { schema: { type: object, required: [folders], properties: { folders: { type: array, items: { $ref: '#/components/schemas/SharedFolderRoot' } } } } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+  /api/assets/shared-folders/{grantID}/snapshot:
+    get:
+      operationId: sharedFolderSnapshot
+      summary: Read a fixed-revision reset snapshot of one shared subtree
+      tags: [Public]
+      x-hhc-visibility: public
+      x-hhc-callers: [api-gateway]
+      security: [ { gatewayDaprCaller: [], gatewayTrustedIdentity: [] } ]
+      parameters:
+        - { $ref: '#/components/parameters/GrantID' }
+        - { name: cursor, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100 } }
+      responses:
+        '200': { description: Paged current subtree reset., content: { application/json: { schema: { $ref: '#/components/schemas/SharedFolderSnapshot' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /api/assets/shared-folders/{grantID}/items/{itemID}/content:
+    get:
+      operationId: sharedFolderContent
+      summary: Download current live content through one active grant
+      tags: [Public]
+      x-hhc-visibility: public
+      x-hhc-callers: [api-gateway]
+      security: [ { gatewayDaprCaller: [], gatewayTrustedIdentity: [] } ]
+      parameters: [ { $ref: '#/components/parameters/GrantID' }, { $ref: '#/components/parameters/ItemID' } ]
+      responses:
+        '200': { $ref: '#/components/responses/Download' }
+        '206': { $ref: '#/components/responses/Download' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '416': { $ref: '#/components/responses/Error' }
+  /api/assets/shared-folders/{grantID}:
+    delete:
+      operationId: leaveSharedFolder
+      summary: Leave one exact shared-folder grant idempotently
+      tags: [Public]
+      x-hhc-visibility: public
+      x-hhc-callers: [api-gateway]
+      security: [ { gatewayDaprCaller: [], gatewayTrustedIdentity: [] } ]
+      parameters: [ { $ref: '#/components/parameters/GrantID' } ]
+      responses:
+        '204': { description: Left or already left. }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
   /api/assets/collections:
     get:
       summary: Asset API operation
@@ -846,6 +949,39 @@ components:
     CollectionACLMutation: { description: Collection ACL mutation., content: { application/json: { schema: { $ref: '#/components/schemas/CollectionACLMutation' } } } }
     DeleteCollectionItems: { description: Collection deletion result., content: { application/json: { schema: { $ref: '#/components/schemas/DeleteCollectionItemsResult' } } } }
   schemas:
+    CreatePersonalFolderGrant:
+      type: object
+      additionalProperties: false
+      required: [granteeUserId]
+      properties: { granteeUserId: { type: string, minLength: 1, maxLength: 128 } }
+    PersonalFolderGrant:
+      type: object
+      required: [id, folderItemId, ownerUserId, granteeUserId, createdAt]
+      properties:
+        id: { type: string }
+        folderItemId: { type: string }
+        ownerUserId: { type: string }
+        granteeUserId: { type: string }
+        createdAt: { type: string, format: date-time }
+        revokedAt: { type: string, format: date-time }
+    SharedFolderRoot:
+      type: object
+      required: [grantId, ownerUserId, root, collectionRevision]
+      properties:
+        grantId: { type: string }
+        ownerUserId: { type: string }
+        root: { $ref: '#/components/schemas/PersonalNode' }
+        collectionRevision: { type: integer, format: int64 }
+    SharedFolderSnapshot:
+      type: object
+      required: [grantId, collectionRevision, items, nextCursor, hasMore, reset]
+      properties:
+        grantId: { type: string }
+        collectionRevision: { type: integer, format: int64 }
+        items: { type: array, items: { $ref: '#/components/schemas/PersonalNode' } }
+        nextCursor: { type: string }
+        hasMore: { type: boolean }
+        reset: { type: boolean, const: true }
     PersonalUploadInput:
       type: object
       additionalProperties: false
@@ -917,6 +1053,9 @@ components:
         kind: { type: string, enum: [folder, file] }
         name: { type: string }
         assetId: { type: string }
+        mimeType: { type: string }
+        sizeBytes: { type: integer, format: int64 }
+        etag: { type: string }
         revision: { type: integer, format: int64 }
         deletedAt: { type: string, format: date-time }
         purged: { type: boolean }
