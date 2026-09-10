@@ -12,6 +12,12 @@ type personalRepository interface {
 	ApplyPersonalMutation(context.Context, string, PersonalMutation, time.Time) (PersonalMutationResult, error)
 }
 
+type personalGovernanceRepository interface {
+	PersonalUsage(context.Context, string, time.Time) (PersonalUsage, error)
+	SetPersonalQuota(context.Context, string, string, *int64, string, time.Time) (PersonalUsage, error)
+	PurgePersonalTrash(context.Context, string, PersonalTrashPurgeInput, time.Time) (PersonalTrashPurgeResult, error)
+}
+
 func (s *Service) EnsurePersonalSpace(ctx context.Context, owner string) (PersonalSpace, error) {
 	if owner == "" {
 		return PersonalSpace{}, ErrUnauthorized
@@ -44,6 +50,45 @@ func (s *Service) ApplyPersonalMutation(ctx context.Context, owner string, m Per
 		return PersonalMutationResult{}, fmt.Errorf("personal sync repository unavailable")
 	}
 	return repository.ApplyPersonalMutation(ctx, owner, m, s.now().UTC())
+}
+
+func (s *Service) PersonalUsage(ctx context.Context, owner string) (PersonalUsage, error) {
+	if owner == "" {
+		return PersonalUsage{}, ErrUnauthorized
+	}
+	repository, ok := s.repository.(personalGovernanceRepository)
+	if !ok {
+		return PersonalUsage{}, fmt.Errorf("personal governance repository unavailable")
+	}
+	return repository.PersonalUsage(ctx, owner, s.now().UTC())
+}
+
+func (s *Service) SetPersonalQuota(ctx context.Context, actor, owner string, quota *int64, requestID string) (PersonalUsage, error) {
+	if actor == "" {
+		return PersonalUsage{}, ErrUnauthorized
+	}
+	if owner == "" || len(owner) > 128 || requestID == "" || len(requestID) > 128 || (quota != nil && *quota <= 0) {
+		return PersonalUsage{}, ErrInvalidInput
+	}
+	repository, ok := s.repository.(personalGovernanceRepository)
+	if !ok {
+		return PersonalUsage{}, fmt.Errorf("personal governance repository unavailable")
+	}
+	return repository.SetPersonalQuota(ctx, actor, owner, quota, requestID, s.now().UTC())
+}
+
+func (s *Service) PurgePersonalTrash(ctx context.Context, owner string, input PersonalTrashPurgeInput) (PersonalTrashPurgeResult, error) {
+	if owner == "" {
+		return PersonalTrashPurgeResult{}, ErrUnauthorized
+	}
+	if err := input.Validate(); err != nil {
+		return PersonalTrashPurgeResult{}, err
+	}
+	repository, ok := s.repository.(personalGovernanceRepository)
+	if !ok {
+		return PersonalTrashPurgeResult{}, fmt.Errorf("personal governance repository unavailable")
+	}
+	return repository.PurgePersonalTrash(ctx, owner, input, s.now().UTC())
 }
 
 func (s *Service) PersonalContentMetadata(ctx context.Context, owner, item string, revision int64) (PublicDownloadMetadata, error) {

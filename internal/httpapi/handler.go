@@ -64,6 +64,10 @@ func (h *Handler) Routes() http.Handler {
 	mux.Handle("POST /api/assets/personal-space", h.personalReader(http.HandlerFunc(h.ensurePersonalSpace)))
 	mux.Handle("GET /api/assets/personal-space/changes", h.personalReader(http.HandlerFunc(h.personalChanges)))
 	mux.Handle("POST /api/assets/personal-space/mutations", h.personalReader(http.HandlerFunc(h.personalMutation)))
+	mux.Handle("GET /api/assets/personal-space/usage", h.personalReader(http.HandlerFunc(h.personalUsage)))
+	mux.Handle("POST /api/assets/personal-space/trash/purge", h.personalReader(http.HandlerFunc(h.purgePersonalTrash)))
+	mux.Handle("GET /api/assets/admin/presenter-cloud/users/{userID}/quota", h.adminUserManager(http.HandlerFunc(h.adminPersonalQuota)))
+	mux.Handle("PATCH /api/assets/admin/presenter-cloud/users/{userID}/quota", h.adminUserManager(http.HandlerFunc(h.adminPersonalQuota)))
 	mux.Handle("GET /api/assets/collections", h.collectionReader(http.HandlerFunc(h.listAuthorizedCollections)))
 	mux.Handle("POST /api/assets/sync-receipts", h.collectionReader(http.HandlerFunc(h.recordSyncReceipt)))
 	mux.Handle("GET /api/assets/collections/{collectionID}/changes", h.collectionReader(http.HandlerFunc(h.collectionChanges)))
@@ -170,6 +174,18 @@ func (h *Handler) personalReader(next http.Handler) http.Handler {
 			}
 		}
 		writeError(w, http.StatusForbidden, "AST_FORBIDDEN", "personal cloud permission is required")
+	}))
+}
+
+func (h *Handler) adminUserManager(next http.Handler) http.Handler {
+	return h.collectionReader(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, scope := range strings.Fields(r.Header.Get("X-HHC-Scopes")) {
+			if scope == "users:manage" || scope == "*" {
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+		writeError(w, http.StatusForbidden, "AST_FORBIDDEN", "user management permission is required")
 	}))
 }
 
