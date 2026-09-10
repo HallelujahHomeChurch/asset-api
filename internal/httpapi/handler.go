@@ -164,7 +164,7 @@ func (h *Handler) internal(next http.Handler) http.Handler {
 func (h *Handler) personalReader(next http.Handler) http.Handler {
 	return h.collectionReader(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		for _, scope := range strings.Fields(r.Header.Get("X-HHC-Scopes")) {
-			if scope == "presenter:cloud:use" {
+			if scope == "presenter:cloud:manage" || scope == "presenter:cloud:use" {
 				next.ServeHTTP(w, r)
 				return
 			}

@@ -68,7 +68,7 @@ paths:
       operationId: ensurePersonalSpace
       summary: Ensure the authenticated user's personal cloud space
       tags: [Public]
-      description: Requires presenter:cloud:use in gateway-verified X-HHC-Scopes for every personal-space route. Creates or returns one permanent personal collection using the trusted gateway user identity. No owner or namespace is accepted from the request body.
+      description: Requires presenter:cloud:manage in gateway-verified X-HHC-Scopes for every personal-space route; presenter:cloud:use remains temporarily accepted for compatibility. Creates or returns one permanent personal collection using the trusted gateway user identity. No owner or namespace is accepted from the request body.
       x-hhc-visibility: public
       x-hhc-callers: [api-gateway]
       security: [ { gatewayDaprCaller: [], gatewayTrustedIdentity: [] } ]
