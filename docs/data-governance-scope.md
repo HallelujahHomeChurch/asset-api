@@ -8,7 +8,7 @@ The automated inventory covers Account asset metadata, upload sessions, grants, 
 
 asset_collections, asset_collection_items, asset_collection_acl, asset_collection_mutations, asset_content_tickets, and asset_collection_acl_audit are adjacent shared/manual scope. ACL subject_id identifies a reader; ticket user_id identifies a ticket user; mutation payloads are shared operation records; and audit actor_user_id identifies an operator. None makes every collection or media row an Account-owned artifact, so collection lifecycle and collection retention remain separate from the Account-artifact purge lifecycle.
 
-Both collection-retention enablement flags remain false: retentionScheduleEnabled=false and retentionApplyEnabled=false.
+Collection retention remains operator-triggered: `retentionScheduleEnabled=false` and `retentionApplyEnabled=true`. The worker still selects only active `line.group.media-sync` assets created by `hhc-line-function-bot` that are not deleted, are not retention-exempt, and have expired under their collection policy. A release cannot start deletion by itself.
 
 Checksums, hashes, and public visibility do not anonymize an artifact or remove its Account-artifact classification.
 

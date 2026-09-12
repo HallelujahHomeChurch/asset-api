@@ -22,14 +22,14 @@ Clean supported images are processed only through the queue-triggered
 job configuration; the service release updates the job to the same immutable
 runtime image as the API.
 
-`asset-retention` is deployed as a Manual Job with mutations disabled. The
+`asset-retention` is deployed as a Manual Job with mutations enabled. The
 release workflow keeps `RETENTION_SCHEDULE_ENABLED=false` and
-`RETENTION_APPLY_ENABLED=false`, so deployment alone cannot schedule cleanup or
-delete media. After verifying identity, network access, and a read-only
-preflight, explicit production approval is required before enabling the 19:00
-UTC (03:00 Asia/Taipei) schedule or mutations. Keep the schedule disabled for
-the first approved bounded mutation run, verify its database and Blob purge
-results, then enable the recurring schedule separately.
+`RETENTION_APPLY_ENABLED=true`; deployment cannot schedule cleanup, and an
+operator must explicitly start each mutation run. Verify identity, network
+access, a fresh read-only preflight, and the fixed selection scope before each
+run. Keep the schedule disabled, verify database and Blob purge results, and
+stop on an unexpected scope or any failed item. Enabling the 19:00 UTC (03:00
+Asia/Taipei) schedule remains a separate production decision.
 
 Upload completion and an `asset.scan.requested.v1` outbox row commit in one
 PostgreSQL transaction. The runtime sends that event to the `asset-scan`
