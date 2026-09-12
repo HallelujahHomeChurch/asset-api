@@ -135,7 +135,7 @@ jobs:
       EMBEDDED_SCAN_ENABLED: "false"
       DEPLOY_RETENTION_JOB: "true"
       RETENTION_SCHEDULE_ENABLED: "false"
-      RETENTION_APPLY_ENABLED: "false"
+      RETENTION_APPLY_ENABLED: "true"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Validate release configuration

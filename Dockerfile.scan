@@ -8,7 +8,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /asset-signa
 
 FROM debian:bookworm-slim
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates clamav \
+ && apt-get install -y --no-install-recommends ca-certificates clamav libpcre2-8-0 \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /asset-scan-worker /asset-scan-worker
 COPY --from=build /asset-signature-refresh /asset-signature-refresh
