@@ -1212,6 +1212,28 @@ func TestInternalRequiresAppTokenInProduction(t *testing.T) {
 	}
 }
 
+func TestInternalDelegatesBulletinWorkerToWebAPI(t *testing.T) {
+	handler := (&Handler{
+		allowedCallers: map[string]bool{"hhc-web-api": true},
+		appAPIToken:    "secret",
+	}).internal(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if caller := authenticatedCaller(r); caller != "hhc-web-api" {
+			t.Fatalf("caller = %q", caller)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	request := httptest.NewRequest(http.MethodGet, "/priv/assets/asset-1/download", nil)
+	request.Header.Set("Dapr-Caller-App-Id", "hhc-web-bulletin-worker")
+	request.Header.Set("dapr-api-token", "secret")
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status = %d", response.Code)
+	}
+}
+
 func TestInternalAllowsExplicitDevelopmentCaller(t *testing.T) {
 	handler := (&Handler{
 		allowedCallers:       map[string]bool{"account-api": true},

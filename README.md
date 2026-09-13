@@ -41,6 +41,8 @@ Private routes first authenticate Dapr's app-channel token, then derive caller
 identity from `Dapr-Caller-App-Id`. Restricted downloads additionally require
 `X-Asset-Subject-Type` and `X-Asset-Subject-Id` to match an active grant. The
 custom caller fallback is accepted only when the development setting is enabled.
+The dedicated `hhc-web-bulletin-worker` is delegated to its owning `hhc-web-api`
+service for these private asset operations.
 
 ## Scan lifecycle
 

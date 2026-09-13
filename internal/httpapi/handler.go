@@ -164,6 +164,9 @@ func (h *Handler) internal(next http.Handler) http.Handler {
 		} else {
 			caller = workloadCaller(r.Header.Get("X-MS-CLIENT-PRINCIPAL"), h.workloadAuth)
 		}
+		if caller == "hhc-web-bulletin-worker" {
+			caller = "hhc-web-api"
+		}
 		if !h.allowedCallers[caller] {
 			writeError(w, http.StatusForbidden, "AST_FORBIDDEN", "caller is not allowed")
 			return
