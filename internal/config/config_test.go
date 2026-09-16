@@ -99,6 +99,26 @@ func TestLoadRequiresQueueURLWhenScanDispatchIsEnabled(t *testing.T) {
 	}
 }
 
+func TestAuditDispatchDefaultsDarkAndValidatesEnabledConfig(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://test")
+	t.Setenv("ASSET_ALLOW_DEV_CALLER_HEADER", "true")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AuditDispatchEnabled || cfg.AuditAppID != "audit-log" || cfg.DaprHTTPPort != 3500 {
+		t.Fatalf("audit defaults: %+v", cfg)
+	}
+	t.Setenv("AUDIT_DISPATCH_ENABLED", "true")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "AUDIT_TOKEN") {
+		t.Fatalf("missing token error=%v", err)
+	}
+	t.Setenv("AUDIT_TOKEN", "secret")
+	if cfg, err := Load(); err != nil || !cfg.AuditDispatchEnabled {
+		t.Fatalf("enabled config=%+v err=%v", cfg, err)
+	}
+}
+
 func TestLoadRequiresDerivativeQueueForAzureStorage(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://test")
 	t.Setenv("ASSET_ALLOW_DEV_CALLER_HEADER", "true")

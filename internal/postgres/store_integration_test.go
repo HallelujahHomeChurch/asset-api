@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"hhc/asset-api/internal/assets"
+	"hhc/asset-api/internal/auditclient"
+	"hhc/asset-api/internal/auditoutbox"
 	"hhc/asset-api/internal/lifecycle"
 	"hhc/asset-api/internal/migrations"
 
@@ -2950,6 +2952,29 @@ func TestBatchDeleteRechecksReferencesAfterCandidateAssetLock(t *testing.T) {
 	}
 	if deletedAt.Valid || active != 1 {
 		t.Fatalf("deleted=%v active=%d", deletedAt.Valid, active)
+	}
+}
+
+func TestAuditedCollectionMutationFailsClosedAndCommitsAtomically(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	store.WithAudit(auditoutbox.New(db))
+	now := time.Date(2026, 9, 16, 12, 0, 0, 0, time.UTC)
+	input := assets.CreateCollectionInput{Namespace: "line.group.media-sync", Name: "Media", CallerService: "hhc-line-function-bot", IdempotencyKey: "audit-create-1"}
+	if _, err := store.CreateCollection(context.Background(), input, now); !errors.Is(err, assets.ErrAuditUnavailable) {
+		t.Fatalf("missing provenance error=%v", err)
+	}
+	var count int
+	if err := db.QueryRow(`SELECT count(*) FROM asset_collections`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("rolled back count=%d err=%v", count, err)
+	}
+	ctx := auditclient.WithProvenance(context.Background(), "user", testAuditActorUserID, testAuditRequestID)
+	value, err := store.CreateCollection(ctx, input, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT count(*) FROM audit_outboxes WHERE payload->>'action'='asset.collection.create' AND payload->>'resourceId'=$1`, value.ID).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("audit count=%d err=%v", count, err)
 	}
 }
 

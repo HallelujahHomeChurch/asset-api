@@ -37,6 +37,7 @@ var governedTables = map[string]bool{
 	"asset_scan_poison_events":       true,
 	"asset_derivative_outbox":        true,
 	"asset_derivative_poison_events": true,
+	"audit_outboxes":                 true,
 }
 
 func TestDataGovernanceManifest(t *testing.T) {
@@ -48,6 +49,7 @@ func TestDataGovernanceManifest(t *testing.T) {
 	ids := []string{
 		"asset.account-artifact-content", "asset.account-artifact-metadata", "asset.account-upload-sessions",
 		"asset.account-grants", "asset.account-scan-and-derivative-state", "asset.account-poison-events", "asset.account-purge-lifecycle",
+		"asset.audit-outbox",
 	}
 	require.Equal(t, ids, manifestDatasetIDs(document))
 	for _, namespace := range []string{"account.avatar", "account.dsr-export"} {
@@ -238,6 +240,7 @@ func migratedColumns(t *testing.T) (map[string]struct{}, map[string]bool) {
 	tableNames := []string{
 		"assets", "upload_sessions", "asset_grants", "asset_scan_events", "asset_derivatives",
 		"asset_scan_outbox", "asset_scan_poison_events", "asset_derivative_outbox", "asset_derivative_poison_events",
+		"audit_outboxes",
 	}
 	rows, err := db.Query(`SELECT table_name,column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name = ANY($1) ORDER BY table_name,column_name`, tableNames)
 	if err != nil {

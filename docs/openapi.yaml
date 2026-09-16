@@ -898,7 +898,7 @@ components:
     ACLID: { name: aclID, in: path, required: true, schema: { $ref: '#/components/schemas/OpaqueID' } }
     Variant: { name: variant, in: path, required: true, schema: { type: string, enum: [small, medium, large] } }
     IdempotencyKey: { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 1, maxLength: 128 } }
-    ACLActorUserID: { name: X-HHC-Actor-User-ID, in: header, required: true, description: Verified Account manager user UUID recorded in the successful ACL mutation audit event., schema: { type: string, format: uuid } }
+    ACLActorUserID: { name: X-HHC-Actor-ID, in: header, required: true, description: Verified Account manager user UUID recorded in the successful ACL mutation audit event., schema: { type: string, format: uuid } }
     RequestID: { name: X-HHC-Request-ID, in: header, required: true, description: Request correlation ID recorded in the successful ACL mutation audit event., schema: { type: string, minLength: 1 } }
     GrantIdempotencyKey: { name: Idempotency-Key, in: header, required: false, description: Required when body idempotencyKey is absent., schema: { type: string, minLength: 1, maxLength: 128 } }
     AssetSubjectType: { name: X-Asset-Subject-Type, in: header, required: true, schema: { type: string, enum: [user, role, service, line_group, app_client] } }

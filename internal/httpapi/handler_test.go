@@ -769,7 +769,7 @@ func TestCollectionACLAuditUsesTrustedActorHeaders(t *testing.T) {
 			request := httptest.NewRequest(test.method, test.path, strings.NewReader(test.body))
 			request.Header.Set("X-Internal-Caller-App-Id", "hhc-line-function-bot")
 			request.Header.Set("Idempotency-Key", test.name)
-			request.Header.Set("X-HHC-Actor-User-ID", actorUserID)
+			request.Header.Set("X-HHC-Actor-ID", actorUserID)
 			request.Header.Set("X-HHC-Request-ID", "request-"+test.name)
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, request)
@@ -780,12 +780,12 @@ func TestCollectionACLAuditUsesTrustedActorHeaders(t *testing.T) {
 		})
 	}
 
-	for _, missing := range []string{"X-HHC-Actor-User-ID", "X-HHC-Request-ID"} {
+	for _, missing := range []string{"X-HHC-Actor-ID", "X-HHC-Request-ID"} {
 		handler, repository := newCollectionManagementHandler()
 		request := httptest.NewRequest(http.MethodPost, "/priv/assets/collections/collection/acl", strings.NewReader(`{"subjectType":"user","subjectId":"user","permission":"read"}`))
 		request.Header.Set("X-Internal-Caller-App-Id", "hhc-line-function-bot")
 		request.Header.Set("Idempotency-Key", "add")
-		request.Header.Set("X-HHC-Actor-User-ID", actorUserID)
+		request.Header.Set("X-HHC-Actor-ID", actorUserID)
 		request.Header.Set("X-HHC-Request-ID", "request-add")
 		request.Header.Del(missing)
 		response := httptest.NewRecorder()
@@ -989,7 +989,7 @@ func collectionManagementRequests() []collectionManagementRequest {
 				value.Header.Set("Idempotency-Key", "key")
 			}
 			if strings.Contains(path, "/acl") {
-				value.Header.Set("X-HHC-Actor-User-ID", "018f0000-0000-7000-8000-000000000009")
+				value.Header.Set("X-HHC-Actor-ID", "018f0000-0000-7000-8000-000000000009")
 				value.Header.Set("X-HHC-Request-ID", "request-acl")
 			}
 			return value

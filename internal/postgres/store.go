@@ -17,6 +17,8 @@ import (
 	"unicode"
 
 	"hhc/asset-api/internal/assets"
+	"hhc/asset-api/internal/auditclient"
+	"hhc/asset-api/internal/auditoutbox"
 	"hhc/asset-api/internal/derivativequeue"
 	"hhc/asset-api/internal/lifecycle"
 	"hhc/asset-api/internal/retention"
@@ -24,9 +26,36 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-type Store struct{ db *sql.DB }
+type Store struct {
+	db    *sql.DB
+	audit *auditoutbox.Store
+}
 
-func New(db *sql.DB) *Store { return &Store{db: db} }
+func New(db *sql.DB) *Store                         { return &Store{db: db} }
+func (s *Store) WithAudit(audit *auditoutbox.Store) { s.audit = audit }
+
+func (s *Store) enqueueAuditTx(ctx context.Context, tx *sql.Tx, action, resource string, metadata auditclient.Metadata, now time.Time) error {
+	if s.audit == nil {
+		return nil
+	}
+	provenance, ok := auditclient.ProvenanceFromContext(ctx)
+	if !ok {
+		return assets.ErrAuditUnavailable
+	}
+	event, err := auditclient.NewEvent(action, resource, provenance.ActorType, provenance.ActorID, provenance.RequestID, now, metadata)
+	if err != nil {
+		return assets.ErrAuditUnavailable
+	}
+	if err := s.audit.EnqueueTx(ctx, tx, event, now); err != nil {
+		return assets.ErrAuditUnavailable
+	}
+	return nil
+}
+
+func auditUploadMetadata(asset assets.Asset) (auditclient.Metadata, bool) {
+	metadata := auditclient.Metadata{"namespace": asset.Namespace, "ownerType": asset.OwnerType, "purpose": asset.Purpose}
+	return metadata, auditclient.ValidUploadMetadata(metadata)
+}
 
 func (s *Store) CreateUpload(ctx context.Context, asset assets.Asset, session assets.UploadSession) error {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -41,6 +70,11 @@ func (s *Store) CreateUpload(ctx context.Context, asset assets.Asset, session as
 	_, err = tx.ExecContext(ctx, `INSERT INTO upload_sessions (id,asset_id,idempotency_key,caller_service,operation,request_fingerprint,staging_object_key,max_size_bytes,status,expires_at,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, session.ID, session.AssetID, session.IdempotencyKey, session.CallerService, session.Operation, session.Fingerprint, session.StagingObjectKey, session.MaxSizeBytes, session.Status, session.ExpiresAt, session.CreatedAt)
 	if err != nil {
 		return err
+	}
+	if metadata, audited := auditUploadMetadata(asset); audited {
+		if err := s.enqueueAuditTx(ctx, tx, "asset.upload_session.create", asset.ID, metadata, asset.CreatedAt); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
@@ -118,6 +152,11 @@ func (s *Store) CompleteUpload(ctx context.Context, asset assets.Asset, session 
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO asset_scan_outbox(event_id,asset_id,asset_etag,available_at,created_at) VALUES($1,$2,$3,$4,$4)`, request.EventID, request.AssetID, request.ETag, request.CreatedAt); err != nil {
 		return err
+	}
+	if metadata, audited := auditUploadMetadata(asset); audited {
+		if err := s.enqueueAuditTx(ctx, tx, "asset.upload.complete", asset.ID, metadata, asset.UpdatedAt); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
@@ -339,14 +378,31 @@ func (s *Store) CreateGrant(ctx context.Context, grant assets.Grant) (assets.Gra
 }
 
 func (s *Store) RevokeGrant(ctx context.Context, assetID, grantID string, now time.Time) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE asset_grants SET revoked_at=$3 WHERE id=$1 AND asset_id=$2 AND revoked_at IS NULL`, grantID, assetID, now)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var subjectType assets.SubjectType
+	if err := tx.QueryRowContext(ctx, `SELECT subject_type FROM asset_grants WHERE id=$1 AND asset_id=$2 AND revoked_at IS NULL FOR UPDATE`, grantID, assetID).Scan(&subjectType); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return assets.ErrNotFound
+		}
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE asset_grants SET revoked_at=$3 WHERE id=$1 AND asset_id=$2 AND revoked_at IS NULL`, grantID, assetID, now)
 	if err != nil {
 		return err
 	}
 	if affected, _ := result.RowsAffected(); affected != 1 {
 		return assets.ErrNotFound
 	}
-	return nil
+	if subjectType == assets.SubjectPublic {
+		if err := s.enqueueAuditTx(ctx, tx, "asset.public_grant.revoke", assetID, nil, now); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 func (s *Store) HasActiveGrant(ctx context.Context, assetID string, subject assets.SubjectType, subjectID string, permission assets.Permission, now time.Time) (bool, error) {
 	var exists bool
@@ -392,7 +448,7 @@ func (s *Store) CreateCollection(ctx context.Context, input assets.CreateCollect
 	if err != nil {
 		return assets.Collection{}, mapCollectionError(err)
 	}
-	if err := finishMutation(ctx, tx, input.CallerService, createCollectionOperation, input.IdempotencyKey, value); err != nil {
+	if err := s.finishAuditedMutation(ctx, tx, input.CallerService, createCollectionOperation, input.IdempotencyKey, value, "asset.collection.create", value.ID, nil, now); err != nil {
 		return assets.Collection{}, err
 	}
 	return value, nil
@@ -425,7 +481,7 @@ func (s *Store) RenameCollection(ctx context.Context, input assets.RenameCollect
 	if _, err := tx.ExecContext(ctx, `UPDATE asset_collections SET name=$2,revision=$3,updated_at=$4 WHERE id=$1`, value.ID, value.Name, value.Revision, now); err != nil {
 		return assets.Collection{}, err
 	}
-	if err := finishMutation(ctx, tx, input.CallerService, renameCollectionOperation, input.IdempotencyKey, value); err != nil {
+	if err := s.finishAuditedMutation(ctx, tx, input.CallerService, renameCollectionOperation, input.IdempotencyKey, value, "asset.collection.rename", value.ID, nil, now); err != nil {
 		return assets.Collection{}, err
 	}
 	return value, nil
@@ -480,7 +536,7 @@ func (s *Store) DeleteCollection(ctx context.Context, input assets.DeleteCollect
 	if _, err := tx.ExecContext(ctx, `UPDATE asset_collections SET revision=$2,updated_at=$3,deleted_at=$3 WHERE id=$1`, value.ID, value.Revision, now); err != nil {
 		return assets.Collection{}, err
 	}
-	if err := finishMutation(ctx, tx, input.CallerService, deleteCollectionOperation, input.IdempotencyKey, value); err != nil {
+	if err := s.finishAuditedMutation(ctx, tx, input.CallerService, deleteCollectionOperation, input.IdempotencyKey, value, "asset.collection.delete", value.ID, nil, now); err != nil {
 		return assets.Collection{}, err
 	}
 	return value, nil
@@ -527,7 +583,8 @@ func (s *Store) AddCollectionACL(ctx context.Context, input assets.AddCollection
 		return assets.CollectionACLMutation{}, err
 	}
 	value := assets.CollectionACLMutation{Collection: collection, ACL: acl}
-	if err := finishMutation(ctx, tx, input.CallerService, addCollectionACLOperation, input.IdempotencyKey, value); err != nil {
+	metadata := auditclient.Metadata{"collectionId": collection.ID, "subjectType": string(acl.SubjectType)}
+	if err := s.finishAuditedMutation(ctx, tx, input.CallerService, addCollectionACLOperation, input.IdempotencyKey, value, "asset.collection_acl.add", acl.ID, metadata, now); err != nil {
 		return assets.CollectionACLMutation{}, err
 	}
 	return value, nil
@@ -575,7 +632,8 @@ func (s *Store) RevokeCollectionACL(ctx context.Context, input assets.RevokeColl
 		return assets.CollectionACLMutation{}, err
 	}
 	value := assets.CollectionACLMutation{Collection: collection, ACL: acl}
-	if err := finishMutation(ctx, tx, input.CallerService, revokeCollectionACLOperation, input.IdempotencyKey, value); err != nil {
+	metadata := auditclient.Metadata{"collectionId": collection.ID, "subjectType": string(acl.SubjectType)}
+	if err := s.finishAuditedMutation(ctx, tx, input.CallerService, revokeCollectionACLOperation, input.IdempotencyKey, value, "asset.collection_acl.revoke", acl.ID, metadata, now); err != nil {
 		return assets.CollectionACLMutation{}, err
 	}
 	return value, nil
@@ -640,7 +698,7 @@ func (s *Store) AddCollectionItem(ctx context.Context, input assets.AddCollectio
 		return assets.CollectionItemMutation{}, err
 	}
 	value := assets.CollectionItemMutation{Collection: collection, Item: item}
-	if err := finishMutation(ctx, tx, input.CallerService, addCollectionItemOperation, input.IdempotencyKey, value); err != nil {
+	if err := s.finishAuditedMutation(ctx, tx, input.CallerService, addCollectionItemOperation, input.IdempotencyKey, value, "asset.collection_item.add", item.ID, auditclient.Metadata{"collectionId": collection.ID}, now); err != nil {
 		return assets.CollectionItemMutation{}, err
 	}
 	return value, nil
@@ -673,7 +731,7 @@ func (s *Store) DeleteCollectionItem(ctx context.Context, input assets.DeleteCol
 	if len(deleted.items) == 1 {
 		value.Item, value.Tombstone = deleted.items[0], deleted.tombstones[0]
 	}
-	if err := finishMutation(ctx, tx, input.CallerService, deleteCollectionItemOperation, input.IdempotencyKey, value); err != nil {
+	if err := s.finishAuditedMutation(ctx, tx, input.CallerService, deleteCollectionItemOperation, input.IdempotencyKey, value, "asset.collection_item.delete", input.ItemID, auditclient.Metadata{"collectionId": input.CollectionID}, now); err != nil {
 		return assets.CollectionItemMutation{}, err
 	}
 	return value, nil
@@ -705,7 +763,8 @@ func (s *Store) DeleteCollectionItems(ctx context.Context, input assets.DeleteCo
 	if err != nil {
 		return assets.DeleteCollectionItemsResult{}, err
 	}
-	if err := finishMutation(ctx, tx, input.CallerService, deleteCollectionItemsOperation, input.IdempotencyKey, deleted.result); err != nil {
+	metadata := auditclient.Metadata{"normalizedUniqueItemCount": len(itemIDs), "deletedCount": deleted.result.Deleted, "alreadyAbsentCount": deleted.result.AlreadyRemoved}
+	if err := s.finishAuditedMutation(ctx, tx, input.CallerService, deleteCollectionItemsOperation, input.IdempotencyKey, deleted.result, "asset.collection_items.delete", input.CollectionID, metadata, now); err != nil {
 		return assets.DeleteCollectionItemsResult{}, err
 	}
 	return deleted.result, nil
@@ -876,7 +935,7 @@ func (s *Store) RenameCollectionItem(ctx context.Context, input assets.RenameCol
 		}
 	}
 	value := assets.ManagedCollectionItem{ID: item.ID, DisplayName: item.DisplayName, MIMEType: item.MIMEType, SizeBytes: item.SizeBytes, CreatedAt: item.CreatedAt, RetentionExempt: item.RetentionExempt}
-	if err := finishMutation(ctx, tx, input.CallerService, renameCollectionItemOperation, input.IdempotencyKey, value); err != nil {
+	if err := s.finishAuditedMutation(ctx, tx, input.CallerService, renameCollectionItemOperation, input.IdempotencyKey, value, "asset.collection_item.rename", input.ItemID, auditclient.Metadata{"collectionId": input.CollectionID}, now); err != nil {
 		return assets.ManagedCollectionItem{}, err
 	}
 	return value, nil
@@ -901,7 +960,7 @@ func claimMutation(ctx context.Context, tx *sql.Tx, caller, operation, key, fing
 	return response, false, nil
 }
 
-func finishMutation(ctx context.Context, tx *sql.Tx, caller, operation, key string, value any) error {
+func (s *Store) finishAuditedMutation(ctx context.Context, tx *sql.Tx, caller, operation, key string, value any, action, resource string, metadata auditclient.Metadata, now time.Time) error {
 	response, err := json.Marshal(value)
 	if err != nil {
 		return err
@@ -912,6 +971,9 @@ func finishMutation(ctx context.Context, tx *sql.Tx, caller, operation, key stri
 	}
 	if count, _ := result.RowsAffected(); count != 1 {
 		return assets.ErrConflict
+	}
+	if err := s.enqueueAuditTx(ctx, tx, action, resource, metadata, now); err != nil {
+		return err
 	}
 	return tx.Commit()
 }
@@ -1357,7 +1419,7 @@ func (s *Store) UpdateCollectionRetention(ctx context.Context, input assets.Upda
 	if _, err := tx.ExecContext(ctx, `UPDATE asset_collections SET retention_days=$2,updated_at=$3 WHERE id=$1`, value.ID, value.RetentionDays, now); err != nil {
 		return assets.Collection{}, err
 	}
-	if err := finishMutation(ctx, tx, input.CallerService, updateCollectionRetentionOperation, input.IdempotencyKey, value); err != nil {
+	if err := s.finishAuditedMutation(ctx, tx, input.CallerService, updateCollectionRetentionOperation, input.IdempotencyKey, value, "asset.collection.retention.update", input.CollectionID, nil, now); err != nil {
 		return assets.Collection{}, err
 	}
 	return value, nil
@@ -1406,7 +1468,8 @@ func (s *Store) SetCollectionItemsRetention(ctx context.Context, input assets.Se
 			return err
 		}
 	}
-	return finishMutation(ctx, tx, input.CallerService, setCollectionItemsRetentionOperation, input.IdempotencyKey, struct{}{})
+	metadata := auditclient.Metadata{"normalizedUniqueItemCount": len(itemIDs), "updatedCount": len(activeIDs), "alreadyAbsentCount": len(itemIDs) - len(activeIDs)}
+	return s.finishAuditedMutation(ctx, tx, input.CallerService, setCollectionItemsRetentionOperation, input.IdempotencyKey, struct{}{}, "asset.collection_items.retention.update", input.CollectionID, metadata, now)
 }
 
 func (s *Store) CollectionChanges(ctx context.Context, id, cursor string, subject assets.CollectionSubject) (assets.CollectionChangePage, error) {
@@ -1958,7 +2021,8 @@ func (s *Store) RequeueFailedScan(ctx context.Context, assetID, ownerService str
 	}
 	defer tx.Rollback()
 	var previousEventID string
-	err = tx.QueryRowContext(ctx, `SELECT scan_event_id FROM assets WHERE id=$1 AND owner_service=$2 AND etag=$3 AND scan_status='failed' AND deleted_at IS NULL AND purged_at IS NULL FOR UPDATE`, assetID, ownerService, request.ETag).Scan(&previousEventID)
+	var asset assets.Asset
+	err = tx.QueryRowContext(ctx, `SELECT scan_event_id,id,namespace,owner_type,purpose FROM assets WHERE id=$1 AND owner_service=$2 AND etag=$3 AND scan_status='failed' AND deleted_at IS NULL AND purged_at IS NULL FOR UPDATE`, assetID, ownerService, request.ETag).Scan(&previousEventID, &asset.ID, &asset.Namespace, &asset.OwnerType, &asset.Purpose)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return assets.ErrInvalidInput
@@ -1977,6 +2041,11 @@ func (s *Store) RequeueFailedScan(ctx context.Context, assetID, ownerService str
 	}
 	if previousEventID != "" {
 		if _, err := tx.ExecContext(ctx, `UPDATE asset_scan_poison_events SET replayed_at=COALESCE(replayed_at,$3),replay_event_id=CASE WHEN replay_event_id='' THEN $2 ELSE replay_event_id END WHERE event_id=$1 AND replayed_at IS NULL`, previousEventID, request.EventID, now); err != nil {
+			return err
+		}
+	}
+	if metadata, audited := auditUploadMetadata(asset); audited {
+		if err := s.enqueueAuditTx(ctx, tx, "asset.scan.retry", assetID, metadata, now); err != nil {
 			return err
 		}
 	}
