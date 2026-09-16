@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"hhc/asset-api/internal/assets"
+	"hhc/asset-api/internal/auditclient"
+	"hhc/asset-api/internal/auditoutbox"
 )
 
 type Handler struct {
@@ -28,6 +30,7 @@ type Handler struct {
 	appAPIToken          string
 	workloadAuth         WorkloadAuthConfig
 	localUpload          http.HandlerFunc
+	audit                *auditoutbox.Store
 }
 
 type WorkloadCaller struct {
@@ -46,6 +49,26 @@ type WorkloadAuthConfig struct {
 
 func New(service *assets.Service, db *sql.DB, allowedCallers map[string]bool, allowDevCallerHeader bool, appAPIToken string, workloadAuth WorkloadAuthConfig, localUpload http.HandlerFunc) *Handler {
 	return &Handler{service: service, db: db, allowedCallers: allowedCallers, allowDevCallerHeader: allowDevCallerHeader, appAPIToken: appAPIToken, workloadAuth: workloadAuth, localUpload: localUpload}
+}
+
+func (h *Handler) WithAudit(store *auditoutbox.Store) *Handler { h.audit = store; return h }
+
+func (h *Handler) recordAccess(ctx context.Context, action, resource string, metadata auditclient.Metadata) error {
+	if h.audit == nil {
+		return nil
+	}
+	provenance, ok := auditclient.ProvenanceFromContext(ctx)
+	if !ok {
+		return assets.ErrAuditUnavailable
+	}
+	event, err := auditclient.NewEvent(action, resource, provenance.ActorType, provenance.ActorID, provenance.RequestID, time.Now().UTC(), metadata)
+	if err != nil {
+		return assets.ErrAuditUnavailable
+	}
+	if err := h.audit.Enqueue(ctx, event, time.Now().UTC()); err != nil {
+		return assets.ErrAuditUnavailable
+	}
+	return nil
 }
 
 func (h *Handler) Routes() http.Handler {
@@ -171,7 +194,14 @@ func (h *Handler) internal(next http.Handler) http.Handler {
 			writeError(w, http.StatusForbidden, "AST_FORBIDDEN", "caller is not allowed")
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), callerContextKey{}, caller)))
+		ctx := context.WithValue(r.Context(), callerContextKey{}, caller)
+		actor, request := strings.TrimSpace(r.Header.Get("X-HHC-Actor-ID")), strings.TrimSpace(r.Header.Get("X-HHC-Request-ID"))
+		if auditclient.ValidUserRequest(actor, request) {
+			ctx = auditclient.WithProvenance(ctx, "user", actor, request)
+		} else if caller == "hhc-line-function-bot" && auditclient.ValidServiceRequest(request) {
+			ctx = auditclient.WithProvenance(ctx, "service", caller, request)
+		}
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
@@ -399,6 +429,10 @@ func (h *Handler) listManagedCollections(w http.ResponseWriter, r *http.Request)
 		handleError(w, err)
 		return
 	}
+	if err := h.recordAccess(r.Context(), "asset.collection.list", "", nil); err != nil {
+		handleError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, page)
 }
 
@@ -600,6 +634,10 @@ func (h *Handler) getManagedCollection(w http.ResponseWriter, r *http.Request) {
 		handleError(w, err)
 		return
 	}
+	if err := h.recordAccess(r.Context(), "asset.collection.read", id, nil); err != nil {
+		handleError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, value)
 }
 
@@ -614,6 +652,10 @@ func (h *Handler) listManagedCollectionItems(w http.ResponseWriter, r *http.Requ
 	}
 	page, err := h.service.ListManagedCollectionItems(r.Context(), collectionID, authenticatedCaller(r), r.URL.Query().Get("q"), r.URL.Query().Get("cursor"), limit)
 	if err != nil {
+		handleError(w, err)
+		return
+	}
+	if err := h.recordAccess(r.Context(), "asset.collection_items.list", collectionID, nil); err != nil {
 		handleError(w, err)
 		return
 	}
@@ -635,6 +677,11 @@ func (h *Handler) issueManagedContentTickets(w http.ResponseWriter, r *http.Requ
 	}
 	batch, err := h.service.IssueManagedContentTickets(r.Context(), collectionID, authenticatedCaller(r), input.ItemIDs, 5*time.Minute)
 	if err != nil {
+		handleError(w, err)
+		return
+	}
+	metadata := auditclient.Metadata{"normalizedUniqueItemCount": len(batch.Tickets) + len(batch.UnavailableItemIDs)}
+	if err := h.recordAccess(r.Context(), "asset.collection_item.ticket.issue", collectionID, metadata); err != nil {
 		handleError(w, err)
 		return
 	}
@@ -731,7 +778,7 @@ func (h *Handler) addCollectionACL(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	input.CollectionID, input.CallerService, input.ActorUserID, input.RequestID, input.IdempotencyKey = id, caller, strings.TrimSpace(r.Header.Get("X-HHC-Actor-User-ID")), strings.TrimSpace(r.Header.Get("X-HHC-Request-ID")), key
+	input.CollectionID, input.CallerService, input.ActorUserID, input.RequestID, input.IdempotencyKey = id, caller, strings.TrimSpace(r.Header.Get("X-HHC-Actor-ID")), strings.TrimSpace(r.Header.Get("X-HHC-Request-ID")), key
 	value, err := h.service.AddCollectionACL(r.Context(), input)
 	if err != nil {
 		handleError(w, err)
@@ -748,7 +795,7 @@ func (h *Handler) revokeCollectionACL(w http.ResponseWriter, r *http.Request) {
 	}
 	value, err := h.service.RevokeCollectionACL(r.Context(), assets.RevokeCollectionACLInput{
 		CollectionID: collectionID, ACLID: aclID, CallerService: caller,
-		ActorUserID: strings.TrimSpace(r.Header.Get("X-HHC-Actor-User-ID")), RequestID: strings.TrimSpace(r.Header.Get("X-HHC-Request-ID")), IdempotencyKey: key,
+		ActorUserID: strings.TrimSpace(r.Header.Get("X-HHC-Actor-ID")), RequestID: strings.TrimSpace(r.Header.Get("X-HHC-Request-ID")), IdempotencyKey: key,
 	})
 	if err != nil {
 		handleError(w, err)
@@ -1091,6 +1138,8 @@ func handleError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "AST_CONFLICT", "idempotency key conflicts with an existing request")
 	case errors.Is(err, assets.ErrNotFound):
 		writeError(w, http.StatusNotFound, "AST_NOT_FOUND", "asset not found")
+	case errors.Is(err, assets.ErrAuditUnavailable):
+		writeError(w, http.StatusServiceUnavailable, "AST_AUDIT_UNAVAILABLE", "audit logging is unavailable")
 	default:
 		writeError(w, http.StatusInternalServerError, "AST_INTERNAL", "internal error")
 	}

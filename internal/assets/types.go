@@ -15,6 +15,7 @@ var (
 	ErrUnauthorized         = errors.New("unauthorized")
 	ErrConflict             = errors.New("conflict")
 	ErrCommitOutcomeUnknown = errors.New("commit outcome unknown")
+	ErrAuditUnavailable     = errors.New("audit unavailable")
 )
 
 type Visibility string

@@ -254,3 +254,27 @@ datasets:
         - {kind: go_test, path: internal/storage/azure/store_test.go, test_name: TestDeleteMissingBlobIsRepeatSafe}
         - {kind: go_test, path: internal/postgres/store_integration_test.go, test_name: TestDeleteExpiredPurgeIsBoundedAndPreservesRecentOrActiveAssets}
         - {kind: go_test, path: internal/postgres/store_integration_test.go, test_name: TestPurgeIncludesAttemptSpecificDerivativeKeys}
+
+  - id: asset.audit-outbox
+    owner: asset-api
+    purpose: "Durably stage canonical staff audit events until Central Audit accepts them."
+    necessity: required
+    storage: {"kind":"postgres","resource":"audit_outboxes","sources":[{"path":"internal/migrations/sql/022_audit_outbox.sql","symbol":"audit_outboxes"},{"path":"internal/auditoutbox/store.go","symbol":"Store.EnqueueTx"}]}
+    subject_keys: [{"kind":"user_id","field":"payload.actorId","evidence":[{"path":"internal/auditclient/client.go","symbol":"Event.ActorID"},{"path":"internal/auditoutbox/store.go","symbol":"Store.EnqueueTx"}]}]
+    data_classes: ["identity","security","activity"]
+    fields:
+      - {"name":"audit_outboxes.id","purpose":"Identify the local delivery row.","necessity":"required","data_classes":["activity"]}
+      - {"name":"audit_outboxes.event_id","purpose":"Deduplicate the canonical Central Audit event.","necessity":"required","data_classes":["security","activity"]}
+      - {"name":"audit_outboxes.payload","purpose":"Store the validated canonical Audit envelope.","necessity":"required","data_classes":["identity","security","activity"]}
+      - {"name":"payload.actorId","purpose":"Bind the event to the acting Account staff user or approved service principal.","necessity":"required","data_classes":["identity"]}
+      - {"name":"audit_outboxes.payload_hash","purpose":"Detect payload conflicts and corruption.","necessity":"required","data_classes":["security"]}
+      - {"name":"audit_outboxes.status","purpose":"Record local dispatch lifecycle.","necessity":"required","data_classes":["activity"]}
+      - {"name":"audit_outboxes.attempts","purpose":"Bound delivery retries.","necessity":"required","data_classes":["activity"]}
+      - {"name":"audit_outboxes.available_at","purpose":"Schedule the next dispatch attempt.","necessity":"required","data_classes":["activity"]}
+      - {"name":"audit_outboxes.last_error","purpose":"Record a bounded non-sensitive failure category.","necessity":"required","data_classes":["security","activity"]}
+      - {"name":"audit_outboxes.created_at","purpose":"Record local event creation time.","necessity":"required","data_classes":["activity"]}
+      - {"name":"audit_outboxes.updated_at","purpose":"Record local dispatch state change time.","necessity":"required","data_classes":["activity"]}
+    attribution: {"mode":"direct","explanation":"payload.actorId is a validated Account user or the catalog-approved LINE service principal; request and event identifiers are not inferred as identity."}
+    legal_basis: {"status":"pending_legal","reference":null}
+    retention: {"status":"pending_legal","rule":null,"action":"none"}
+    cleanup: {"mode":"none","implementation":[],"evidence":[]}

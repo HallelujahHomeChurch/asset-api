@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"hhc/asset-api/internal/assets"
+	"hhc/asset-api/internal/auditclient"
+	"hhc/asset-api/internal/auditoutbox"
 	"hhc/asset-api/internal/clamav"
 	"hhc/asset-api/internal/config"
 	"hhc/asset-api/internal/derivativequeue"
@@ -64,6 +66,8 @@ func run() error {
 		localUpload = store.PutHandler
 	}
 	repository := postgres.New(db)
+	auditStore := auditoutbox.New(db)
+	repository.WithAudit(auditStore)
 	service := assets.NewService(repository, blobStore, cfg.PublicBaseURL, time.Now)
 	workloadCallers := map[string]httpapi.WorkloadCaller{}
 	if cfg.LineWorkloadClientID != "" {
@@ -72,10 +76,17 @@ func run() error {
 	handler := httpapi.New(service, db, cfg.AllowedCallers, cfg.AllowDevCallerHeader, cfg.AppAPIToken, httpapi.WorkloadAuthConfig{
 		TenantID: cfg.WorkloadTenantID, Issuer: cfg.WorkloadIssuer, Audience: cfg.WorkloadAudience,
 		RequiredRole: cfg.WorkloadRequiredRole, ReaderCallerAppID: cfg.ReaderCallerAppID, Callers: workloadCallers,
-	}, localUpload)
+	}, localUpload).WithAudit(auditStore)
 	server := &http.Server{Addr: ":" + cfg.Port, Handler: handler.Routes(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 2 * time.Minute, IdleTimeout: 2 * time.Minute}
 
 	lifecycleWorker := lifecycle.NewWorker(repository, blobStore)
+	if cfg.AuditDispatchEnabled {
+		client, err := auditclient.New(cfg.DaprHTTPPort, cfg.AuditAppID, cfg.AuditToken)
+		if err != nil {
+			return err
+		}
+		go auditoutbox.NewWorker(auditStore, client).Run(ctx)
+	}
 	if cfg.ScanDispatchEnabled {
 		sender, err := scanqueue.NewAzureSender(cfg.ScanQueueURL)
 		if err != nil {

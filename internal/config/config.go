@@ -41,6 +41,10 @@ type Config struct {
 	LineWorkloadClientID string
 	LineWorkloadObjectID string
 	ShutdownTimeout      time.Duration
+	AuditDispatchEnabled bool
+	AuditAppID           string
+	AuditToken           string
+	DaprHTTPPort         int
 }
 
 func Load() (Config, error) {
@@ -76,6 +80,9 @@ func Load() (Config, error) {
 		LineWorkloadClientID: strings.TrimSpace(os.Getenv("ASSET_LINE_WORKLOAD_CLIENT_ID")),
 		LineWorkloadObjectID: strings.TrimSpace(os.Getenv("ASSET_LINE_WORKLOAD_OBJECT_ID")),
 		ShutdownTimeout:      10 * time.Second,
+		AuditAppID:           value("AUDIT_APP_ID", "audit-log"),
+		AuditToken:           strings.TrimSpace(os.Getenv("AUDIT_TOKEN")),
+		DaprHTTPPort:         3500,
 	}
 	if cfg.DatabaseURL == "" {
 		return Config{}, fmt.Errorf("DATABASE_URL is required")
@@ -101,6 +108,19 @@ func Load() (Config, error) {
 	}
 	if cfg.ScanDispatchEnabled && cfg.ScanQueueURL == "" {
 		return Config{}, fmt.Errorf("ASSET_SCAN_QUEUE_URL is required when scan dispatch is enabled")
+	}
+	if raw := strings.TrimSpace(os.Getenv("AUDIT_DISPATCH_ENABLED")); raw != "" {
+		enabled, err := strconv.ParseBool(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("invalid AUDIT_DISPATCH_ENABLED")
+		}
+		cfg.AuditDispatchEnabled = enabled
+	}
+	if err := positiveInt("DAPR_HTTP_PORT", &cfg.DaprHTTPPort); err != nil {
+		return Config{}, err
+	}
+	if cfg.AuditDispatchEnabled && (cfg.AuditAppID != "audit-log" || cfg.AuditToken == "") {
+		return Config{}, fmt.Errorf("AUDIT_APP_ID and AUDIT_TOKEN are required when audit dispatch is enabled")
 	}
 	if value := strings.TrimSpace(os.Getenv("ASSET_EMBEDDED_SCAN_ENABLED")); value != "" {
 		enabled, err := strconv.ParseBool(value)
