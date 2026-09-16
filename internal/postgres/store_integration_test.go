@@ -850,13 +850,20 @@ func TestOperationsIncludesProcessingBacklog(t *testing.T) {
 	oldest := now.Add(-time.Hour)
 	insertAsset(t, db, "processing-pending", assets.UploadCompleted, assets.ScanClean, assets.ProcessingPending, oldest, time.Time{})
 	insertAsset(t, db, "processing-failed", assets.UploadCompleted, assets.ScanClean, assets.ProcessingFailed, now, time.Time{})
+	insertAsset(t, db, "protected-bulletin", assets.UploadCompleted, assets.ScanClean, assets.ProcessingNotRequired, now, time.Time{})
+	if _, err := db.Exec(`UPDATE assets SET namespace='cms.weekly.pdf',visibility='private' WHERE id='protected-bulletin'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO asset_grants(id,asset_id,subject_type,subject_id,permission,idempotency_key,caller_service,operation,request_fingerprint,created_at) VALUES('protected-public','protected-bulletin','public','*','read','protected-public','hhc-web-api','create_grant','fingerprint',$1)`, now); err != nil {
+		t.Fatal(err)
+	}
 
 	operations, err := store.GetOperations(ctx, now)
 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if operations.ProcessingPending != 1 || operations.ProcessingFailed != 1 || !operations.OldestProcessingPending.Equal(oldest) {
+	if operations.ProcessingPending != 1 || operations.ProcessingFailed != 1 || !operations.OldestProcessingPending.Equal(oldest) || operations.BulletinPublicGrants != 1 {
 		t.Fatalf("operations=%+v", operations)
 	}
 }

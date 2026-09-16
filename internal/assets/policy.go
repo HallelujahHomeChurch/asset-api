@@ -36,7 +36,7 @@ var namespacePolicies = map[string]NamespacePolicy{
 	},
 	"cms.weekly.pdf": {
 		OwnerService: "hhc-web-api", MIMETypes: map[string]bool{"application/pdf": true},
-		MaxSizeBytes: 20 << 20, DefaultVisibility: VisibilityPrivate, Visibilities: map[Visibility]bool{VisibilityPrivate: true, VisibilityPublic: true}, Processing: ProcessingNotRequired,
+		MaxSizeBytes: 20 << 20, DefaultVisibility: VisibilityPrivate, Visibilities: map[Visibility]bool{VisibilityPrivate: true}, Processing: ProcessingNotRequired,
 		CacheControl: "private, no-store",
 	},
 	"cms.news.cover": {

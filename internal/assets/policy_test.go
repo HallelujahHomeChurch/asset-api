@@ -40,6 +40,16 @@ func TestAccountDSRExportPolicy(t *testing.T) {
 	}
 }
 
+func TestWeeklyBulletinPolicyIsPermanentlyPrivate(t *testing.T) {
+	policy, ok := PolicyFor("cms.weekly.pdf")
+	if !ok {
+		t.Fatal("cms.weekly.pdf policy is missing")
+	}
+	if policy.DefaultVisibility != VisibilityPrivate || !policy.AllowsVisibility(VisibilityPrivate) || policy.AllowsVisibility(VisibilityPublic) {
+		t.Fatalf("weekly bulletin visibility policy = %+v", policy)
+	}
+}
+
 func TestHomeBannerPolicy(t *testing.T) {
 	policy, ok := PolicyFor("cms.home.banner")
 	if !ok {

@@ -71,6 +71,19 @@ func TestOpenAPIContract(t *testing.T) {
 	}
 }
 
+func TestOpenAPIDocumentsProtectedBulletinReconciliation(t *testing.T) {
+	raw, err := os.ReadFile("openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{"bulletinPublicGrants", "Must remain zero", "cms.weekly.pdf"} {
+		assertContains(t, string(raw), value)
+	}
+	assertContains(t, string(raw), "visibility must be private, and public grants and public downloads are always rejected")
+	grant := operationBlockFor(t, string(raw), documentedOperation{"POST", "/priv/assets/{assetID}/grants", ""})
+	assertContains(t, grant, "Public grants are rejected")
+}
+
 func TestOpenAPIHomeBannerContract(t *testing.T) {
 	raw, err := os.ReadFile("openapi.yaml")
 	if err != nil {

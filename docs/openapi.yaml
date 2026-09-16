@@ -560,7 +560,7 @@ paths:
     get:
       summary: Asset API operation
       tags: [Private]
-      description: Returns scan, processing, and purge backlog counts for current owning services.
+      description: Returns scan, processing, purge, and protected-bulletin public-grant reconciliation counts for current owning services.
       x-hhc-visibility: private
       x-hhc-callers: [account-api, hhc-web-api, hhc-line-function-bot]
       security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
@@ -834,7 +834,7 @@ paths:
     post:
       summary: Asset API operation
       tags: [Private]
-      description: Creates an idempotent subject grant for an owned asset. At least one of body idempotencyKey or Idempotency-Key header is required.
+      description: Creates an idempotent subject grant for an owned asset. Public grants are rejected when the namespace does not support public visibility, including cms.weekly.pdf. At least one of body idempotencyKey or Idempotency-Key header is required.
       x-hhc-visibility: private
       x-hhc-callers: [account-api, hhc-web-api, hhc-line-function-bot]
       security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
@@ -924,7 +924,7 @@ components:
       description: Stable platform download URL.
       content: { application/json: { schema: { $ref: '#/components/schemas/PublicURL' } } }
     Operations:
-      description: Scan, processing, and purge work counts.
+      description: Scan, processing, purge, and protected-bulletin public-grant reconciliation counts.
       content: { application/json: { schema: { $ref: '#/components/schemas/Operations' } } }
     Download:
       description: Asset bytes with ETag and Range support.
@@ -1167,7 +1167,7 @@ components:
         uploadTarget: { $ref: '#/components/schemas/UploadTarget' }
     CreateUploadRequest:
       type: object
-      description: For `cms.home.banner`, ownerService=hhc-web-api, expected and detected MIME must be image/jpeg, decoded dimensions must be exactly 1900x700, and successful completion returns processingStatus=not_required. After a clean scan and public grant, the granted original is served directly without derivatives. For `account.dsr-export`, ownerService=account-api, expected and detected MIME must be application/zip, max size is 50 MiB, visibility must be private, and successful completion returns processingStatus=not_required; bytes remain private after clean scan with no public endpoint or derivative.
+      description: For `cms.home.banner`, ownerService=hhc-web-api, expected and detected MIME must be image/jpeg, decoded dimensions must be exactly 1900x700, and successful completion returns processingStatus=not_required. After a clean scan and public grant, the granted original is served directly without derivatives. For `cms.weekly.pdf`, ownerService=hhc-web-api, expected and detected MIME must be application/pdf, visibility must be private, and public grants and public downloads are always rejected. For `account.dsr-export`, ownerService=account-api, expected and detected MIME must be application/zip, max size is 50 MiB, visibility must be private, and successful completion returns processingStatus=not_required; bytes remain private after clean scan with no public endpoint or derivative.
       required: [namespace, ownerService, ownerType, ownerId, purpose, originalFileName, expectedMimeType, maxSizeBytes, visibility]
       properties:
         namespace: { type: string }
@@ -1216,7 +1216,7 @@ components:
         downloadUrl: { type: string, format: uri }
     Operations:
       type: object
-      required: [scanPending, scanFailed, processingPending, processingFailed, purgePending, expiredCollectionItems]
+      required: [scanPending, scanFailed, processingPending, processingFailed, purgePending, expiredCollectionItems, bulletinPublicGrants]
       properties:
         scanPending: { type: integer, format: int64 }
         scanFailed: { type: integer, format: int64 }
@@ -1226,6 +1226,7 @@ components:
         oldestProcessingPending: { type: string, format: date-time }
         purgePending: { type: integer, format: int64 }
         expiredCollectionItems: { type: integer, format: int64 }
+        bulletinPublicGrants: { type: integer, format: int64, minimum: 0, description: Must remain zero; counts active public grants for cms.weekly.pdf. }
     Collection:
       type: object
       required: [id, namespace, name, revision, retentionDays, createdAt, updatedAt]
