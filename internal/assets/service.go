@@ -298,6 +298,12 @@ func (s *Service) CreateGrant(ctx context.Context, assetID string, input CreateG
 	if !asset.DeletedAt.IsZero() {
 		return Grant{}, ErrNotFound
 	}
+	if input.SubjectType == SubjectPublic {
+		policy, ok := PolicyFor(asset.Namespace)
+		if !ok || !policy.AllowsVisibility(VisibilityPublic) {
+			return Grant{}, ErrInvalidInput
+		}
+	}
 	if input.SubjectType == SubjectPublic && input.Permission == PermissionRead && (asset.UploadStatus != UploadCompleted || asset.ScanStatus != ScanClean || (asset.ProcessingStatus != ProcessingReady && asset.ProcessingStatus != ProcessingNotRequired)) {
 		return Grant{}, ErrInvalidUpload
 	}
@@ -721,6 +727,10 @@ func (s *Service) PublicMetadata(ctx context.Context, assetID, variant string) (
 	if err != nil {
 		return PublicDownloadMetadata{}, ErrNotFound
 	}
+	policy, ok := PolicyFor(asset.Namespace)
+	if !ok || !policy.AllowsVisibility(VisibilityPublic) {
+		return PublicDownloadMetadata{}, ErrNotFound
+	}
 	if asset.Visibility != VisibilityPublic || asset.UploadStatus != UploadCompleted || asset.ScanStatus != ScanClean || !asset.DeletedAt.IsZero() || (asset.ProcessingStatus != ProcessingReady && asset.ProcessingStatus != ProcessingNotRequired) {
 		return PublicDownloadMetadata{}, ErrNotFound
 	}
@@ -747,9 +757,7 @@ func (s *Service) PublicMetadata(ctx context.Context, assetID, variant string) (
 		metadata.FileName = ""
 		metadata.LastModified, metadata.objectKey = derivative.CreatedAt, derivative.ObjectKey
 	}
-	if policy, ok := PolicyFor(asset.Namespace); ok {
-		metadata.CacheControl = policy.CacheControl
-	}
+	metadata.CacheControl = policy.CacheControl
 	return metadata, nil
 }
 

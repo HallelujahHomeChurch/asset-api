@@ -70,7 +70,7 @@ func TestOperationsIncludesExpiredCollectionItemsWithoutChangingPurgePending(t *
 	if err := json.Unmarshal(response.Body.Bytes(), &operations); err != nil {
 		t.Fatal(err)
 	}
-	if operations.ExpiredCollectionItems != 7 || operations.PurgePending != 3 {
+	if operations.ExpiredCollectionItems != 7 || operations.PurgePending != 3 || operations.BulletinPublicGrants != 2 {
 		t.Fatalf("operations=%+v", operations)
 	}
 }
@@ -1038,7 +1038,7 @@ type collectionManagementRepository struct {
 }
 
 func (r *collectionManagementRepository) GetOperations(context.Context, time.Time) (assets.Operations, error) {
-	return assets.Operations{ExpiredCollectionItems: 7, PurgePending: 3}, nil
+	return assets.Operations{ExpiredCollectionItems: 7, PurgePending: 3, BulletinPublicGrants: 2}, nil
 }
 
 func (r *collectionManagementRepository) GetAsset(context.Context, string) (assets.Asset, error) {
@@ -1605,30 +1605,32 @@ func TestAssetErrorsAreNotCacheable(t *testing.T) {
 	}
 }
 
-func TestRestrictedDownloadRequiresOwnerAndSubjectGrant(t *testing.T) {
+func TestPrivateWeeklyDownloadRequiresOwnerAndSubjectGrantBeforeRange(t *testing.T) {
 	modified := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
 	repository := &downloadRepository{
 		grantActive: true,
 		asset: assets.Asset{
-			ID: "asset-1", Namespace: "line.group.file", OwnerService: "hhc-line-function-bot",
+			ID: "asset-1", Namespace: "cms.weekly.pdf", OwnerService: "hhc-web-api",
 			ObjectKey: "original", DetectedMIMEType: "application/pdf", SizeBytes: 6, ETag: `"original"`,
 			UploadStatus: assets.UploadCompleted, ScanStatus: assets.ScanClean,
-			ProcessingStatus: assets.ProcessingNotRequired, Visibility: assets.VisibilityRestricted, UpdatedAt: modified,
+			ProcessingStatus: assets.ProcessingNotRequired, Visibility: assets.VisibilityPrivate, UpdatedAt: modified,
 		},
 	}
 	blobs := &downloadBlobStore{objects: map[string][]byte{"original": []byte("secret")}}
 	service := assets.NewService(repository, blobs, "https://www.alive.org.tw/api/assets", func() time.Time { return modified })
-	handler := New(service, nil, map[string]bool{"hhc-line-function-bot": true}, false, "token", WorkloadAuthConfig{}, nil).Routes()
+	handler := New(service, nil, map[string]bool{"hhc-web-api": true}, false, "token", WorkloadAuthConfig{}, nil).Routes()
 
 	request := httptest.NewRequest(http.MethodGet, "/priv/assets/asset-1/download", nil)
-	request.Header.Set("Dapr-Caller-App-Id", "hhc-line-function-bot")
+	request.Header.Set("Dapr-Caller-App-Id", "hhc-web-api")
 	request.Header.Set("dapr-api-token", "token")
-	request.Header.Set("X-Asset-Subject-Type", "line_group")
-	request.Header.Set("X-Asset-Subject-Id", "group-1")
+	request.Header.Set("X-Asset-Subject-Type", "service")
+	request.Header.Set("X-Asset-Subject-Id", "hhc-web-api")
+	request.Header.Set("Range", "bytes=1-3")
+	request.Header.Set("If-Range", `"original"`)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 
-	if response.Code != http.StatusOK || response.Body.String() != "secret" {
+	if response.Code != http.StatusPartialContent || response.Body.String() != "ecr" || response.Header().Get("Content-Range") != "bytes 1-3/6" || response.Header().Get("ETag") != `"original"` {
 		t.Fatalf("status=%d body=%q", response.Code, response.Body.String())
 	}
 	if response.Header().Get("Cache-Control") != "private, no-store" {

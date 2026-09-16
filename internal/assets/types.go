@@ -307,6 +307,7 @@ type Operations struct {
 	OldestProcessingPending time.Time `json:"oldestProcessingPending,omitempty"`
 	PurgePending            int64     `json:"purgePending"`
 	ExpiredCollectionItems  int64     `json:"expiredCollectionItems"`
+	BulletinPublicGrants    int64     `json:"bulletinPublicGrants"`
 }
 
 type CollectionSubject struct {

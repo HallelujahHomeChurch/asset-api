@@ -30,7 +30,7 @@ func TestCompleteUploadValidatesObservedBlobAndLeavesDownloadPending(t *testing.
 	created, err := service.CreateUploadSession(ctx, CreateUploadInput{
 		Namespace: "cms.weekly.pdf", OwnerService: "hhc-web-api", OwnerType: "bulletin_version",
 		OwnerID: "version-1", Purpose: "pdf", Locale: "zh-Hant", OriginalFileName: "weekly.pdf",
-		ExpectedMIMEType: "application/pdf", MaxSizeBytes: 5 << 20, Visibility: VisibilityPublic,
+		ExpectedMIMEType: "application/pdf", MaxSizeBytes: 5 << 20, Visibility: VisibilityPrivate,
 	}, "request-1")
 	if err != nil {
 		t.Fatal(err)
@@ -258,7 +258,7 @@ func TestCompleteUploadRecoversAfterBlobCommitAndDatabaseFailure(t *testing.T) {
 	created, err := service.CreateUploadSession(ctx, CreateUploadInput{
 		Namespace: "cms.weekly.pdf", OwnerService: "hhc-web-api", OwnerType: "bulletin_version",
 		OwnerID: "version-1", Purpose: "pdf", OriginalFileName: "weekly.pdf",
-		ExpectedMIMEType: "application/pdf", MaxSizeBytes: 1024, Visibility: VisibilityPublic,
+		ExpectedMIMEType: "application/pdf", MaxSizeBytes: 1024, Visibility: VisibilityPrivate,
 	}, "recover-completion")
 	if err != nil {
 		t.Fatal(err)
@@ -341,7 +341,7 @@ func TestCompleteUploadRecoversFinalWithStagingAfterExpiry(t *testing.T) {
 	created, err := service.CreateUploadSession(ctx, CreateUploadInput{
 		Namespace: "cms.weekly.pdf", OwnerService: "hhc-web-api", OwnerType: "bulletin_version",
 		OwnerID: "version-2", Purpose: "pdf", OriginalFileName: "weekly.pdf",
-		ExpectedMIMEType: "application/pdf", MaxSizeBytes: 1024, Visibility: VisibilityPublic,
+		ExpectedMIMEType: "application/pdf", MaxSizeBytes: 1024, Visibility: VisibilityPrivate,
 	}, "recover-final-and-staging")
 	if err != nil {
 		t.Fatal(err)
@@ -371,7 +371,7 @@ func TestCompleteUploadRefetchesAssetForCompletedSession(t *testing.T) {
 	created, err := service.CreateUploadSession(ctx, CreateUploadInput{
 		Namespace: "cms.weekly.pdf", OwnerService: "hhc-web-api", OwnerType: "bulletin_version",
 		OwnerID: "version-3", Purpose: "pdf", OriginalFileName: "weekly.pdf",
-		ExpectedMIMEType: "application/pdf", MaxSizeBytes: 1024, Visibility: VisibilityPublic,
+		ExpectedMIMEType: "application/pdf", MaxSizeBytes: 1024, Visibility: VisibilityPrivate,
 	}, "completed-refetch")
 	if err != nil {
 		t.Fatal(err)
@@ -408,7 +408,7 @@ func TestCompleteUploadAcceptsConcurrentFinalCommit(t *testing.T) {
 	created, err := service.CreateUploadSession(ctx, CreateUploadInput{
 		Namespace: "cms.weekly.pdf", OwnerService: "hhc-web-api", OwnerType: "bulletin_version",
 		OwnerID: "version-4", Purpose: "pdf", OriginalFileName: "weekly.pdf",
-		ExpectedMIMEType: "application/pdf", MaxSizeBytes: 1024, Visibility: VisibilityPublic,
+		ExpectedMIMEType: "application/pdf", MaxSizeBytes: 1024, Visibility: VisibilityPrivate,
 	}, "concurrent-final")
 	if err != nil {
 		t.Fatal(err)
@@ -762,7 +762,7 @@ func TestCleanScanAndPublicGrantEnableStableDownload(t *testing.T) {
 	}
 	defer download.Body.Close()
 	body, _ := io.ReadAll(download.Body)
-	if !bytes.HasPrefix(body, []byte("%PDF")) {
+	if string(body) != "jpeg" {
 		t.Fatalf("unexpected body %q", body)
 	}
 	if got := service.PublicURL(asset.ID); got != "https://www.alive.org.tw/assets/"+asset.ID {
@@ -816,12 +816,30 @@ func TestGrantRejectsUnknownSubjectAndPermission(t *testing.T) {
 	}
 }
 
+func TestProtectedWeeklyRejectsPublicGrantAndStalePublicDownload(t *testing.T) {
+	repo := newMemoryRepository()
+	service := NewService(repo, newMemoryBlobStore(), "https://www.alive.org.tw/api/assets", time.Now)
+	asset := Asset{ID: "weekly", Namespace: "cms.weekly.pdf", OwnerService: "hhc-web-api", ObjectKey: "assets/weekly/original", UploadStatus: UploadCompleted, ScanStatus: ScanClean, ProcessingStatus: ProcessingNotRequired, Visibility: VisibilityPublic, DetectedMIMEType: "application/pdf", SizeBytes: 4, ETag: "etag"}
+	repo.assets[asset.ID] = asset
+	repo.grants["legacy-public"] = Grant{ID: "legacy-public", AssetID: asset.ID, SubjectType: SubjectPublic, SubjectID: "*", Permission: PermissionRead}
+
+	if _, err := service.CreateGrant(context.Background(), asset.ID, CreateGrantInput{SubjectType: SubjectPublic, SubjectID: "*", Permission: PermissionRead, IdempotencyKey: "new-public"}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("public grant error = %v", err)
+	}
+	if _, err := service.PublicMetadata(context.Background(), asset.ID, ""); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("legacy original remained public: %v", err)
+	}
+	if _, err := service.PublicMetadata(context.Background(), asset.ID, "large"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("legacy derivative remained public: %v", err)
+	}
+}
+
 func TestPublicGrantAlsoProtectsStableDerivative(t *testing.T) {
 	ctx := context.Background()
 	repo := newMemoryRepository()
 	blobs := newMemoryBlobStore()
 	service := NewService(repo, blobs, "https://www.alive.org.tw/api/assets", time.Now)
-	asset := Asset{ID: "image-1", ObjectKey: "assets/image-1/original", UploadStatus: UploadCompleted, ScanStatus: ScanClean, ProcessingStatus: ProcessingReady, Visibility: VisibilityPublic, DetectedMIMEType: "image/png", SizeBytes: 8}
+	asset := Asset{ID: "image-1", Namespace: "cms.news.cover", ObjectKey: "assets/image-1/original", UploadStatus: UploadCompleted, ScanStatus: ScanClean, ProcessingStatus: ProcessingReady, Visibility: VisibilityPublic, DetectedMIMEType: "image/png", SizeBytes: 8}
 	repo.assets[asset.ID] = asset
 	repo.derivatives[asset.ID+":large"] = Derivative{AssetID: asset.ID, Variant: "large", ObjectKey: "assets/image-1/derivatives/large.jpg", MIMEType: "image/jpeg", SizeBytes: 10}
 	blobs.objects["assets/image-1/derivatives/large.jpg"] = []byte("jpeg-bytes")
@@ -900,22 +918,6 @@ func TestPublicDownloadUsesNamespaceCachePolicy(t *testing.T) {
 	repo := newMemoryRepository()
 	blobs := newMemoryBlobStore()
 	service := NewService(repo, blobs, "https://www.alive.org.tw/api/assets", time.Now)
-	weekly := completedAsset(t, ctx, service, blobs, VisibilityPublic)
-	if err := service.ApplyScanResult(ctx, ScanResult{EventID: "cache-weekly", AssetID: weekly.ID, Status: ScanClean}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := service.CreateGrant(ctx, weekly.ID, CreateGrantInput{SubjectType: SubjectPublic, SubjectID: "*", Permission: PermissionRead, IdempotencyKey: "cache-weekly-grant"}); err != nil {
-		t.Fatal(err)
-	}
-	download, err := service.OpenPublic(ctx, weekly.ID, ByteRange{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = download.Body.Close()
-	if download.CacheControl != "private, no-store" {
-		t.Fatalf("weekly cache = %q", download.CacheControl)
-	}
-
 	avatar := Asset{ID: "avatar-1", Namespace: "account.avatar", OwnerService: "account-api", ObjectKey: "assets/avatar-1/original", UploadStatus: UploadCompleted, ScanStatus: ScanClean, ProcessingStatus: ProcessingNotRequired, Visibility: VisibilityPublic, DetectedMIMEType: "image/jpeg", SizeBytes: 4, ETag: "etag-avatar"}
 	repo.assets[avatar.ID] = avatar
 	blobs.objects[avatar.ObjectKey] = []byte("jpeg")
@@ -925,7 +927,7 @@ func TestPublicDownloadUsesNamespaceCachePolicy(t *testing.T) {
 	if _, err := service.CreateGrant(ctx, avatar.ID, CreateGrantInput{SubjectType: SubjectPublic, SubjectID: "*", Permission: PermissionRead, IdempotencyKey: "cache-avatar-grant"}); err != nil {
 		t.Fatal(err)
 	}
-	download, err = service.OpenPublic(ctx, avatar.ID, ByteRange{})
+	download, err := service.OpenPublic(ctx, avatar.ID, ByteRange{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -981,6 +983,14 @@ func TestRequeueScanAllowsFailedButNotInfected(t *testing.T) {
 
 func completedAsset(t *testing.T, ctx context.Context, service *Service, blobs *memoryBlobStore, visibility Visibility) Asset {
 	t.Helper()
+	if visibility == VisibilityPublic {
+		asset := Asset{ID: newID(), Namespace: "cms.news.cover", OwnerService: "hhc-web-api", OwnerType: "news", OwnerID: "news-1", ObjectKey: "assets/news/original", UploadStatus: UploadCompleted, ScanStatus: ScanPending, ProcessingStatus: ProcessingReady, Visibility: VisibilityPublic, DetectedMIMEType: "image/png", SizeBytes: 4, ETag: "etag"}
+		blobs.objects[asset.ObjectKey] = []byte("jpeg")
+		properties, _ := blobs.Inspect(ctx, asset.ObjectKey, "", 0)
+		asset.ETag = properties.ETag
+		service.repository.(*memoryRepository).assets[asset.ID] = asset
+		return asset
+	}
 	created, err := service.CreateUploadSession(ctx, CreateUploadInput{
 		Namespace: "cms.weekly.pdf", OwnerService: "hhc-web-api", OwnerType: "bulletin_version",
 		OwnerID: "version-complete", Purpose: "pdf", OriginalFileName: "weekly.pdf",

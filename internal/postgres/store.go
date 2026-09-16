@@ -2088,6 +2088,14 @@ func (s *Store) GetOperations(ctx context.Context, now time.Time) (assets.Operat
 			  AND i.deleted_revision IS NULL AND i.retention_exempt=false
 			  AND i.created_at + c.retention_days * interval '1 day' <= $1`, now).Scan(&value.ExpiredCollectionItems)
 	}
+	if err == nil {
+		err = s.db.QueryRowContext(ctx, `
+			SELECT COUNT(*)
+			FROM asset_grants g
+			JOIN assets a ON a.id=g.asset_id
+			WHERE a.namespace='cms.weekly.pdf' AND g.subject_type='public'
+			  AND g.revoked_at IS NULL AND (g.expires_at IS NULL OR g.expires_at>$1)`, now).Scan(&value.BulletinPublicGrants)
+	}
 	if oldestScan.Valid {
 		value.OldestScanPending = oldestScan.Time
 	}
