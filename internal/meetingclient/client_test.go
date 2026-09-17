@@ -10,7 +10,7 @@ import (
 
 func TestListSyncWindows(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/priv/meeting-sync-windows" || r.Header.Get("Authorization") != "Bearer token" || r.Header.Get("Dapr-Caller-App-Id") != "" || r.Header.Get("dapr-api-token") != "" {
+		if r.URL.Path != "/priv/operations/sync-windows" || r.Header.Get("Authorization") != "Bearer token" || r.Header.Get("Dapr-Caller-App-Id") != "" || r.Header.Get("dapr-api-token") != "" {
 			t.Fatalf("request=%s headers=%v", r.URL.String(), r.Header)
 		}
 		if r.URL.Query().Get("from") != "2026-09-02T00:00:00Z" || r.URL.Query().Get("to") != "2026-09-02T01:00:00Z" {
