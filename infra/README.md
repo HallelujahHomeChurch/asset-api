@@ -14,7 +14,7 @@ does not retain a stale approximate count. Warm messages also expire after
 120 seconds. The legacy `asset-scan` Job remains
 Manual with its queue trigger disabled for one compatibility release.
 The `asset-scan-warmer` scheduled Job runs once per minute, reads meeting windows
-through hhc-web-api internal ingress using its dedicated managed identity, and
+through Operations internal ingress using its dedicated managed identity, and
 can only enqueue the warm queue. It has no Dapr app-channel secret, database,
 Blob, business queue, or Azure management-plane access.
 Clean supported images are processed only through the queue-triggered
