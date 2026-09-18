@@ -6,6 +6,7 @@ param containerRegistryName string = 'alive'
 param storageAccountName string
 param runtimeKeyVaultName string = 'alive-asset-runtime-kv'
 param migrationKeyVaultName string = 'alive-asset-migrate-kv'
+param auditVaultName string = 'alive-vault'
 @minLength(1)
 param runtimeImage string
 @minLength(1)
@@ -100,6 +101,10 @@ resource migrationVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
     softDeleteRetentionInDays: 90
     publicNetworkAccess: 'Enabled'
   }
+}
+
+resource auditVault 'Microsoft.KeyVault/vaults@2024-11-01' existing = {
+  name: auditVaultName
 }
 
 resource pullIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
@@ -337,7 +342,7 @@ resource defenderForStorageDisabled 'Microsoft.Security/defenderForStorageSettin
   }
 }
 
-resource app 'Microsoft.App/containerApps@2024-03-01' = if (deployRuntime) {
+resource app 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
   name: 'asset-api'
   location: location
   identity: {
@@ -386,6 +391,11 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = if (deployRuntime) {
           keyVaultUrl: '${runtimeVault.properties.vaultUri}secrets/database-url'
           identity: runtimeIdentity.id
         }
+        {
+          name: 'audit-token'
+          keyVaultUrl: '${auditVault.properties.vaultUri}secrets/audit-log-production-token-asset-api'
+          identity: runtimeIdentity.id
+        }
       ]
     }
     template: {
@@ -416,6 +426,9 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = if (deployRuntime) {
             { name: 'ASSET_WORKLOAD_REQUIRED_ROLE', value: 'Asset.Invoke' }
             { name: 'ASSET_LINE_WORKLOAD_CLIENT_ID', value: workloadAuthEnabled ? lineAttachmentClientId : '' }
             { name: 'ASSET_LINE_WORKLOAD_OBJECT_ID', value: workloadAuthEnabled ? lineAttachmentObjectId : '' }
+            { name: 'AUDIT_DISPATCH_ENABLED', value: 'true' }
+            { name: 'AUDIT_APP_ID', value: 'audit-log' }
+            { name: 'AUDIT_TOKEN', secretRef: 'audit-token' }
           ]
           resources: {
             cpu: json('0.25')
@@ -440,6 +453,8 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = if (deployRuntime) {
       scale: {
         minReplicas: 1
         maxReplicas: 3
+        cooldownPeriod: 300
+        pollingInterval: 30
       }
     }
   }

@@ -34,6 +34,16 @@ grep -q 'deploy-asset-api-production' "$workflow"
 grep -q 'environment: production' "$workflow"
 grep -q 'Verify isolated runtime prerequisites' "$workflow"
 grep -q 'az resource show --ids' "$workflow"
+grep -q 'audit-log-production-token-asset-api' "$workflow"
+grep -q "param auditVaultName string = 'alive-vault'" infra/main.bicep
+grep -q "name: 'AUDIT_DISPATCH_ENABLED', value: 'true'" infra/main.bicep
+grep -q "name: 'AUDIT_APP_ID', value: 'audit-log'" infra/main.bicep
+grep -q "name: 'AUDIT_TOKEN', secretRef: 'audit-token'" infra/main.bicep
+grep -q 'name: Verify revision health' "$workflow"
+if grep -q 'az containerapp exec' "$workflow"; then
+  echo 'release verification must not use Container Apps exec' >&2
+  exit 1
+fi
 if grep -q 'az keyvault secret show' "$workflow"; then
   echo 'release preflight must not read secret values' >&2
   exit 1
