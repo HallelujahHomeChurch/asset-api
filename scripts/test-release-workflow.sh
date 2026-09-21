@@ -417,7 +417,8 @@ grep -q "name: 'asset-derivative'" infra/main.bicep
 grep -q "name: 'asset-derivative-poison'" infra/main.bicep
 grep -q "command: \['/asset-derivative-worker'\]" infra/main.bicep
 grep -q 'minExecutions: 0' infra/main.bicep
-grep -q 'maxExecutions: 1' infra/main.bicep
+grep -q 'maxExecutions: 3' infra/main.bicep
+grep -q 'parallelism: 1' infra/main.bicep
 grep -q "queueName: 'asset-derivative'" infra/main.bicep
 grep -q "queueLength: '1'" infra/main.bicep
 grep -q "name: 'ASSET_DERIVATIVE_QUEUE_URL'" infra/main.bicep

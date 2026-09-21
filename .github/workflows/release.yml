@@ -361,7 +361,7 @@ jobs:
           derivative_image="$(az containerapp job show -g "$RESOURCE_GROUP" -n "$DERIVATIVE_JOB_NAME" --query properties.template.containers[0].image -o tsv --only-show-errors)"
           [[ "$derivative_image" == "$IMAGE_REF" ]]
           [[ "$(az containerapp job show -g "$RESOURCE_GROUP" -n "$DERIVATIVE_JOB_NAME" --query properties.configuration.eventTriggerConfig.scale.minExecutions -o tsv --only-show-errors)" == "0" ]]
-          [[ "$(az containerapp job show -g "$RESOURCE_GROUP" -n "$DERIVATIVE_JOB_NAME" --query properties.configuration.eventTriggerConfig.scale.maxExecutions -o tsv --only-show-errors)" == "1" ]]
+          [[ "$(az containerapp job show -g "$RESOURCE_GROUP" -n "$DERIVATIVE_JOB_NAME" --query properties.configuration.eventTriggerConfig.scale.maxExecutions -o tsv --only-show-errors)" == "3" ]]
       - name: Capture healthy release
         id: release_outputs
         run: |
