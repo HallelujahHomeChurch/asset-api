@@ -945,7 +945,7 @@ resource derivativeJob 'Microsoft.App/jobs@2025-07-01' = if (deployDerivativeJob
         scale: {
           pollingInterval: 10
           minExecutions: 0
-          maxExecutions: 1
+          maxExecutions: 3
           rules: [
             {
               name: 'asset-derivative-queue'
