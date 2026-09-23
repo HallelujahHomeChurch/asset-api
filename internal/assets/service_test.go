@@ -1238,13 +1238,19 @@ func TestManagedCollectionItemsAndRetentionServiceValidation(t *testing.T) {
 	repository := &collectionServiceRepository{}
 	service := NewService(repository, newMemoryBlobStore(), "", time.Now)
 
-	if _, err := service.ListManagedCollectionItems(context.Background(), "", "helper", "", "", 10); !errors.Is(err, ErrInvalidInput) {
+	if _, err := service.ListManagedCollectionItems(context.Background(), "", "helper", "", "", 10, "", ""); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("blank collection err=%v", err)
 	}
-	if _, err := service.ListManagedCollectionItems(context.Background(), "collection", "", "", "", 10); !errors.Is(err, ErrInvalidInput) {
+	if _, err := service.ListManagedCollectionItems(context.Background(), "collection", "", "", "", 10, "", ""); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("blank caller err=%v", err)
 	}
-	page, err := service.ListManagedCollectionItems(context.Background(), "collection", "helper", "Sunday", "cursor", 25)
+	if _, err := service.ListManagedCollectionItems(context.Background(), "collection", "helper", "", "", 10, "unknown", "asc"); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("invalid sort err=%v", err)
+	}
+	if _, err := service.ListManagedCollectionItems(context.Background(), "collection", "helper", "", "", 10, "name", "sideways"); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("invalid direction err=%v", err)
+	}
+	page, err := service.ListManagedCollectionItems(context.Background(), "collection", "helper", "Sunday", "cursor", 25, "name", "asc")
 	if err != nil || len(page.Items) != 1 || page.Items[0].DisplayName != "Sunday.mp4" {
 		t.Fatalf("page=%+v err=%v", page, err)
 	}
@@ -1252,11 +1258,11 @@ func TestManagedCollectionItemsAndRetentionServiceValidation(t *testing.T) {
 		t.Fatalf("managed item input=%+v", repository)
 	}
 	for _, query := range []string{"bad\x00query", "bad\nquery", strings.Repeat("a", 256)} {
-		if _, err := service.ListManagedCollectionItems(context.Background(), "collection", "helper", query, "", 25); !errors.Is(err, ErrInvalidInput) {
+		if _, err := service.ListManagedCollectionItems(context.Background(), "collection", "helper", query, "", 25, "", ""); !errors.Is(err, ErrInvalidInput) {
 			t.Fatalf("query=%q err=%v", query, err)
 		}
 	}
-	if _, err := service.ListManagedCollectionItems(context.Background(), "collection", "helper", "主日", "", 25); err != nil || repository.managedItemQuery != "主日" {
+	if _, err := service.ListManagedCollectionItems(context.Background(), "collection", "helper", "主日", "", 25, "", ""); err != nil || repository.managedItemQuery != "主日" {
 		t.Fatalf("unicode query=%q err=%v", repository.managedItemQuery, err)
 	}
 
@@ -1384,7 +1390,7 @@ func (r *collectionServiceRepository) GetManagedCollection(_ context.Context, _,
 	return ManagedCollection{Collection: Collection{Namespace: namespace}}, nil
 }
 
-func (r *collectionServiceRepository) ListManagedCollectionItems(_ context.Context, collectionID, callerService, query, cursor string, limit int) (ManagedCollectionItemPage, error) {
+func (r *collectionServiceRepository) ListManagedCollectionItems(_ context.Context, collectionID, callerService, query, cursor string, limit int, _, _ string) (ManagedCollectionItemPage, error) {
 	r.managedItemCalls++
 	r.managedItemCollectionID, r.managedItemCaller, r.managedItemQuery, r.managedItemCursor, r.managedItemLimit = collectionID, callerService, query, cursor, limit
 	return ManagedCollectionItemPage{Items: []ManagedCollectionItem{{ID: "item", DisplayName: "Sunday.mp4"}}}, nil

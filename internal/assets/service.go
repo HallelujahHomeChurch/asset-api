@@ -643,11 +643,17 @@ func (s *Service) GetManagedCollection(ctx context.Context, id, callerService st
 	return s.repository.GetManagedCollection(ctx, id, callerService)
 }
 
-func (s *Service) ListManagedCollectionItems(ctx context.Context, collectionID, callerService, query, cursor string, limit int) (ManagedCollectionItemPage, error) {
-	if collectionID == "" || callerService == "" || !validManagedCollectionItemQuery(query) {
+func (s *Service) ListManagedCollectionItems(ctx context.Context, collectionID, callerService, query, cursor string, limit int, sort, direction string) (ManagedCollectionItemPage, error) {
+	if sort == "" {
+		sort = "created"
+	}
+	if direction == "" {
+		direction = "desc"
+	}
+	if collectionID == "" || callerService == "" || !validManagedCollectionItemQuery(query) || !slices.Contains([]string{"name", "type", "size", "created", "retention"}, sort) || !slices.Contains([]string{"asc", "desc"}, direction) {
 		return ManagedCollectionItemPage{}, ErrInvalidInput
 	}
-	return s.repository.ListManagedCollectionItems(ctx, collectionID, callerService, query, cursor, limit)
+	return s.repository.ListManagedCollectionItems(ctx, collectionID, callerService, query, cursor, limit, sort, direction)
 }
 
 func validManagedCollectionItemQuery(query string) bool {

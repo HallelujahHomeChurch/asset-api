@@ -650,7 +650,7 @@ func (h *Handler) listManagedCollectionItems(w http.ResponseWriter, r *http.Requ
 	if !ok {
 		return
 	}
-	page, err := h.service.ListManagedCollectionItems(r.Context(), collectionID, authenticatedCaller(r), r.URL.Query().Get("q"), r.URL.Query().Get("cursor"), limit)
+	page, err := h.service.ListManagedCollectionItems(r.Context(), collectionID, authenticatedCaller(r), r.URL.Query().Get("q"), r.URL.Query().Get("cursor"), limit, r.URL.Query().Get("sort"), r.URL.Query().Get("direction"))
 	if err != nil {
 		handleError(w, err)
 		return

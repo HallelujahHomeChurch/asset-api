@@ -1034,8 +1034,10 @@ type listCursor struct {
 }
 
 type managedItemCursor struct {
-	CreatedAt time.Time `json:"t"`
-	LastID    string    `json:"i"`
+	Value     string `json:"v"`
+	LastID    string `json:"i"`
+	Sort      string `json:"s"`
+	Direction string `json:"d"`
 }
 
 type changeCursor struct {
@@ -1341,9 +1343,9 @@ func (s *Store) GetManagedCollection(ctx context.Context, id, callerService stri
 	return assets.ManagedCollection{Collection: value, ACLs: acls}, nil
 }
 
-func (s *Store) ListManagedCollectionItems(ctx context.Context, collectionID, callerService, query, cursor string, limit int) (assets.ManagedCollectionItemPage, error) {
+func (s *Store) ListManagedCollectionItems(ctx context.Context, collectionID, callerService, query, cursor string, limit int, sort, direction string) (assets.ManagedCollectionItemPage, error) {
 	last, ok := decodeManagedItemCursor(cursor)
-	if !ok {
+	if !ok || (cursor != "" && (last.Sort != sort || last.Direction != direction)) {
 		return assets.ManagedCollectionItemPage{}, assets.ErrInvalidInput
 	}
 	var owned bool
@@ -1354,6 +1356,13 @@ func (s *Store) ListManagedCollectionItems(ctx context.Context, collectionID, ca
 		return assets.ManagedCollectionItemPage{}, assets.ErrNotFound
 	}
 	limit = boundedCollectionLimit(limit)
+	order := map[string]string{"name": "i.display_name", "type": "COALESCE(a.detected_mime_type,'')", "size": "COALESCE(a.size_bytes,0)", "created": "i.created_at", "retention": "i.retention_exempt"}[sort]
+	cursorValue := map[string]string{"name": "$5", "type": "$5", "size": "$5::bigint", "created": "$5::timestamptz", "retention": "$5::boolean"}[sort]
+	direction = strings.ToUpper(direction)
+	comparison := ">"
+	if direction == "DESC" {
+		comparison = "<"
+	}
 	query = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(query)
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT i.id,i.display_name,COALESCE(a.detected_mime_type,''),COALESCE(a.size_bytes,0),i.created_at,i.retention_exempt
@@ -1363,8 +1372,8 @@ func (s *Store) ListManagedCollectionItems(ctx context.Context, collectionID, ca
 		WHERE c.id=$1 AND c.namespace='line.group.media-sync' AND c.created_by_service=$2 AND c.deleted_at IS NULL
 		  AND i.deleted_revision IS NULL
 		  AND i.display_name ILIKE '%' || $3 || '%' ESCAPE '\'
-		  AND ($4::timestamptz='0001-01-01'::timestamptz OR i.created_at<$4 OR (i.created_at=$4 AND i.id<$5))
-		ORDER BY i.created_at DESC,i.id DESC LIMIT $6`, collectionID, callerService, query, last.CreatedAt, last.LastID, limit+1)
+		  AND ($4='' OR (`+order+`,i.id) `+comparison+` (`+cursorValue+`,$4))
+		ORDER BY `+order+` `+direction+`,i.id `+direction+` LIMIT $6`, collectionID, callerService, query, last.LastID, last.Value, limit+1)
 	if err != nil {
 		return assets.ManagedCollectionItemPage{}, err
 	}
@@ -1382,9 +1391,20 @@ func (s *Store) ListManagedCollectionItems(ctx context.Context, collectionID, ca
 	}
 	if len(page.Items) > limit {
 		page.Items = page.Items[:limit]
-		last := page.Items[len(page.Items)-1]
+		item := page.Items[len(page.Items)-1]
 		page.HasMore = true
-		page.Cursor = encodeManagedItemCursor(managedItemCursor{CreatedAt: last.CreatedAt, LastID: last.ID})
+		value := item.DisplayName
+		switch sort {
+		case "type":
+			value = item.MIMEType
+		case "size":
+			value = strconv.FormatInt(item.SizeBytes, 10)
+		case "created":
+			value = item.CreatedAt.UTC().Format(time.RFC3339Nano)
+		case "retention":
+			value = strconv.FormatBool(item.RetentionExempt)
+		}
+		page.Cursor = encodeManagedItemCursor(managedItemCursor{Value: value, LastID: item.ID, Sort: sort, Direction: strings.ToLower(direction)})
 	}
 	return page, nil
 }
@@ -1684,7 +1704,7 @@ func decodeManagedItemCursor(value string) (managedItemCursor, bool) {
 		return managedItemCursor{}, false
 	}
 	var cursor managedItemCursor
-	if err := json.Unmarshal(decoded, &cursor); err != nil || cursor.CreatedAt.IsZero() || cursor.LastID == "" {
+	if err := json.Unmarshal(decoded, &cursor); err != nil || cursor.LastID == "" || cursor.Sort == "" || cursor.Direction == "" {
 		return managedItemCursor{}, false
 	}
 	return cursor, true

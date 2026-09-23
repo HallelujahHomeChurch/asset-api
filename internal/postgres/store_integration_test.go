@@ -1296,7 +1296,7 @@ func TestManagedCollectionItemsAndCollectionRetention(t *testing.T) {
 		}
 	}
 
-	page, err := store.ListManagedCollectionItems(ctx, "managed-items", "hhc-line-function-bot", "SUNday", "", 1)
+	page, err := store.ListManagedCollectionItems(ctx, "managed-items", "hhc-line-function-bot", "SUNday", "", 1, "created", "desc")
 	if err != nil || len(page.Items) != 1 || page.Items[0].ID != "same-b" || !page.HasMore || page.Cursor == "" {
 		t.Fatalf("first page=%+v err=%v", page, err)
 	}
@@ -1309,24 +1309,24 @@ func TestManagedCollectionItemsAndCollectionRetention(t *testing.T) {
 			t.Fatalf("managed response contains %q", forbidden)
 		}
 	}
-	second, err := store.ListManagedCollectionItems(ctx, "managed-items", "hhc-line-function-bot", "sunday", page.Cursor, 1)
+	second, err := store.ListManagedCollectionItems(ctx, "managed-items", "hhc-line-function-bot", "sunday", page.Cursor, 1, "created", "desc")
 	if err != nil || len(second.Items) != 1 || second.Items[0].ID != "same-a" || second.HasMore {
 		t.Fatalf("second page=%+v err=%v", second, err)
 	}
-	if _, err := store.ListManagedCollectionItems(ctx, "managed-items", "hhc-line-function-bot", "", "not-a-cursor", 100); !errors.Is(err, assets.ErrInvalidInput) {
+	if _, err := store.ListManagedCollectionItems(ctx, "managed-items", "hhc-line-function-bot", "", "not-a-cursor", 100, "created", "desc"); !errors.Is(err, assets.ErrInvalidInput) {
 		t.Fatalf("malformed cursor err=%v", err)
 	}
-	bounded, err := store.ListManagedCollectionItems(ctx, "managed-items", "hhc-line-function-bot", "", "", 100)
+	bounded, err := store.ListManagedCollectionItems(ctx, "managed-items", "hhc-line-function-bot", "", "", 100, "created", "desc")
 	if err != nil || len(bounded.Items) != 100 || !bounded.HasMore || bounded.Items[0].ID != "same-b" {
 		t.Fatalf("bounded page=%+v err=%v", bounded, err)
 	}
-	if _, err := store.ListManagedCollectionItems(ctx, "managed-items", "other-service", "", "", 100); !errors.Is(err, assets.ErrNotFound) {
+	if _, err := store.ListManagedCollectionItems(ctx, "managed-items", "other-service", "", "", 100, "created", "desc"); !errors.Is(err, assets.ErrNotFound) {
 		t.Fatalf("cross-owner list err=%v", err)
 	}
 	if _, err := db.Exec(`INSERT INTO asset_collections(id,namespace,name,created_by_service,created_at,updated_at) VALUES('managed-other-namespace','other','Other','hhc-line-function-bot',$1,$1)`, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.ListManagedCollectionItems(ctx, "managed-other-namespace", "hhc-line-function-bot", "", "", 100); !errors.Is(err, assets.ErrNotFound) {
+	if _, err := store.ListManagedCollectionItems(ctx, "managed-other-namespace", "hhc-line-function-bot", "", "", 100, "created", "desc"); !errors.Is(err, assets.ErrNotFound) {
 		t.Fatalf("cross-namespace list err=%v", err)
 	}
 

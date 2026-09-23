@@ -570,7 +570,7 @@ type Repository interface {
 	RedeemContentTicket(context.Context, string, time.Time) (Asset, error)
 	ListManagedCollections(context.Context, string, string, int) (ManagedCollectionPage, error)
 	GetManagedCollection(context.Context, string, string) (ManagedCollection, error)
-	ListManagedCollectionItems(context.Context, string, string, string, string, int) (ManagedCollectionItemPage, error)
+	ListManagedCollectionItems(context.Context, string, string, string, string, int, string, string) (ManagedCollectionItemPage, error)
 	UpdateCollectionRetention(context.Context, UpdateCollectionRetentionInput, time.Time) (Collection, error)
 }
 

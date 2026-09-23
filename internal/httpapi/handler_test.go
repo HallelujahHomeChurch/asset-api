@@ -1093,7 +1093,7 @@ func (r *collectionManagementRepository) GetManagedCollection(_ context.Context,
 	r.caller = caller
 	return assets.ManagedCollection{Collection: assets.Collection{ID: id, Namespace: "line.group.media-sync", RetentionDays: 14}}, nil
 }
-func (r *collectionManagementRepository) ListManagedCollectionItems(_ context.Context, collectionID, callerService, query, cursor string, limit int) (assets.ManagedCollectionItemPage, error) {
+func (r *collectionManagementRepository) ListManagedCollectionItems(_ context.Context, collectionID, callerService, query, cursor string, limit int, _, _ string) (assets.ManagedCollectionItemPage, error) {
 	r.calls++
 	r.managedItemCollectionID, r.managedItemCaller, r.managedItemQuery, r.managedItemCursor, r.managedItemLimit = collectionID, callerService, query, cursor, limit
 	if cursor == "not-a-cursor" {
