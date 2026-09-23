@@ -75,6 +75,34 @@ func TestOperationsIncludesExpiredCollectionItemsWithoutChangingPurgePending(t *
 	}
 }
 
+func TestAccountCleanupIsRestrictedToAccountAPIAndReturnsPostcondition(t *testing.T) {
+	handler, repository := newCollectionManagementHandler()
+	request := httptest.NewRequest(http.MethodPost, "/priv/account-cleanup", strings.NewReader(`{"userId":"user-1","idempotencyKey":"delete-1"}`))
+	request.Header.Set("X-Internal-Caller-App-Id", "account-api")
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || repository.calls != 1 {
+		t.Fatalf("status=%d calls=%d body=%s", response.Code, repository.calls, response.Body.String())
+	}
+	var result assets.AccountCleanupResult
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != assets.AccountCleanupCompleted || result.AffectedCount != 2 || result.RemainingCount != 0 {
+		t.Fatalf("result=%+v", result)
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/priv/account-cleanup", strings.NewReader(`{"userId":"user-1","idempotencyKey":"delete-2"}`))
+	request.Header.Set("X-Internal-Caller-App-Id", "hhc-line-function-bot")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("wrong caller status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func TestCollectionReaderAcceptsRoleIDsAndNoGlobalRole(t *testing.T) {
 	roleID := "018f0000-0000-7000-8000-000000000001"
 	tests := []struct {
@@ -1035,6 +1063,11 @@ type collectionManagementRepository struct {
 	ticket                                                                          assets.ContentTicket
 	aclAdd                                                                          assets.AddCollectionACLInput
 	aclRevoke                                                                       assets.RevokeCollectionACLInput
+}
+
+func (r *collectionManagementRepository) CleanupAccountAssets(context.Context, string, string, time.Time) (assets.AccountCleanupResult, error) {
+	r.calls++
+	return assets.AccountCleanupResult{Status: assets.AccountCleanupCompleted, AffectedCount: 2, ReasonCodes: []string{}}, nil
 }
 
 func (r *collectionManagementRepository) GetOperations(context.Context, time.Time) (assets.Operations, error) {

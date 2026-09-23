@@ -337,6 +337,19 @@ func (s *Service) SoftDelete(ctx context.Context, assetID, ownerService string) 
 	return repository.SoftDeleteAsset(ctx, assetID, ownerService, s.now().UTC())
 }
 
+func (s *Service) CleanupAccount(ctx context.Context, request AccountCleanupRequest) (AccountCleanupResult, error) {
+	if strings.TrimSpace(request.UserID) == "" || strings.TrimSpace(request.IdempotencyKey) == "" || len(request.IdempotencyKey) > 200 {
+		return AccountCleanupResult{}, ErrInvalidInput
+	}
+	repository, ok := s.repository.(interface {
+		CleanupAccountAssets(context.Context, string, string, time.Time) (AccountCleanupResult, error)
+	})
+	if !ok {
+		return AccountCleanupResult{}, ErrForbidden
+	}
+	return repository.CleanupAccountAssets(ctx, request.UserID, request.IdempotencyKey, s.now().UTC())
+}
+
 func (s *Service) RequeueScan(ctx context.Context, assetID, ownerService string) error {
 	asset, err := s.repository.GetAsset(ctx, assetID)
 	if err != nil {

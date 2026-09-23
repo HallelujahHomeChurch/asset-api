@@ -537,6 +537,30 @@ paths:
         '206': { $ref: '#/components/responses/Download' }
         '401': { $ref: '#/components/responses/Error' }
         '416': { $ref: '#/components/responses/Error' }
+  /priv/account-cleanup:
+    post:
+      operationId: cleanupAccountAssets
+      summary: Delete every Account-owned asset attributed to one Account user
+      tags: [Private]
+      description: Idempotently revokes grants and soft-deletes account.avatar and account.dsr-export assets. Returns pending until the existing lifecycle worker has removed Blob bytes and deidentified subject metadata.
+      x-hhc-visibility: private
+      x-hhc-callers: [account-api]
+      security: [ { daprCaller: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AccountCleanupRequest' }
+      responses:
+        '200':
+          description: Current durable cleanup postcondition.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AccountCleanupResult' }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
   /priv/assets/upload-sessions:
     post:
       summary: Asset API operation
@@ -955,6 +979,22 @@ components:
     CollectionACLMutation: { description: Collection ACL mutation., content: { application/json: { schema: { $ref: '#/components/schemas/CollectionACLMutation' } } } }
     DeleteCollectionItems: { description: Collection deletion result., content: { application/json: { schema: { $ref: '#/components/schemas/DeleteCollectionItemsResult' } } } }
   schemas:
+    AccountCleanupRequest:
+      type: object
+      additionalProperties: false
+      required: [userId, idempotencyKey]
+      properties:
+        userId: { type: string, format: uuid }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+    AccountCleanupResult:
+      type: object
+      additionalProperties: false
+      required: [status, affectedCount, remainingCount, reasonCodes]
+      properties:
+        status: { type: string, enum: [pending, completed] }
+        affectedCount: { type: integer, format: int64, minimum: 0 }
+        remainingCount: { type: integer, format: int64, minimum: 0 }
+        reasonCodes: { type: array, items: { type: string } }
     CreatePersonalFolderGrant:
       type: object
       additionalProperties: false

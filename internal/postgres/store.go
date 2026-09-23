@@ -1923,6 +1923,58 @@ func (s *Store) SoftDeleteAsset(ctx context.Context, assetID, ownerService strin
 	}
 }
 
+func (s *Store) CleanupAccountAssets(ctx context.Context, userID, idempotencyKey string, now time.Time) (assets.AccountCleanupResult, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return assets.AccountCleanupResult{}, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('asset-account-cleanup:' || $1,0))`, userID); err != nil {
+		return assets.AccountCleanupResult{}, err
+	}
+	subjectHash := sha256.Sum256([]byte("asset-account-cleanup:" + userID))
+	subjectRef := hex.EncodeToString(subjectHash[:])
+	var operationSubject string
+	var affected int64
+	err = tx.QueryRowContext(ctx, `SELECT subject_ref,affected_count FROM asset_account_cleanup_operations WHERE idempotency_key=$1 FOR UPDATE`, idempotencyKey).Scan(&operationSubject, &affected)
+	if errors.Is(err, sql.ErrNoRows) {
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM assets WHERE owner_service='account-api' AND owner_id=$1 AND namespace IN ('account.avatar','account.dsr-export')`, userID).Scan(&affected); err != nil {
+			return assets.AccountCleanupResult{}, err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO asset_account_cleanup_operations(idempotency_key,subject_ref,status,affected_count,created_at,updated_at) VALUES($1,$2,'pending',$3,$4,$4)`, idempotencyKey, subjectRef, affected, now); err != nil {
+			return assets.AccountCleanupResult{}, err
+		}
+	} else if err != nil {
+		return assets.AccountCleanupResult{}, err
+	} else if operationSubject != subjectRef {
+		return assets.AccountCleanupResult{}, assets.ErrConflict
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE asset_grants SET revoked_at=COALESCE(revoked_at,$2) WHERE asset_id IN (SELECT id FROM assets WHERE owner_service='account-api' AND owner_id=$1 AND namespace IN ('account.avatar','account.dsr-export'))`, userID, now); err != nil {
+		return assets.AccountCleanupResult{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE assets SET deleted_at=COALESCE(deleted_at,$2),updated_at=$2 WHERE owner_service='account-api' AND owner_id=$1 AND namespace IN ('account.avatar','account.dsr-export') AND purged_at IS NULL`, userID, now); err != nil {
+		return assets.AccountCleanupResult{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE assets SET owner_id='erased:'||id,original_file_name='',checksum_sha256='',etag='',scan_details='',processing_error='',updated_at=$2 WHERE owner_service='account-api' AND owner_id=$1 AND namespace IN ('account.avatar','account.dsr-export') AND purged_at IS NOT NULL`, userID, now); err != nil {
+		return assets.AccountCleanupResult{}, err
+	}
+	var remaining int64
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM assets WHERE owner_service='account-api' AND owner_id=$1 AND namespace IN ('account.avatar','account.dsr-export')`, userID).Scan(&remaining); err != nil {
+		return assets.AccountCleanupResult{}, err
+	}
+	status := assets.AccountCleanupPending
+	if remaining == 0 {
+		status = assets.AccountCleanupCompleted
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE asset_account_cleanup_operations SET status=$2,updated_at=$3 WHERE idempotency_key=$1`, idempotencyKey, status, now); err != nil {
+		return assets.AccountCleanupResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return assets.AccountCleanupResult{}, err
+	}
+	return assets.AccountCleanupResult{Status: status, AffectedCount: affected, RemainingCount: remaining, ReasonCodes: []string{}}, nil
+}
+
 func (s *Store) softDeleteAsset(ctx context.Context, assetID, ownerService string, now time.Time) (bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -2274,7 +2326,14 @@ func (s *Store) ClaimPurge(ctx context.Context, now time.Time, lease time.Durati
 }
 
 func (s *Store) CompletePurge(ctx context.Context, assetID string, now time.Time) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE assets SET purged_at=$2,purge_claimed_until=NULL,purge_error='',updated_at=$2 WHERE id=$1 AND purged_at IS NULL`, assetID, now)
+	result, err := s.db.ExecContext(ctx, `UPDATE assets SET purged_at=$2,purge_claimed_until=NULL,purge_error='',updated_at=$2,
+		owner_id=CASE WHEN owner_service='account-api' AND namespace IN ('account.avatar','account.dsr-export') THEN 'erased:'||id ELSE owner_id END,
+		original_file_name=CASE WHEN owner_service='account-api' AND namespace IN ('account.avatar','account.dsr-export') THEN '' ELSE original_file_name END,
+		checksum_sha256=CASE WHEN owner_service='account-api' AND namespace IN ('account.avatar','account.dsr-export') THEN '' ELSE checksum_sha256 END,
+		etag=CASE WHEN owner_service='account-api' AND namespace IN ('account.avatar','account.dsr-export') THEN '' ELSE etag END,
+		scan_details=CASE WHEN owner_service='account-api' AND namespace IN ('account.avatar','account.dsr-export') THEN '' ELSE scan_details END,
+		processing_error=CASE WHEN owner_service='account-api' AND namespace IN ('account.avatar','account.dsr-export') THEN '' ELSE processing_error END
+		WHERE id=$1 AND purged_at IS NULL`, assetID, now)
 	if err != nil {
 		return err
 	}
