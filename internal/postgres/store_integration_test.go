@@ -2179,6 +2179,61 @@ func TestAccountCleanupWaitsForPurgeThenDeidentifiesSubjectMetadata(t *testing.T
 	}
 }
 
+func TestAccountUploadWaitsForCleanupAndRejectsCompletedSubject(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 9, 23, 14, 0, 0, 0, time.UTC)
+	userID := "user-after-cleanup"
+
+	blocker, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Rollback()
+	if _, err := blocker.Exec(`SELECT pg_advisory_xact_lock(hashtextextended('asset-account-cleanup:' || $1,0))`, userID); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256([]byte("asset-account-cleanup:" + userID))
+	if _, err := blocker.Exec(`INSERT INTO asset_account_cleanup_operations(idempotency_key,subject_ref,status,created_at,updated_at) VALUES('completed-cleanup',$1,'completed',$2,$2)`, fmt.Sprintf("%x", digest), now); err != nil {
+		t.Fatal(err)
+	}
+	asset := assets.Asset{ID: "post-cleanup-upload", Namespace: "account.avatar", OwnerService: "account-api", OwnerType: "user", OwnerID: userID, Purpose: "avatar", OriginalFileName: "avatar.jpg", ObjectKey: "assets/post-cleanup-upload", ExpectedMIMEType: "image/jpeg", UploadStatus: assets.UploadCreated, ScanStatus: assets.ScanPending, ProcessingStatus: assets.ProcessingNotRequired, Visibility: assets.VisibilityPublic, CreatedAt: now, UpdatedAt: now}
+	session := assets.UploadSession{ID: "post-cleanup-session", AssetID: asset.ID, IdempotencyKey: "post-cleanup-upload", CallerService: "account-api", Operation: "create_upload", Fingerprint: "post-cleanup", StagingObjectKey: "staging/post-cleanup-upload", MaxSizeBytes: 1024, Status: assets.UploadCreated, ExpiresAt: now.Add(time.Minute), CreatedAt: now}
+
+	created := make(chan error, 1)
+	go func() { created <- store.CreateUpload(context.Background(), asset, session) }()
+	select {
+	case err := <-created:
+		t.Fatalf("upload did not wait for cleanup lock: %v", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+	if err := blocker.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-created; !errors.Is(err, assets.ErrConflict) {
+		t.Fatalf("post-cleanup upload error=%v", err)
+	}
+	var assetCount int
+	if err := db.QueryRow(`SELECT count(*) FROM assets WHERE id=$1`, asset.ID).Scan(&assetCount); err != nil {
+		t.Fatal(err)
+	}
+	if assetCount != 0 {
+		t.Fatalf("post-cleanup asset count=%d", assetCount)
+	}
+
+	pendingUserID := "user-pending-cleanup"
+	pendingDigest := sha256.Sum256([]byte("asset-account-cleanup:" + pendingUserID))
+	if _, err := db.Exec(`INSERT INTO asset_account_cleanup_operations(idempotency_key,subject_ref,status,created_at,updated_at) VALUES('pending-cleanup',$1,'pending',$2,$2)`, fmt.Sprintf("%x", pendingDigest), now); err != nil {
+		t.Fatal(err)
+	}
+	asset.ID, asset.OwnerID, asset.ObjectKey = "pending-cleanup-upload", pendingUserID, "assets/pending-cleanup-upload"
+	session.ID, session.AssetID, session.IdempotencyKey = "pending-cleanup-session", asset.ID, "pending-cleanup-upload"
+	if err := store.CreateUpload(ctx, asset, session); err != nil {
+		t.Fatalf("pending cleanup upload error=%v", err)
+	}
+}
+
 func TestCollectionReaderACLAuthority(t *testing.T) {
 	db := integrationDB(t)
 	store := New(db)

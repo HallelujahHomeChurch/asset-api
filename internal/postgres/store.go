@@ -63,6 +63,18 @@ func (s *Store) CreateUpload(ctx context.Context, asset assets.Asset, session as
 		return err
 	}
 	defer tx.Rollback()
+	if asset.OwnerService == "account-api" && (asset.Namespace == "account.avatar" || asset.Namespace == "account.dsr-export") {
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('asset-account-cleanup:' || $1,0))`, asset.OwnerID); err != nil {
+			return err
+		}
+		var cleaned bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM asset_account_cleanup_operations WHERE subject_ref=$1 AND status='completed')`, accountCleanupSubjectRef(asset.OwnerID)).Scan(&cleaned); err != nil {
+			return err
+		}
+		if cleaned {
+			return assets.ErrConflict
+		}
+	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO assets (id,namespace,owner_service,owner_type,owner_id,purpose,locale,original_file_name,object_key,expected_mime_type,upload_status,scan_status,processing_status,visibility,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`, asset.ID, asset.Namespace, asset.OwnerService, asset.OwnerType, asset.OwnerID, asset.Purpose, asset.Locale, asset.OriginalFileName, asset.ObjectKey, asset.ExpectedMIMEType, asset.UploadStatus, asset.ScanStatus, asset.ProcessingStatus, asset.Visibility, asset.CreatedAt, asset.UpdatedAt)
 	if err != nil {
 		return err
@@ -1932,8 +1944,7 @@ func (s *Store) CleanupAccountAssets(ctx context.Context, userID, idempotencyKey
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('asset-account-cleanup:' || $1,0))`, userID); err != nil {
 		return assets.AccountCleanupResult{}, err
 	}
-	subjectHash := sha256.Sum256([]byte("asset-account-cleanup:" + userID))
-	subjectRef := hex.EncodeToString(subjectHash[:])
+	subjectRef := accountCleanupSubjectRef(userID)
 	var operationSubject string
 	var affected int64
 	err = tx.QueryRowContext(ctx, `SELECT subject_ref,affected_count FROM asset_account_cleanup_operations WHERE idempotency_key=$1 FOR UPDATE`, idempotencyKey).Scan(&operationSubject, &affected)
@@ -1973,6 +1984,11 @@ func (s *Store) CleanupAccountAssets(ctx context.Context, userID, idempotencyKey
 		return assets.AccountCleanupResult{}, err
 	}
 	return assets.AccountCleanupResult{Status: status, AffectedCount: affected, RemainingCount: remaining, ReasonCodes: []string{}}, nil
+}
+
+func accountCleanupSubjectRef(userID string) string {
+	digest := sha256.Sum256([]byte("asset-account-cleanup:" + userID))
+	return hex.EncodeToString(digest[:])
 }
 
 func (s *Store) softDeleteAsset(ctx context.Context, assetID, ownerService string, now time.Time) (bool, error) {

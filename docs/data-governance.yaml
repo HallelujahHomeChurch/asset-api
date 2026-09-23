@@ -257,9 +257,9 @@ datasets:
 
   - id: asset.account-cleanup-receipts
     owner: asset-api
-    purpose: Deduplicate Account cleanup requests without retaining the Account user identifier.
+    purpose: Deduplicate Account cleanup requests and prevent completed subjects from recreating Account-owned artifacts without retaining the Account user identifier.
     necessity: required
-    storage: {kind: postgres, resource: asset_account_cleanup_operations, sources: [{path: internal/postgres/store.go, symbol: Store.CleanupAccountAssets}]}
+    storage: {kind: postgres, resource: asset_account_cleanup_operations, sources: [{path: internal/postgres/store.go, symbol: Store.CleanupAccountAssets}, {path: internal/postgres/store.go, symbol: Store.CreateUpload}]}
     subject_keys: [{kind: user_id, field: asset_account_cleanup_operations.subject_ref, evidence: [{path: internal/postgres/store.go, symbol: Store.CleanupAccountAssets}]}]
     data_classes: [identity, security, activity]
     fields:
