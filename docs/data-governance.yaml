@@ -255,6 +255,25 @@ datasets:
         - {kind: go_test, path: internal/postgres/store_integration_test.go, test_name: TestDeleteExpiredPurgeIsBoundedAndPreservesRecentOrActiveAssets}
         - {kind: go_test, path: internal/postgres/store_integration_test.go, test_name: TestPurgeIncludesAttemptSpecificDerivativeKeys}
 
+  - id: asset.account-cleanup-receipts
+    owner: asset-api
+    purpose: Deduplicate Account cleanup requests and prevent completed subjects from recreating Account-owned artifacts without retaining the Account user identifier.
+    necessity: required
+    storage: {kind: postgres, resource: asset_account_cleanup_operations, sources: [{path: internal/postgres/store.go, symbol: Store.CleanupAccountAssets}, {path: internal/postgres/store.go, symbol: Store.CreateUpload}]}
+    subject_keys: [{kind: user_id, field: asset_account_cleanup_operations.subject_ref, evidence: [{path: internal/postgres/store.go, symbol: Store.CleanupAccountAssets}]}]
+    data_classes: [identity, security, activity]
+    fields:
+      - {name: asset_account_cleanup_operations.idempotency_key, purpose: Deduplicate the owner cleanup request, necessity: required, data_classes: [security]}
+      - {name: asset_account_cleanup_operations.subject_ref, purpose: Detect idempotency collisions using a domain-separated SHA-256 reference rather than the Account user identifier, necessity: required, data_classes: [identity, security]}
+      - {name: asset_account_cleanup_operations.status, purpose: Record pending or completed cleanup state, necessity: required, data_classes: [activity]}
+      - {name: asset_account_cleanup_operations.affected_count, purpose: Preserve the stable number of Account artifacts affected by the cleanup, necessity: required, data_classes: [activity]}
+      - {name: asset_account_cleanup_operations.created_at, purpose: Record cleanup receipt creation time, necessity: required, data_classes: [activity]}
+      - {name: asset_account_cleanup_operations.updated_at, purpose: Record the latest cleanup result time, necessity: required, data_classes: [activity]}
+    attribution: {mode: direct, explanation: subject_ref is a deterministic pseudonymous reference derived from the verified caller-supplied Account user identifier; it is not anonymous data.}
+    legal_basis: {status: pending_legal, reference: null}
+    retention: {status: pending_legal, rule: null, action: none}
+    cleanup: {mode: none, implementation: [], evidence: []}
+
   - id: asset.audit-outbox
     owner: asset-api
     purpose: "Durably stage canonical staff audit events until Central Audit accepts them."

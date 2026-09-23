@@ -28,16 +28,17 @@ var operationalColumnExclusions = map[string]string{
 }
 
 var governedTables = map[string]bool{
-	"assets":                         true,
-	"upload_sessions":                true,
-	"asset_grants":                   true,
-	"asset_scan_events":              true,
-	"asset_derivatives":              true,
-	"asset_scan_outbox":              true,
-	"asset_scan_poison_events":       true,
-	"asset_derivative_outbox":        true,
-	"asset_derivative_poison_events": true,
-	"audit_outboxes":                 true,
+	"assets":                           true,
+	"upload_sessions":                  true,
+	"asset_grants":                     true,
+	"asset_scan_events":                true,
+	"asset_derivatives":                true,
+	"asset_scan_outbox":                true,
+	"asset_scan_poison_events":         true,
+	"asset_derivative_outbox":          true,
+	"asset_derivative_poison_events":   true,
+	"audit_outboxes":                   true,
+	"asset_account_cleanup_operations": true,
 }
 
 func TestDataGovernanceManifest(t *testing.T) {
@@ -49,6 +50,7 @@ func TestDataGovernanceManifest(t *testing.T) {
 	ids := []string{
 		"asset.account-artifact-content", "asset.account-artifact-metadata", "asset.account-upload-sessions",
 		"asset.account-grants", "asset.account-scan-and-derivative-state", "asset.account-poison-events", "asset.account-purge-lifecycle",
+		"asset.account-cleanup-receipts",
 		"asset.audit-outbox",
 	}
 	require.Equal(t, ids, manifestDatasetIDs(document))
@@ -62,9 +64,9 @@ func TestDataGovernanceManifest(t *testing.T) {
 	uploadCleanup := upload["cleanup"].(map[string]any)
 	require.Equal(t, map[string]bool{
 		"internal/postgres/store_integration_test.go:TestAccountUploadExpiryEligibilityIsStrictAndLeaseBounded": true,
-		"internal/lifecycle/worker_test.go:TestWorkerPurgesEveryCandidateObjectAndCompletes":                     true,
-		"internal/lifecycle/worker_test.go:TestWorkerRetriesBlobFailure":                                          true,
-		"internal/storage/azure/store_test.go:TestDeleteMissingBlobIsRepeatSafe":                                  true,
+		"internal/lifecycle/worker_test.go:TestWorkerPurgesEveryCandidateObjectAndCompletes":                    true,
+		"internal/lifecycle/worker_test.go:TestWorkerRetriesBlobFailure":                                        true,
+		"internal/storage/azure/store_test.go:TestDeleteMissingBlobIsRepeatSafe":                                true,
 	}, manifestEvidence(t, uploadCleanup["evidence"]))
 	grants := manifestDataset(t, document, "asset.account-grants")
 	require.Contains(t, grants["attribution"].(map[string]any)["explanation"], "reader")
@@ -93,7 +95,7 @@ func TestDataGovernanceManifest(t *testing.T) {
 	}, manifestReferences(t, lifecycleCleanup["implementation"]))
 	require.Equal(t, map[string]bool{
 		"internal/assets/service_test.go:TestSoftDeleteImmediatelyBlocksPublicDownload":                               true,
-		"internal/lifecycle/worker_test.go:TestWorkerPurgesEveryCandidateObjectAndCompletes":                         true,
+		"internal/lifecycle/worker_test.go:TestWorkerPurgesEveryCandidateObjectAndCompletes":                          true,
 		"internal/lifecycle/worker_test.go:TestWorkerRetriesBlobFailure":                                              true,
 		"internal/storage/azure/store_test.go:TestDeleteMissingBlobIsRepeatSafe":                                      true,
 		"internal/postgres/store_integration_test.go:TestDeleteExpiredPurgeIsBoundedAndPreservesRecentOrActiveAssets": true,
@@ -240,7 +242,7 @@ func migratedColumns(t *testing.T) (map[string]struct{}, map[string]bool) {
 	tableNames := []string{
 		"assets", "upload_sessions", "asset_grants", "asset_scan_events", "asset_derivatives",
 		"asset_scan_outbox", "asset_scan_poison_events", "asset_derivative_outbox", "asset_derivative_poison_events",
-		"audit_outboxes",
+		"audit_outboxes", "asset_account_cleanup_operations",
 	}
 	rows, err := db.Query(`SELECT table_name,column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name = ANY($1) ORDER BY table_name,column_name`, tableNames)
 	if err != nil {

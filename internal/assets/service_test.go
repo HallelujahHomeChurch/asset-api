@@ -960,6 +960,43 @@ func TestSoftDeleteImmediatelyBlocksPublicDownload(t *testing.T) {
 	}
 }
 
+func TestCleanupAccountSoftDeletesEveryAccountArtifactAndRevokesGrants(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 9, 23, 13, 0, 0, 0, time.UTC)
+	repo := newMemoryRepository()
+	service := NewService(repo, newMemoryBlobStore(), "https://www.alive.org.tw/api/assets", func() time.Time { return now })
+	repo.assets["avatar-current"] = Asset{ID: "avatar-current", Namespace: "account.avatar", OwnerService: "account-api", OwnerID: "user-1"}
+	repo.assets["avatar-replaced"] = Asset{ID: "avatar-replaced", Namespace: "account.avatar", OwnerService: "account-api", OwnerID: "user-1"}
+	repo.assets["dsr-export"] = Asset{ID: "dsr-export", Namespace: "account.dsr-export", OwnerService: "account-api", OwnerID: "user-1"}
+	repo.assets["other-user"] = Asset{ID: "other-user", Namespace: "account.avatar", OwnerService: "account-api", OwnerID: "user-2"}
+	repo.assets["other-owner"] = Asset{ID: "other-owner", Namespace: "cms.news.cover", OwnerService: "hhc-web-api", OwnerID: "user-1"}
+	repo.grants["grant-current"] = Grant{ID: "grant-current", AssetID: "avatar-current"}
+
+	result, err := service.CleanupAccount(ctx, AccountCleanupRequest{UserID: "user-1", IdempotencyKey: "delete-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != AccountCleanupPending || result.AffectedCount != 3 || result.RemainingCount != 3 {
+		t.Fatalf("result=%+v", result)
+	}
+	for _, id := range []string{"avatar-current", "avatar-replaced", "dsr-export"} {
+		if repo.assets[id].DeletedAt != now {
+			t.Fatalf("asset %s deleted_at=%v", id, repo.assets[id].DeletedAt)
+		}
+	}
+	if !repo.assets["other-user"].DeletedAt.IsZero() || !repo.assets["other-owner"].DeletedAt.IsZero() {
+		t.Fatal("cleanup changed an unrelated asset")
+	}
+	if repo.grants["grant-current"].RevokedAt != now {
+		t.Fatalf("grant revoked_at=%v", repo.grants["grant-current"].RevokedAt)
+	}
+
+	replayed, err := service.CleanupAccount(ctx, AccountCleanupRequest{UserID: "user-1", IdempotencyKey: "delete-1"})
+	if err != nil || replayed.Status != result.Status || replayed.AffectedCount != result.AffectedCount || replayed.RemainingCount != result.RemainingCount || !slices.Equal(replayed.ReasonCodes, result.ReasonCodes) {
+		t.Fatalf("replayed=%+v err=%v", replayed, err)
+	}
+}
+
 func TestRequeueScanAllowsFailedButNotInfected(t *testing.T) {
 	ctx := context.Background()
 	repo := newMemoryRepository()
@@ -1238,13 +1275,19 @@ func TestManagedCollectionItemsAndRetentionServiceValidation(t *testing.T) {
 	repository := &collectionServiceRepository{}
 	service := NewService(repository, newMemoryBlobStore(), "", time.Now)
 
-	if _, err := service.ListManagedCollectionItems(context.Background(), "", "helper", "", "", 10); !errors.Is(err, ErrInvalidInput) {
+	if _, err := service.ListManagedCollectionItems(context.Background(), "", "helper", "", "", 10, "", ""); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("blank collection err=%v", err)
 	}
-	if _, err := service.ListManagedCollectionItems(context.Background(), "collection", "", "", "", 10); !errors.Is(err, ErrInvalidInput) {
+	if _, err := service.ListManagedCollectionItems(context.Background(), "collection", "", "", "", 10, "", ""); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("blank caller err=%v", err)
 	}
-	page, err := service.ListManagedCollectionItems(context.Background(), "collection", "helper", "Sunday", "cursor", 25)
+	if _, err := service.ListManagedCollectionItems(context.Background(), "collection", "helper", "", "", 10, "unknown", "asc"); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("invalid sort err=%v", err)
+	}
+	if _, err := service.ListManagedCollectionItems(context.Background(), "collection", "helper", "", "", 10, "name", "sideways"); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("invalid direction err=%v", err)
+	}
+	page, err := service.ListManagedCollectionItems(context.Background(), "collection", "helper", "Sunday", "cursor", 25, "name", "asc")
 	if err != nil || len(page.Items) != 1 || page.Items[0].DisplayName != "Sunday.mp4" {
 		t.Fatalf("page=%+v err=%v", page, err)
 	}
@@ -1252,11 +1295,11 @@ func TestManagedCollectionItemsAndRetentionServiceValidation(t *testing.T) {
 		t.Fatalf("managed item input=%+v", repository)
 	}
 	for _, query := range []string{"bad\x00query", "bad\nquery", strings.Repeat("a", 256)} {
-		if _, err := service.ListManagedCollectionItems(context.Background(), "collection", "helper", query, "", 25); !errors.Is(err, ErrInvalidInput) {
+		if _, err := service.ListManagedCollectionItems(context.Background(), "collection", "helper", query, "", 25, "", ""); !errors.Is(err, ErrInvalidInput) {
 			t.Fatalf("query=%q err=%v", query, err)
 		}
 	}
-	if _, err := service.ListManagedCollectionItems(context.Background(), "collection", "helper", "主日", "", 25); err != nil || repository.managedItemQuery != "主日" {
+	if _, err := service.ListManagedCollectionItems(context.Background(), "collection", "helper", "主日", "", 25, "", ""); err != nil || repository.managedItemQuery != "主日" {
 		t.Fatalf("unicode query=%q err=%v", repository.managedItemQuery, err)
 	}
 
@@ -1384,7 +1427,7 @@ func (r *collectionServiceRepository) GetManagedCollection(_ context.Context, _,
 	return ManagedCollection{Collection: Collection{Namespace: namespace}}, nil
 }
 
-func (r *collectionServiceRepository) ListManagedCollectionItems(_ context.Context, collectionID, callerService, query, cursor string, limit int) (ManagedCollectionItemPage, error) {
+func (r *collectionServiceRepository) ListManagedCollectionItems(_ context.Context, collectionID, callerService, query, cursor string, limit int, _, _ string) (ManagedCollectionItemPage, error) {
 	r.managedItemCalls++
 	r.managedItemCollectionID, r.managedItemCaller, r.managedItemQuery, r.managedItemCursor, r.managedItemLimit = collectionID, callerService, query, cursor, limit
 	return ManagedCollectionItemPage{Items: []ManagedCollectionItem{{ID: "item", DisplayName: "Sunday.mp4"}}}, nil
@@ -1553,6 +1596,28 @@ func (r *memoryRepository) SoftDeleteAsset(_ context.Context, assetID, owner str
 		r.assets[assetID] = asset
 	}
 	return nil
+}
+func (r *memoryRepository) CleanupAccountAssets(_ context.Context, userID, _ string, now time.Time) (AccountCleanupResult, error) {
+	var affected, remaining int64
+	for id, asset := range r.assets {
+		if asset.OwnerService != "account-api" || asset.OwnerID != userID || (asset.Namespace != "account.avatar" && asset.Namespace != "account.dsr-export") {
+			continue
+		}
+		affected++
+		remaining++
+		if asset.DeletedAt.IsZero() {
+			asset.DeletedAt = now
+			asset.UpdatedAt = now
+			r.assets[id] = asset
+		}
+		for grantID, grant := range r.grants {
+			if grant.AssetID == id && grant.RevokedAt.IsZero() {
+				grant.RevokedAt = now
+				r.grants[grantID] = grant
+			}
+		}
+	}
+	return AccountCleanupResult{Status: AccountCleanupPending, AffectedCount: affected, RemainingCount: remaining, ReasonCodes: []string{}}, nil
 }
 func (r *memoryRepository) RequeueFailedScan(_ context.Context, assetID, owner string, request ScanRequest, now time.Time) error {
 	asset, ok := r.assets[assetID]

@@ -1296,7 +1296,7 @@ func TestManagedCollectionItemsAndCollectionRetention(t *testing.T) {
 		}
 	}
 
-	page, err := store.ListManagedCollectionItems(ctx, "managed-items", "hhc-line-function-bot", "SUNday", "", 1)
+	page, err := store.ListManagedCollectionItems(ctx, "managed-items", "hhc-line-function-bot", "SUNday", "", 1, "created", "desc")
 	if err != nil || len(page.Items) != 1 || page.Items[0].ID != "same-b" || !page.HasMore || page.Cursor == "" {
 		t.Fatalf("first page=%+v err=%v", page, err)
 	}
@@ -1309,24 +1309,24 @@ func TestManagedCollectionItemsAndCollectionRetention(t *testing.T) {
 			t.Fatalf("managed response contains %q", forbidden)
 		}
 	}
-	second, err := store.ListManagedCollectionItems(ctx, "managed-items", "hhc-line-function-bot", "sunday", page.Cursor, 1)
+	second, err := store.ListManagedCollectionItems(ctx, "managed-items", "hhc-line-function-bot", "sunday", page.Cursor, 1, "created", "desc")
 	if err != nil || len(second.Items) != 1 || second.Items[0].ID != "same-a" || second.HasMore {
 		t.Fatalf("second page=%+v err=%v", second, err)
 	}
-	if _, err := store.ListManagedCollectionItems(ctx, "managed-items", "hhc-line-function-bot", "", "not-a-cursor", 100); !errors.Is(err, assets.ErrInvalidInput) {
+	if _, err := store.ListManagedCollectionItems(ctx, "managed-items", "hhc-line-function-bot", "", "not-a-cursor", 100, "created", "desc"); !errors.Is(err, assets.ErrInvalidInput) {
 		t.Fatalf("malformed cursor err=%v", err)
 	}
-	bounded, err := store.ListManagedCollectionItems(ctx, "managed-items", "hhc-line-function-bot", "", "", 100)
+	bounded, err := store.ListManagedCollectionItems(ctx, "managed-items", "hhc-line-function-bot", "", "", 100, "created", "desc")
 	if err != nil || len(bounded.Items) != 100 || !bounded.HasMore || bounded.Items[0].ID != "same-b" {
 		t.Fatalf("bounded page=%+v err=%v", bounded, err)
 	}
-	if _, err := store.ListManagedCollectionItems(ctx, "managed-items", "other-service", "", "", 100); !errors.Is(err, assets.ErrNotFound) {
+	if _, err := store.ListManagedCollectionItems(ctx, "managed-items", "other-service", "", "", 100, "created", "desc"); !errors.Is(err, assets.ErrNotFound) {
 		t.Fatalf("cross-owner list err=%v", err)
 	}
 	if _, err := db.Exec(`INSERT INTO asset_collections(id,namespace,name,created_by_service,created_at,updated_at) VALUES('managed-other-namespace','other','Other','hhc-line-function-bot',$1,$1)`, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.ListManagedCollectionItems(ctx, "managed-other-namespace", "hhc-line-function-bot", "", "", 100); !errors.Is(err, assets.ErrNotFound) {
+	if _, err := store.ListManagedCollectionItems(ctx, "managed-other-namespace", "hhc-line-function-bot", "", "", 100, "created", "desc"); !errors.Is(err, assets.ErrNotFound) {
 		t.Fatalf("cross-namespace list err=%v", err)
 	}
 
@@ -2121,6 +2121,116 @@ func TestCollectionAssetDeleteTombstonesMembershipsAndRacesAdd(t *testing.T) {
 	}
 	if active != 0 {
 		t.Fatalf("active memberships after asset delete=%d", active)
+	}
+}
+
+func TestAccountCleanupWaitsForPurgeThenDeidentifiesSubjectMetadata(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 9, 23, 13, 30, 0, 0, time.UTC)
+	for _, id := range []string{"account-avatar", "account-export"} {
+		insertAsset(t, db, id, assets.UploadCompleted, assets.ScanClean, assets.ProcessingNotRequired, now, time.Time{})
+	}
+	if _, err := db.Exec(`UPDATE assets SET namespace='account.avatar',owner_service='account-api',owner_type='user',owner_id='user-1',original_file_name='person.jpg' WHERE id='account-avatar'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE assets SET namespace='account.dsr-export',owner_service='account-api',owner_type='dsr_export',owner_id='user-1',original_file_name='export.zip' WHERE id='account-export'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO asset_grants(id,asset_id,subject_type,subject_id,permission,idempotency_key,created_at) VALUES('account-grant','account-avatar','public','*','read','account-grant',$1)`, now); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := store.CleanupAccountAssets(ctx, "user-1", "delete-1", now)
+	if err != nil || result.Status != assets.AccountCleanupPending || result.AffectedCount != 2 || result.RemainingCount != 2 {
+		t.Fatalf("pending result=%+v err=%v", result, err)
+	}
+	var liveAssets, liveGrants int
+	if err := db.QueryRow(`SELECT count(*) FROM assets WHERE owner_id='user-1' AND deleted_at IS NULL`).Scan(&liveAssets); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT count(*) FROM asset_grants WHERE asset_id IN ('account-avatar','account-export') AND revoked_at IS NULL`).Scan(&liveGrants); err != nil {
+		t.Fatal(err)
+	}
+	if liveAssets != 0 || liveGrants != 0 {
+		t.Fatalf("live assets=%d grants=%d", liveAssets, liveGrants)
+	}
+
+	if err := store.CompletePurge(ctx, "account-avatar", now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompletePurge(ctx, "account-export", now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	result, err = store.CleanupAccountAssets(ctx, "user-1", "delete-1", now.Add(2*time.Minute))
+	if err != nil || result.Status != assets.AccountCleanupCompleted || result.AffectedCount != 2 || result.RemainingCount != 0 {
+		t.Fatalf("completed result=%+v err=%v", result, err)
+	}
+	var attributed, named int
+	if err := db.QueryRow(`SELECT count(*) FILTER (WHERE owner_id='user-1'),count(*) FILTER (WHERE original_file_name<>'') FROM assets WHERE id IN ('account-avatar','account-export')`).Scan(&attributed, &named); err != nil {
+		t.Fatal(err)
+	}
+	if attributed != 0 || named != 0 {
+		t.Fatalf("attributed=%d named=%d", attributed, named)
+	}
+	if _, err := store.CleanupAccountAssets(ctx, "user-2", "delete-1", now); !errors.Is(err, assets.ErrConflict) {
+		t.Fatalf("idempotency collision error=%v", err)
+	}
+}
+
+func TestAccountUploadWaitsForCleanupAndRejectsCompletedSubject(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Date(2026, 9, 23, 14, 0, 0, 0, time.UTC)
+	userID := "user-after-cleanup"
+
+	blocker, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Rollback()
+	if _, err := blocker.Exec(`SELECT pg_advisory_xact_lock(hashtextextended('asset-account-cleanup:' || $1,0))`, userID); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256([]byte("asset-account-cleanup:" + userID))
+	if _, err := blocker.Exec(`INSERT INTO asset_account_cleanup_operations(idempotency_key,subject_ref,status,created_at,updated_at) VALUES('completed-cleanup',$1,'completed',$2,$2)`, fmt.Sprintf("%x", digest), now); err != nil {
+		t.Fatal(err)
+	}
+	asset := assets.Asset{ID: "post-cleanup-upload", Namespace: "account.avatar", OwnerService: "account-api", OwnerType: "user", OwnerID: userID, Purpose: "avatar", OriginalFileName: "avatar.jpg", ObjectKey: "assets/post-cleanup-upload", ExpectedMIMEType: "image/jpeg", UploadStatus: assets.UploadCreated, ScanStatus: assets.ScanPending, ProcessingStatus: assets.ProcessingNotRequired, Visibility: assets.VisibilityPublic, CreatedAt: now, UpdatedAt: now}
+	session := assets.UploadSession{ID: "post-cleanup-session", AssetID: asset.ID, IdempotencyKey: "post-cleanup-upload", CallerService: "account-api", Operation: "create_upload", Fingerprint: "post-cleanup", StagingObjectKey: "staging/post-cleanup-upload", MaxSizeBytes: 1024, Status: assets.UploadCreated, ExpiresAt: now.Add(time.Minute), CreatedAt: now}
+
+	created := make(chan error, 1)
+	go func() { created <- store.CreateUpload(context.Background(), asset, session) }()
+	select {
+	case err := <-created:
+		t.Fatalf("upload did not wait for cleanup lock: %v", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+	if err := blocker.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-created; !errors.Is(err, assets.ErrConflict) {
+		t.Fatalf("post-cleanup upload error=%v", err)
+	}
+	var assetCount int
+	if err := db.QueryRow(`SELECT count(*) FROM assets WHERE id=$1`, asset.ID).Scan(&assetCount); err != nil {
+		t.Fatal(err)
+	}
+	if assetCount != 0 {
+		t.Fatalf("post-cleanup asset count=%d", assetCount)
+	}
+
+	pendingUserID := "user-pending-cleanup"
+	pendingDigest := sha256.Sum256([]byte("asset-account-cleanup:" + pendingUserID))
+	if _, err := db.Exec(`INSERT INTO asset_account_cleanup_operations(idempotency_key,subject_ref,status,created_at,updated_at) VALUES('pending-cleanup',$1,'pending',$2,$2)`, fmt.Sprintf("%x", pendingDigest), now); err != nil {
+		t.Fatal(err)
+	}
+	asset.ID, asset.OwnerID, asset.ObjectKey = "pending-cleanup-upload", pendingUserID, "assets/pending-cleanup-upload"
+	session.ID, session.AssetID, session.IdempotencyKey = "pending-cleanup-session", asset.ID, "pending-cleanup-upload"
+	if err := store.CreateUpload(ctx, asset, session); err != nil {
+		t.Fatalf("pending cleanup upload error=%v", err)
 	}
 }
 

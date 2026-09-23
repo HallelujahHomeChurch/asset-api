@@ -63,6 +63,18 @@ func (s *Store) CreateUpload(ctx context.Context, asset assets.Asset, session as
 		return err
 	}
 	defer tx.Rollback()
+	if asset.OwnerService == "account-api" && (asset.Namespace == "account.avatar" || asset.Namespace == "account.dsr-export") {
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('asset-account-cleanup:' || $1,0))`, asset.OwnerID); err != nil {
+			return err
+		}
+		var cleaned bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM asset_account_cleanup_operations WHERE subject_ref=$1 AND status='completed')`, accountCleanupSubjectRef(asset.OwnerID)).Scan(&cleaned); err != nil {
+			return err
+		}
+		if cleaned {
+			return assets.ErrConflict
+		}
+	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO assets (id,namespace,owner_service,owner_type,owner_id,purpose,locale,original_file_name,object_key,expected_mime_type,upload_status,scan_status,processing_status,visibility,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`, asset.ID, asset.Namespace, asset.OwnerService, asset.OwnerType, asset.OwnerID, asset.Purpose, asset.Locale, asset.OriginalFileName, asset.ObjectKey, asset.ExpectedMIMEType, asset.UploadStatus, asset.ScanStatus, asset.ProcessingStatus, asset.Visibility, asset.CreatedAt, asset.UpdatedAt)
 	if err != nil {
 		return err
@@ -1034,8 +1046,10 @@ type listCursor struct {
 }
 
 type managedItemCursor struct {
-	CreatedAt time.Time `json:"t"`
-	LastID    string    `json:"i"`
+	Value     string `json:"v"`
+	LastID    string `json:"i"`
+	Sort      string `json:"s"`
+	Direction string `json:"d"`
 }
 
 type changeCursor struct {
@@ -1341,9 +1355,9 @@ func (s *Store) GetManagedCollection(ctx context.Context, id, callerService stri
 	return assets.ManagedCollection{Collection: value, ACLs: acls}, nil
 }
 
-func (s *Store) ListManagedCollectionItems(ctx context.Context, collectionID, callerService, query, cursor string, limit int) (assets.ManagedCollectionItemPage, error) {
+func (s *Store) ListManagedCollectionItems(ctx context.Context, collectionID, callerService, query, cursor string, limit int, sort, direction string) (assets.ManagedCollectionItemPage, error) {
 	last, ok := decodeManagedItemCursor(cursor)
-	if !ok {
+	if !ok || (cursor != "" && (last.Sort != sort || last.Direction != direction)) {
 		return assets.ManagedCollectionItemPage{}, assets.ErrInvalidInput
 	}
 	var owned bool
@@ -1354,6 +1368,13 @@ func (s *Store) ListManagedCollectionItems(ctx context.Context, collectionID, ca
 		return assets.ManagedCollectionItemPage{}, assets.ErrNotFound
 	}
 	limit = boundedCollectionLimit(limit)
+	order := map[string]string{"name": "i.display_name", "type": "COALESCE(a.detected_mime_type,'')", "size": "COALESCE(a.size_bytes,0)", "created": "i.created_at", "retention": "i.retention_exempt"}[sort]
+	cursorValue := map[string]string{"name": "$5", "type": "$5", "size": "NULLIF($5,'')::bigint", "created": "NULLIF($5,'')::timestamptz", "retention": "NULLIF($5,'')::boolean"}[sort]
+	direction = strings.ToUpper(direction)
+	comparison := ">"
+	if direction == "DESC" {
+		comparison = "<"
+	}
 	query = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(query)
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT i.id,i.display_name,COALESCE(a.detected_mime_type,''),COALESCE(a.size_bytes,0),i.created_at,i.retention_exempt
@@ -1363,8 +1384,8 @@ func (s *Store) ListManagedCollectionItems(ctx context.Context, collectionID, ca
 		WHERE c.id=$1 AND c.namespace='line.group.media-sync' AND c.created_by_service=$2 AND c.deleted_at IS NULL
 		  AND i.deleted_revision IS NULL
 		  AND i.display_name ILIKE '%' || $3 || '%' ESCAPE '\'
-		  AND ($4::timestamptz='0001-01-01'::timestamptz OR i.created_at<$4 OR (i.created_at=$4 AND i.id<$5))
-		ORDER BY i.created_at DESC,i.id DESC LIMIT $6`, collectionID, callerService, query, last.CreatedAt, last.LastID, limit+1)
+		  AND ($4='' OR (`+order+`,i.id) `+comparison+` (`+cursorValue+`,$4))
+		ORDER BY `+order+` `+direction+`,i.id `+direction+` LIMIT $6`, collectionID, callerService, query, last.LastID, last.Value, limit+1)
 	if err != nil {
 		return assets.ManagedCollectionItemPage{}, err
 	}
@@ -1382,9 +1403,20 @@ func (s *Store) ListManagedCollectionItems(ctx context.Context, collectionID, ca
 	}
 	if len(page.Items) > limit {
 		page.Items = page.Items[:limit]
-		last := page.Items[len(page.Items)-1]
+		item := page.Items[len(page.Items)-1]
 		page.HasMore = true
-		page.Cursor = encodeManagedItemCursor(managedItemCursor{CreatedAt: last.CreatedAt, LastID: last.ID})
+		value := item.DisplayName
+		switch sort {
+		case "type":
+			value = item.MIMEType
+		case "size":
+			value = strconv.FormatInt(item.SizeBytes, 10)
+		case "created":
+			value = item.CreatedAt.UTC().Format(time.RFC3339Nano)
+		case "retention":
+			value = strconv.FormatBool(item.RetentionExempt)
+		}
+		page.Cursor = encodeManagedItemCursor(managedItemCursor{Value: value, LastID: item.ID, Sort: sort, Direction: strings.ToLower(direction)})
 	}
 	return page, nil
 }
@@ -1684,7 +1716,7 @@ func decodeManagedItemCursor(value string) (managedItemCursor, bool) {
 		return managedItemCursor{}, false
 	}
 	var cursor managedItemCursor
-	if err := json.Unmarshal(decoded, &cursor); err != nil || cursor.CreatedAt.IsZero() || cursor.LastID == "" {
+	if err := json.Unmarshal(decoded, &cursor); err != nil || cursor.LastID == "" || cursor.Sort == "" || cursor.Direction == "" {
 		return managedItemCursor{}, false
 	}
 	return cursor, true
@@ -1901,6 +1933,62 @@ func (s *Store) SoftDeleteAsset(ctx context.Context, assetID, ownerService strin
 			return err
 		}
 	}
+}
+
+func (s *Store) CleanupAccountAssets(ctx context.Context, userID, idempotencyKey string, now time.Time) (assets.AccountCleanupResult, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return assets.AccountCleanupResult{}, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('asset-account-cleanup:' || $1,0))`, userID); err != nil {
+		return assets.AccountCleanupResult{}, err
+	}
+	subjectRef := accountCleanupSubjectRef(userID)
+	var operationSubject string
+	var affected int64
+	err = tx.QueryRowContext(ctx, `SELECT subject_ref,affected_count FROM asset_account_cleanup_operations WHERE idempotency_key=$1 FOR UPDATE`, idempotencyKey).Scan(&operationSubject, &affected)
+	if errors.Is(err, sql.ErrNoRows) {
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM assets WHERE owner_service='account-api' AND owner_id=$1 AND namespace IN ('account.avatar','account.dsr-export')`, userID).Scan(&affected); err != nil {
+			return assets.AccountCleanupResult{}, err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO asset_account_cleanup_operations(idempotency_key,subject_ref,status,affected_count,created_at,updated_at) VALUES($1,$2,'pending',$3,$4,$4)`, idempotencyKey, subjectRef, affected, now); err != nil {
+			return assets.AccountCleanupResult{}, err
+		}
+	} else if err != nil {
+		return assets.AccountCleanupResult{}, err
+	} else if operationSubject != subjectRef {
+		return assets.AccountCleanupResult{}, assets.ErrConflict
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE asset_grants SET revoked_at=COALESCE(revoked_at,$2) WHERE asset_id IN (SELECT id FROM assets WHERE owner_service='account-api' AND owner_id=$1 AND namespace IN ('account.avatar','account.dsr-export'))`, userID, now); err != nil {
+		return assets.AccountCleanupResult{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE assets SET deleted_at=COALESCE(deleted_at,$2),updated_at=$2 WHERE owner_service='account-api' AND owner_id=$1 AND namespace IN ('account.avatar','account.dsr-export') AND purged_at IS NULL`, userID, now); err != nil {
+		return assets.AccountCleanupResult{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE assets SET owner_id='erased:'||id,original_file_name='',checksum_sha256='',etag='',scan_details='',processing_error='',updated_at=$2 WHERE owner_service='account-api' AND owner_id=$1 AND namespace IN ('account.avatar','account.dsr-export') AND purged_at IS NOT NULL`, userID, now); err != nil {
+		return assets.AccountCleanupResult{}, err
+	}
+	var remaining int64
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM assets WHERE owner_service='account-api' AND owner_id=$1 AND namespace IN ('account.avatar','account.dsr-export')`, userID).Scan(&remaining); err != nil {
+		return assets.AccountCleanupResult{}, err
+	}
+	status := assets.AccountCleanupPending
+	if remaining == 0 {
+		status = assets.AccountCleanupCompleted
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE asset_account_cleanup_operations SET status=$2,updated_at=$3 WHERE idempotency_key=$1`, idempotencyKey, status, now); err != nil {
+		return assets.AccountCleanupResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return assets.AccountCleanupResult{}, err
+	}
+	return assets.AccountCleanupResult{Status: status, AffectedCount: affected, RemainingCount: remaining, ReasonCodes: []string{}}, nil
+}
+
+func accountCleanupSubjectRef(userID string) string {
+	digest := sha256.Sum256([]byte("asset-account-cleanup:" + userID))
+	return hex.EncodeToString(digest[:])
 }
 
 func (s *Store) softDeleteAsset(ctx context.Context, assetID, ownerService string, now time.Time) (bool, error) {
@@ -2254,7 +2342,14 @@ func (s *Store) ClaimPurge(ctx context.Context, now time.Time, lease time.Durati
 }
 
 func (s *Store) CompletePurge(ctx context.Context, assetID string, now time.Time) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE assets SET purged_at=$2,purge_claimed_until=NULL,purge_error='',updated_at=$2 WHERE id=$1 AND purged_at IS NULL`, assetID, now)
+	result, err := s.db.ExecContext(ctx, `UPDATE assets SET purged_at=$2,purge_claimed_until=NULL,purge_error='',updated_at=$2,
+		owner_id=CASE WHEN owner_service='account-api' AND namespace IN ('account.avatar','account.dsr-export') THEN 'erased:'||id ELSE owner_id END,
+		original_file_name=CASE WHEN owner_service='account-api' AND namespace IN ('account.avatar','account.dsr-export') THEN '' ELSE original_file_name END,
+		checksum_sha256=CASE WHEN owner_service='account-api' AND namespace IN ('account.avatar','account.dsr-export') THEN '' ELSE checksum_sha256 END,
+		etag=CASE WHEN owner_service='account-api' AND namespace IN ('account.avatar','account.dsr-export') THEN '' ELSE etag END,
+		scan_details=CASE WHEN owner_service='account-api' AND namespace IN ('account.avatar','account.dsr-export') THEN '' ELSE scan_details END,
+		processing_error=CASE WHEN owner_service='account-api' AND namespace IN ('account.avatar','account.dsr-export') THEN '' ELSE processing_error END
+		WHERE id=$1 AND purged_at IS NULL`, assetID, now)
 	if err != nil {
 		return err
 	}

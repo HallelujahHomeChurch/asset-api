@@ -310,6 +310,25 @@ type Operations struct {
 	BulletinPublicGrants    int64     `json:"bulletinPublicGrants"`
 }
 
+type AccountCleanupStatus string
+
+const (
+	AccountCleanupPending   AccountCleanupStatus = "pending"
+	AccountCleanupCompleted AccountCleanupStatus = "completed"
+)
+
+type AccountCleanupRequest struct {
+	UserID         string `json:"userId"`
+	IdempotencyKey string `json:"idempotencyKey"`
+}
+
+type AccountCleanupResult struct {
+	Status         AccountCleanupStatus `json:"status"`
+	AffectedCount  int64                `json:"affectedCount"`
+	RemainingCount int64                `json:"remainingCount"`
+	ReasonCodes    []string             `json:"reasonCodes"`
+}
+
 type CollectionSubject struct {
 	UserID  string
 	RoleIDs []string
@@ -570,7 +589,7 @@ type Repository interface {
 	RedeemContentTicket(context.Context, string, time.Time) (Asset, error)
 	ListManagedCollections(context.Context, string, string, int) (ManagedCollectionPage, error)
 	GetManagedCollection(context.Context, string, string) (ManagedCollection, error)
-	ListManagedCollectionItems(context.Context, string, string, string, string, int) (ManagedCollectionItemPage, error)
+	ListManagedCollectionItems(context.Context, string, string, string, string, int, string, string) (ManagedCollectionItemPage, error)
 	UpdateCollectionRetention(context.Context, UpdateCollectionRetentionInput, time.Time) (Collection, error)
 }
 

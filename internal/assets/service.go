@@ -337,6 +337,19 @@ func (s *Service) SoftDelete(ctx context.Context, assetID, ownerService string) 
 	return repository.SoftDeleteAsset(ctx, assetID, ownerService, s.now().UTC())
 }
 
+func (s *Service) CleanupAccount(ctx context.Context, request AccountCleanupRequest) (AccountCleanupResult, error) {
+	if strings.TrimSpace(request.UserID) == "" || strings.TrimSpace(request.IdempotencyKey) == "" || len(request.IdempotencyKey) > 200 {
+		return AccountCleanupResult{}, ErrInvalidInput
+	}
+	repository, ok := s.repository.(interface {
+		CleanupAccountAssets(context.Context, string, string, time.Time) (AccountCleanupResult, error)
+	})
+	if !ok {
+		return AccountCleanupResult{}, ErrForbidden
+	}
+	return repository.CleanupAccountAssets(ctx, request.UserID, request.IdempotencyKey, s.now().UTC())
+}
+
 func (s *Service) RequeueScan(ctx context.Context, assetID, ownerService string) error {
 	asset, err := s.repository.GetAsset(ctx, assetID)
 	if err != nil {
@@ -643,11 +656,17 @@ func (s *Service) GetManagedCollection(ctx context.Context, id, callerService st
 	return s.repository.GetManagedCollection(ctx, id, callerService)
 }
 
-func (s *Service) ListManagedCollectionItems(ctx context.Context, collectionID, callerService, query, cursor string, limit int) (ManagedCollectionItemPage, error) {
-	if collectionID == "" || callerService == "" || !validManagedCollectionItemQuery(query) {
+func (s *Service) ListManagedCollectionItems(ctx context.Context, collectionID, callerService, query, cursor string, limit int, sort, direction string) (ManagedCollectionItemPage, error) {
+	if sort == "" {
+		sort = "created"
+	}
+	if direction == "" {
+		direction = "desc"
+	}
+	if collectionID == "" || callerService == "" || !validManagedCollectionItemQuery(query) || !slices.Contains([]string{"name", "type", "size", "created", "retention"}, sort) || !slices.Contains([]string{"asc", "desc"}, direction) {
 		return ManagedCollectionItemPage{}, ErrInvalidInput
 	}
-	return s.repository.ListManagedCollectionItems(ctx, collectionID, callerService, query, cursor, limit)
+	return s.repository.ListManagedCollectionItems(ctx, collectionID, callerService, query, cursor, limit, sort, direction)
 }
 
 func validManagedCollectionItemQuery(query string) bool {

@@ -106,6 +106,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.Handle("GET /api/assets/collections/{collectionID}/items/{itemID}/content", h.collectionReader(http.HandlerFunc(h.collectionContent)))
 	mux.Handle("GET /api/assets/content", h.collectionTicket(http.HandlerFunc(h.ticketContent)))
 	mux.Handle("POST /priv/assets/upload-sessions", h.internal(http.HandlerFunc(h.createUpload)))
+	mux.Handle("POST /priv/account-cleanup", h.internal(h.accountCaller(http.HandlerFunc(h.cleanupAccount))))
 	mux.Handle("GET /priv/assets/operations", h.internal(http.HandlerFunc(h.operations)))
 	mux.Handle("GET /priv/assets/collections", h.internal(h.collectionCaller(http.HandlerFunc(h.listManagedCollections))))
 	mux.Handle("GET /priv/assets/collections/{collectionID}", h.internal(h.collectionCaller(http.HandlerFunc(h.getManagedCollection))))
@@ -281,6 +282,16 @@ func (h *Handler) collectionCaller(next http.Handler) http.Handler {
 	})
 }
 
+func (h *Handler) accountCaller(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if authenticatedCaller(r) != "account-api" {
+			writeError(w, http.StatusForbidden, "AST_FORBIDDEN", "caller is not allowed")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func sameToken(got, want string) bool {
 	return got != "" && want != "" && subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
@@ -311,6 +322,19 @@ func (h *Handler) createUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, created)
+}
+
+func (h *Handler) cleanupAccount(w http.ResponseWriter, r *http.Request) {
+	var request assets.AccountCleanupRequest
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	result, err := h.service.CleanupAccount(r.Context(), request)
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 func (h *Handler) getAsset(w http.ResponseWriter, r *http.Request) {
 	asset, err := h.service.GetAsset(r.Context(), r.PathValue("assetID"))
@@ -650,7 +674,7 @@ func (h *Handler) listManagedCollectionItems(w http.ResponseWriter, r *http.Requ
 	if !ok {
 		return
 	}
-	page, err := h.service.ListManagedCollectionItems(r.Context(), collectionID, authenticatedCaller(r), r.URL.Query().Get("q"), r.URL.Query().Get("cursor"), limit)
+	page, err := h.service.ListManagedCollectionItems(r.Context(), collectionID, authenticatedCaller(r), r.URL.Query().Get("q"), r.URL.Query().Get("cursor"), limit, r.URL.Query().Get("sort"), r.URL.Query().Get("direction"))
 	if err != nil {
 		handleError(w, err)
 		return

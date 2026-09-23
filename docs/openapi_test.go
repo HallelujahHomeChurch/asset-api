@@ -35,6 +35,7 @@ func TestOpenAPIContract(t *testing.T) {
 		{"GET", "/api/assets/shared-folders/{grantID}/snapshot", "[api-gateway]"},
 		{"GET", "/api/assets/shared-folders/{grantID}/items/{itemID}/content", "[api-gateway]"},
 		{"DELETE", "/api/assets/shared-folders/{grantID}", "[api-gateway]"},
+		{"POST", "/priv/account-cleanup", "[account-api]"},
 		{"POST", "/priv/assets/upload-sessions", "[account-api, hhc-web-api, hhc-line-function-bot]"},
 		{"GET", "/priv/assets/operations", "[account-api, hhc-web-api, hhc-line-function-bot]"},
 		{"GET", "/priv/assets/collections", "[hhc-line-function-bot]"},
@@ -68,6 +69,23 @@ func TestOpenAPIContract(t *testing.T) {
 		if !strings.Contains(document, value) {
 			t.Fatalf("missing contract detail %q", value)
 		}
+	}
+}
+
+func TestOpenAPIDocumentsAccountCleanupPostcondition(t *testing.T) {
+	raw, err := os.ReadFile("openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := string(raw)
+	operation := operationBlockFor(t, document, documentedOperation{"POST", "/priv/account-cleanup", ""})
+	assertContains(t, operation, "$ref: '#/components/schemas/AccountCleanupRequest'")
+	assertContains(t, operation, "$ref: '#/components/schemas/AccountCleanupResult'")
+	request := schemaBlockFor(t, document, "AccountCleanupRequest")
+	assertContains(t, request, "required: [userId, idempotencyKey]")
+	result := schemaBlockFor(t, document, "AccountCleanupResult")
+	for _, value := range []string{"required: [status, affectedCount, remainingCount, reasonCodes]", "enum: [pending, completed]", "remainingCount"} {
+		assertContains(t, result, value)
 	}
 }
 
