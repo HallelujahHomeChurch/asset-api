@@ -1357,7 +1357,7 @@ func (s *Store) ListManagedCollectionItems(ctx context.Context, collectionID, ca
 	}
 	limit = boundedCollectionLimit(limit)
 	order := map[string]string{"name": "i.display_name", "type": "COALESCE(a.detected_mime_type,'')", "size": "COALESCE(a.size_bytes,0)", "created": "i.created_at", "retention": "i.retention_exempt"}[sort]
-	cursorValue := map[string]string{"name": "$5", "type": "$5", "size": "$5::bigint", "created": "$5::timestamptz", "retention": "$5::boolean"}[sort]
+	cursorValue := map[string]string{"name": "$5", "type": "$5", "size": "NULLIF($5,'')::bigint", "created": "NULLIF($5,'')::timestamptz", "retention": "NULLIF($5,'')::boolean"}[sort]
 	direction = strings.ToUpper(direction)
 	comparison := ">"
 	if direction == "DESC" {

@@ -242,7 +242,7 @@ func migratedColumns(t *testing.T) (map[string]struct{}, map[string]bool) {
 	tableNames := []string{
 		"assets", "upload_sessions", "asset_grants", "asset_scan_events", "asset_derivatives",
 		"asset_scan_outbox", "asset_scan_poison_events", "asset_derivative_outbox", "asset_derivative_poison_events",
-		"audit_outboxes",
+		"audit_outboxes", "asset_account_cleanup_operations",
 	}
 	rows, err := db.Query(`SELECT table_name,column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name = ANY($1) ORDER BY table_name,column_name`, tableNames)
 	if err != nil {
