@@ -55,7 +55,7 @@ test "$(grep -c 'memberVideoEnabled="$MEMBER_VIDEO_ENABLED"' "$workflow")" = 2
 grep -q 'recordingImage="$RECORDING_IMAGE_REF"' "$workflow"
 grep -q 'name: Verify recording validation job release' "$workflow"
 grep -q '^  deploy_media:' "$workflow"
-grep -Fq "if: \${{ vars.MEMBER_VIDEO_ENABLED == 'true' }}" "$workflow"
+grep -Fq "if: \${{ vars.MEMBER_MEDIA_DEPLOY_ENABLED == 'true' }}" "$workflow"
 grep -q 'name: member-media-${{ github.sha }}' "$workflow"
 grep -q 'pages deploy dist --project-name hhc-member-media' "$workflow"
 grep -q 'name: Capture previous media deployment' "$workflow"

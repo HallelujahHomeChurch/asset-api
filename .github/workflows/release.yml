@@ -446,7 +446,7 @@ jobs:
 
   deploy_media:
     needs: [verify, deploy]
-    if: ${{ vars.MEMBER_VIDEO_ENABLED == 'true' }}
+    if: ${{ vars.MEMBER_MEDIA_DEPLOY_ENABLED == 'true' }}
     runs-on: ubuntu-latest
     environment: production
     permissions:
