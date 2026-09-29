@@ -46,7 +46,7 @@ func TestDataGovernanceManifest(t *testing.T) {
 	require.NoError(t, err)
 	document, err := validateManifest("../..", raw, manifestService)
 	require.NoError(t, err)
-	require.Contains(t, string(raw), "account.avatar and account.dsr-export")
+	require.Contains(t, string(raw), "account.avatar, account.dsr-export and account.dsr-supplement")
 	ids := []string{
 		"asset.account-artifact-content", "asset.account-artifact-metadata", "asset.account-upload-sessions",
 		"asset.account-grants", "asset.account-scan-and-derivative-state", "asset.account-poison-events", "asset.account-purge-lifecycle",
@@ -54,7 +54,7 @@ func TestDataGovernanceManifest(t *testing.T) {
 		"asset.audit-outbox",
 	}
 	require.Equal(t, ids, manifestDatasetIDs(document))
-	for _, namespace := range []string{"account.avatar", "account.dsr-export"} {
+	for _, namespace := range []string{"account.avatar", "account.dsr-export", "account.dsr-supplement"} {
 		policy, ok := assets.PolicyFor(namespace)
 		require.Truef(t, ok, "%s policy", namespace)
 		require.Equal(t, "account-api", policy.OwnerService)

@@ -29,6 +29,9 @@ var namespacePolicies = map[string]NamespacePolicy{
 		MaxSizeBytes: 1 << 20, DefaultVisibility: VisibilityPublic, Visibilities: map[Visibility]bool{VisibilityPublic: true}, Processing: ProcessingNotRequired,
 		CacheControl: "public, max-age=31536000, immutable",
 	},
+	"account.dsr-supplement": {
+		OwnerService: "account-api", MIMETypes: map[string]bool{"application/zip": true}, MaxSizeBytes: 10 << 20, DefaultVisibility: VisibilityPrivate, Visibilities: map[Visibility]bool{VisibilityPrivate: true}, Processing: ProcessingNotRequired, CacheControl: "private, no-store",
+	},
 	"account.dsr-export": {
 		OwnerService: "account-api", MIMETypes: map[string]bool{"application/zip": true},
 		MaxSizeBytes: 50 << 20, DefaultVisibility: VisibilityPrivate, Visibilities: map[Visibility]bool{VisibilityPrivate: true}, Processing: ProcessingNotRequired,

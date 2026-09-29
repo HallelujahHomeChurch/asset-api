@@ -2129,7 +2129,7 @@ func TestAccountCleanupWaitsForPurgeThenDeidentifiesSubjectMetadata(t *testing.T
 	store := New(db)
 	ctx := context.Background()
 	now := time.Date(2026, 9, 23, 13, 30, 0, 0, time.UTC)
-	for _, id := range []string{"account-avatar", "account-export"} {
+	for _, id := range []string{"account-avatar", "account-export", "account-supplement"} {
 		insertAsset(t, db, id, assets.UploadCompleted, assets.ScanClean, assets.ProcessingNotRequired, now, time.Time{})
 	}
 	if _, err := db.Exec(`UPDATE assets SET namespace='account.avatar',owner_service='account-api',owner_type='user',owner_id='user-1',original_file_name='person.jpg' WHERE id='account-avatar'`); err != nil {
@@ -2138,19 +2138,22 @@ func TestAccountCleanupWaitsForPurgeThenDeidentifiesSubjectMetadata(t *testing.T
 	if _, err := db.Exec(`UPDATE assets SET namespace='account.dsr-export',owner_service='account-api',owner_type='dsr_export',owner_id='user-1',original_file_name='export.zip' WHERE id='account-export'`); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.Exec(`UPDATE assets SET namespace='account.dsr-supplement',owner_service='account-api',owner_type='dsr_supplement',owner_id='user-1',original_file_name='supplement.zip' WHERE id='account-supplement'`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.Exec(`INSERT INTO asset_grants(id,asset_id,subject_type,subject_id,permission,idempotency_key,created_at) VALUES('account-grant','account-avatar','public','*','read','account-grant',$1)`, now); err != nil {
 		t.Fatal(err)
 	}
 
 	result, err := store.CleanupAccountAssets(ctx, "user-1", "delete-1", now)
-	if err != nil || result.Status != assets.AccountCleanupPending || result.AffectedCount != 2 || result.RemainingCount != 2 {
+	if err != nil || result.Status != assets.AccountCleanupPending || result.AffectedCount != 3 || result.RemainingCount != 3 {
 		t.Fatalf("pending result=%+v err=%v", result, err)
 	}
 	var liveAssets, liveGrants int
 	if err := db.QueryRow(`SELECT count(*) FROM assets WHERE owner_id='user-1' AND deleted_at IS NULL`).Scan(&liveAssets); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.QueryRow(`SELECT count(*) FROM asset_grants WHERE asset_id IN ('account-avatar','account-export') AND revoked_at IS NULL`).Scan(&liveGrants); err != nil {
+	if err := db.QueryRow(`SELECT count(*) FROM asset_grants WHERE asset_id IN ('account-avatar','account-export','account-supplement') AND revoked_at IS NULL`).Scan(&liveGrants); err != nil {
 		t.Fatal(err)
 	}
 	if liveAssets != 0 || liveGrants != 0 {
@@ -2163,12 +2166,15 @@ func TestAccountCleanupWaitsForPurgeThenDeidentifiesSubjectMetadata(t *testing.T
 	if err := store.CompletePurge(ctx, "account-export", now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.CompletePurge(ctx, "account-supplement", now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
 	result, err = store.CleanupAccountAssets(ctx, "user-1", "delete-1", now.Add(2*time.Minute))
-	if err != nil || result.Status != assets.AccountCleanupCompleted || result.AffectedCount != 2 || result.RemainingCount != 0 {
+	if err != nil || result.Status != assets.AccountCleanupCompleted || result.AffectedCount != 3 || result.RemainingCount != 0 {
 		t.Fatalf("completed result=%+v err=%v", result, err)
 	}
 	var attributed, named int
-	if err := db.QueryRow(`SELECT count(*) FILTER (WHERE owner_id='user-1'),count(*) FILTER (WHERE original_file_name<>'') FROM assets WHERE id IN ('account-avatar','account-export')`).Scan(&attributed, &named); err != nil {
+	if err := db.QueryRow(`SELECT count(*) FILTER (WHERE owner_id='user-1'),count(*) FILTER (WHERE original_file_name<>'') FROM assets WHERE id IN ('account-avatar','account-export','account-supplement')`).Scan(&attributed, &named); err != nil {
 		t.Fatal(err)
 	}
 	if attributed != 0 || named != 0 {

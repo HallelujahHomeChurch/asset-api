@@ -1,6 +1,6 @@
 # Asset API Account-artifact governance scope
 
-Automated Account-artifact scope is only the two account.avatar and account.dsr-export namespaces and the rows mechanically linked through their asset_id values. The artifact subject is assets.owner_id; grant subject_id is a reader and is not the artifact owner. Grant expiry or revocation denies access but does not delete a Blob or a grant row.
+Automated Account-artifact scope is only account.avatar, account.dsr-export and account.dsr-supplement namespaces and the rows mechanically linked through their asset_id values. The artifact subject is assets.owner_id; grant subject_id is a reader and is not the artifact owner. Grant expiry or revocation denies access but does not delete a Blob or a grant row.
 
 The automated inventory covers Account asset metadata, upload sessions, grants, scan and derivative state, poison-event metadata, and the staged purge lifecycle. FK-linked scan, derivative, and outbox rows cascade when parent asset metadata is hard-deleted. Poison rows retain textual asset_id lookup only: they have no parent FK, so no cascade is claimed. Their attribution and retention remain manual and pending_legal.
 
