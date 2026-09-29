@@ -18,6 +18,13 @@ type Config struct {
 	LocalSigningKey      string
 	AzureAccountURL      string
 	AzureContainer       string
+	R2AccountID          string
+	R2Bucket             string
+	R2AccessKeyID        string
+	R2SecretAccessKey    string
+	MediaPrivateKeyPEM   string
+	MediaKeyID           string
+	MediaIssuer          string
 	ScanQueueURL         string
 	DerivativeQueueURL   string
 	ScanDispatchEnabled  bool
@@ -58,6 +65,13 @@ func Load() (Config, error) {
 		LocalSigningKey:      value("ASSET_LOCAL_SIGNING_KEY", "local-development-only-change-me"),
 		AzureAccountURL:      os.Getenv("ASSET_AZURE_ACCOUNT_URL"),
 		AzureContainer:       value("ASSET_AZURE_CONTAINER", "assets"),
+		R2AccountID:          strings.TrimSpace(os.Getenv("ASSET_R2_ACCOUNT_ID")),
+		R2Bucket:             strings.TrimSpace(os.Getenv("ASSET_R2_BUCKET")),
+		R2AccessKeyID:        strings.TrimSpace(os.Getenv("ASSET_R2_ACCESS_KEY_ID")),
+		R2SecretAccessKey:    strings.TrimSpace(os.Getenv("ASSET_R2_SECRET_ACCESS_KEY")),
+		MediaPrivateKeyPEM:   os.Getenv("ASSET_MEDIA_PRIVATE_KEY_PEM"),
+		MediaKeyID:           strings.TrimSpace(os.Getenv("ASSET_MEDIA_KEY_ID")),
+		MediaIssuer:          strings.TrimSpace(os.Getenv("ASSET_MEDIA_ISSUER")),
 		ScanQueueURL:         strings.TrimSpace(os.Getenv("ASSET_SCAN_QUEUE_URL")),
 		DerivativeQueueURL:   strings.TrimSpace(os.Getenv("ASSET_DERIVATIVE_QUEUE_URL")),
 		EmbeddedScanEnabled:  true,
@@ -95,6 +109,19 @@ func Load() (Config, error) {
 	}
 	if cfg.StorageBackend == "azure" && cfg.DerivativeQueueURL == "" {
 		return Config{}, fmt.Errorf("ASSET_DERIVATIVE_QUEUE_URL is required for azure storage")
+	}
+	r2Values := []string{cfg.R2AccountID, cfg.R2Bucket, cfg.R2AccessKeyID, cfg.R2SecretAccessKey}
+	r2Configured := 0
+	for _, field := range r2Values {
+		if field != "" {
+			r2Configured++
+		}
+	}
+	if r2Configured != 0 && r2Configured != len(r2Values) {
+		return Config{}, fmt.Errorf("R2 recording configuration is incomplete")
+	}
+	if r2Configured == len(r2Values) && (cfg.MediaPrivateKeyPEM == "" || cfg.MediaKeyID == "" || cfg.MediaIssuer == "") {
+		return Config{}, fmt.Errorf("R2 media signing configuration is incomplete")
 	}
 	if cfg.AllowedCallers[cfg.ReaderCallerAppID] {
 		return Config{}, fmt.Errorf("ASSET_READER_CALLER_APP_ID must not be in ASSET_ALLOWED_CALLERS")

@@ -50,6 +50,20 @@ if grep -q 'az keyvault secret show' "$workflow"; then
 fi
 grep -q 'IMAGE_REF=.*@${digest}' "$workflow"
 grep -q 'SCAN_IMAGE_REF=.*@${scan_digest}' "$workflow"
+grep -Fq "MEMBER_VIDEO_ENABLED: \${{ vars.MEMBER_VIDEO_ENABLED || 'false' }}" "$workflow"
+test "$(grep -c 'memberVideoEnabled="$MEMBER_VIDEO_ENABLED"' "$workflow")" = 2
+grep -q 'recordingImage="$RECORDING_IMAGE_REF"' "$workflow"
+grep -q 'name: Verify recording validation job release' "$workflow"
+grep -q '^  deploy_media:' "$workflow"
+grep -Fq "if: \${{ vars.MEMBER_VIDEO_ENABLED == 'true' }}" "$workflow"
+grep -q 'name: member-media-${{ github.sha }}' "$workflow"
+grep -q 'pages deploy dist --project-name hhc-member-media' "$workflow"
+grep -q 'name: Capture previous media deployment' "$workflow"
+grep -q 'canonical_deployment.id' "$workflow"
+grep -q 'name: Restore previous media deployment on failure' "$workflow"
+grep -q 'deployments/${PREVIOUS_MEDIA_DEPLOYMENT}/rollback' "$workflow"
+grep -q 'param memberVideoEnabled bool = false' infra/main.bicep
+grep -q "name: 'asset-recording-validation'" infra/main.bicep
 grep -q 'Dockerfile.scan' "$workflow"
 trivy_image='ghcr.io/aquasecurity/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969'
 grep -Fq "$trivy_image" .github/workflows/ci.yml
