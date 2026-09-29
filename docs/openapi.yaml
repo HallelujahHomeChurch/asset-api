@@ -926,6 +926,7 @@ paths:
     parameters: [ { $ref: '#/components/parameters/RecordingSessionID' }, { $ref: '#/components/parameters/RecordingActorID' } ]
     get:
       operationId: getRecordingUpload
+      summary: Get an owner-scoped recording upload session.
       tags: [Private]
       x-hhc-visibility: private
       x-hhc-callers: [hhc-web-api]
@@ -934,6 +935,7 @@ paths:
         '200': { $ref: '#/components/responses/RecordingUpload' }
     delete:
       operationId: abortRecordingUpload
+      summary: Cancel an owner-scoped recording upload session.
       tags: [Private]
       x-hhc-visibility: private
       x-hhc-callers: [hhc-web-api]
@@ -978,6 +980,7 @@ paths:
     parameters: [ { $ref: '#/components/parameters/RecordingVersionID' } ]
     get:
       operationId: getRecordingAsset
+      summary: Get a validated private recording asset.
       tags: [Private]
       x-hhc-visibility: private
       x-hhc-callers: [hhc-web-api]
@@ -986,6 +989,7 @@ paths:
         '200': { $ref: '#/components/responses/RecordingAsset' }
     delete:
       operationId: deleteRecordingAsset
+      summary: Delete a private recording asset version.
       tags: [Private]
       x-hhc-visibility: private
       x-hhc-callers: [hhc-web-api]
@@ -1062,7 +1066,7 @@ components:
     RecordingUpload: { description: Owner-scoped private R2 upload session., content: { application/json: { schema: { $ref: '#/components/schemas/RecordingUploadSession' } } } }
     RecordingPart: { description: Fifteen-minute presigned R2 part request., content: { application/json: { schema: { $ref: '#/components/schemas/RecordingPartTarget' } } } }
     RecordingAsset: { description: Private validated media version., content: { application/json: { schema: { $ref: '#/components/schemas/RecordingAssetState' } } } }
-    RecordingGrant: { description: One-minute exchange credential, never a public URL., content: { application/json: { schema: { $ref: '#/components/schemas/RecordingMediaGrant' } } } }
+    RecordingGrant: { description: 'One-minute exchange credential, never a public URL.', content: { application/json: { schema: { $ref: '#/components/schemas/RecordingMediaGrant' } } } }
     Grant:
       description: Asset access grant.
       content: { application/json: { schema: { $ref: '#/components/schemas/Grant' } } }
@@ -1136,7 +1140,7 @@ components:
       type: object
       required: [exchangeCredential, expiresAt]
       properties:
-        exchangeCredential: { type: string, description: One-minute body-only bearer, never logged. }
+        exchangeCredential: { type: string, description: 'One-minute body-only bearer, never logged.' }
         expiresAt: { type: string, format: date-time }
     AccountCleanupRequest:
       type: object
