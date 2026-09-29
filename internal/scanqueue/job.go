@@ -70,13 +70,13 @@ func (j *ScanJob) RunOnce(ctx context.Context) (bool, error) {
 		poison := poisonRecord(message, nil, "invalid_payload", safeError(err))
 		return true, j.poison(ctx, message, nil, poison, now, false, assets.ScanResult{})
 	}
-	slog.Info("asset scan dequeued", "asset_id", event.AssetID, "event_id", event.EventID, "dequeue_count", message.DequeueCount)
+	slog.Debug("asset scan dequeued", "asset_id", event.AssetID, "event_id", event.EventID, "dequeue_count", message.DequeueCount)
 	asset, claim, err := j.repository.ClaimAssetScan(ctx, event.EventID, event.AssetID, event.ETag, now, j.lease)
 	if err != nil {
 		return true, err
 	}
 	if claim == assets.ScanBusy {
-		slog.Info("asset scan deferred", "asset_id", event.AssetID, "reason", "busy")
+		slog.Debug("asset scan deferred", "asset_id", event.AssetID, "reason", "busy")
 		return true, j.queue.Retry(ctx, message, 15*time.Second)
 	}
 	if claim == assets.ScanTerminal {
@@ -88,7 +88,7 @@ func (j *ScanJob) RunOnce(ctx context.Context) (bool, error) {
 			poison := poisonRecord(message, &event, reason, asset.ScanDetails)
 			return true, j.poison(ctx, message, &event, poison, now, false, assets.ScanResult{})
 		}
-		slog.Info("asset scan already terminal", "asset_id", event.AssetID, "status", asset.ScanStatus)
+		slog.Debug("asset scan already terminal", "asset_id", event.AssetID, "status", asset.ScanStatus)
 		return true, j.queue.Ack(ctx, message)
 	}
 	if int64(asset.ScanAttempts) >= j.maxAttempts {

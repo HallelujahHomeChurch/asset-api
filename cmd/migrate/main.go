@@ -8,12 +8,17 @@ import (
 	"strings"
 	"time"
 
+	"hhc/asset-api/internal/logging"
 	"hhc/asset-api/internal/migrations"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 func main() {
+	if err := logging.Init(); err != nil {
+		slog.Error("invalid logging configuration", "error", err)
+		os.Exit(1)
+	}
 	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
 	if databaseURL == "" {
 		slog.Error("DATABASE_URL is required")
