@@ -898,6 +898,119 @@ paths:
       responses:
         '202': { description: Scan requeue accepted. }
         '409': { $ref: '#/components/responses/Error' }
+  /priv/recording-uploads:
+    post:
+      operationId: createRecordingUpload
+      summary: Create or resume a private R2 multipart upload; never enters the Blob scan pipeline.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/RecordingActorID' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [recordingId, fileName, sizeBytes, checksumSHA256]
+              properties:
+                recordingId: { type: string, format: uuid }
+                fileName: { type: string, pattern: '\.mp4$' }
+                sizeBytes: { type: integer, format: int64, minimum: 1, maximum: 10000000000 }
+                checksumSHA256: { type: string, pattern: '^[0-9a-fA-F]{64}$' }
+      responses:
+        '201': { $ref: '#/components/responses/RecordingUpload' }
+        '409': { $ref: '#/components/responses/Error' }
+  /priv/recording-uploads/{sessionID}:
+    parameters: [ { $ref: '#/components/parameters/RecordingSessionID' }, { $ref: '#/components/parameters/RecordingActorID' } ]
+    get:
+      operationId: getRecordingUpload
+      summary: Get an owner-scoped recording upload session.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      responses:
+        '200': { $ref: '#/components/responses/RecordingUpload' }
+    delete:
+      operationId: abortRecordingUpload
+      summary: Cancel an owner-scoped recording upload session.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      responses:
+        '204': { description: Session cancelled; already signed part URLs may work briefly but cannot complete. }
+  /priv/recording-uploads/{sessionID}/parts:
+    parameters: [ { $ref: '#/components/parameters/RecordingSessionID' }, { $ref: '#/components/parameters/RecordingActorID' } ]
+    get:
+      operationId: listRecordingUploadedParts
+      summary: Return only complete part numbers for owner-scoped resume.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      responses:
+        '200': { description: Complete part numbers, content: { application/json: { schema: { type: array, items: { type: integer, minimum: 1, maximum: 597 } } } } }
+  /priv/recording-uploads/{sessionID}/parts/{partNumber}:
+    parameters: [ { $ref: '#/components/parameters/RecordingSessionID' }, { $ref: '#/components/parameters/RecordingActorID' }, { name: partNumber, in: path, required: true, schema: { type: integer, minimum: 1, maximum: 597 } } ]
+    post:
+      operationId: signRecordingPart
+      summary: Sign one fifteen-minute UploadPart URL; browser uploads directly to private R2.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      responses:
+        '200': { $ref: '#/components/responses/RecordingPart' }
+  /priv/recording-uploads/{sessionID}/complete:
+    parameters: [ { $ref: '#/components/parameters/RecordingSessionID' }, { $ref: '#/components/parameters/RecordingActorID' } ]
+    post:
+      operationId: completeRecordingUpload
+      summary: Verify all parts and enqueue independent media-format validation; no malware scan.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      responses:
+        '200': { $ref: '#/components/responses/RecordingUpload' }
+        '409': { $ref: '#/components/responses/Error' }
+  /priv/recording-assets/{assetVersionID}:
+    parameters: [ { $ref: '#/components/parameters/RecordingVersionID' } ]
+    get:
+      operationId: getRecordingAsset
+      summary: Get a validated private recording asset.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      responses:
+        '200': { $ref: '#/components/responses/RecordingAsset' }
+    delete:
+      operationId: deleteRecordingAsset
+      summary: Delete a private recording asset version.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      responses:
+        '204': { description: Version deleted or already absent. }
+  /priv/recording-assets/{assetVersionID}/grants:
+    parameters: [ { $ref: '#/components/parameters/RecordingVersionID' } ]
+    post:
+      operationId: issueRecordingGrant
+      summary: Sign an owner-matched ready version for one recording and playback scope.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [recordingId, scopeId, recordingExpiresAt], properties: { recordingId: { type: string, format: uuid }, scopeId: { type: string }, recordingExpiresAt: { type: string, format: date-time } } } } }
+      responses:
+        '200': { $ref: '#/components/responses/RecordingGrant' }
+        '403': { $ref: '#/components/responses/Error' }
 components:
   securitySchemes:
     daprCaller:
@@ -928,6 +1041,9 @@ components:
     ACLID: { name: aclID, in: path, required: true, schema: { $ref: '#/components/schemas/OpaqueID' } }
     Variant: { name: variant, in: path, required: true, schema: { type: string, enum: [small, medium, large] } }
     IdempotencyKey: { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 1, maxLength: 128 } }
+    RecordingActorID: { name: X-HHC-Actor-ID, in: header, required: true, schema: { type: string, format: uuid } }
+    RecordingSessionID: { name: sessionID, in: path, required: true, schema: { type: string, pattern: '^[a-f0-9]{32}$' } }
+    RecordingVersionID: { name: assetVersionID, in: path, required: true, schema: { type: string, pattern: '^[a-f0-9]{32}$' } }
     ACLActorUserID: { name: X-HHC-Actor-ID, in: header, required: true, description: Verified Account manager user UUID recorded in the successful ACL mutation audit event., schema: { type: string, format: uuid } }
     RequestID: { name: X-HHC-Request-ID, in: header, required: true, description: Request correlation ID recorded in the successful ACL mutation audit event., schema: { type: string, minLength: 1 } }
     GrantIdempotencyKey: { name: Idempotency-Key, in: header, required: false, description: Required when body idempotencyKey is absent., schema: { type: string, minLength: 1, maxLength: 128 } }
@@ -947,6 +1063,10 @@ components:
     CreatedUpload:
       description: Idempotent upload session with a short-lived upload target.
       content: { application/json: { schema: { $ref: '#/components/schemas/CreatedUpload' } } }
+    RecordingUpload: { description: Owner-scoped private R2 upload session., content: { application/json: { schema: { $ref: '#/components/schemas/RecordingUploadSession' } } } }
+    RecordingPart: { description: Fifteen-minute presigned R2 part request., content: { application/json: { schema: { $ref: '#/components/schemas/RecordingPartTarget' } } } }
+    RecordingAsset: { description: Private validated media version., content: { application/json: { schema: { $ref: '#/components/schemas/RecordingAssetState' } } } }
+    RecordingGrant: { description: 'One-minute exchange credential, never a public URL.', content: { application/json: { schema: { $ref: '#/components/schemas/RecordingMediaGrant' } } } }
     Grant:
       description: Asset access grant.
       content: { application/json: { schema: { $ref: '#/components/schemas/Grant' } } }
@@ -979,6 +1099,49 @@ components:
     CollectionACLMutation: { description: Collection ACL mutation., content: { application/json: { schema: { $ref: '#/components/schemas/CollectionACLMutation' } } } }
     DeleteCollectionItems: { description: Collection deletion result., content: { application/json: { schema: { $ref: '#/components/schemas/DeleteCollectionItemsResult' } } } }
   schemas:
+    RecordingUploadSession:
+      type: object
+      required: [id, assetVersionId, ownerService, adminId, recordingId, fileName, objectKey, uploadId, idempotencyKey, status, sizeBytes, checksumSHA256, createdAt, expiresAt, uploadedAt]
+      properties:
+        id: { type: string }
+        assetVersionId: { type: string }
+        ownerService: { type: string, const: hhc-web-api }
+        adminId: { type: string, format: uuid }
+        recordingId: { type: string, format: uuid }
+        fileName: { type: string }
+        objectKey: { type: string, description: Internal R2 key; never sent to the browser. }
+        uploadId: { type: string, description: Internal multipart ID; never sent to the browser. }
+        idempotencyKey: { type: string }
+        status: { type: string, enum: [created, completing, validating, ready, failed, cancelled, deleting, deleted] }
+        sizeBytes: { type: integer, format: int64 }
+        checksumSHA256: { type: string }
+        durationSeconds: { type: number }
+        createdAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+        uploadedAt: { type: [string, 'null'], format: date-time, description: Persisted once when upload completion is confirmed; independent of validation and publication. }
+    RecordingPartTarget:
+      type: object
+      required: [url, method, headers]
+      properties:
+        url: { type: string, format: uri }
+        method: { type: string, const: PUT }
+        headers: { type: object, additionalProperties: { type: array, items: { type: string } } }
+    RecordingAssetState:
+      type: object
+      required: [assetVersionId, recordingId, status, sizeBytes, durationSeconds, uploadedAt]
+      properties:
+        assetVersionId: { type: string }
+        recordingId: { type: string, format: uuid }
+        status: { type: string }
+        sizeBytes: { type: integer, format: int64 }
+        durationSeconds: { type: number }
+        uploadedAt: { type: [string, 'null'], format: date-time }
+    RecordingMediaGrant:
+      type: object
+      required: [exchangeCredential, expiresAt]
+      properties:
+        exchangeCredential: { type: string, description: 'One-minute body-only bearer, never logged.' }
+        expiresAt: { type: string, format: date-time }
     AccountCleanupRequest:
       type: object
       additionalProperties: false

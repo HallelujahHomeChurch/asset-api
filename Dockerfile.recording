@@ -1,0 +1,15 @@
+FROM golang@sha256:1e0126852075c9c60731c8ba49088448b91f63e2aed97ca9d1a9791622a05946 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /asset-recording-worker ./cmd/recording-worker
+
+FROM debian:bookworm-slim
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates ffmpeg \
+ && rm -rf /var/lib/apt/lists/*
+COPY --from=build /asset-recording-worker /asset-recording-worker
+USER 65532:65532
+STOPSIGNAL SIGTERM
+ENTRYPOINT ["/asset-recording-worker"]

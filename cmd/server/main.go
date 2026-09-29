@@ -23,6 +23,7 @@ import (
 	"hhc/asset-api/internal/scanqueue"
 	azurestorage "hhc/asset-api/internal/storage/azure"
 	localstorage "hhc/asset-api/internal/storage/local"
+	r2storage "hhc/asset-api/internal/storage/r2"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -77,6 +78,18 @@ func run() error {
 		TenantID: cfg.WorkloadTenantID, Issuer: cfg.WorkloadIssuer, Audience: cfg.WorkloadAudience,
 		RequiredRole: cfg.WorkloadRequiredRole, ReaderCallerAppID: cfg.ReaderCallerAppID, Callers: workloadCallers,
 	}, localUpload).WithAudit(auditStore)
+	if cfg.R2AccountID != "" {
+		objects, err := r2storage.New(cfg.R2AccountID, cfg.R2Bucket, cfg.R2AccessKeyID, cfg.R2SecretAccessKey)
+		if err != nil {
+			return err
+		}
+		signer, err := assets.NewRecordingSigner([]byte(cfg.MediaPrivateKeyPEM), cfg.MediaKeyID, cfg.MediaIssuer)
+		if err != nil {
+			return err
+		}
+		recordings := postgres.NewRecordingUploadStore(db)
+		handler.WithRecordingUpload(assets.NewRecordingUploadService(recordings, objects, time.Now)).WithRecordingGrants(recordings, signer)
+	}
 	server := &http.Server{Addr: ":" + cfg.Port, Handler: handler.Routes(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 2 * time.Minute, IdleTimeout: 2 * time.Minute}
 
 	lifecycleWorker := lifecycle.NewWorker(repository, blobStore)
