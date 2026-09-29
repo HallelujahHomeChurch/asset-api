@@ -8,9 +8,9 @@ validation is not malware scanning. Keep the bucket private and disable public
 
 ## Activation gate
 
-Do not turn on the recording configuration until the separate test and
-production R2 buckets, Pages projects and custom domains, CORS policies, least-privilege R2 API
-tokens, signing key pair, Key Vault references, and recording-validation
+Do not turn on the recording configuration until the production private R2
+bucket, Pages project and custom domain, CORS policy, least-privilege R2 API
+token, signing key pair, Key Vault references, and recording-validation
 Container App are reviewed and provisioned. The API needs
 `ASSET_R2_ACCOUNT_ID`, `ASSET_R2_BUCKET`, `ASSET_R2_ACCESS_KEY_ID`,
 `ASSET_R2_SECRET_ACCESS_KEY`, `ASSET_MEDIA_PRIVATE_KEY_PEM`,
@@ -18,43 +18,43 @@ Container App are reviewed and provisioned. The API needs
 `DATABASE_URL` and the four R2 settings. Each Pages media function needs the matching
 `MEDIA_ISSUER`, `MEDIA_PUBLIC_KEYS` JSON map, `ALLOWED_ORIGINS`, and private
 `MEDIA_BUCKET` binding. Never place signing or R2 secrets in browser config,
-logs, Git, or workflow output. Apply the matching
-`workers/member-media/r2-cors.{test,production}.json` to each bucket only
-after reviewing exact Admin origins.
+logs, Git, or workflow output. Apply
+`workers/member-media/r2-cors.production.json` to the production bucket only
+after reviewing exact Admin origins. Existing empty test resources are not
+activation evidence and remain untouched.
 
 Build the single media source with `npm ci && npm test && npm run typecheck && npm run build`
-in `workers/member-media`. The build creates separate ignored Pages output at
-`pages/test/dist` and `pages/production/dist`; deploy from the corresponding
-project directory so its `wrangler.jsonc` is the configuration source of truth.
-The test project is `hhc-member-media-test` with `hhc-member-recordings-test`,
-`hhc-media-test`, and `https://www-test.alive.org.tw`; production uses
-`hhc-member-media`, `hhc-member-recordings-prod`, `hhc-media-prod`, and
-`https://www.alive.org.tw`. Set `MEDIA_PUBLIC_KEYS` separately as a Pages secret
-in each project; never commit it. Do not publish preview branches with production
-bindings or assume a Pages preview alias can serve an external-DNS custom domain.
+in `workers/member-media`. The production output is
+`pages/production/dist`; the release workflow deploys this verified artifact
+from the production project directory so its `wrangler.jsonc` is the
+configuration source of truth. Production uses `hhc-member-media`,
+`hhc-member-recordings-prod`, `hhc-media-prod`, and
+`https://www.alive.org.tw`. Set `MEDIA_PUBLIC_KEYS` as a Pages secret; never
+commit it. Do not publish preview branches with production bindings.
 
-Provision and verify the private test R2 bucket, then test Pages project, binding,
-secret, custom domain, and only the `media-test.alive.org.tw` CNAME in Azure DNS
-pointing at the actual test project hostname. Exercise real upload, exchange,
-GET/HEAD/Range, expiry, denial, and HTTPS certificate before repeating the same
-sequence for production. The production DNS change is only the new `media`
-CNAME; do not change NS, apex, existing records, wildcard, or CAA. Resolve
-record-set conflicts and inspect the exact DNS diff before either apply.
-Keep member access disabled until the production smoke and cost alerts pass.
-Rollback by disabling new grants and reverting the Pages deployment; DNS rollback
-removes only the newly added `media`/`media-test` record after verifying its
-ownership. Keep the R2 objects private throughout rollback.
+Provision and verify the private production R2 bucket and Pages project without
+a custom domain. Set the binding and secret, then enable
+`MEMBER_MEDIA_DEPLOY_ENABLED=true` while `MEMBER_VIDEO_ENABLED=false` and run
+the standard release workflow. Its first-deployment guard requires no custom
+domain, and unauthenticated GET/HEAD must return 401 before DNS is attached.
+After a fresh DNS preview, add only the new `media.alive.org.tw` CNAME pointing
+at the actual production Pages hostname. Do not change NS, apex, existing
+records, wildcard, or CAA. Keep member access disabled until authenticated
+upload/playback, denial, expiry, HTTPS, and cost checks pass. Rollback by
+disabling new grants and reverting the Pages deployment; remove only the newly
+added `media` record after verifying its ownership. Keep R2 objects private.
 
 Release order: audit catalog, Account permission catalog, Operations
-entitlement, Asset API and validation worker, Pages media function, HHC Web API,
-gateway, versioned frontend client, Admin, website. Each repository uses its
-own PR, CI, approved release, revision verification, and rollback. The
-Asset API release conditionally deploys the recording-validation Job and Pages
-function when `MEMBER_VIDEO_ENABLED=true`. Review its infrastructure diff and
-provision the private Cloudflare resources first. A failed media smoke rolls
-back to the previous Pages deployment; the first deployment is allowed only
-before a custom domain is attached. Never deploy a local unmerged build to
-production. This is a hard activation gate.
+entitlement, Engagement notification source, Asset API, HHC Web API, gateway,
+versioned frontend client, Admin, website—all dark—then private Cloudflare
+media resources and staged activation. Each repository uses its own PR, CI,
+release, revision verification, and rollback. `MEMBER_MEDIA_DEPLOY_ENABLED`
+controls Pages deployment independently; `MEMBER_VIDEO_ENABLED` controls the
+Asset R2 runtime and recording-validation Job. Both default off. Review the
+infrastructure diff before enabling either. A failed media smoke rolls back
+to the previous Pages deployment; the first deployment is allowed only before
+a custom domain is attached. Never deploy an unmerged local build. This is a
+hard activation gate.
 
 ## Routine and incident handling
 
