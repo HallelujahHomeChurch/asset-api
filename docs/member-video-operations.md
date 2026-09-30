@@ -56,6 +56,13 @@ to the previous Pages deployment; the first deployment is allowed only before
 a custom domain is attached. Never deploy an unmerged local build. This is a
 hard activation gate.
 
+Use a distinct merged commit for each staged production release. The governance
+artifacts are immutable per commit: rerunning the same commit is only a retry
+when it resolves to the original image digest. Changing a repository variable
+and rebuilding the same commit can deploy a different digest, after which the
+governance publisher must reject the conflicting provenance. Land the reviewed
+activation/configuration change first, then release that new commit.
+
 ## Routine and incident handling
 
 - Failed/resumed upload: have the Admin reselect the identical original MP4;
