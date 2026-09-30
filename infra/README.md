@@ -54,6 +54,27 @@ replaces `current.json`. The previous generation remains available for rollback.
 
 ## One-time production cutover
 
+### Bulletin extractor authorization gate
+
+Reuse the existing `hhc-web-api-identity`; do not create another identity or
+broaden application consent. The optional `extractorClientId` and
+`extractorObjectId` parameters must match that identity and are added to the
+existing EasyAuth application/principal allowlists alongside LINE.
+
+With the corresponding release variables configured, release first runs
+`bash scripts/ensure-workload-app-role.sh check`. This verifies the exact
+existing `Asset.Invoke` assignment without changing it. A missing assignment
+stops release before ARM writes. Only a separately reviewed manual dispatch
+with `approve_extractor_app_role=true` allows `apply`, under the existing
+Entra deployment service principal. Missing authority, unexpected assignments
+or ambiguous roles require platform-owner review, not additional consent.
+
+Review the fresh what-if and exact role delta before that dispatch. After the
+approved asset release, verify a real CMS managed-identity token's audience,
+client/object IDs and `Asset.Invoke` role, then read a clean private asset owned
+by `hhc-web-api` through EasyAuth. Do not enable the extractor Job until this
+smoke passes. Local mock tests and Bicep compilation do not satisfy this gate.
+
 The existing `asset` login becomes the DML-only runtime role. Migrations use
 `asset_migrate` through a manual Container Apps job. Runtime and migration
 database URLs are stored in separate RBAC Key Vaults.

@@ -67,6 +67,7 @@ jobs:
           ./scripts/test-migration-policy-test.sh
           ./scripts/test-migration-policy.sh internal/migrations/sql/*.sql
           ./scripts/test-what-if-policy.sh
+          bash scripts/ensure-workload-app-role.test.sh
           mkdir -p .artifacts/data-governance
           set -o pipefail
           go test -race -json ./... -count=1 -p=1 | tee .artifacts/data-governance/test-events.jsonl

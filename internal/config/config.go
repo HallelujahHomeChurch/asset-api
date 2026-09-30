@@ -9,94 +9,98 @@ import (
 )
 
 type Config struct {
-	Port                 string
-	DatabaseURL          string
-	PublicBaseURL        string
-	StorageBackend       string
-	LocalDirectory       string
-	LocalUploadBaseURL   string
-	LocalSigningKey      string
-	AzureAccountURL      string
-	AzureContainer       string
-	R2AccountID          string
-	R2Bucket             string
-	R2AccessKeyID        string
-	R2SecretAccessKey    string
-	MediaPrivateKeyPEM   string
-	MediaKeyID           string
-	MediaIssuer          string
-	ScanQueueURL         string
-	DerivativeQueueURL   string
-	ScanDispatchEnabled  bool
-	EmbeddedScanEnabled  bool
-	ClamAVHost           string
-	ClamAVPort           int
-	ClamAVTimeout        time.Duration
-	ClamAVMaxFileSize    int64
-	ClamAVMaxRetries     int
-	DBMaxOpenConns       int
-	DBMaxIdleConns       int
-	DBConnMaxLifetime    time.Duration
-	AllowedCallers       map[string]bool
-	ReaderCallerAppID    string
-	AllowDevCallerHeader bool
-	AppAPIToken          string
-	WorkloadTenantID     string
-	WorkloadIssuer       string
-	WorkloadAudience     string
-	WorkloadRequiredRole string
-	LineWorkloadClientID string
-	LineWorkloadObjectID string
-	ShutdownTimeout      time.Duration
-	AuditDispatchEnabled bool
-	AuditAppID           string
-	AuditToken           string
-	DaprHTTPPort         int
+	Port                      string
+	DatabaseURL               string
+	PublicBaseURL             string
+	StorageBackend            string
+	LocalDirectory            string
+	LocalUploadBaseURL        string
+	LocalSigningKey           string
+	AzureAccountURL           string
+	AzureContainer            string
+	R2AccountID               string
+	R2Bucket                  string
+	R2AccessKeyID             string
+	R2SecretAccessKey         string
+	MediaPrivateKeyPEM        string
+	MediaKeyID                string
+	MediaIssuer               string
+	ScanQueueURL              string
+	DerivativeQueueURL        string
+	ScanDispatchEnabled       bool
+	EmbeddedScanEnabled       bool
+	ClamAVHost                string
+	ClamAVPort                int
+	ClamAVTimeout             time.Duration
+	ClamAVMaxFileSize         int64
+	ClamAVMaxRetries          int
+	DBMaxOpenConns            int
+	DBMaxIdleConns            int
+	DBConnMaxLifetime         time.Duration
+	AllowedCallers            map[string]bool
+	ReaderCallerAppID         string
+	AllowDevCallerHeader      bool
+	AppAPIToken               string
+	WorkloadTenantID          string
+	WorkloadIssuer            string
+	WorkloadAudience          string
+	WorkloadRequiredRole      string
+	LineWorkloadClientID      string
+	LineWorkloadObjectID      string
+	ExtractorWorkloadClientID string
+	ExtractorWorkloadObjectID string
+	ShutdownTimeout           time.Duration
+	AuditDispatchEnabled      bool
+	AuditAppID                string
+	AuditToken                string
+	DaprHTTPPort              int
 }
 
 func Load() (Config, error) {
 	cfg := Config{
-		Port:                 value("PORT", "8080"),
-		DatabaseURL:          os.Getenv("DATABASE_URL"),
-		PublicBaseURL:        value("ASSET_PUBLIC_BASE_URL", "http://localhost:8080/assets"),
-		StorageBackend:       value("ASSET_STORAGE_BACKEND", "local"),
-		LocalDirectory:       value("ASSET_LOCAL_DIR", ".data/assets"),
-		LocalUploadBaseURL:   value("ASSET_LOCAL_UPLOAD_BASE_URL", "http://localhost:8080/dev/uploads"),
-		LocalSigningKey:      value("ASSET_LOCAL_SIGNING_KEY", "local-development-only-change-me"),
-		AzureAccountURL:      os.Getenv("ASSET_AZURE_ACCOUNT_URL"),
-		AzureContainer:       value("ASSET_AZURE_CONTAINER", "assets"),
-		R2AccountID:          strings.TrimSpace(os.Getenv("ASSET_R2_ACCOUNT_ID")),
-		R2Bucket:             strings.TrimSpace(os.Getenv("ASSET_R2_BUCKET")),
-		R2AccessKeyID:        strings.TrimSpace(os.Getenv("ASSET_R2_ACCESS_KEY_ID")),
-		R2SecretAccessKey:    strings.TrimSpace(os.Getenv("ASSET_R2_SECRET_ACCESS_KEY")),
-		MediaPrivateKeyPEM:   os.Getenv("ASSET_MEDIA_PRIVATE_KEY_PEM"),
-		MediaKeyID:           strings.TrimSpace(os.Getenv("ASSET_MEDIA_KEY_ID")),
-		MediaIssuer:          strings.TrimSpace(os.Getenv("ASSET_MEDIA_ISSUER")),
-		ScanQueueURL:         strings.TrimSpace(os.Getenv("ASSET_SCAN_QUEUE_URL")),
-		DerivativeQueueURL:   strings.TrimSpace(os.Getenv("ASSET_DERIVATIVE_QUEUE_URL")),
-		EmbeddedScanEnabled:  true,
-		ClamAVHost:           value("CLAMAV_HOST", "127.0.0.1"),
-		ClamAVPort:           3310,
-		ClamAVTimeout:        2 * time.Minute,
-		ClamAVMaxFileSize:    25 << 20,
-		ClamAVMaxRetries:     5,
-		DBMaxOpenConns:       10,
-		DBMaxIdleConns:       5,
-		DBConnMaxLifetime:    30 * time.Minute,
-		AllowedCallers:       splitSet(value("ASSET_ALLOWED_CALLERS", "account-api,hhc-web-api,hhc-line-function-bot")),
-		ReaderCallerAppID:    strings.TrimSpace(value("ASSET_READER_CALLER_APP_ID", "api-gateway")),
-		AllowDevCallerHeader: strings.EqualFold(value("ASSET_ALLOW_DEV_CALLER_HEADER", "false"), "true"),
-		AppAPIToken:          os.Getenv("APP_API_TOKEN"),
-		WorkloadTenantID:     strings.TrimSpace(os.Getenv("ASSET_WORKLOAD_TENANT_ID")),
-		WorkloadIssuer:       strings.TrimSpace(os.Getenv("ASSET_WORKLOAD_ISSUER")),
-		WorkloadAudience:     strings.TrimSpace(os.Getenv("ASSET_WORKLOAD_AUDIENCE")),
-		WorkloadRequiredRole: value("ASSET_WORKLOAD_REQUIRED_ROLE", "Asset.Invoke"),
-		LineWorkloadClientID: strings.TrimSpace(os.Getenv("ASSET_LINE_WORKLOAD_CLIENT_ID")),
-		LineWorkloadObjectID: strings.TrimSpace(os.Getenv("ASSET_LINE_WORKLOAD_OBJECT_ID")),
-		ShutdownTimeout:      10 * time.Second,
-		AuditAppID:           value("AUDIT_APP_ID", "audit-log"),
-		AuditToken:           strings.TrimSpace(os.Getenv("AUDIT_TOKEN")),
-		DaprHTTPPort:         3500,
+		Port:                      value("PORT", "8080"),
+		DatabaseURL:               os.Getenv("DATABASE_URL"),
+		PublicBaseURL:             value("ASSET_PUBLIC_BASE_URL", "http://localhost:8080/assets"),
+		StorageBackend:            value("ASSET_STORAGE_BACKEND", "local"),
+		LocalDirectory:            value("ASSET_LOCAL_DIR", ".data/assets"),
+		LocalUploadBaseURL:        value("ASSET_LOCAL_UPLOAD_BASE_URL", "http://localhost:8080/dev/uploads"),
+		LocalSigningKey:           value("ASSET_LOCAL_SIGNING_KEY", "local-development-only-change-me"),
+		AzureAccountURL:           os.Getenv("ASSET_AZURE_ACCOUNT_URL"),
+		AzureContainer:            value("ASSET_AZURE_CONTAINER", "assets"),
+		R2AccountID:               strings.TrimSpace(os.Getenv("ASSET_R2_ACCOUNT_ID")),
+		R2Bucket:                  strings.TrimSpace(os.Getenv("ASSET_R2_BUCKET")),
+		R2AccessKeyID:             strings.TrimSpace(os.Getenv("ASSET_R2_ACCESS_KEY_ID")),
+		R2SecretAccessKey:         strings.TrimSpace(os.Getenv("ASSET_R2_SECRET_ACCESS_KEY")),
+		MediaPrivateKeyPEM:        os.Getenv("ASSET_MEDIA_PRIVATE_KEY_PEM"),
+		MediaKeyID:                strings.TrimSpace(os.Getenv("ASSET_MEDIA_KEY_ID")),
+		MediaIssuer:               strings.TrimSpace(os.Getenv("ASSET_MEDIA_ISSUER")),
+		ScanQueueURL:              strings.TrimSpace(os.Getenv("ASSET_SCAN_QUEUE_URL")),
+		DerivativeQueueURL:        strings.TrimSpace(os.Getenv("ASSET_DERIVATIVE_QUEUE_URL")),
+		EmbeddedScanEnabled:       true,
+		ClamAVHost:                value("CLAMAV_HOST", "127.0.0.1"),
+		ClamAVPort:                3310,
+		ClamAVTimeout:             2 * time.Minute,
+		ClamAVMaxFileSize:         25 << 20,
+		ClamAVMaxRetries:          5,
+		DBMaxOpenConns:            10,
+		DBMaxIdleConns:            5,
+		DBConnMaxLifetime:         30 * time.Minute,
+		AllowedCallers:            splitSet(value("ASSET_ALLOWED_CALLERS", "account-api,hhc-web-api,hhc-line-function-bot")),
+		ReaderCallerAppID:         strings.TrimSpace(value("ASSET_READER_CALLER_APP_ID", "api-gateway")),
+		AllowDevCallerHeader:      strings.EqualFold(value("ASSET_ALLOW_DEV_CALLER_HEADER", "false"), "true"),
+		AppAPIToken:               os.Getenv("APP_API_TOKEN"),
+		WorkloadTenantID:          strings.TrimSpace(os.Getenv("ASSET_WORKLOAD_TENANT_ID")),
+		WorkloadIssuer:            strings.TrimSpace(os.Getenv("ASSET_WORKLOAD_ISSUER")),
+		WorkloadAudience:          strings.TrimSpace(os.Getenv("ASSET_WORKLOAD_AUDIENCE")),
+		WorkloadRequiredRole:      value("ASSET_WORKLOAD_REQUIRED_ROLE", "Asset.Invoke"),
+		LineWorkloadClientID:      strings.TrimSpace(os.Getenv("ASSET_LINE_WORKLOAD_CLIENT_ID")),
+		LineWorkloadObjectID:      strings.TrimSpace(os.Getenv("ASSET_LINE_WORKLOAD_OBJECT_ID")),
+		ExtractorWorkloadClientID: strings.TrimSpace(os.Getenv("ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID")),
+		ExtractorWorkloadObjectID: strings.TrimSpace(os.Getenv("ASSET_EXTRACTOR_WORKLOAD_OBJECT_ID")),
+		ShutdownTimeout:           10 * time.Second,
+		AuditAppID:                value("AUDIT_APP_ID", "audit-log"),
+		AuditToken:                strings.TrimSpace(os.Getenv("AUDIT_TOKEN")),
+		DaprHTTPPort:              3500,
 	}
 	if cfg.DatabaseURL == "" {
 		return Config{}, fmt.Errorf("DATABASE_URL is required")
@@ -168,6 +172,14 @@ func Load() (Config, error) {
 	}
 	if configured != 0 && configured != len(workloadValues) {
 		return Config{}, fmt.Errorf("ASSET workload authentication configuration is incomplete")
+	}
+	if cfg.ExtractorWorkloadClientID != "" || cfg.ExtractorWorkloadObjectID != "" {
+		if configured != len(workloadValues) || cfg.ExtractorWorkloadClientID == "" || cfg.ExtractorWorkloadObjectID == "" {
+			return Config{}, fmt.Errorf("ASSET extractor workload authentication configuration is incomplete")
+		}
+		if cfg.ExtractorWorkloadClientID == cfg.LineWorkloadClientID || cfg.ExtractorWorkloadObjectID == cfg.LineWorkloadObjectID {
+			return Config{}, fmt.Errorf("ASSET extractor and LINE workload identities must be distinct")
+		}
 	}
 	if err := positiveInt("CLAMAV_PORT", &cfg.ClamAVPort); err != nil {
 		return Config{}, err

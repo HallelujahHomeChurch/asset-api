@@ -12,3 +12,7 @@ param workloadAuthClientId = 'REPLACE_ME'
 param workloadAuthAudience = 'api://REPLACE_ME'
 param lineAttachmentClientId = 'REPLACE_ME'
 param lineAttachmentObjectId = 'REPLACE_ME'
+// Optional: both IDs must belong to the existing hhc-web-api-identity.
+// Keep empty until the exact Asset.Invoke assignment is reviewed and verified.
+param extractorClientId = ''
+param extractorObjectId = ''

@@ -213,3 +213,20 @@ func TestLoadRequiresAppAPITokenOutsideDevelopment(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestExtractorWorkloadPairCannotBePartialOrCollideWithLINE(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://test")
+	t.Setenv("ASSET_ALLOW_DEV_CALLER_HEADER", "true")
+	t.Setenv("ASSET_WORKLOAD_TENANT_ID", "tenant")
+	t.Setenv("ASSET_WORKLOAD_ISSUER", "issuer")
+	t.Setenv("ASSET_WORKLOAD_AUDIENCE", "audience")
+	t.Setenv("ASSET_LINE_WORKLOAD_CLIENT_ID", "line-client")
+	t.Setenv("ASSET_LINE_WORKLOAD_OBJECT_ID", "line-object")
+	for _, pair := range [][2]string{{"extractor-client", ""}, {"", "extractor-object"}, {"line-client", "extractor-object"}, {"extractor-client", "line-object"}} {
+		t.Setenv("ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID", pair[0])
+		t.Setenv("ASSET_EXTRACTOR_WORKLOAD_OBJECT_ID", pair[1])
+		if _, err := Load(); err == nil {
+			t.Fatal("incomplete or overlapping extractor identity accepted")
+		}
+	}
+}
