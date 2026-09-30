@@ -135,3 +135,10 @@ func TestLineGroupMediaSyncPolicy(t *testing.T) {
 		}
 	}
 }
+
+func TestAccountDSRSupplementPolicy(t *testing.T) {
+	policy, ok := PolicyFor("account.dsr-supplement")
+	if !ok || policy.OwnerService != "account-api" || !policy.AllowsMIME("application/zip") || policy.MaxSizeBytes != 10<<20 || policy.AllowsVisibility(VisibilityPublic) || !policy.AllowsVisibility(VisibilityPrivate) {
+		t.Fatal("missing private bounded supplement policy")
+	}
+}

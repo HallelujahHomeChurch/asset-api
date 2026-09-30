@@ -10,9 +10,14 @@ import (
 	"time"
 
 	"hhc/asset-api/internal/clamav"
+	"hhc/asset-api/internal/logging"
 )
 
 func main() {
+	if err := logging.Init(); err != nil {
+		slog.Error("invalid logging configuration", "error", err)
+		os.Exit(1)
+	}
 	accountURL := strings.TrimSpace(os.Getenv("ASSET_AZURE_ACCOUNT_URL"))
 	if accountURL == "" {
 		slog.Error("ASSET_AZURE_ACCOUNT_URL is required")

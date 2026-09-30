@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"hhc/asset-api/internal/logging"
 	"hhc/asset-api/internal/postgres"
 	"hhc/asset-api/internal/retention"
 
@@ -20,6 +21,10 @@ import (
 )
 
 func main() {
+	if err := logging.Init(); err != nil {
+		slog.Error("invalid logging configuration", "error", err)
+		os.Exit(1)
+	}
 	if err := run(context.Background()); err != nil {
 		os.Exit(1)
 	}

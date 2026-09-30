@@ -19,6 +19,7 @@ import (
 	"hhc/asset-api/internal/derivativequeue"
 	"hhc/asset-api/internal/httpapi"
 	"hhc/asset-api/internal/lifecycle"
+	"hhc/asset-api/internal/logging"
 	"hhc/asset-api/internal/postgres"
 	"hhc/asset-api/internal/scanqueue"
 	azurestorage "hhc/asset-api/internal/storage/azure"
@@ -29,6 +30,10 @@ import (
 )
 
 func main() {
+	if err := logging.Init(); err != nil {
+		slog.Error("invalid logging configuration", "error", err)
+		os.Exit(1)
+	}
 	if err := run(); err != nil {
 		slog.Error("asset api stopped", "error", err)
 		os.Exit(1)

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"hhc/asset-api/internal/logging"
 	"hhc/asset-api/internal/meetingclient"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
@@ -23,6 +24,10 @@ const (
 )
 
 func main() {
+	if err := logging.Init(); err != nil {
+		slog.Error("invalid logging configuration", "error", err)
+		os.Exit(1)
+	}
 	if err := execute(context.Background()); err != nil {
 		slog.Error("scan warmer failed", "error", err)
 		os.Exit(1)

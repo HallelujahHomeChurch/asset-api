@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"hhc/asset-api/internal/assets"
+	"hhc/asset-api/internal/logging"
 	"hhc/asset-api/internal/postgres"
 	"hhc/asset-api/internal/recordingvalidation"
 	"hhc/asset-api/internal/storage/r2"
@@ -22,6 +23,10 @@ import (
 )
 
 func main() {
+	if err := logging.Init(); err != nil {
+		slog.Error("invalid logging configuration", "error", err)
+		os.Exit(1)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	if err := run(ctx); err != nil && !errors.Is(err, context.Canceled) {

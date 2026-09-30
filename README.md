@@ -85,3 +85,9 @@ release and has no queue trigger. A failed release rolls the API back; the schem
 Job stays on the new immutable image so it can drain events already committed
 by that revision. Complete the reviewed one-time cutover in `infra/README.md`
 first.
+
+## Application logging
+
+`LOG_LEVEL=debug|info|warn|error` defaults to `info`; invalid values stop
+startup. This controls application slog and default standard-log output.
+Persisted audit records remain independent of this setting.
