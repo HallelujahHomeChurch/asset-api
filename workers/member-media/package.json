@@ -1,0 +1,14 @@
+{
+  "name": "hhc-member-media-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --experimental-strip-types --test src/*.test.mjs",
+    "typecheck": "tsc --noEmit --target ES2022 --module ESNext --lib ES2022,DOM --strict src/index.ts",
+    "build": "tsc --target ES2022 --module ESNext --lib ES2022,DOM --strict --outDir pages/test/dist src/index.ts && mv pages/test/dist/index.js pages/test/dist/_worker.js && mkdir -p pages/production/dist && cp pages/test/dist/_worker.js pages/production/dist/_worker.js"
+  },
+  "devDependencies": {
+    "typescript": "6.0.2",
+    "wrangler": "4.141.0"
+  }
+}

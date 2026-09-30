@@ -31,6 +31,11 @@ type Handler struct {
 	workloadAuth         WorkloadAuthConfig
 	localUpload          http.HandlerFunc
 	audit                *auditoutbox.Store
+	recordingUpload      *assets.RecordingUploadService
+	recordingAssets      interface {
+		GetByVersion(context.Context, string) (assets.RecordingUploadSession, error)
+	}
+	recordingSigner *assets.RecordingSigner
 }
 
 type WorkloadCaller struct {
@@ -52,6 +57,16 @@ func New(service *assets.Service, db *sql.DB, allowedCallers map[string]bool, al
 }
 
 func (h *Handler) WithAudit(store *auditoutbox.Store) *Handler { h.audit = store; return h }
+func (h *Handler) WithRecordingUpload(service *assets.RecordingUploadService) *Handler {
+	h.recordingUpload = service
+	return h
+}
+func (h *Handler) WithRecordingGrants(repository interface {
+	GetByVersion(context.Context, string) (assets.RecordingUploadSession, error)
+}, signer *assets.RecordingSigner) *Handler {
+	h.recordingAssets, h.recordingSigner = repository, signer
+	return h
+}
 
 func (h *Handler) recordAccess(ctx context.Context, action, resource string, metadata auditclient.Metadata) error {
 	if h.audit == nil {
@@ -106,6 +121,15 @@ func (h *Handler) Routes() http.Handler {
 	mux.Handle("GET /api/assets/collections/{collectionID}/items/{itemID}/content", h.collectionReader(http.HandlerFunc(h.collectionContent)))
 	mux.Handle("GET /api/assets/content", h.collectionTicket(http.HandlerFunc(h.ticketContent)))
 	mux.Handle("POST /priv/assets/upload-sessions", h.internal(http.HandlerFunc(h.createUpload)))
+	mux.Handle("POST /priv/recording-uploads", h.internal(http.HandlerFunc(h.createRecordingUpload)))
+	mux.Handle("GET /priv/recording-uploads/{sessionID}", h.internal(http.HandlerFunc(h.getRecordingUpload)))
+	mux.Handle("GET /priv/recording-uploads/{sessionID}/parts", h.internal(http.HandlerFunc(h.listRecordingParts)))
+	mux.Handle("POST /priv/recording-uploads/{sessionID}/parts/{partNumber}", h.internal(http.HandlerFunc(h.signRecordingPart)))
+	mux.Handle("POST /priv/recording-uploads/{sessionID}/complete", h.internal(http.HandlerFunc(h.completeRecordingUpload)))
+	mux.Handle("DELETE /priv/recording-uploads/{sessionID}", h.internal(http.HandlerFunc(h.abortRecordingUpload)))
+	mux.Handle("GET /priv/recording-assets/{assetVersionID}", h.internal(http.HandlerFunc(h.getRecordingAsset)))
+	mux.Handle("POST /priv/recording-assets/{assetVersionID}/grants", h.internal(http.HandlerFunc(h.issueRecordingGrant)))
+	mux.Handle("DELETE /priv/recording-assets/{assetVersionID}", h.internal(http.HandlerFunc(h.deleteRecordingAsset)))
 	mux.Handle("POST /priv/account-cleanup", h.internal(h.accountCaller(http.HandlerFunc(h.cleanupAccount))))
 	mux.Handle("GET /priv/assets/operations", h.internal(http.HandlerFunc(h.operations)))
 	mux.Handle("GET /priv/assets/collections", h.internal(h.collectionCaller(http.HandlerFunc(h.listManagedCollections))))

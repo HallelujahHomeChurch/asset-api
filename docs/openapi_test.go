@@ -61,6 +61,15 @@ func TestOpenAPIContract(t *testing.T) {
 		{"DELETE", "/priv/assets/{assetID}/grants/{grantID}", "[account-api, hhc-web-api, hhc-line-function-bot]"},
 		{"POST", "/priv/assets/{assetID}/scan/requeue", "[account-api, hhc-web-api, hhc-line-function-bot]"},
 		{"DELETE", "/priv/assets/{assetID}", "[account-api, hhc-web-api, hhc-line-function-bot]"},
+		{"POST", "/priv/recording-uploads", "[hhc-web-api]"},
+		{"GET", "/priv/recording-uploads/{sessionID}", "[hhc-web-api]"},
+		{"DELETE", "/priv/recording-uploads/{sessionID}", "[hhc-web-api]"},
+		{"GET", "/priv/recording-uploads/{sessionID}/parts", "[hhc-web-api]"},
+		{"POST", "/priv/recording-uploads/{sessionID}/parts/{partNumber}", "[hhc-web-api]"},
+		{"POST", "/priv/recording-uploads/{sessionID}/complete", "[hhc-web-api]"},
+		{"GET", "/priv/recording-assets/{assetVersionID}", "[hhc-web-api]"},
+		{"DELETE", "/priv/recording-assets/{assetVersionID}", "[hhc-web-api]"},
+		{"POST", "/priv/recording-assets/{assetVersionID}/grants", "[hhc-web-api]"},
 	} {
 		assertOperation(t, document, operation)
 	}

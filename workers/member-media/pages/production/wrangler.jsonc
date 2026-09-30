@@ -1,0 +1,10 @@
+{
+  "name": "hhc-member-media",
+  "pages_build_output_dir": "./dist",
+  "compatibility_date": "2026-09-27",
+  "r2_buckets": [{ "binding": "MEDIA_BUCKET", "bucket_name": "hhc-member-recordings-prod" }],
+  "vars": {
+    "MEDIA_ISSUER": "hhc-media-prod",
+    "ALLOWED_ORIGINS": "https://www.alive.org.tw"
+  }
+}

@@ -54,6 +54,22 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
+        with:
+          node-version: 24
+      - name: Verify member media Pages bundle
+        working-directory: workers/member-media
+        run: |
+          npm ci
+          npm test
+          npm run typecheck
+          npm run build
+      - name: Store verified production media bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: member-media-${{ github.sha }}
+          if-no-files-found: error
+          path: workers/member-media/pages/production/dist/_worker.js
       - name: Scan dependencies
         run: |
           trivy_cache="$RUNNER_TEMP/trivy-cache"
@@ -82,6 +98,8 @@ jobs:
           docker export "$(docker create asset-api:verify)" | tar -tf - | grep -Fx 'asset-derivative-worker' >/dev/null
           docker export "$(docker create asset-api:verify)" | tar -tf - | grep -Fx 'asset-scan-warmer' >/dev/null
           docker build -f Dockerfile.scan -t asset-scan:verify .
+          docker build -f Dockerfile.recording -t asset-recording:verify .
+          docker run --rm --entrypoint ffprobe asset-recording:verify -version >/dev/null
           clam_help="$(docker run --rm --entrypoint clamscan asset-scan:verify --help)"
           for flag in --max-filesize --max-scansize --max-files --max-recursion --alert-exceeds-max --alert-encrypted; do
             grep -Fq -- "$flag" <<<"$clam_help"
@@ -113,6 +131,7 @@ jobs:
       ACR_LOGIN_SERVER: alive.azurecr.io
       IMAGE_REPOSITORY: alive/asset-api
       SCAN_IMAGE_REPOSITORY: alive/asset-scan
+      RECORDING_IMAGE_REPOSITORY: alive/asset-recording
       RESOURCE_GROUP: alive
       STORAGE_ACCOUNT_NAME: alivestoragebb99ee6e
       MIGRATION_JOB_NAME: asset-migrate
@@ -129,6 +148,9 @@ jobs:
       LINE_ATTACHMENT_OBJECT_ID: ${{ vars.LINE_ATTACHMENT_OBJECT_ID }}
       MEETING_API_BASE_URL: ${{ vars.MEETING_API_BASE_URL }}
       MEETING_API_AUDIENCE: ${{ vars.MEETING_API_AUDIENCE }}
+      MEMBER_VIDEO_ENABLED: ${{ vars.MEMBER_VIDEO_ENABLED || 'false' }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      MEDIA_KEY_ID: ${{ vars.ASSET_MEDIA_KEY_ID }}
       RELEASE_CONFIRMATION: ${{ github.event_name == 'push' && 'deploy-asset-api-production' || inputs.confirmation }}
       ACTIVATE_QUEUE_SCANNING: "true"
       EMBEDDED_SCAN_ENABLED: "false"
@@ -150,6 +172,13 @@ jobs:
               *) echo "${name} must be true or false" >&2; exit 1 ;;
             esac
           done
+          case "$MEMBER_VIDEO_ENABLED" in
+            true)
+              test -n "$CLOUDFLARE_ACCOUNT_ID" && test -n "$MEDIA_KEY_ID" || { echo 'Member video activation variables are missing' >&2; exit 1; }
+              ;;
+            false) ;;
+            *) echo 'MEMBER_VIDEO_ENABLED must be true or false' >&2; exit 1 ;;
+          esac
       - name: Set image tag
         run: echo "IMAGE_TAG=main-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
       - name: Sign in to Azure with OIDC
@@ -200,6 +229,11 @@ jobs:
           [[ "$(az resource show --ids "$runtime_vault/secrets/database-url" --api-version 2024-11-01 --query properties.attributes.enabled -o tsv --only-show-errors)" == "true" ]]
           [[ "$(az resource show --ids "$migration_vault/secrets/database-url" --api-version 2024-11-01 --query properties.attributes.enabled -o tsv --only-show-errors)" == "true" ]]
           [[ "$(az resource show --ids "$audit_token_scope" --api-version 2024-11-01 --query properties.attributes.enabled -o tsv --only-show-errors)" == "true" ]]
+          if [[ "$MEMBER_VIDEO_ENABLED" == true ]]; then
+            for secret in member-video-r2-access-key-id member-video-r2-secret-access-key member-video-media-private-key-pem; do
+              [[ "$(az resource show --ids "${runtime_vault}/secrets/${secret}" --api-version 2024-11-01 --query properties.attributes.enabled -o tsv --only-show-errors)" == true ]]
+            done
+          fi
       - name: Capture rollback revision
         run: |
           resolve_image_ref() {
@@ -222,6 +256,9 @@ jobs:
         run: |
           az acr build --registry "$ACR_NAME" --image "${IMAGE_REPOSITORY}:${IMAGE_TAG}" --file Dockerfile .
           az acr build --registry "$ACR_NAME" --image "${SCAN_IMAGE_REPOSITORY}:${IMAGE_TAG}" --file Dockerfile.scan .
+          if [[ "$MEMBER_VIDEO_ENABLED" == true ]]; then
+            az acr build --registry "$ACR_NAME" --image "${RECORDING_IMAGE_REPOSITORY}:${IMAGE_TAG}" --file Dockerfile.recording .
+          fi
       - name: Resolve immutable image digest
         run: |
           digest="$(az acr repository show --name "$ACR_NAME" --image "${IMAGE_REPOSITORY}:${IMAGE_TAG}" --query digest -o tsv --only-show-errors)"
@@ -230,6 +267,13 @@ jobs:
           scan_digest="$(az acr repository show --name "$ACR_NAME" --image "${SCAN_IMAGE_REPOSITORY}:${IMAGE_TAG}" --query digest -o tsv --only-show-errors)"
           [[ "$scan_digest" == sha256:* ]]
           echo "SCAN_IMAGE_REF=${ACR_LOGIN_SERVER}/${SCAN_IMAGE_REPOSITORY}@${scan_digest}" >> "$GITHUB_ENV"
+          if [[ "$MEMBER_VIDEO_ENABLED" == true ]]; then
+            recording_digest="$(az acr repository show --name "$ACR_NAME" --image "${RECORDING_IMAGE_REPOSITORY}:${IMAGE_TAG}" --query digest -o tsv --only-show-errors)"
+            [[ "$recording_digest" == sha256:* ]]
+            echo "RECORDING_IMAGE_REF=${ACR_LOGIN_SERVER}/${RECORDING_IMAGE_REPOSITORY}@${recording_digest}" >> "$GITHUB_ENV"
+          else
+            echo "RECORDING_IMAGE_REF=${ACR_LOGIN_SERVER}/${IMAGE_REPOSITORY}@${digest}" >> "$GITHUB_ENV"
+          fi
       - name: Scan immutable images
         run: |
           trivy_cache="$RUNNER_TEMP/trivy-cache"
@@ -283,12 +327,21 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           test "$runtime_fixable" -eq 0
           test "$scan_fixable" -eq 0
+      - name: Scan immutable recording image
+        if: env.MEMBER_VIDEO_ENABLED == 'true'
+        run: |
+          docker pull "$RECORDING_IMAGE_REF"
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$RUNNER_TEMP/trivy-cache:/root/.cache/trivy" \
+            ghcr.io/aquasecurity/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 \
+            image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 "$RECORDING_IMAGE_REF"
       - name: Reject destructive infrastructure changes
         run: |
           az deployment group what-if \
             --resource-group "$RESOURCE_GROUP" \
             --template-file infra/main.bicep \
-            --parameters storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" scanWorkerImage="$SCAN_IMAGE_REF" deployRuntime=true deployMigrationJob=true deployScanJob=true deployScanWorker=true deployScanWarmer=true provisionScanWarmInfrastructure=false deploySignatureRefreshJob=true deployDerivativeJob=true deployRetentionJob="$DEPLOY_RETENTION_JOB" retentionScheduleEnabled="$RETENTION_SCHEDULE_ENABLED" retentionApplyEnabled="$RETENTION_APPLY_ENABLED" scanDispatchEnabled="$ACTIVATE_QUEUE_SCANNING" embeddedScanEnabled="$EMBEDDED_SCAN_ENABLED" workloadAuthClientId="$ASSET_WORKLOAD_CLIENT_ID" workloadAuthAudience="$ASSET_WORKLOAD_AUDIENCE" lineAttachmentClientId="$LINE_ATTACHMENT_CLIENT_ID" lineAttachmentObjectId="$LINE_ATTACHMENT_OBJECT_ID" readerCallerAppId="$ASSET_READER_CALLER_APP_ID" meetingApiBaseUrl="$MEETING_API_BASE_URL" meetingApiAudience="$MEETING_API_AUDIENCE" provisionPermissions=false manageSharedInfrastructure=false \
+            --parameters storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" scanWorkerImage="$SCAN_IMAGE_REF" recordingImage="$RECORDING_IMAGE_REF" memberVideoEnabled="$MEMBER_VIDEO_ENABLED" recordingR2AccountId="$CLOUDFLARE_ACCOUNT_ID" mediaKeyId="$MEDIA_KEY_ID" deployRuntime=true deployMigrationJob=true deployScanJob=true deployScanWorker=true deployScanWarmer=true provisionScanWarmInfrastructure=false deploySignatureRefreshJob=true deployDerivativeJob=true deployRetentionJob="$DEPLOY_RETENTION_JOB" retentionScheduleEnabled="$RETENTION_SCHEDULE_ENABLED" retentionApplyEnabled="$RETENTION_APPLY_ENABLED" scanDispatchEnabled="$ACTIVATE_QUEUE_SCANNING" embeddedScanEnabled="$EMBEDDED_SCAN_ENABLED" workloadAuthClientId="$ASSET_WORKLOAD_CLIENT_ID" workloadAuthAudience="$ASSET_WORKLOAD_AUDIENCE" lineAttachmentClientId="$LINE_ATTACHMENT_CLIENT_ID" lineAttachmentObjectId="$LINE_ATTACHMENT_OBJECT_ID" readerCallerAppId="$ASSET_READER_CALLER_APP_ID" meetingApiBaseUrl="$MEETING_API_BASE_URL" meetingApiAudience="$MEETING_API_AUDIENCE" provisionPermissions=false manageSharedInfrastructure=false \
             --validation-level Provider --result-format FullResourcePayloads --no-pretty-print --only-show-errors \
             --output json > what-if.json
           ./scripts/check-what-if.sh what-if.json
@@ -321,7 +374,7 @@ jobs:
           az deployment group create \
             --name "asset-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --resource-group "$RESOURCE_GROUP" --template-file infra/main.bicep \
-            --parameters storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" scanWorkerImage="$SCAN_IMAGE_REF" deployRuntime=true deployMigrationJob=true deployScanJob=true deployScanWorker=true deployScanWarmer=true provisionScanWarmInfrastructure=false deploySignatureRefreshJob=true deployDerivativeJob=true deployRetentionJob="$DEPLOY_RETENTION_JOB" retentionScheduleEnabled="$RETENTION_SCHEDULE_ENABLED" retentionApplyEnabled="$RETENTION_APPLY_ENABLED" scanDispatchEnabled="$ACTIVATE_QUEUE_SCANNING" embeddedScanEnabled="$EMBEDDED_SCAN_ENABLED" workloadAuthClientId="$ASSET_WORKLOAD_CLIENT_ID" workloadAuthAudience="$ASSET_WORKLOAD_AUDIENCE" lineAttachmentClientId="$LINE_ATTACHMENT_CLIENT_ID" lineAttachmentObjectId="$LINE_ATTACHMENT_OBJECT_ID" readerCallerAppId="$ASSET_READER_CALLER_APP_ID" meetingApiBaseUrl="$MEETING_API_BASE_URL" meetingApiAudience="$MEETING_API_AUDIENCE" provisionPermissions=false manageSharedInfrastructure=false \
+            --parameters storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" scanWorkerImage="$SCAN_IMAGE_REF" recordingImage="$RECORDING_IMAGE_REF" memberVideoEnabled="$MEMBER_VIDEO_ENABLED" recordingR2AccountId="$CLOUDFLARE_ACCOUNT_ID" mediaKeyId="$MEDIA_KEY_ID" deployRuntime=true deployMigrationJob=true deployScanJob=true deployScanWorker=true deployScanWarmer=true provisionScanWarmInfrastructure=false deploySignatureRefreshJob=true deployDerivativeJob=true deployRetentionJob="$DEPLOY_RETENTION_JOB" retentionScheduleEnabled="$RETENTION_SCHEDULE_ENABLED" retentionApplyEnabled="$RETENTION_APPLY_ENABLED" scanDispatchEnabled="$ACTIVATE_QUEUE_SCANNING" embeddedScanEnabled="$EMBEDDED_SCAN_ENABLED" workloadAuthClientId="$ASSET_WORKLOAD_CLIENT_ID" workloadAuthAudience="$ASSET_WORKLOAD_AUDIENCE" lineAttachmentClientId="$LINE_ATTACHMENT_CLIENT_ID" lineAttachmentObjectId="$LINE_ATTACHMENT_OBJECT_ID" readerCallerAppId="$ASSET_READER_CALLER_APP_ID" meetingApiBaseUrl="$MEETING_API_BASE_URL" meetingApiAudience="$MEETING_API_AUDIENCE" provisionPermissions=false manageSharedInfrastructure=false \
             --only-show-errors --output none
       - name: Verify revision health
         run: |
@@ -362,6 +415,12 @@ jobs:
           [[ "$derivative_image" == "$IMAGE_REF" ]]
           [[ "$(az containerapp job show -g "$RESOURCE_GROUP" -n "$DERIVATIVE_JOB_NAME" --query properties.configuration.eventTriggerConfig.scale.minExecutions -o tsv --only-show-errors)" == "0" ]]
           [[ "$(az containerapp job show -g "$RESOURCE_GROUP" -n "$DERIVATIVE_JOB_NAME" --query properties.configuration.eventTriggerConfig.scale.maxExecutions -o tsv --only-show-errors)" == "3" ]]
+      - name: Verify recording validation job release
+        if: env.MEMBER_VIDEO_ENABLED == 'true'
+        run: |
+          [[ "$(az containerapp job show -g "$RESOURCE_GROUP" -n asset-recording-validation --query properties.template.containers[0].image -o tsv --only-show-errors)" == "$RECORDING_IMAGE_REF" ]]
+          [[ "$(az containerapp job show -g "$RESOURCE_GROUP" -n asset-recording-validation --query properties.configuration.triggerType -o tsv --only-show-errors)" == Schedule ]]
+          [[ "$(az containerapp job show -g "$RESOURCE_GROUP" -n asset-recording-validation --query properties.configuration.scheduleTriggerConfig.cronExpression -o tsv --only-show-errors)" == '*/1 * * * *' ]]
       - name: Capture healthy release
         id: release_outputs
         run: |
@@ -384,6 +443,68 @@ jobs:
             sleep 10
           done
           exit 1
+
+  deploy_media:
+    needs: [verify, deploy]
+    if: ${{ vars.MEMBER_MEDIA_DEPLOY_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PAGES_DEPLOY_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: member-media-${{ github.sha }}
+          path: workers/member-media/pages/production/dist
+          digest-mismatch: error
+      - name: Capture previous media deployment
+        run: |
+          test -n "$CLOUDFLARE_API_TOKEN" && test -n "$CLOUDFLARE_ACCOUNT_ID"
+          api="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/hhc-member-media"
+          project="$(curl --silent --show-error --fail --header "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" "$api")"
+          jq -e '.success == true' <<<"$project" >/dev/null
+          previous="$(jq -r '.result.canonical_deployment.id // empty' <<<"$project")"
+          if [[ -z "$previous" ]]; then
+            domains="$(curl --silent --show-error --fail --header "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" "$api/domains")"
+            jq -e '.success == true and (.result | length == 0)' <<<"$domains" >/dev/null || {
+              echo 'First media deployment requires no custom domain; refusing an unrollbackable public release' >&2
+              exit 1
+            }
+          fi
+          echo "PREVIOUS_MEDIA_DEPLOYMENT=$previous" >> "$GITHUB_ENV"
+      - name: Deploy verified private media function
+        working-directory: workers/member-media
+        run: |
+          test -n "$CLOUDFLARE_API_TOKEN" && test -n "$CLOUDFLARE_ACCOUNT_ID"
+          npm ci
+          cd pages/production
+          ../../node_modules/.bin/wrangler pages secret list --project-name hhc-member-media | grep -Fq MEDIA_PUBLIC_KEYS
+          ../../node_modules/.bin/wrangler pages deploy dist --project-name hhc-member-media --branch main --commit-hash "$GITHUB_SHA"
+      - name: Verify unauthenticated media is denied
+        run: |
+          url='https://hhc-member-media.pages.dev/videos/rec-1/files/file-1/sessions/scope-1/content'
+          for method in GET HEAD; do
+            status=''
+            for attempt in {1..20}; do
+              status="$(curl --silent --output /dev/null --write-out '%{http_code}' --request "$method" "$url")"
+              [[ "$status" == 401 ]] && break
+              sleep 3
+            done
+            [[ "$status" == 401 ]]
+          done
+      - name: Restore previous media deployment on failure
+        if: ${{ failure() && env.PREVIOUS_MEDIA_DEPLOYMENT != '' }}
+        run: |
+          api="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/hhc-member-media"
+          rollback="$(curl --silent --show-error --fail --request POST --header "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" "$api/deployments/${PREVIOUS_MEDIA_DEPLOYMENT}/rollback")"
+          jq -e '.success == true' <<<"$rollback" >/dev/null
 
   publish_openapi:
     needs: deploy

@@ -99,6 +99,15 @@ func TestLoadRequiresQueueURLWhenScanDispatchIsEnabled(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsPartialR2RecordingConfiguration(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://test")
+	t.Setenv("ASSET_ALLOW_DEV_CALLER_HEADER", "true")
+	t.Setenv("ASSET_R2_ACCOUNT_ID", "account-id")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "R2") {
+		t.Fatalf("Load() error=%v", err)
+	}
+}
+
 func TestAuditDispatchDefaultsDarkAndValidatesEnabledConfig(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://test")
 	t.Setenv("ASSET_ALLOW_DEV_CALLER_HEADER", "true")

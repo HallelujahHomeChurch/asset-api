@@ -27,6 +27,10 @@ param deployDerivativeJob bool = false
 param retentionScheduleEnabled bool = false
 param retentionApplyEnabled bool = false
 param scanWorkerImage string = runtimeImage
+param memberVideoEnabled bool = false
+param recordingImage string = runtimeImage
+param recordingR2AccountId string = ''
+param mediaKeyId string = ''
 param workloadAuthClientId string = ''
 param workloadAuthAudience string = ''
 param lineAttachmentClientId string = ''
@@ -44,6 +48,26 @@ param uploadAllowedOrigins array = [
 var keyVaultSecretsUserRole = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
 var workloadAuthEnabled = workloadAuthClientId != '' && workloadAuthAudience != '' && lineAttachmentClientId != '' && lineAttachmentObjectId != ''
 var workloadAuthIssuer = 'https://sts.windows.net/${subscription().tenantId}/'
+var recordingBucket = 'hhc-member-recordings-prod'
+var mediaIssuer = 'hhc-media-prod'
+var recordingSecrets = [
+  { name: 'r2-access-key-id', keyVaultUrl: '${runtimeVault.properties.vaultUri}secrets/member-video-r2-access-key-id', identity: runtimeIdentity.id }
+  { name: 'r2-secret-access-key', keyVaultUrl: '${runtimeVault.properties.vaultUri}secrets/member-video-r2-secret-access-key', identity: runtimeIdentity.id }
+]
+var mediaRuntimeSecrets = concat(recordingSecrets, [
+  { name: 'media-private-key', keyVaultUrl: '${runtimeVault.properties.vaultUri}secrets/member-video-media-private-key-pem', identity: runtimeIdentity.id }
+])
+var recordingR2Env = [
+  { name: 'ASSET_R2_ACCOUNT_ID', value: recordingR2AccountId }
+  { name: 'ASSET_R2_BUCKET', value: recordingBucket }
+  { name: 'ASSET_R2_ACCESS_KEY_ID', secretRef: 'r2-access-key-id' }
+  { name: 'ASSET_R2_SECRET_ACCESS_KEY', secretRef: 'r2-secret-access-key' }
+]
+var mediaRuntimeEnv = concat(recordingR2Env, [
+  { name: 'ASSET_MEDIA_PRIVATE_KEY_PEM', secretRef: 'media-private-key' }
+  { name: 'ASSET_MEDIA_KEY_ID', value: mediaKeyId }
+  { name: 'ASSET_MEDIA_ISSUER', value: mediaIssuer }
+])
 var retentionTriggerConfiguration = retentionScheduleEnabled ? {
   triggerType: 'Schedule'
   scheduleTriggerConfig: {
@@ -385,7 +409,7 @@ resource app 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
           identity: pullIdentity.id
         }
       ]
-      secrets: [
+      secrets: concat([
         {
           name: 'database-url'
           keyVaultUrl: '${runtimeVault.properties.vaultUri}secrets/database-url'
@@ -396,14 +420,14 @@ resource app 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
           keyVaultUrl: '${auditVault.properties.vaultUri}secrets/audit-log-production-token-asset-api'
           identity: runtimeIdentity.id
         }
-      ]
+      ], memberVideoEnabled ? mediaRuntimeSecrets : [])
     }
     template: {
       containers: [
         {
           name: 'asset-api'
           image: runtimeImage
-          env: [
+          env: concat([
             { name: 'PORT', value: '8080' }
             { name: 'DATABASE_URL', secretRef: 'database-url' }
             { name: 'DB_MAX_OPEN_CONNS', value: '4' }
@@ -429,7 +453,7 @@ resource app 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
             { name: 'AUDIT_DISPATCH_ENABLED', value: 'true' }
             { name: 'AUDIT_APP_ID', value: 'audit-log' }
             { name: 'AUDIT_TOKEN', secretRef: 'audit-token' }
-          ]
+          ], memberVideoEnabled ? mediaRuntimeEnv : [])
           resources: {
             cpu: json('0.25')
             memory: '0.5Gi'
@@ -1023,6 +1047,52 @@ resource retentionJob 'Microsoft.App/jobs@2025-07-01' = if (deployRetentionJob) 
             { name: 'ASSET_RETENTION_APPLY_ENABLED', value: string(retentionApplyEnabled) }
           ]
           resources: { cpu: json('0.25'), memory: '0.5Gi' }
+        }
+      ]
+    }
+  }
+  dependsOn: [acrPull, runtimeSecretAccess]
+}
+
+resource recordingJob 'Microsoft.App/jobs@2025-07-01' = if (memberVideoEnabled) {
+  name: 'asset-recording-validation'
+  location: location
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${pullIdentity.id}': {}
+      '${runtimeIdentity.id}': {}
+    }
+  }
+  properties: {
+    environmentId: environment.id
+    workloadProfileName: 'Consumption'
+    configuration: {
+      replicaTimeout: 1200
+      replicaRetryLimit: 1
+      triggerType: 'Schedule'
+      // ponytail: overlapping schedules are serialized per upload by the DB claim; use a queue trigger if concurrency grows.
+      scheduleTriggerConfig: {
+        cronExpression: '*/1 * * * *'
+        parallelism: 1
+        replicaCompletionCount: 1
+      }
+      registries: [
+        { server: registry.properties.loginServer, identity: pullIdentity.id }
+      ]
+      secrets: concat([
+        { name: 'database-url', keyVaultUrl: '${runtimeVault.properties.vaultUri}secrets/database-url', identity: runtimeIdentity.id }
+      ], recordingSecrets)
+    }
+    template: {
+      containers: [
+        {
+          name: 'asset-recording-validation'
+          image: recordingImage
+          env: concat([
+            { name: 'DATABASE_URL', secretRef: 'database-url' }
+          ], recordingR2Env)
+          resources: { cpu: json('0.5'), memory: '1Gi' }
         }
       ]
     }
