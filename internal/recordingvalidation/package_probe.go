@@ -92,14 +92,14 @@ func (p PackageMediaProbe) Validate(ctx context.Context, inv assets.RecordingPac
 			}
 			actual, err := validatePackageSegmentProbe(data, r)
 			if err != nil {
-				return err
+				return fmt.Errorf("segment stream or timeline: %w", err)
 			}
 			first, err := boundedProbeCommand(ctx, p.FFprobe, "-v", "error", "-protocol_whitelist", "file", "-enable_drefs", "0", "-use_absolute_path", "0", "-select_streams", "v:0", "-read_intervals", "%+#1", "-show_packets", "-show_data", "-show_entries", "packet=flags,data", "-of", "json", path)
 			if err != nil {
 				return err
 			}
 			if err := validateFirstIDRPacket(first); err != nil {
-				return err
+				return fmt.Errorf("segment IDR: %w", err)
 			}
 			if i == 0 {
 				if actual.Start < -0.1 || actual.Start > 0.25 {
@@ -107,13 +107,13 @@ func (p PackageMediaProbe) Validate(ctx context.Context, inv assets.RecordingPac
 				}
 				codecs[r.Name] = actual.Codecs
 			} else if math.Abs(actual.Start-timeline[i-1].End) > 1/r.FrameRate+0.001 || actual.Codecs != codecs[r.Name] {
-				return assets.ErrInvalidUpload
+				return fmt.Errorf("segment decode: %w", assets.ErrInvalidUpload)
 			}
 			if i < r.SegmentCount-1 && math.Abs(actual.End-actual.Start-30) > 1/r.FrameRate+0.001 {
 				return assets.ErrInvalidUpload
 			}
 			decodeCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-			err = exec.CommandContext(decodeCtx, p.FFmpeg, "-nostdin", "-v", "error", "-xerror", "-protocol_whitelist", "file", "-enable_drefs", "0", "-use_absolute_path", "0", "-i", path, "-map", "0:v:0", "-map", "0:a:0", "-f", "null", "-").Run()
+			err = exec.CommandContext(decodeCtx, p.FFmpeg, "-nostdin", "-v", "error", "-xerror", "-protocol_whitelist", "file", "-enable_drefs", "0", "-use_absolute_path", "0", "-threads", "2", "-i", path, "-map", "0:v:0", "-map", "0:a:0", "-f", "null", "-").Run()
 			deadlineErr := decodeCtx.Err()
 			cancel()
 			if err != nil {
@@ -156,7 +156,10 @@ func (p PackageMediaProbe) Validate(ctx context.Context, inv assets.RecordingPac
 	if err != nil {
 		return err
 	}
-	return assets.ValidateRecordingMasterCodecs(inv, master, codecs)
+	if err := assets.ValidateRecordingMasterCodecs(inv, master, codecs); err != nil {
+		return fmt.Errorf("master codecs: %w", err)
+	}
+	return nil
 }
 
 func boundedProbeCommand(ctx context.Context, binary string, args ...string) ([]byte, error) {
@@ -194,7 +197,10 @@ type segmentProbe struct {
 
 // Only bounded ffprobe output from a local init+fragment is accepted here.
 func validatePackageSegmentProbe(data []byte, r assets.RecordingRendition) (segmentProbe, error) {
-	invalid := func() (segmentProbe, error) { return segmentProbe{}, assets.ErrInvalidUpload }
+	stage := "streams"
+	invalid := func() (segmentProbe, error) {
+		return segmentProbe{}, fmt.Errorf("%w: %s", assets.ErrInvalidUpload, stage)
+	}
 	var output struct {
 		Streams []struct {
 			Index       int    `json:"index"`
@@ -265,16 +271,23 @@ func validatePackageSegmentProbe(data []byte, r assets.RecordingRendition) (segm
 		pts, duration float64
 		key           bool
 	}
+	stage = "packet fields"
 	tracks := map[int][]packet{video: nil, audio: nil}
 	for _, p := range output.Packets {
 		pts, e1 := strconv.ParseFloat(p.PTS, 64)
 		duration, e2 := strconv.ParseFloat(p.Duration, 64)
-		if _, ok := tracks[p.Stream]; !ok || e1 != nil || e2 != nil || !finite(pts) || !finite(duration) || duration <= 0 || duration > 1 {
+		missingDuration := p.Stream == audio && p.Duration == ""
+		if missingDuration {
+			duration = 0
+			e2 = nil
+		}
+		if _, ok := tracks[p.Stream]; !ok || e1 != nil || e2 != nil || !finite(pts) || !finite(duration) || duration <= 0 && !missingDuration || duration > 1 {
 			return invalid()
 		}
 		tracks[p.Stream] = append(tracks[p.Stream], packet{pts, duration, strings.Contains(p.Flags, "K")})
 	}
 	for stream, packets := range tracks {
+		stage = "packet continuity"
 		if len(packets) == 0 || stream == video && (len(packets) > 1000 || !packets[0].key) || stream == audio && len(packets) > 2000 {
 			return invalid()
 		}
@@ -288,6 +301,19 @@ func validatePackageSegmentProbe(data []byte, r assets.RecordingRendition) (segm
 			return 0
 		})
 		for i, p := range packets {
+			// Older ffprobe omits the first AAC packet duration in a standalone
+			// fragment. Infer only that packet from the next actual timestamp,
+			// bounded to an AAC-LC 960/1024-sample frame at the verified 48kHz.
+			if p.duration == 0 {
+				if stream != audio || i != 0 || len(packets) < 2 {
+					return invalid()
+				}
+				p.duration = packets[1].pts - p.pts
+				if math.Abs(p.duration-1024.0/48000) > 0.000002 && math.Abs(p.duration-960.0/48000) > 0.000002 {
+					return invalid()
+				}
+				packets[i].duration = p.duration
+			}
 			if stream == video && math.Abs(p.duration-1/r.FrameRate) > 0.0002 {
 				return invalid()
 			}

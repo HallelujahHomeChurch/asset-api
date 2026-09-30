@@ -49,6 +49,10 @@ func TestPackageProbeDecodesRealFragment(t *testing.T) {
 	objects.bytes["final/master.m3u8"] = []byte(strings.Replace(string(objects.bytes[p.StagingKey("master.m3u8")]), "avc1.64001f", "avc1.42c01f", 1))
 	probe := PackageMediaProbe{Objects: objects, FFmpeg: ffmpeg, FFprobe: ffprobe, ScratchRoot: t.TempDir()}
 	if err := probe.Validate(context.Background(), p.Inventory, "final/"); err != nil {
+		for _, track := range []string{"v:0", "a:0"} {
+			out, _ := exec.Command(ffprobe, "-v", "error", "-protocol_whitelist", "file,concat", "-select_streams", track, "-read_intervals", "%+#1", "-show_packets", "-show_entries", "packet=stream_index,pts_time,duration_time,flags", "-of", "json", "concat:"+filepath.Join(dir, "init.mp4")+"|"+filepath.Join(dir, "seg-000000.m4s")).Output()
+			t.Logf("generated fixture first %s packet: %s", track, out)
+		}
 		t.Fatalf("real probe: %v", err)
 	}
 	entries, err := os.ReadDir(probe.ScratchRoot)
@@ -96,5 +100,17 @@ func TestFirstPacketRequiresActualIDRNAL(t *testing.T) {
 		if err := validateFirstIDRPacket([]byte(bad)); !errors.Is(err, assets.ErrInvalidUpload) {
 			t.Fatalf("non-IDR accepted: %v", err)
 		}
+	}
+}
+
+func TestFragmentProbeInfersOnlyMissingFirstAACDurationFromNextPTS(t *testing.T) {
+	r := assets.RecordingRendition{Width: 1280, Height: 720, FrameRate: 30}
+	data := strings.Replace(segmentProbeFixture, `"stream_index":1,"pts_time":"0.000000","duration_time":"0.021333"`, `"stream_index":1,"pts_time":"0.000000"`, 1)
+	if _, err := validatePackageSegmentProbe([]byte(data), r); err != nil {
+		t.Fatal(err)
+	}
+	bad := strings.Replace(data, `"stream_index":1,"pts_time":"0.021333","duration_time":"0.021333"`, `"stream_index":1,"pts_time":"0.021333"`, 1)
+	if _, err := validatePackageSegmentProbe([]byte(bad), r); !errors.Is(err, assets.ErrInvalidUpload) {
+		t.Fatalf("missing later duration accepted: %v", err)
 	}
 }
