@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"hhc/asset-api/internal/assets"
+	"hhc/asset-api/internal/config"
 	"hhc/asset-api/internal/logging"
 	"hhc/asset-api/internal/postgres"
 	"hhc/asset-api/internal/recordingvalidation"
@@ -36,6 +37,10 @@ func main() {
 }
 
 func run(ctx context.Context) error {
+	hlsEnabled, err := config.RecordingHLSFlag()
+	if err != nil {
+		return err
+	}
 	dsn := strings.TrimSpace(os.Getenv("DATABASE_URL"))
 	if dsn == "" {
 		return errors.New("DATABASE_URL is required")
@@ -50,6 +55,13 @@ func run(ctx context.Context) error {
 	}
 	defer db.Close()
 	db.SetMaxOpenConns(3)
+	if hlsEnabled {
+		packages := postgres.NewRecordingPackageStore(db)
+		probe := recordingvalidation.PackageMediaProbe{Objects: objects, FFmpeg: "/usr/bin/ffmpeg", FFprobe: "/usr/bin/ffprobe"}
+		validationErr := recordingvalidation.RunPackageValidation(ctx, packages, objects, probe)
+		cleanupErr := packages.ReconcilePackages(ctx, objects.DeletePackageObjects)
+		return errors.Join(validationErr, cleanupErr)
+	}
 	repository := postgres.NewRecordingUploadStore(db)
 	worker := recordingvalidation.New(repository, objects.Open, func(ctx context.Context, key string) ([]byte, error) {
 		url, err := objects.PresignProbeRead(ctx, key, 15*time.Minute)

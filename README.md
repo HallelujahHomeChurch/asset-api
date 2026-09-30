@@ -47,12 +47,17 @@ service for these private asset operations.
 ## HLS package producer contract
 
 `/priv/recording-packages` provides create, paginated status, batched single-object
-PUT signing and durable completion handlers. These routes currently fail closed
-with 503 in the server: the package service is not wired until the immutable-copy
-and media-validation worker is complete. Completion means `freezing`, not ready.
+PUT signing and durable completion handlers. These routes fail closed with 503
+unless `ASSET_RECORDING_HLS_ENABLED=true` is set for the API and recording Job.
+The flag defaults off and must remain off until the reviewed HLS cutover.
+Completion means `freezing`, not ready. In HLS mode the recording Job uses two
+global DB slots, renewable fenced leases and bounded per-fragment media validation;
+it does not re-encode CLI packages. Ready retention is thirty days, with a one-hour
+existing-grant cleanup grace. Staging and failed attempt deletion are retried and
+reconciled daily to sweep late writes; provider acceptance remains required.
 The additive package table and OpenAPI do not change existing recording uploads
-or the ordinary Blob scan lifecycle. Package cleanup and ready retention are
-remaining implementation work, not enabled policies.
+or the ordinary Blob scan lifecycle. Browser source ingest/encode and HLS playback
+grants are subsequent work; enabling this producer is not end-to-end readiness.
 
 ## Scan lifecycle
 

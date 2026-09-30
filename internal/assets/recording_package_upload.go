@@ -22,6 +22,9 @@ type RecordingPackage struct {
 	CreatedAt      time.Time                 `json:"createdAt"`
 	ExpiresAt      time.Time                 `json:"expiresAt"`
 	Inventory      RecordingPackageInventory `json:"inventory"`
+	FinalPrefix    string                    `json:"-"`
+	ReadyAt        *time.Time                `json:"readyAt,omitempty"`
+	MediaExpiresAt *time.Time                `json:"mediaExpiresAt,omitempty"`
 }
 
 func (p RecordingPackage) StagingKey(path string) string {
@@ -36,14 +39,17 @@ type CreateRecordingPackageInput struct {
 }
 
 type RecordingPackageStatus struct {
-	PackageID        string    `json:"packageId"`
-	SessionID        string    `json:"sessionId"`
-	RecordingID      string    `json:"recordingId"`
-	State            string    `json:"state"`
-	SizeBytes        int64     `json:"sizeBytes"`
-	ExpiresAt        time.Time `json:"expiresAt"`
-	ConfirmedObjects []string  `json:"confirmedObjects"`
-	NextCursor       string    `json:"nextCursor"`
+	PackageID        string               `json:"packageId"`
+	SessionID        string               `json:"sessionId"`
+	RecordingID      string               `json:"recordingId"`
+	State            string               `json:"state"`
+	SizeBytes        int64                `json:"sizeBytes"`
+	ExpiresAt        time.Time            `json:"expiresAt"`
+	ConfirmedObjects []string             `json:"confirmedObjects"`
+	NextCursor       string               `json:"nextCursor"`
+	ReadyAt          *time.Time           `json:"readyAt,omitempty"`
+	MediaExpiresAt   *time.Time           `json:"mediaExpiresAt,omitempty"`
+	Renditions       []RecordingRendition `json:"renditions,omitempty"`
 }
 
 type SignedRecordingObject struct {
@@ -110,6 +116,19 @@ func (s *RecordingPackageService) Get(ctx context.Context, id, actor string) (Re
 		return RecordingPackage{}, err
 	}
 	if actor == "" || p.ActorID != actor || p.OwnerService != "hhc-web-api" {
+		return RecordingPackage{}, ErrForbidden
+	}
+	return p, nil
+}
+
+// Only the owning CMS may use this private operation after checking the viewer's
+// entitlement/publication. Uploader identity is not the viewer identity.
+func (s *RecordingPackageService) GetReady(ctx context.Context, id, recordingID string) (RecordingPackage, error) {
+	p, err := s.repository.Get(ctx, id)
+	if err != nil {
+		return RecordingPackage{}, err
+	}
+	if p.OwnerService != "hhc-web-api" || p.RecordingID != recordingID || p.State != "ready" || p.ReadyAt == nil || p.MediaExpiresAt == nil || p.FinalPrefix == "" || !s.now().Before(*p.MediaExpiresAt) {
 		return RecordingPackage{}, ErrForbidden
 	}
 	return p, nil
@@ -215,6 +234,13 @@ func (s *RecordingPackageService) Status(ctx context.Context, id, actor, cursor 
 	}
 	end := min(start+limit, len(objects))
 	page := RecordingPackageStatus{PackageID: p.ID, SessionID: p.SessionID, RecordingID: p.RecordingID, State: p.State, SizeBytes: p.SizeBytes, ExpiresAt: p.ExpiresAt, ConfirmedObjects: []string{}}
+	page.ReadyAt, page.MediaExpiresAt = p.ReadyAt, p.MediaExpiresAt
+	if p.State == "ready" {
+		page.Renditions = slices.Clone(p.Inventory.Renditions)
+		if p.MediaExpiresAt != nil && !s.now().Before(*p.MediaExpiresAt) {
+			page.State = "expired"
+		}
+	}
 	if end < len(objects) {
 		page.NextCursor = objects[end-1].Path
 	}

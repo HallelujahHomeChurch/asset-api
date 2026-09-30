@@ -6,6 +6,31 @@ import (
 	"time"
 )
 
+func TestRecordingHLSIsExplicitAndRequiresStorage(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://test")
+	t.Setenv("ASSET_ALLOW_DEV_CALLER_HEADER", "true")
+	t.Setenv("ASSET_RECORDING_HLS_ENABLED", "")
+	cfg, err := Load()
+	if err != nil || cfg.RecordingHLSEnabled {
+		t.Fatalf("default gate: %+v %v", cfg.RecordingHLSEnabled, err)
+	}
+	t.Setenv("ASSET_RECORDING_HLS_ENABLED", "typo")
+	if _, err := Load(); err == nil {
+		t.Fatal("invalid gate accepted")
+	}
+	t.Setenv("ASSET_RECORDING_HLS_ENABLED", "true")
+	if _, err := Load(); err == nil {
+		t.Fatal("enabled without R2")
+	}
+	for key, value := range map[string]string{"ASSET_R2_ACCOUNT_ID": "test", "ASSET_R2_BUCKET": "test", "ASSET_R2_ACCESS_KEY_ID": "test", "ASSET_R2_SECRET_ACCESS_KEY": "test", "ASSET_MEDIA_PRIVATE_KEY_PEM": "test", "ASSET_MEDIA_KEY_ID": "test", "ASSET_MEDIA_ISSUER": "test"} {
+		t.Setenv(key, value)
+	}
+	cfg, err = Load()
+	if err != nil || !cfg.RecordingHLSEnabled {
+		t.Fatalf("explicit gate: %v", err)
+	}
+}
+
 func TestLoadEnablesDevelopmentCallerHeaderExplicitly(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://test")
 	t.Setenv("ASSET_ALLOW_DEV_CALLER_HEADER", "true")

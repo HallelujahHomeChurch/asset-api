@@ -112,3 +112,232 @@ func TestRecordingPackageCapsAndExpiryAreAtomic(t *testing.T) {
 		t.Fatalf("missing: %v", err)
 	}
 }
+
+func TestPackageJobsGlobalSlotsAndStaleClaimFencing(t *testing.T) {
+	ctx := context.Background()
+	db := isolatedIntegrationDB(t)
+	if err := migrations.Run(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	store := NewRecordingPackageStore(db)
+	for i := 0; i < 3; i++ {
+		p := testRecordingPackage(t, fmt.Sprintf("lease-package-%d", i), fmt.Sprintf("actor-%d", i), fmt.Sprintf("lease-recording-%d", i))
+		if err := store.Create(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Freeze(ctx, p.ID, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a, err := store.ClaimPackageValidation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := store.ClaimPackageValidation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Package.ID == b.Package.ID || a.ClaimID == b.ClaimID {
+		t.Fatal("duplicate claim")
+	}
+	if _, err := store.ClaimPackageValidation(ctx); !errors.Is(err, assets.ErrNotFound) {
+		t.Fatalf("third concurrent job: %v", err)
+	}
+	if err := store.HeartbeatPackageValidation(ctx, a.Package.ID, a.ClaimID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE recording_packages SET claimed_until=now()-interval '1 minute' WHERE id=$1`, a.Package.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE recording_processing_slots SET leased_until=now()-interval '1 minute' WHERE claim_id=$1`, a.ClaimID); err != nil {
+		t.Fatal(err)
+	}
+	c, err := store.ClaimPackageValidation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Package.ID != a.Package.ID || c.ClaimID == a.ClaimID || c.Attempts != 2 {
+		t.Fatalf("reclaim: %+v", c)
+	}
+	if err := store.HeartbeatPackageValidation(ctx, a.Package.ID, a.ClaimID); !errors.Is(err, assets.ErrConflict) {
+		t.Fatalf("stale heartbeat: %v", err)
+	}
+	if err := store.FinishPackageValidation(ctx, a.Package.ID, a.ClaimID, true, ""); !errors.Is(err, assets.ErrConflict) {
+		t.Fatalf("stale ready: %v", err)
+	}
+	if err := store.FinishPackageValidation(ctx, c.Package.ID, c.ClaimID, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Get(ctx, c.Package.ID)
+	if err != nil || got.State != "ready" {
+		t.Fatalf("ready: %+v %v", got, err)
+	}
+	var prefix string
+	var retention time.Duration
+	if err := db.QueryRowContext(ctx, `SELECT final_prefix,(extract(epoch from(media_expires_at-ready_at))*1000000000)::bigint FROM recording_packages WHERE id=$1`, c.Package.ID).Scan(&prefix, &retention); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prefix, "/final/"+c.ClaimID+"/") || retention != 30*24*time.Hour {
+		t.Fatalf("retention %s %s", prefix, retention)
+	}
+	if _, err := store.ClaimPackageValidation(ctx); err != nil {
+		t.Fatalf("released slot: %v", err)
+	}
+}
+
+func TestPackageJobsConcurrentClaimIsGloballyBounded(t *testing.T) {
+	ctx := context.Background()
+	db := isolatedIntegrationDB(t)
+	if err := migrations.Run(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	store := NewRecordingPackageStore(db)
+	for i := 0; i < 8; i++ {
+		p := testRecordingPackage(t, fmt.Sprintf("parallel-package-%d", i), fmt.Sprintf("actor-%d", i), fmt.Sprintf("parallel-recording-%d", i))
+		if err := store.Create(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Freeze(ctx, p.ID, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var group sync.WaitGroup
+	results := make(chan error, 8)
+	for i := 0; i < 8; i++ {
+		group.Add(1)
+		go func() { defer group.Done(); _, err := store.ClaimPackageValidation(ctx); results <- err }()
+	}
+	group.Wait()
+	close(results)
+	claimed := 0
+	for err := range results {
+		if err == nil {
+			claimed++
+		} else if !errors.Is(err, assets.ErrNotFound) {
+			t.Fatal(err)
+		}
+	}
+	if claimed != 2 {
+		t.Fatalf("concurrent claims: %d", claimed)
+	}
+}
+
+func TestReadyPackagePurgeRetainsFinalAndSweepsLateStagingWrites(t *testing.T) {
+	ctx := context.Background()
+	db := isolatedIntegrationDB(t)
+	if err := migrations.Run(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	store := NewRecordingPackageStore(db)
+	p := testRecordingPackage(t, "cleanup-package", "actor-a", "cleanup-recording")
+	if err := store.Create(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Freeze(ctx, p.ID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	claim, err := store.ClaimPackageValidation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishPackageValidation(ctx, p.ID, claim.ClaimID, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	bytes := map[string]bool{}
+	prefix := "recordings/packages/" + p.ID + "/final/" + claim.ClaimID + "/"
+	for _, o := range p.Inventory.Objects {
+		bytes[p.StagingKey(o.Path)] = true
+		bytes[prefix+o.Path] = true
+	}
+	bytes[prefix+"package.json"] = true
+	deleteBatch := func(_ context.Context, keys []string) error {
+		for _, key := range keys {
+			delete(bytes, key)
+		}
+		return nil
+	}
+	if err := store.CleanupPackage(ctx, p.ID, deleteBatch); err != nil {
+		t.Fatal(err)
+	}
+	if bytes[p.StagingKey("master.m3u8")] || !bytes[prefix+"master.m3u8"] {
+		t.Fatal("ready final removed or staging retained")
+	}
+	bytes[p.StagingKey("master.m3u8")] = true
+	if _, err := db.ExecContext(ctx, `UPDATE recording_packages SET cleanup_after=now()-interval '1 minute',expires_at=now()-interval '1 minute',created_at=now()-interval '24 hours' WHERE id=$1`, p.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CleanupPackage(ctx, p.ID, deleteBatch); err != nil {
+		t.Fatal(err)
+	}
+	if bytes[p.StagingKey("master.m3u8")] || !bytes[prefix+"master.m3u8"] {
+		t.Fatal("late write not swept or ready final removed")
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE recording_packages SET cleanup_after=now()-interval '1 minute',ready_at=now()-interval '30 days 30 minutes',media_expires_at=now()-interval '30 minutes' WHERE id=$1`, p.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CleanupPackage(ctx, p.ID, deleteBatch); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Get(ctx, p.ID)
+	if err != nil || got.State != "expired" || !bytes[prefix+"master.m3u8"] {
+		t.Fatalf("expiry/grant grace: %+v %v", got, err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE recording_packages SET cleanup_after=now()-interval '1 minute',ready_at=now()-interval '31 days',media_expires_at=now()-interval '1 day' WHERE id=$1`, p.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CleanupPackage(ctx, p.ID, deleteBatch); err != nil {
+		t.Fatal(err)
+	}
+	if len(bytes) != 0 {
+		t.Fatalf("expired bytes retained: %v", bytes)
+	}
+}
+
+func TestPackageCleanupRetriesAndNeverDeletesActiveAttempt(t *testing.T) {
+	ctx := context.Background()
+	db := isolatedIntegrationDB(t)
+	if err := migrations.Run(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	store := NewRecordingPackageStore(db)
+	p := testRecordingPackage(t, "retry-cleanup", "actor-a", "retry-recording")
+	if err := store.Create(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Freeze(ctx, p.ID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	active, err := store.ClaimPackageValidation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO recording_package_attempts(claim_id,package_id,state,finished_at) VALUES ('abandoned-attempt',$1,'abandoned',now()-interval '7 hours')`, p.ID); err != nil {
+		t.Fatal(err)
+	}
+	providerFailure := errors.New("transient delete failure")
+	if err := store.CleanupPackage(ctx, p.ID, func(context.Context, []string) error { return providerFailure }); !errors.Is(err, providerFailure) {
+		t.Fatalf("delete failure: %v", err)
+	}
+	ids, err := store.PackageCleanupCandidates(ctx)
+	if err != nil || len(ids) != 1 || ids[0] != p.ID {
+		t.Fatalf("retry omitted: %v %v", ids, err)
+	}
+	deleted := 0
+	if err := store.CleanupPackage(ctx, p.ID, func(_ context.Context, keys []string) error {
+		for _, key := range keys {
+			if strings.Contains(key, "/staging/") || strings.Contains(key, active.ClaimID) || !strings.Contains(key, "/final/abandoned-attempt/") {
+				t.Fatalf("active scope deleted: %s", key)
+			}
+			deleted++
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if deleted != len(p.Inventory.Objects)+1 {
+		t.Fatalf("deleted %d keys", deleted)
+	}
+	if err := store.HeartbeatPackageValidation(ctx, p.ID, active.ClaimID); err != nil {
+		t.Fatalf("active job affected: %v", err)
+	}
+}

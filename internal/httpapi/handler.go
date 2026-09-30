@@ -131,6 +131,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.Handle("GET /priv/recording-packages/{packageID}", h.internal(http.HandlerFunc(h.getRecordingPackage)))
 	mux.Handle("POST /priv/recording-packages/{packageID}/sign", h.internal(http.HandlerFunc(h.signRecordingPackage)))
 	mux.Handle("POST /priv/recording-packages/{packageID}/complete", h.internal(http.HandlerFunc(h.completeRecordingPackage)))
+	mux.Handle("POST /priv/recording-packages/{packageID}/grant", h.internal(http.HandlerFunc(h.issueRecordingPackageGrant)))
 	mux.Handle("GET /priv/recording-uploads/{sessionID}", h.internal(http.HandlerFunc(h.getRecordingUpload)))
 	mux.Handle("GET /priv/recording-uploads/{sessionID}/parts", h.internal(http.HandlerFunc(h.listRecordingParts)))
 	mux.Handle("POST /priv/recording-uploads/{sessionID}/parts/{partNumber}", h.internal(http.HandlerFunc(h.signRecordingPart)))

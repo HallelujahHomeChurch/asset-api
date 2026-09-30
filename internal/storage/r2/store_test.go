@@ -2,6 +2,7 @@ package r2
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -13,6 +14,32 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
+
+func TestDeletePackageObjectsRejectsMixedScopeAndProviderPartialFailure(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		body, _ := io.ReadAll(r.Body)
+		if r.Method != http.MethodPost || !r.URL.Query().Has("delete") || !strings.Contains(string(body), "recordings/packages/a/staging/master.m3u8") {
+			t.Errorf("delete request: %s %s %s", r.Method, r.URL, body)
+		}
+		w.Header().Set("Content-Type", "application/xml")
+		_, _ = w.Write([]byte(`<DeleteResult><Error><Key>recordings/packages/a/staging/master.m3u8</Key><Code>AccessDenied</Code></Error></DeleteResult>`))
+	}))
+	defer server.Close()
+	store := &Store{bucket: "test", client: s3.New(s3.Options{BaseEndpoint: aws.String(server.URL), Region: "auto", UsePathStyle: true, Credentials: credentials.NewStaticCredentialsProvider("key", "secret", ""), HTTPClient: server.Client(), RetryMaxAttempts: 1})}
+	for _, keys := range [][]string{nil, {"recordings/other.mp4"}, {"recordings/packages/a/staging/master.m3u8", "recordings/packages/b/staging/master.m3u8"}, {"recordings/packages/a/final/attempt/master.m3u8", "recordings/packages/a/final/other/master.m3u8"}} {
+		if err := store.DeletePackageObjects(context.Background(), keys); err == nil {
+			t.Fatalf("unsafe delete accepted %v", keys)
+		}
+	}
+	if requests != 0 {
+		t.Fatal("unsafe request sent")
+	}
+	if err := store.DeletePackageObjects(context.Background(), []string{"recordings/packages/a/staging/master.m3u8"}); err == nil {
+		t.Fatal("partial provider failure accepted")
+	}
+}
 
 func TestAbortAlreadyMissingMultipartUploadIsSuccess(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -133,5 +160,66 @@ func TestPresignPackageOnlyWritesOneSizedStagingObject(t *testing.T) {
 	}
 	if _, err := store.PresignPackageObject(context.Background(), key, 123, "video/mp4", 16*time.Minute); err == nil {
 		t.Fatal("signed overlong URL")
+	}
+}
+
+func TestPackageCopyPinsSourceETagAndCannotCrossPackage(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.Method != "PUT" || r.URL.Path != "/recordings-test/recordings/packages/package-a/final/attempt-a/720p/init.mp4" || r.Header.Get("X-Amz-Copy-Source-If-Match") != `"source-etag"` {
+			t.Errorf("incorrect copy scope: %s %s", r.Method, r.URL.Path)
+		}
+		source, err := url.PathUnescape(r.Header.Get("X-Amz-Copy-Source"))
+		if err != nil || source != "recordings-test/recordings/packages/package-a/staging/720p/init.mp4" {
+			t.Errorf("copy source=%q", source)
+		}
+		w.Header().Set("Content-Type", "application/xml")
+		_, _ = w.Write([]byte(`<CopyObjectResult><ETag>"final-etag"</ETag><LastModified>2026-09-30T00:00:00Z</LastModified></CopyObjectResult>`))
+	}))
+	defer server.Close()
+	store := &Store{bucket: "recordings-test", client: s3.New(s3.Options{BaseEndpoint: aws.String(server.URL), Region: "auto", UsePathStyle: true, Credentials: credentials.NewStaticCredentialsProvider("key", "secret", ""), HTTPClient: server.Client(), RetryMaxAttempts: 1})}
+	from := "recordings/packages/package-a/staging/720p/init.mp4"
+	to := "recordings/packages/package-a/final/attempt-a/720p/init.mp4"
+	if err := store.CopyPackageObject(context.Background(), from, to, `"source-etag"`); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{strings.Replace(to, "package-a", "package-b", 1), strings.Replace(to, "init.mp4", "seg-000000.m4s", 1), from} {
+		if err := store.CopyPackageObject(context.Background(), from, bad, `"source-etag"`); err == nil {
+			t.Fatalf("invalid copy destination accepted: %s", bad)
+		}
+	}
+	if err := store.CopyPackageObject(context.Background(), from, to, ""); err == nil {
+		t.Fatal("copy without conditional source")
+	}
+	if requests != 1 {
+		t.Fatalf("invalid requests reached provider: %d", requests)
+	}
+}
+
+func TestPackageControlInventoryOnlyUsesServerFinalPath(t *testing.T) {
+	requests := 0
+	data := []byte(`{"schemaVersion":1}`)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.Method != "PUT" || r.URL.Path != "/recordings-test/recordings/packages/package-a/final/attempt-a/package.json" || r.ContentLength != int64(len(data)) || r.Header.Get("Content-Type") != "application/json" {
+			t.Errorf("invalid control PUT: %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("ETag", `"etag"`)
+		w.WriteHeader(200)
+	}))
+	defer server.Close()
+	store := &Store{bucket: "recordings-test", client: s3.New(s3.Options{BaseEndpoint: aws.String(server.URL), Region: "auto", UsePathStyle: true, Credentials: credentials.NewStaticCredentialsProvider("key", "secret", ""), HTTPClient: server.Client(), RetryMaxAttempts: 1})}
+	if err := store.PutPackageInventory(context.Background(), "recordings/packages/package-a/final/attempt-a/package.json", data); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutPackageInventory(context.Background(), "recordings/packages/package-a/staging/package.json", data); err == nil {
+		t.Fatal("staging inventory PUT accepted")
+	}
+	if err := store.PutPackageInventory(context.Background(), "recordings/packages/package-a/final/attempt-a/package.json", []byte("invalid")); err == nil {
+		t.Fatal("invalid control JSON accepted")
+	}
+	if requests != 1 {
+		t.Fatal("invalid control PUT reached provider")
 	}
 }

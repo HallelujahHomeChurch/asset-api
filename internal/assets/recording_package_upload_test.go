@@ -72,6 +72,38 @@ func newPackageTest(t *testing.T) (*RecordingPackageService, *packageRepo, *pack
 		CreateRecordingPackageInput{ActorID: "admin-a", RecordingID: "recording-a", IdempotencyKey: "operation-a", Inventory: inv}
 }
 
+func TestReadyPackageAccessStopsAtMediaExpiryBeforeCleanup(t *testing.T) {
+	ctx := context.Background()
+	svc, repo, _, now, input := newPackageTest(t)
+	p, err := svc.Create(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.GetReady(ctx, p.ID, p.RecordingID); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("unvalidated package exposed: %v", err)
+	}
+	ready, expiry := *now, now.Add(30*24*time.Hour)
+	p.State = "ready"
+	p.ReadyAt = &ready
+	p.MediaExpiresAt = &expiry
+	p.FinalPrefix = "recordings/packages/" + p.ID + "/final/attempt-a/"
+	repo.packages[p.ID] = p
+	if _, err := svc.GetReady(ctx, p.ID, "another-recording"); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("cross-recording: %v", err)
+	}
+	if _, err := svc.GetReady(ctx, p.ID, p.RecordingID); err != nil {
+		t.Fatal(err)
+	}
+	*now = expiry
+	if _, err := svc.GetReady(ctx, p.ID, p.RecordingID); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("expired access: %v", err)
+	}
+	page, err := svc.Status(ctx, p.ID, input.ActorID, "", 100)
+	if err != nil || page.State != "expired" || page.MediaExpiresAt == nil {
+		t.Fatalf("expiry projection: %+v %v", page, err)
+	}
+}
+
 func TestRecordingPackageUploadOwnershipReplayAndFreeze(t *testing.T) {
 	ctx := context.Background()
 	svc, _, objects, now, input := newPackageTest(t)

@@ -22,6 +22,7 @@ type Config struct {
 	R2Bucket             string
 	R2AccessKeyID        string
 	R2SecretAccessKey    string
+	RecordingHLSEnabled  bool
 	MediaPrivateKeyPEM   string
 	MediaKeyID           string
 	MediaIssuer          string
@@ -123,6 +124,14 @@ func Load() (Config, error) {
 	if r2Configured == len(r2Values) && (cfg.MediaPrivateKeyPEM == "" || cfg.MediaKeyID == "" || cfg.MediaIssuer == "") {
 		return Config{}, fmt.Errorf("R2 media signing configuration is incomplete")
 	}
+	var err error
+	cfg.RecordingHLSEnabled, err = RecordingHLSFlag()
+	if err != nil {
+		return Config{}, err
+	}
+	if cfg.RecordingHLSEnabled && r2Configured != len(r2Values) {
+		return Config{}, fmt.Errorf("R2 recording configuration is required when HLS is enabled")
+	}
 	if cfg.AllowedCallers[cfg.ReaderCallerAppID] {
 		return Config{}, fmt.Errorf("ASSET_READER_CALLER_APP_ID must not be in ASSET_ALLOWED_CALLERS")
 	}
@@ -209,6 +218,14 @@ func Load() (Config, error) {
 		cfg.ShutdownTimeout = time.Duration(seconds) * time.Second
 	}
 	return cfg, nil
+}
+
+func RecordingHLSFlag() (bool, error) {
+	enabled, err := strconv.ParseBool(value("ASSET_RECORDING_HLS_ENABLED", "false"))
+	if err != nil {
+		return false, fmt.Errorf("invalid ASSET_RECORDING_HLS_ENABLED")
+	}
+	return enabled, nil
 }
 
 func positiveInt(key string, destination *int) error {

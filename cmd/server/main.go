@@ -94,6 +94,9 @@ func run() error {
 		}
 		recordings := postgres.NewRecordingUploadStore(db)
 		handler.WithRecordingUpload(assets.NewRecordingUploadService(recordings, objects, time.Now)).WithRecordingGrants(recordings, signer)
+		if cfg.RecordingHLSEnabled {
+			handler.WithRecordingPackages(assets.NewRecordingPackageService(postgres.NewRecordingPackageStore(db), objects, time.Now))
+		}
 	}
 	server := &http.Server{Addr: ":" + cfg.Port, Handler: handler.Routes(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 2 * time.Minute, IdleTimeout: 2 * time.Minute}
 

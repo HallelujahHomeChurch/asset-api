@@ -2,7 +2,12 @@ package httpapi
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -11,6 +16,45 @@ import (
 	"hhc/asset-api/internal/assets"
 	"hhc/asset-api/internal/storage/r2"
 )
+
+func TestRecordingPackageGrantChecksReadyOwnershipAndExpiry(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := assets.NewRecordingSigner(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), "test-key", "hhc-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	ready, expiry := now.Add(-time.Hour), now.Add(time.Hour)
+	repo := &httpPackageRepo{p: assets.RecordingPackage{ID: "package-a", OwnerService: "hhc-web-api", RecordingID: "recording-a", State: "ready", ReadyAt: &ready, MediaExpiresAt: &expiry, FinalPrefix: "recordings/packages/package-a/final/attempt-a/"}}
+	svc := assets.NewRecordingPackageService(repo, httpPackageObjects{}, time.Now)
+	handler := New(nil, nil, map[string]bool{"hhc-web-api": true, "account-api": true}, true, "", WorkloadAuthConfig{}, nil).WithRecordingPackages(svc).WithRecordingGrants(nil, signer).Routes()
+	for _, tc := range []struct {
+		caller, recording, state string
+		expires                  time.Time
+		want                     int
+	}{{"hhc-web-api", "recording-a", "ready", expiry, 200}, {"account-api", "recording-a", "ready", expiry, 403}, {"hhc-web-api", "other", "ready", expiry, 403}, {"hhc-web-api", "recording-a", "validating", expiry, 403}, {"hhc-web-api", "recording-a", "ready", now.Add(-time.Minute), 403}} {
+		repo.p.State = tc.state
+		repo.p.MediaExpiresAt = &tc.expires
+		body, _ := json.Marshal(map[string]any{"recordingId": tc.recording, "scopeId": "scope-a", "recordingExpiresAt": expiry})
+		r := httptest.NewRequest("POST", "/priv/recording-packages/package-a/grant", strings.NewReader(string(body)))
+		r.Header.Set("X-Internal-Caller-App-Id", tc.caller)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != tc.want {
+			t.Fatalf("%s %s %s: %d", tc.caller, tc.recording, tc.state, w.Code)
+		}
+		if w.Code == 200 && (w.Header().Get("Cache-Control") != "private, no-store" || w.Header().Get("Referrer-Policy") != "no-referrer") {
+			t.Fatal("grant response can be cached or leaked via referrer")
+		}
+	}
+}
 
 type httpPackageRepo struct {
 	assets.RecordingPackageRepository
@@ -46,7 +90,7 @@ func (httpPackageObjects) PresignPackageObject(context.Context, string, int64, s
 
 func TestRecordingPackageRoutesFailClosed(t *testing.T) {
 	handler := New(nil, nil, map[string]bool{"hhc-web-api": true, "account-api": true}, true, "", WorkloadAuthConfig{}, nil).Routes()
-	for _, route := range []struct{ method, path string }{{"POST", "/priv/recording-packages"}, {"GET", "/priv/recording-packages/package-a"}, {"POST", "/priv/recording-packages/package-a/sign"}, {"POST", "/priv/recording-packages/package-a/complete"}} {
+	for _, route := range []struct{ method, path string }{{"POST", "/priv/recording-packages"}, {"GET", "/priv/recording-packages/package-a"}, {"POST", "/priv/recording-packages/package-a/sign"}, {"POST", "/priv/recording-packages/package-a/complete"}, {"POST", "/priv/recording-packages/package-a/grant"}} {
 		for _, tc := range []struct {
 			caller string
 			status int

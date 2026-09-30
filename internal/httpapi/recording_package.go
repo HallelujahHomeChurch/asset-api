@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"hhc/asset-api/internal/assets"
 )
@@ -20,6 +21,37 @@ func (h *Handler) recordingPackageAllowed(w http.ResponseWriter, r *http.Request
 		return false
 	}
 	return true
+}
+
+func (h *Handler) issueRecordingPackageGrant(w http.ResponseWriter, r *http.Request) {
+	if !h.recordingPackageAllowed(w, r) {
+		return
+	}
+	if h.recordingSigner == nil {
+		writeError(w, http.StatusServiceUnavailable, "AST_UNAVAILABLE", "recording grants are unavailable")
+		return
+	}
+	var input struct {
+		RecordingID        string    `json:"recordingId"`
+		ScopeID            string    `json:"scopeId"`
+		RecordingExpiresAt time.Time `json:"recordingExpiresAt"`
+	}
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	p, err := h.recordingPackages.GetReady(r.Context(), r.PathValue("packageID"), input.RecordingID)
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+	grant, err := h.recordingSigner.IssuePackage(p, input.ScopeID, input.RecordingExpiresAt, time.Now())
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "private, no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	writeJSON(w, http.StatusOK, grant)
 }
 
 func (h *Handler) createRecordingPackage(w http.ResponseWriter, r *http.Request) {
