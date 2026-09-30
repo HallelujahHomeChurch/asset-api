@@ -41,7 +41,7 @@ func (s *packageMemoryObjects) PutPackageInventory(_ context.Context, key string
 func packageTransferFixture() (assets.RecordingPackage, *packageMemoryObjects) {
 	inv := assets.RecordingPackageInventory{SchemaVersion: 1, PresetVersion: "hls-v1", Renditions: []assets.RecordingRendition{{Name: "720p", Width: 1280, Height: 720, FrameRate: 30, VideoBitrate: 1500000, AudioBitrate: 128000, DurationSeconds: 5, SegmentCount: 1}}}
 	content := map[string][]byte{
-		"master.m3u8":     []byte("#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-INDEPENDENT-SEGMENTS\n#EXT-X-STREAM-INF:BANDWIDTH=1628000,RESOLUTION=1280x720,CODECS=\"avc1.64001f,mp4a.40.2\"\n720p/index.m3u8\n"),
+		"master.m3u8":     []byte("#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-INDEPENDENT-SEGMENTS\n#EXT-X-STREAM-INF:BANDWIDTH=12,AVERAGE-BANDWIDTH=12,RESOLUTION=1280x720,CODECS=\"avc1.64001f,mp4a.40.2\"\n720p/index.m3u8\n"),
 		"720p/index.m3u8": []byte("#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:5\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:5.000000,\nseg-000000.m4s\n#EXT-X-ENDLIST\n"),
 		"720p/init.mp4":   []byte("init"), "720p/seg-000000.m4s": []byte("segment"),
 	}

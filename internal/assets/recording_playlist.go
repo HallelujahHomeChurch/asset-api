@@ -62,6 +62,11 @@ func ValidateRecordingPlaylists(inv RecordingPackageInventory, files map[string]
 		return err
 	}
 	var reference []float64
+	bitrates := make(map[string][2]int64, len(inv.Renditions))
+	sizes := make(map[string]int64, len(inv.Objects))
+	for _, object := range inv.Objects {
+		sizes[object.Path] = object.SizeBytes
+	}
 	for _, r := range inv.Renditions {
 		lines, err := recordingPlaylistLines(files[r.Name+"/index.m3u8"])
 		if err != nil {
@@ -71,6 +76,25 @@ func ValidateRecordingPlaylists(inv RecordingPackageInventory, files map[string]
 		if err != nil {
 			return err
 		}
+		durations := make([]float64, 0, len(boundaries))
+		segmentSizes := make([]int64, len(boundaries))
+		target := 0
+		for _, line := range lines {
+			if strings.HasPrefix(line, "#EXT-X-TARGETDURATION:") {
+				target, _ = strconv.Atoi(strings.TrimPrefix(line, "#EXT-X-TARGETDURATION:"))
+			} else if strings.HasPrefix(line, "#EXTINF:") {
+				d, _ := strconv.ParseFloat(strings.TrimSuffix(strings.TrimPrefix(line, "#EXTINF:"), ","), 64)
+				durations = append(durations, d)
+			}
+		}
+		for n := range boundaries {
+			segmentSizes[n] = sizes[fmt.Sprintf("%s/seg-%06d.m4s", r.Name, n)]
+		}
+		peak, average, err := RecordingPlaylistBitrates(segmentSizes, durations, target)
+		if err != nil {
+			return err
+		}
+		bitrates[r.Name+"/index.m3u8"] = [2]int64{peak, average}
 		if reference != nil {
 			if len(boundaries) != len(reference) {
 				return ErrInvalidUpload
@@ -84,7 +108,67 @@ func ValidateRecordingPlaylists(inv RecordingPackageInventory, files map[string]
 			reference = boundaries
 		}
 	}
+	var pending map[string]string
+	for _, line := range master {
+		if line == "" {
+			continue
+		}
+		if pending != nil {
+			actual := bitrates[line]
+			peak, _ := strconv.ParseInt(pending["BANDWIDTH"], 10, 64)
+			average, _ := strconv.ParseInt(pending["AVERAGE-BANDWIDTH"], 10, 64)
+			if peak != actual[0] || (pending["AVERAGE-BANDWIDTH"] != "" && average != actual[1]) {
+				return ErrInvalidUpload
+			}
+			pending = nil
+		} else if strings.HasPrefix(line, "#EXT-X-STREAM-INF:") {
+			pending, _ = recordingAttributes(strings.TrimPrefix(line, "#EXT-X-STREAM-INF:"))
+		}
+	}
 	return nil
+}
+
+// RecordingPlaylistBitrates implements RFC 8216 section 4.1 for HHC VOD:
+// actual media segment bytes, including mux overhead but excluding init/HTTP.
+// A short tail alone is not eligible when it falls below half target duration.
+func RecordingPlaylistBitrates(sizes []int64, durations []float64, target int) (int64, int64, error) {
+	if len(sizes) == 0 || len(sizes) != len(durations) || len(sizes) > RecordingPackageMaxObjects || target < 1 || target > 31 {
+		return 0, 0, ErrInvalidUpload
+	}
+	var totalSize int64
+	totalDuration := 0.0
+	for n, size := range sizes {
+		d := durations[n]
+		if size <= 0 || size > RecordingObjectMaxBytes || math.IsNaN(d) || math.IsInf(d, 0) || d <= 0 || d > 31 || (n < len(sizes)-1 && d < 29) {
+			return 0, 0, ErrInvalidUpload
+		}
+		totalSize += size
+		totalDuration += d
+	}
+	if totalSize > RecordingPackageMaxBytes || totalDuration > RecordingMaxDurationSeconds {
+		return 0, 0, ErrInvalidUpload
+	}
+	peak := 0.0
+	for start := range sizes {
+		var bytes int64
+		seconds := 0.0
+		// HHC non-tail segments are >=29s, so a qualifying window has at
+		// most two segments; this is bounded even for the longest recording.
+		for end := start; end < len(sizes); end++ {
+			bytes += sizes[end]
+			seconds += durations[end]
+			if seconds > 1.5*float64(target) {
+				break
+			}
+			if seconds >= 0.5*float64(target) {
+				peak = math.Max(peak, float64(bytes)*8/seconds)
+			}
+		}
+	}
+	if peak == 0 {
+		return 0, 0, ErrInvalidUpload
+	}
+	return int64(math.Ceil(peak)), int64(math.Ceil(float64(totalSize) * 8 / totalDuration)), nil
 }
 
 func recordingPlaylistLines(data []byte) ([]string, error) {

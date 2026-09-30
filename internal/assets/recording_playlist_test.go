@@ -2,6 +2,7 @@ package assets
 
 import (
 	"errors"
+	"math"
 	"strings"
 	"testing"
 )
@@ -23,7 +24,7 @@ func playlistFixture() (RecordingPackageInventory, map[string][]byte) {
 			inv.Objects = append(inv.Objects, o)
 		}
 	}
-	master := "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-INDEPENDENT-SEGMENTS\n#EXT-X-STREAM-INF:BANDWIDTH=1628000,RESOLUTION=1280x720,CODECS=\"avc1.64001f,mp4a.40.2\"\n720p/index.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=3128000,RESOLUTION=1920x1080,CODECS=\"avc1.640028,mp4a.40.2\"\n1080p/index.m3u8\n"
+	master := "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-INDEPENDENT-SEGMENTS\n#EXT-X-STREAM-INF:BANDWIDTH=46,AVERAGE-BANDWIDTH=46,RESOLUTION=1280x720,CODECS=\"avc1.64001f,mp4a.40.2\"\n720p/index.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=46,AVERAGE-BANDWIDTH=46,RESOLUTION=1920x1080,CODECS=\"avc1.640028,mp4a.40.2\"\n1080p/index.m3u8\n"
 	media := "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:30\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXT-X-INDEPENDENT-SEGMENTS\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:30.000000,\nseg-000000.m4s\n#EXTINF:5.000000,\nseg-000001.m4s\n#EXT-X-ENDLIST\n"
 	return inv, map[string][]byte{"master.m3u8": []byte(master), "720p/index.m3u8": []byte(media), "1080p/index.m3u8": []byte(media)}
 }
@@ -55,5 +56,47 @@ func TestRecordingPlaylistClosureAndAlignedBoundaries(t *testing.T) {
 				t.Fatalf("unsafe playlist accepted: %v", err)
 			}
 		})
+	}
+}
+
+func TestRecordingMasterRejectsInventedBandwidth(t *testing.T) {
+	inv, files := playlistFixture()
+	// Each rendition has two 100-byte segments lasting 30s and 5s. The
+	// eligible peak window is both segments: ceil(1600/35)=46 bit/s.
+	if err := ValidateRecordingPlaylists(inv, files); err != nil {
+		t.Fatal(err)
+	}
+	for _, replacement := range []string{"BANDWIDTH=1,AVERAGE-BANDWIDTH=46", "BANDWIDTH=46,AVERAGE-BANDWIDTH=1", "BANDWIDTH=160,AVERAGE-BANDWIDTH=46"} {
+		bad := make(map[string][]byte, len(files))
+		for k, v := range files {
+			bad[k] = v
+		}
+		bad["master.m3u8"] = []byte(strings.Replace(string(files["master.m3u8"]), "BANDWIDTH=46,AVERAGE-BANDWIDTH=46", replacement, 1))
+		if err := ValidateRecordingPlaylists(inv, bad); !errors.Is(err, ErrInvalidUpload) {
+			t.Fatalf("accepted invented throughput %s: %v", replacement, err)
+		}
+	}
+}
+
+func TestRecordingPlaylistBitratesUseActualEligibleWindows(t *testing.T) {
+	for _, tc := range []struct {
+		sizes         []int64
+		durations     []float64
+		target        int
+		peak, average int64
+	}{
+		{[]int64{100, 100}, []float64{30, 5}, 30, 46, 46},
+		{[]int64{3750000, 7500000, 625000}, []float64{30, 30, 5}, 30, 2000000, 1461539},
+		{[]int64{7}, []float64{5}, 5, 12, 12},
+	} {
+		peak, average, err := RecordingPlaylistBitrates(tc.sizes, tc.durations, tc.target)
+		if err != nil || peak != tc.peak || average != tc.average {
+			t.Fatalf("rates %d/%d %v", peak, average, err)
+		}
+	}
+	for _, durations := range [][]float64{{30, 0}, {5, 5}, {30, 32}, {30, math.NaN()}} {
+		if _, _, err := RecordingPlaylistBitrates([]int64{100, 100}, durations, 30); !errors.Is(err, ErrInvalidUpload) {
+			t.Fatalf("accepted invalid durations %v", durations)
+		}
 	}
 }

@@ -1282,6 +1282,8 @@ components:
         objects sorted by path, renditions sorted by name, and fields in the order shown below.
         Objects exclude package.json itself; total package bytes include the serialized inventory.
         Metadata and hashes are declarations, not proof of readiness. Final bytes and media are verified by the recording Job.
+        Master BANDWIDTH and optional AVERAGE-BANDWIDTH must match measured media segment bytes and EXTINF durations
+        under RFC 8216 section 4.1, not configured encoder bitrates. Ineligible short-tail windows are excluded from peak bandwidth.
       required: [schemaVersion, presetVersion, objects, renditions, inventoryDigest]
       properties:
         schemaVersion: { type: integer, const: 1 }
