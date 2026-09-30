@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,7 +27,7 @@ func TestAbortAlreadyMissingMultipartUploadIsSuccess(t *testing.T) {
 	store := &Store{bucket: "recordings-test", client: s3.New(s3.Options{
 		BaseEndpoint: aws.String(server.URL), Region: "auto", UsePathStyle: true,
 		Credentials: credentials.NewStaticCredentialsProvider("key", "secret", ""),
-		HTTPClient: server.Client(), RetryMaxAttempts: 1,
+		HTTPClient:  server.Client(), RetryMaxAttempts: 1,
 	})}
 	if err := store.Abort(context.Background(), "recordings/version.mp4", "upload-1"); err != nil {
 		t.Fatalf("missing multipart upload must count as aborted: %v", err)
@@ -97,5 +98,40 @@ func TestPresignProbeReadOnlyTargetsOneImmutableRecording(t *testing.T) {
 	}
 	if _, err := store.PresignProbeRead(context.Background(), "../other", time.Minute); err == nil {
 		t.Fatal("non-recording key must fail")
+	}
+}
+
+func TestPresignPackageOnlyWritesOneSizedStagingObject(t *testing.T) {
+	store, err := New("account-id", "recordings-test", "test-key", "test-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := "recordings/packages/package-a/staging/720p/seg-000001.m4s"
+	signed, err := store.PresignPackageObject(context.Background(), key, 123, "video/mp4", 15*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, _ := url.Parse(signed.URL)
+	if signed.Method != "PUT" || u.Path != "/recordings-test/"+key || u.Query().Get("X-Amz-Expires") != "900" {
+		t.Fatalf("wrong scope: %s", u.Redacted())
+	}
+	if http.Header(signed.Headers).Get("Content-Length") != "123" {
+		t.Fatalf("missing fixed length: %v", signed.Headers)
+	}
+	if !strings.Contains(u.Query().Get("X-Amz-SignedHeaders"), "content-length") || !strings.Contains(u.Query().Get("X-Amz-SignedHeaders"), "content-type") {
+		t.Fatal("size and content type must participate in the signature")
+	}
+	for _, bad := range []string{"recordings/packages/package-a/final/720p/init.mp4", "recordings/packages/package-a/staging/../secret", "recordings/packages/package-a/staging/package.json", "recordings/packages/package-a/staging/720p/init.mp4?x=1", "recordings/packages/package-a/staging/720p/%2e%2e"} {
+		if _, err := store.PresignPackageObject(context.Background(), bad, 123, "video/mp4", time.Minute); err == nil {
+			t.Fatalf("signed forbidden key: %q", bad)
+		}
+	}
+	for _, size := range []int64{0, 128<<20 + 1} {
+		if _, err := store.PresignPackageObject(context.Background(), key, size, "video/mp4", time.Minute); err == nil {
+			t.Fatalf("signed invalid size: %d", size)
+		}
+	}
+	if _, err := store.PresignPackageObject(context.Background(), key, 123, "video/mp4", 16*time.Minute); err == nil {
+		t.Fatal("signed overlong URL")
 	}
 }

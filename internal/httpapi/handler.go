@@ -32,6 +32,7 @@ type Handler struct {
 	localUpload          http.HandlerFunc
 	audit                *auditoutbox.Store
 	recordingUpload      *assets.RecordingUploadService
+	recordingPackages    *assets.RecordingPackageService
 	recordingAssets      interface {
 		GetByVersion(context.Context, string) (assets.RecordingUploadSession, error)
 	}
@@ -59,6 +60,10 @@ func New(service *assets.Service, db *sql.DB, allowedCallers map[string]bool, al
 func (h *Handler) WithAudit(store *auditoutbox.Store) *Handler { h.audit = store; return h }
 func (h *Handler) WithRecordingUpload(service *assets.RecordingUploadService) *Handler {
 	h.recordingUpload = service
+	return h
+}
+func (h *Handler) WithRecordingPackages(service *assets.RecordingPackageService) *Handler {
+	h.recordingPackages = service
 	return h
 }
 func (h *Handler) WithRecordingGrants(repository interface {
@@ -122,6 +127,10 @@ func (h *Handler) Routes() http.Handler {
 	mux.Handle("GET /api/assets/content", h.collectionTicket(http.HandlerFunc(h.ticketContent)))
 	mux.Handle("POST /priv/assets/upload-sessions", h.internal(http.HandlerFunc(h.createUpload)))
 	mux.Handle("POST /priv/recording-uploads", h.internal(http.HandlerFunc(h.createRecordingUpload)))
+	mux.Handle("POST /priv/recording-packages", h.internal(http.HandlerFunc(h.createRecordingPackage)))
+	mux.Handle("GET /priv/recording-packages/{packageID}", h.internal(http.HandlerFunc(h.getRecordingPackage)))
+	mux.Handle("POST /priv/recording-packages/{packageID}/sign", h.internal(http.HandlerFunc(h.signRecordingPackage)))
+	mux.Handle("POST /priv/recording-packages/{packageID}/complete", h.internal(http.HandlerFunc(h.completeRecordingPackage)))
 	mux.Handle("GET /priv/recording-uploads/{sessionID}", h.internal(http.HandlerFunc(h.getRecordingUpload)))
 	mux.Handle("GET /priv/recording-uploads/{sessionID}/parts", h.internal(http.HandlerFunc(h.listRecordingParts)))
 	mux.Handle("POST /priv/recording-uploads/{sessionID}/parts/{partNumber}", h.internal(http.HandlerFunc(h.signRecordingPart)))
@@ -1162,7 +1171,10 @@ func matchesIfRange(value string, metadata assets.PublicDownloadMetadata) bool {
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, destination any) bool {
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	return decodeJSONLimit(w, r, destination, 1<<20)
+}
+func decodeJSONLimit(w http.ResponseWriter, r *http.Request, destination any, limit int64) bool {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(destination); err != nil {
 		writeError(w, http.StatusBadRequest, "AST_INVALID_REQUEST", "invalid request body")
@@ -1176,6 +1188,12 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, destination any) bool {
 }
 func handleError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, assets.ErrRecordingSourceTooLarge):
+		writeError(w, http.StatusRequestEntityTooLarge, "source_too_large", "recording source exceeds 50GB")
+	case errors.Is(err, assets.ErrRecordingPackageTooLarge):
+		writeError(w, http.StatusRequestEntityTooLarge, "package_too_large", "recording package exceeds 10GB")
+	case errors.Is(err, assets.ErrRecordingPackageEstimateTooLarge):
+		writeError(w, http.StatusUnprocessableEntity, "package_size_estimate_exceeded", "estimated recording package exceeds 10GB")
 	case errors.Is(err, assets.ErrInvalidInput), errors.Is(err, assets.ErrInvalidUpload):
 		writeError(w, http.StatusBadRequest, "AST_INVALID_REQUEST", err.Error())
 	case errors.Is(err, assets.ErrForbidden):

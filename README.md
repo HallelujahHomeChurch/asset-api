@@ -44,6 +44,16 @@ custom caller fallback is accepted only when the development setting is enabled.
 The dedicated `hhc-web-bulletin-worker` is delegated to its owning `hhc-web-api`
 service for these private asset operations.
 
+## HLS package producer contract
+
+`/priv/recording-packages` provides create, paginated status, batched single-object
+PUT signing and durable completion handlers. These routes currently fail closed
+with 503 in the server: the package service is not wired until the immutable-copy
+and media-validation worker is complete. Completion means `freezing`, not ready.
+The additive package table and OpenAPI do not change existing recording uploads
+or the ordinary Blob scan lifecycle. Package cleanup and ready retention are
+remaining implementation work, not enabled policies.
+
 ## Scan lifecycle
 
 After upload completion, the runtime dispatches a durable queue message. The

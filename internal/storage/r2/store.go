@@ -20,6 +20,7 @@ const maxParts = 597
 var ErrNotFound = errors.New("R2 object not found")
 
 var namePattern = regexp.MustCompile(`^[a-z0-9-]+$`)
+var packageStagingKey = regexp.MustCompile(`^recordings/packages/[a-zA-Z0-9-]{1,80}/staging/(master\.m3u8|(720p|1080p)/(index\.m3u8|init\.mp4|seg-[0-9]{6}\.m4s))$`)
 
 type Store struct {
 	bucket  string
@@ -57,6 +58,21 @@ func New(accountID, bucket, accessKey, secretKey string) (*Store, error) {
 
 func validKey(key string) bool {
 	return strings.HasPrefix(key, "recordings/") && !strings.Contains(key, "..") && !strings.ContainsAny(key, "?#\\")
+}
+
+// No final key can receive a client PUT capability. Hash validation is done
+// against the immutable copy by the worker, not trusted from upload metadata.
+func (s *Store) PresignPackageObject(ctx context.Context, key string, size int64, contentType string, ttl time.Duration) (PresignedPart, error) {
+	if !packageStagingKey.MatchString(key) || size <= 0 || size > 128<<20 || ttl <= 0 || ttl > 15*time.Minute || (contentType != "video/mp4" && contentType != "application/vnd.apple.mpegurl") {
+		return PresignedPart{}, errors.New("invalid recording package object")
+	}
+	result, err := s.presign.PresignPutObject(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(s.bucket), Key: aws.String(key), ContentLength: aws.Int64(size), ContentType: aws.String(contentType),
+	}, s3.WithPresignExpires(ttl))
+	if err != nil {
+		return PresignedPart{}, fmt.Errorf("presign R2 package object: %w", err)
+	}
+	return PresignedPart{URL: result.URL, Method: result.Method, Headers: result.SignedHeader}, nil
 }
 
 func (s *Store) Create(ctx context.Context, key string) (string, error) {
