@@ -103,6 +103,21 @@ func (h *Handler) getRecordingPackage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, page)
 }
 
+// CMS checks its own publication/viewer policy. This bounded private projection
+// verifies the recording relationship without impersonating the uploader.
+func (h *Handler) getReadyRecordingPackage(w http.ResponseWriter, r *http.Request) {
+	if !h.recordingPackageAllowed(w, r) {
+		return
+	}
+	p, err := h.recordingPackages.GetReady(r.Context(), r.PathValue("packageID"), r.URL.Query().Get("recordingId"))
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "private, no-store")
+	writeJSON(w, http.StatusOK, assets.RecordingPackageStatus{PackageID: p.ID, SessionID: p.SessionID, RecordingID: p.RecordingID, State: p.State, SizeBytes: p.SizeBytes, ExpiresAt: p.ExpiresAt, ReadyAt: p.ReadyAt, MediaExpiresAt: p.MediaExpiresAt, Renditions: p.Inventory.Renditions, ConfirmedObjects: []string{}})
+}
+
 func (h *Handler) signRecordingPackage(w http.ResponseWriter, r *http.Request) {
 	if !h.recordingPackageAllowed(w, r) {
 		return

@@ -945,6 +945,23 @@ paths:
         '403': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
+  /priv/recording-packages/{packageID}/ready:
+    parameters: [ { $ref: '#/components/parameters/RecordingPackageID' } ]
+    get:
+      operationId: getReadyRecordingPackage
+      summary: Read the recording-bound ready package projection for its owning CMS.
+      description: Owner-only and gated with HLS. Does not require uploader identity or expose inventory/storage paths. CMS must independently authorize its viewer or publication operation. Failed, incomplete, expired and mismatched packages are denied.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      parameters:
+        - { name: recordingId, in: query, required: true, schema: { type: string, pattern: '^[a-zA-Z0-9-]{1,80}$' } }
+      responses:
+        '200': { description: Bounded ready projection., content: { application/json: { schema: { $ref: '#/components/schemas/RecordingPackageStatus' } } } }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
   /priv/recording-packages/{packageID}/sign:
     parameters: [ { $ref: '#/components/parameters/RecordingPackageID' }, { $ref: '#/components/parameters/RecordingActorID' } ]
     post:

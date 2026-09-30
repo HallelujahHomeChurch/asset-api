@@ -17,6 +17,33 @@ import (
 	"hhc/asset-api/internal/storage/r2"
 )
 
+func TestReadyPackageProjectionIsOwnerAndRecordingBoundNotUploaderBound(t *testing.T) {
+	now := time.Now().UTC()
+	ready, expiry := now.Add(-time.Hour), now.Add(719*time.Hour)
+	repo := &httpPackageRepo{p: assets.RecordingPackage{ID: "package-a", OwnerService: "hhc-web-api", ActorID: "uploader-only", RecordingID: "recording-a", State: "ready", ReadyAt: &ready, MediaExpiresAt: &expiry, FinalPrefix: "recordings/packages/package-a/final/attempt-a/"}}
+	svc := assets.NewRecordingPackageService(repo, httpPackageObjects{}, time.Now)
+	handler := New(nil, nil, map[string]bool{"hhc-web-api": true, "account-api": true}, true, "", WorkloadAuthConfig{}, nil).WithRecordingPackages(svc).Routes()
+	for _, tc := range []struct {
+		caller, recording, state string
+		want                     int
+	}{
+		{"hhc-web-api", "recording-a", "ready", 200}, {"account-api", "recording-a", "ready", 403},
+		{"hhc-web-api", "other", "ready", 403}, {"hhc-web-api", "recording-a", "freezing", 403},
+	} {
+		repo.p.State = tc.state
+		r := httptest.NewRequest("GET", "/priv/recording-packages/package-a/ready?recordingId="+tc.recording, nil)
+		r.Header.Set("X-Internal-Caller-App-Id", tc.caller)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != tc.want {
+			t.Fatalf("%+v: %d %s", tc, w.Code, w.Body.String())
+		}
+		if w.Code == 200 && (strings.Contains(w.Body.String(), "uploader-only") || strings.Contains(w.Body.String(), "final/") || strings.Contains(w.Body.String(), "inventory")) {
+			t.Fatal("private upload/storage details exposed")
+		}
+	}
+}
+
 func TestRecordingPackageGrantChecksReadyOwnershipAndExpiry(t *testing.T) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -90,7 +117,7 @@ func (httpPackageObjects) PresignPackageObject(context.Context, string, int64, s
 
 func TestRecordingPackageRoutesFailClosed(t *testing.T) {
 	handler := New(nil, nil, map[string]bool{"hhc-web-api": true, "account-api": true}, true, "", WorkloadAuthConfig{}, nil).Routes()
-	for _, route := range []struct{ method, path string }{{"POST", "/priv/recording-packages"}, {"GET", "/priv/recording-packages/package-a"}, {"POST", "/priv/recording-packages/package-a/sign"}, {"POST", "/priv/recording-packages/package-a/complete"}, {"POST", "/priv/recording-packages/package-a/grant"}} {
+	for _, route := range []struct{ method, path string }{{"POST", "/priv/recording-packages"}, {"GET", "/priv/recording-packages/package-a"}, {"GET", "/priv/recording-packages/package-a/ready"}, {"POST", "/priv/recording-packages/package-a/sign"}, {"POST", "/priv/recording-packages/package-a/complete"}, {"POST", "/priv/recording-packages/package-a/grant"}} {
 		for _, tc := range []struct {
 			caller string
 			status int
