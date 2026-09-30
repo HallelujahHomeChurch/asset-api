@@ -24,6 +24,8 @@ type Claims = {
   nbf?: number;
   recordingId: string;
   assetVersionId: string;
+  packageId?: string;
+  prefix?: string;
   scopeId: string;
   objectKey?: string;
   playback?: string;
@@ -31,6 +33,8 @@ type Claims = {
 
 const cookieName = 'hhc_media';
 const route = /^\/videos\/([a-zA-Z0-9-]{1,80})\/files\/([a-zA-Z0-9-]{1,80})\/sessions\/([a-zA-Z0-9-]{1,80})\/(cookie|content)$/;
+const packageRoute = /^\/videos\/([a-zA-Z0-9-]{1,80})\/packages\/([a-f0-9]{32})\/sessions\/([a-zA-Z0-9-]{1,80})\/(cookie|master\.m3u8|(?:720p|1080p)\/(?:index\.m3u8|init\.mp4|seg-\d{6}\.m4s))$/;
+const finalPrefix = /^recordings\/packages\/([a-f0-9]{32})\/final\/[a-zA-Z0-9-]{1,80}\/$/;
 const encoder = new TextEncoder();
 
 function failure(status: number): Response {
@@ -44,7 +48,7 @@ function decode64(value: string): Uint8Array<ArrayBuffer> {
 }
 
 async function verify(token: string, type: Claims['typ'], env: Env, now: number): Promise<Claims | null> {
-  if (token.length > 3072) return null;
+  if (token.length > (type === 'exchange' ? 8192 : 3072)) return null;
   try {
     const parts = token.split('.');
     if (parts.length !== 3) return null;
@@ -64,8 +68,16 @@ async function verify(token: string, type: Claims['typ'], env: Env, now: number)
   }
 }
 
-function scoped(claims: Claims, ids: string[]): boolean {
-  return claims.recordingId === ids[0] && claims.assetVersionId === ids[1] && claims.scopeId === ids[2];
+function scoped(claims: Claims, ids: string[], isPackage: boolean): boolean {
+  return claims.recordingId === ids[0] && claims.scopeId === ids[2] && (isPackage
+    ? claims.packageId === ids[1] && claims.assetVersionId === undefined
+    : claims.assetVersionId === ids[1] && claims.packageId === undefined);
+}
+
+function validResource(claims: Claims, isPackage: boolean): boolean {
+  return isPackage
+    ? typeof claims.prefix === 'string' && finalPrefix.exec(claims.prefix)?.[1] === claims.packageId && claims.objectKey === undefined
+    : !!claims.objectKey?.startsWith('recordings/') && !claims.objectKey.includes('..') && claims.prefix === undefined;
 }
 
 function withCors(response: Response, origin: string): Response {
@@ -106,13 +118,18 @@ function parseRange(value: string | null, size: number): { offset?: number; leng
   return { offset: start, length: Math.min(end ?? size - 1, size - 1) - start + 1 };
 }
 
-async function handle(request: Request, env: Env): Promise<Response> {
+type ExecutionContext = { waitUntil(promise: Promise<unknown>): void };
+
+async function handle(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
   if (env.DENY_ALL === 'true') return failure(503);
   const url = new URL(request.url);
-  const match = route.exec(url.pathname);
+  const packageMatch = packageRoute.exec(url.pathname);
+  const isPackage = !!packageMatch;
+  const match = packageMatch ?? route.exec(url.pathname);
   if (!match) return failure(404);
+  if (isPackage && url.search) return failure(404);
   const ids = match.slice(1, 4);
-  const path = url.pathname.slice(0, url.pathname.lastIndexOf('/') + 1);
+  const path = url.pathname.slice(0, -match[4].length);
   const origin = request.headers.get('Origin');
   const allowed = env.ALLOWED_ORIGINS.split(',').map(value => value.trim()).includes(origin ?? '');
   if (origin && !allowed) return failure(403);
@@ -139,9 +156,9 @@ async function handle(request: Request, env: Env): Promise<Response> {
     if (typeof credential !== 'string') return failure(400);
     const now = Math.floor(Date.now() / 1000);
     const exchange = await verify(credential, 'exchange', env, now);
-    if (!exchange || !scoped(exchange, ids) || typeof exchange.playback !== 'string') return failure(401);
+    if (!exchange || !scoped(exchange, ids, isPackage) || typeof exchange.playback !== 'string') return failure(401);
     const playback = await verify(exchange.playback, 'playback', env, now);
-    if (!playback || !scoped(playback, ids) || !playback.objectKey?.startsWith('recordings/') || playback.exp < exchange.exp || exchange.playback.length > 3072) return failure(401);
+    if (!playback || !scoped(playback, ids, isPackage) || !validResource(playback, isPackage) || playback.exp < exchange.exp || exchange.playback.length > 3072) return failure(401);
     const response = withCors(failure(204), origin!);
     response.headers.set('Set-Cookie', `${cookieName}=${exchange.playback}; Path=${path}; Max-Age=${playback.exp - now}; Secure; HttpOnly; SameSite=Strict`);
     return response;
@@ -149,10 +166,28 @@ async function handle(request: Request, env: Env): Promise<Response> {
   if (request.method !== 'GET' && request.method !== 'HEAD') return failure(405);
   const cookie = request.headers.get('Cookie')?.split(';').map(value => value.trim()).find(value => value.startsWith(`${cookieName}=`))?.slice(cookieName.length + 1);
   const playback = cookie && await verify(cookie, 'playback', env, Math.floor(Date.now() / 1000));
-  if (!playback || !scoped(playback, ids) || !playback.objectKey?.startsWith('recordings/')) return failure(401);
-  const object = await env.MEDIA_BUCKET.head(playback.objectKey);
+  if (!playback || !scoped(playback, ids, isPackage) || !validResource(playback, isPackage)) return failure(401);
+  const objectKey = isPackage ? playback.prefix! + match[4] : playback.objectKey!;
+  const cache = isPackage ? (globalThis.caches as CacheStorage & { default?: Cache } | undefined)?.default : undefined;
+  const cacheKey = new Request(`${url.origin}/__hhc_media_cache/${objectKey}`);
+  if (cache && !request.headers.has('If-Range')) {
+    const headers = new Headers();
+    for (const name of ['Range', 'If-None-Match']) {
+      const value = request.headers.get(name);
+      if (value) headers.set(name, value);
+    }
+    const cached = await cache.match(new Request(cacheKey, { headers })).catch(() => undefined);
+    if (cached) {
+      const response = new Response(request.method === 'HEAD' ? null : cached.body, cached);
+      response.headers.set('Cache-Control', 'private, no-store');
+      return origin ? withCors(response, origin) : response;
+    }
+  }
+  const object = await env.MEDIA_BUCKET.head(objectKey);
   if (!object) return failure(404);
-  const headers = new Headers({ 'Cache-Control': 'private, no-store', 'Content-Type': 'video/mp4', 'Accept-Ranges': 'bytes', ETag: object.httpEtag });
+  if (isPackage && (!Number.isSafeInteger(object.size) || object.size <= 0 || object.size > (match[4].endsWith('.m3u8') ? 1 << 20 : 128 << 20))) return failure(503);
+  const mime = match[4].endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : match[4].endsWith('.m4s') ? 'video/iso.segment' : 'video/mp4';
+  const headers = new Headers({ 'Cache-Control': 'private, no-store', 'Content-Type': mime, 'X-Content-Type-Options': 'nosniff', 'Accept-Ranges': 'bytes', ETag: object.httpEtag });
   if (request.headers.get('If-None-Match') === object.httpEtag) {
     const response = new Response(null, { status: 304, headers });
     return origin ? withCors(response, origin) : response;
@@ -170,10 +205,17 @@ async function handle(request: Request, env: Env): Promise<Response> {
     const response = new Response(null, { status: range ? 206 : 200, headers });
     return origin ? withCors(response, origin) : response;
   }
-  const data = await env.MEDIA_BUCKET.get(playback.objectKey, range ? { range } : undefined);
+  const data = await env.MEDIA_BUCKET.get(objectKey, range ? { range } : undefined);
   if (!data?.body) return failure(503);
   const response = new Response(data.body, { status: range ? 206 : 200, headers });
+  if (cache && ctx && !range) {
+    const internal = response.clone();
+    internal.headers.set('Cache-Control', 'public, max-age=86400');
+    ctx.waitUntil(cache.put(cacheKey, internal).catch(() => undefined));
+  }
   return origin ? withCors(response, origin) : response;
 }
 
-export default { fetch: handle };
+export default { fetch: async (request: Request, env: Env, ctx?: ExecutionContext) => {
+  try { return await handle(request, env, ctx); } catch { return failure(503); }
+} };

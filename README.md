@@ -56,8 +56,10 @@ it does not re-encode CLI packages. Ready retention is thirty days, with a one-h
 existing-grant cleanup grace. Staging and failed attempt deletion are retried and
 reconciled daily to sweep late writes; provider acceptance remains required.
 The additive package table and OpenAPI do not change existing recording uploads
-or the ordinary Blob scan lifecycle. Browser source ingest/encode and HLS playback
-grants are subsequent work; enabling this producer is not end-to-end readiness.
+or the ordinary Blob scan lifecycle. The Pages function accepts package-scoped
+HLS grants and authorizes every playlist/init/segment, including internal cache
+hits. Browser source ingest/encode and CMS/player integration remain subsequent
+work; enabling this producer is not end-to-end readiness.
 
 ## Scan lifecycle
 
