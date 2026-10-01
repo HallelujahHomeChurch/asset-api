@@ -61,6 +61,16 @@ HLS grants and authorizes every playlist/init/segment, including internal cache
 hits. Browser source ingest/encode and CMS/player integration remain subsequent
 work; enabling this producer is not end-to-end readiness.
 
+Browser source storage primitives use separate `recording-sources/{id}/staging`
+Blob keys: 16 MiB blocks, up to 2,981 blocks for the independent 50 GB source
+budget, exact block IDs/tail sizes and write-only blob-scoped user-delegation
+SAS capped at fifteen minutes. Commit checks the returned ETag and size, without
+reading/copying/hashing the whole source in the API request. These primitives
+are not yet exposed as source-ingest routes or wired into the processing Job.
+They do not create normal asset records or invoke the existing malware scanner.
+A write SAS can still overwrite its staging blob; immutable ETag-fenced
+finalization and server-side SHA-256 validation remain required before encode.
+
 ## Scan lifecycle
 
 After upload completion, the runtime dispatches a durable queue message. The
