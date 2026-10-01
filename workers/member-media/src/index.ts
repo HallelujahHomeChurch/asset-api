@@ -23,16 +23,15 @@ type Claims = {
   exp: number;
   nbf?: number;
   recordingId: string;
-  assetVersionId: string;
+  assetVersionId?: never;
   packageId?: string;
   prefix?: string;
   scopeId: string;
-  objectKey?: string;
+  objectKey?: never;
   playback?: string;
 };
 
 const cookieName = 'hhc_media';
-const route = /^\/videos\/([a-zA-Z0-9-]{1,80})\/files\/([a-zA-Z0-9-]{1,80})\/sessions\/([a-zA-Z0-9-]{1,80})\/(cookie|content)$/;
 const packageRoute = /^\/videos\/([a-zA-Z0-9-]{1,80})\/packages\/([a-f0-9]{32})\/sessions\/([a-zA-Z0-9-]{1,80})\/(cookie|master\.m3u8|(?:720p|1080p)\/(?:index\.m3u8|init\.mp4|seg-\d{6}\.m4s))$/;
 const finalPrefix = /^recordings\/packages\/([a-f0-9]{32})\/final\/[a-zA-Z0-9-]{1,80}\/$/;
 const encoder = new TextEncoder();
@@ -68,16 +67,12 @@ async function verify(token: string, type: Claims['typ'], env: Env, now: number)
   }
 }
 
-function scoped(claims: Claims, ids: string[], isPackage: boolean): boolean {
-  return claims.recordingId === ids[0] && claims.scopeId === ids[2] && (isPackage
-    ? claims.packageId === ids[1] && claims.assetVersionId === undefined
-    : claims.assetVersionId === ids[1] && claims.packageId === undefined);
+function scoped(claims: Claims, ids: string[]): boolean {
+  return claims.recordingId === ids[0] && claims.scopeId === ids[2] && claims.packageId === ids[1] && claims.assetVersionId === undefined;
 }
 
-function validResource(claims: Claims, isPackage: boolean): boolean {
-  return isPackage
-    ? typeof claims.prefix === 'string' && finalPrefix.exec(claims.prefix)?.[1] === claims.packageId && claims.objectKey === undefined
-    : !!claims.objectKey?.startsWith('recordings/') && !claims.objectKey.includes('..') && claims.prefix === undefined;
+function validResource(claims: Claims): boolean {
+  return typeof claims.prefix === 'string' && finalPrefix.exec(claims.prefix)?.[1] === claims.packageId && claims.objectKey === undefined;
 }
 
 function withCors(response: Response, origin: string): Response {
@@ -123,11 +118,9 @@ type ExecutionContext = { waitUntil(promise: Promise<unknown>): void };
 async function handle(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
   if (env.DENY_ALL === 'true') return failure(503);
   const url = new URL(request.url);
-  const packageMatch = packageRoute.exec(url.pathname);
-  const isPackage = !!packageMatch;
-  const match = packageMatch ?? route.exec(url.pathname);
+  const match = packageRoute.exec(url.pathname);
   if (!match) return failure(404);
-  if (isPackage && url.search) return failure(404);
+  if (url.search) return failure(404);
   const ids = match.slice(1, 4);
   const path = url.pathname.slice(0, -match[4].length);
   const origin = request.headers.get('Origin');
@@ -156,9 +149,9 @@ async function handle(request: Request, env: Env, ctx?: ExecutionContext): Promi
     if (typeof credential !== 'string') return failure(400);
     const now = Math.floor(Date.now() / 1000);
     const exchange = await verify(credential, 'exchange', env, now);
-    if (!exchange || !scoped(exchange, ids, isPackage) || typeof exchange.playback !== 'string') return failure(401);
+    if (!exchange || !scoped(exchange, ids) || typeof exchange.playback !== 'string') return failure(401);
     const playback = await verify(exchange.playback, 'playback', env, now);
-    if (!playback || !scoped(playback, ids, isPackage) || !validResource(playback, isPackage) || playback.exp < exchange.exp || exchange.playback.length > 3072) return failure(401);
+    if (!playback || !scoped(playback, ids) || !validResource(playback) || playback.exp < exchange.exp || exchange.playback.length > 3072) return failure(401);
     const response = withCors(failure(204), origin!);
     response.headers.set('Set-Cookie', `${cookieName}=${exchange.playback}; Path=${path}; Max-Age=${playback.exp - now}; Secure; HttpOnly; SameSite=Strict`);
     return response;
@@ -166,9 +159,9 @@ async function handle(request: Request, env: Env, ctx?: ExecutionContext): Promi
   if (request.method !== 'GET' && request.method !== 'HEAD') return failure(405);
   const cookie = request.headers.get('Cookie')?.split(';').map(value => value.trim()).find(value => value.startsWith(`${cookieName}=`))?.slice(cookieName.length + 1);
   const playback = cookie && await verify(cookie, 'playback', env, Math.floor(Date.now() / 1000));
-  if (!playback || !scoped(playback, ids, isPackage) || !validResource(playback, isPackage)) return failure(401);
-  const objectKey = isPackage ? playback.prefix! + match[4] : playback.objectKey!;
-  const cache = isPackage ? (globalThis.caches as CacheStorage & { default?: Cache } | undefined)?.default : undefined;
+  if (!playback || !scoped(playback, ids) || !validResource(playback)) return failure(401);
+  const objectKey = playback.prefix! + match[4];
+  const cache = (globalThis.caches as CacheStorage & { default?: Cache } | undefined)?.default;
   const cacheKey = new Request(`${url.origin}/__hhc_media_cache/${objectKey}`);
   if (cache && !request.headers.has('If-Range')) {
     const headers = new Headers();
@@ -185,7 +178,7 @@ async function handle(request: Request, env: Env, ctx?: ExecutionContext): Promi
   }
   const object = await env.MEDIA_BUCKET.head(objectKey);
   if (!object) return failure(404);
-  if (isPackage && (!Number.isSafeInteger(object.size) || object.size <= 0 || object.size > (match[4].endsWith('.m3u8') ? 1 << 20 : 128 << 20))) return failure(503);
+  if (!Number.isSafeInteger(object.size) || object.size <= 0 || object.size > (match[4].endsWith('.m3u8') ? 1 << 20 : 128 << 20)) return failure(503);
   const mime = match[4].endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : match[4].endsWith('.m4s') ? 'video/iso.segment' : 'video/mp4';
   const headers = new Headers({ 'Cache-Control': 'private, no-store', 'Content-Type': mime, 'X-Content-Type-Options': 'nosniff', 'Accept-Ranges': 'bytes', ETag: object.httpEtag });
   if (request.headers.get('If-None-Match') === object.httpEtag) {

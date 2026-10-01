@@ -25,16 +25,16 @@ still require production measurements.
 Local checks include the signed-cookie/R2/Cache flow in Wrangler's pinned
 Cloudflare runtime, but are not deployment or browser/device acceptance.
 Keep `ASSET_RECORDING_HLS_ENABLED` off until CMS, Gateway and player cutover
-checks pass. The following legacy MP4 procedures remain applicable only until
-that separately reviewed cutover; ordinary Blob scanning stays unchanged.
+checks pass. Ordinary Blob scanning stays unchanged.
 
-## Existing MP4 path
+## Retired single-file path
 
-The recording path is isolated from Blob uploads and ClamAV. It accepts only
-MP4 candidates through private R2 multipart sessions, validates SHA-256 and
-media format, and serves ready versions through the Pages media function. Format
-validation is not malware scanning. Keep the bucket private and disable public
-`r2.dev` access.
+Single-file recording routes and multipart helpers are removed. Old media URLs
+return 404 even with a valid old grant. No MP4 migration or playback fallback is
+provided. The empty legacy database table remains solely for release rollback;
+do not drop it while old revisions remain rollback candidates. Original browser
+sources and HLS initialization fragments can still be MP4. Format validation is
+not malware scanning. Keep the bucket private and disable public `r2.dev` access.
 
 ## Activation gate
 
@@ -95,26 +95,27 @@ activation/configuration change first, then release that new commit.
 
 ## Routine and incident handling
 
-- Failed/resumed upload: have the Admin reselect the identical original MP4;
-  the browser reuses its session and checks completed parts. Different bytes
+- Failed/resumed upload: have the Admin reselect the identical original source;
+  the browser reuses its session and checks completed Blob blocks. Different bytes
   require a new recording, never another session on the original recording.
-  A failed/cancelled session and its R2 parts are
+  A failed/cancelled session and its staged bytes are
   cleaned by the recording worker; inspect session status without logging
   presigned URLs.
 - Validation failure: inspect structured status and worker errors, not signed
-  `ffprobe` URLs or video bytes in logs. Re-encode to H.264/AAC fast-start MP4
-  locally and create a new recording. Each attempt is bounded to 15 minutes;
-  the claim lease and scheduled Job allow cleanup after that deadline. Do not
+  source URLs or video bytes in logs. CLI packages require H.264/AAC fMP4 HLS.
+  Browser source processing can be retried at most three times without extending
+  source retention. Each processing attempt is bounded to 5.5 hours;
+  the fenced claim lease allows recovery after a crash. Do not
   bypass format or hash checks.
 - Files cannot be replaced. Unpublishing stops new grants; existing scoped
   playback cookies can remain valid for up to one hour. Do not promise instant
   revocation. Editing or republishing never extends the original deadline.
-- Cleanup: CMS denies new grants at uploadedAt + 720 hours and retries deleting
-  completed Asset files every 15 minutes. The Asset worker owns incomplete
-  24-hour session cleanup, serialized with completion. A committed R2 object in
-  completing state is recovered into validation instead of deleted. Completion
-  time is persisted once; HHC reconciles missing completion metadata every five
-  minutes. Deleted rows retain immutable recording/file identity.
+- Cleanup: CMS denies new grants at the earlier of unpublish time and readyAt
+  + 30 days. The Asset worker owns HLS expiry, one-hour existing-grant grace,
+  incomplete 24-hour session cleanup and repeated late-write sweeps. Browser
+  sources are removed after success; failed sources expire seven days after the
+  first durable completion. The independent Blob lifecycle is a nine-day fallback.
+  Metadata receipts retain immutable recording/package identity.
   Investigate cleanup lag over one
   hour; escalate at 24 hours. Never extend retention by reuploading.
 - Key rotation: add the new public key to `MEDIA_PUBLIC_KEYS`, release the
@@ -126,7 +127,7 @@ activation/configuration change first, then release that new commit.
   signing key alone does not retract bytes already delivered to a player.
 - Recovery: restore CMS metadata through existing database backup procedures;
   recover the existing object/version only through a reviewed operational repair
-  without changing uploadedAt or its deadline. Ordinary reupload creates a new
+  without changing readyAt or its deadline. Ordinary reupload creates a new
   recording. R2 is not the original recording backup. A past-deadline recording
   must stay unavailable.
 

@@ -61,7 +61,7 @@ func TestRecordingPackageGrantChecksReadyOwnershipAndExpiry(t *testing.T) {
 	ready, expiry := now.Add(-time.Hour), now.Add(time.Hour)
 	repo := &httpPackageRepo{p: assets.RecordingPackage{ID: "package-a", OwnerService: "hhc-web-api", RecordingID: "recording-a", State: "ready", ReadyAt: &ready, MediaExpiresAt: &expiry, FinalPrefix: "recordings/packages/package-a/final/attempt-a/"}}
 	svc := assets.NewRecordingPackageService(repo, httpPackageObjects{}, time.Now)
-	handler := New(nil, nil, map[string]bool{"hhc-web-api": true, "account-api": true}, true, "", WorkloadAuthConfig{}, nil).WithRecordingPackages(svc).WithRecordingGrants(nil, signer).Routes()
+	handler := New(nil, nil, map[string]bool{"hhc-web-api": true, "account-api": true}, true, "", WorkloadAuthConfig{}, nil).WithRecordingPackages(svc).WithRecordingSigner(signer).Routes()
 	for _, tc := range []struct {
 		caller, recording, state string
 		expires                  time.Time

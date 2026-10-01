@@ -92,8 +92,7 @@ func run() error {
 		if err != nil {
 			return err
 		}
-		recordings := postgres.NewRecordingUploadStore(db)
-		handler.WithRecordingUpload(assets.NewRecordingUploadService(recordings, objects, time.Now)).WithRecordingGrants(recordings, signer)
+		handler.WithRecordingSigner(signer)
 		if cfg.RecordingHLSEnabled {
 			handler.WithRecordingPackages(assets.NewRecordingPackageService(postgres.NewRecordingPackageStore(db), objects, time.Now))
 			if cfg.RecordingSourceAccountURL != "" {

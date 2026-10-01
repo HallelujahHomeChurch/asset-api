@@ -11,11 +11,11 @@ import (
 
 type RecordingSourceStore struct {
 	db    *sql.DB
-	locks *RecordingUploadStore
+	locks *recordingSessionStore
 }
 
 func NewRecordingSourceStore(db *sql.DB) *RecordingSourceStore {
-	return &RecordingSourceStore{db: db, locks: NewRecordingUploadStore(db)}
+	return &RecordingSourceStore{db: db, locks: newRecordingSessionStore(db)}
 }
 
 func (s *RecordingSourceStore) WithSessionLock(ctx context.Context, id string, fn func(context.Context) error) error {

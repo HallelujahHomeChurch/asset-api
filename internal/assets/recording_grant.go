@@ -42,15 +42,6 @@ func NewRecordingSigner(privatePEM []byte, kid, issuer string) (*RecordingSigner
 	return &RecordingSigner{key: key, kid: kid, issuer: issuer}, nil
 }
 
-// Issue only signs a caller-validated, ready private recording asset. The
-// owning service must recheck member entitlement and publication first.
-func (s *RecordingSigner) Issue(recordingID, assetVersionID, scopeID, objectKey string, recordingExpiry, now time.Time) (RecordingGrant, error) {
-	if !mediaID.MatchString(recordingID) || !mediaID.MatchString(assetVersionID) || !mediaID.MatchString(scopeID) || !strings.HasPrefix(objectKey, "recordings/") || strings.Contains(objectKey, "..") {
-		return RecordingGrant{}, ErrInvalidInput
-	}
-	return s.issue(map[string]any{"recordingId": recordingID, "assetVersionId": assetVersionID, "scopeId": scopeID}, map[string]any{"objectKey": objectKey}, recordingExpiry, now)
-}
-
 func (s *RecordingSigner) IssuePackage(p RecordingPackage, scopeID string, recordingExpiry, now time.Time) (RecordingGrant, error) {
 	if !mediaID.MatchString(p.ID) || !mediaID.MatchString(p.RecordingID) || !mediaID.MatchString(scopeID) || p.State != "ready" || p.OwnerService != "hhc-web-api" || p.ReadyAt == nil || p.MediaExpiresAt == nil || !recordingFinalPrefix.MatchString(p.FinalPrefix) || strings.Split(p.FinalPrefix, "/")[2] != p.ID {
 		return RecordingGrant{}, ErrInvalidInput

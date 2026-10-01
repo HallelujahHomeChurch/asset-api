@@ -6,7 +6,7 @@ import { test } from 'node:test';
 test('Pages bundle rejects media reads without a scoped cookie', async () => {
   execFileSync('npm', ['run', 'build'], { cwd: new URL('..', import.meta.url), stdio: 'pipe' });
   const { default: media } = await import(new URL('../pages/test/dist/_worker.js', import.meta.url));
-  const url = 'https://hhc-member-media-test.pages.dev/videos/rec-1/files/file-1/sessions/scope-1/content';
+  const url = 'https://hhc-member-media-test.pages.dev/videos/rec-1/packages/0123456789abcdef0123456789abcdef/sessions/scope-1/master.m3u8';
   const env = { ALLOWED_ORIGINS: 'https://www-test.alive.org.tw' };
   for (const method of ['GET', 'HEAD']) {
     const response = await media.fetch(new Request(url, { method }), env);
