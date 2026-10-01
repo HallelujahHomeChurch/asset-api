@@ -1,6 +1,60 @@
 schema_version: 1
 service: asset-api
 datasets:
+  - id: asset.recording-sources
+    owner: asset-api
+    purpose: Bind temporary browser recording inputs to authorized CMS actors and retain fenced processing and retry receipts without entering the ordinary asset scan pipeline.
+    necessity: required
+    storage: {kind: postgres, resource: recording_sources, sources: [{path: internal/postgres/recording_source.go, symbol: RecordingSourceStore.Create}]}
+    subject_keys: []
+    data_classes: [identity, content, security, activity]
+    fields:
+      - {name: recording_sources.id, purpose: Scope the temporary source bytes, necessity: required, data_classes: [identity]}
+      - {name: recording_sources.owner_service, purpose: Enforce CMS ownership, necessity: required, data_classes: [security]}
+      - {name: recording_sources.actor_id, purpose: Bind authorization and active source quota to the uploader, necessity: required, data_classes: [identity, security]}
+      - {name: recording_sources.recording_id, purpose: Link to the CMS recording, necessity: required, data_classes: [identity]}
+      - {name: recording_sources.idempotency_key, purpose: Recover lost upload responses, necessity: required, data_classes: [security]}
+      - {name: recording_sources.file_name, purpose: Identify the selected input for resume, necessity: required, data_classes: [content]}
+      - {name: recording_sources.size_bytes, purpose: Enforce the independent source budget, necessity: required, data_classes: [content]}
+      - {name: recording_sources.checksum_sha256, purpose: Verify immutable source integrity, necessity: required, data_classes: [security]}
+      - {name: recording_sources.block_count, purpose: Require complete bounded block closure, necessity: required, data_classes: [content]}
+      - {name: recording_sources.state, purpose: Report durable processing progress, necessity: required, data_classes: [activity]}
+      - {name: recording_sources.created_at, purpose: Anchor upload lifetime, necessity: required, data_classes: [activity]}
+      - {name: recording_sources.expires_at, purpose: Bound upload capabilities, necessity: required, data_classes: [activity]}
+      - {name: recording_sources.completed_at, purpose: Persist durable acceptance, necessity: required, data_classes: [activity]}
+      - {name: recording_sources.retry_until, purpose: Bound retry retention from first acceptance, necessity: required, data_classes: [activity]}
+      - {name: recording_sources.staging_etag, purpose: Fence immutable source copy, necessity: required, data_classes: [security]}
+      - {name: recording_sources.processing_attempts, purpose: Bound retry and crash recovery attempts, necessity: required, data_classes: [activity]}
+      - {name: recording_sources.claim_id, purpose: Fence worker ownership, necessity: required, data_classes: [security]}
+      - {name: recording_sources.claimed_until, purpose: Reclaim abandoned processing, necessity: required, data_classes: [activity]}
+      - {name: recording_sources.copy_attempt_id, purpose: Recover the original provider copy, necessity: required, data_classes: [security]}
+      - {name: recording_sources.source_key, purpose: Locate the verified immutable input, necessity: required, data_classes: [content]}
+      - {name: recording_sources.source_etag, purpose: Pin all Range reads to verified bytes, necessity: required, data_classes: [security]}
+      - {name: recording_sources.source_verified_at, purpose: Avoid rehashing a checkpointed input, necessity: required, data_classes: [activity]}
+      - {name: recording_sources.package_id, purpose: Project the independently validated ready package, necessity: required, data_classes: [identity]}
+      - {name: recording_sources.processing_error, purpose: Report redacted bounded failure classification, necessity: required, data_classes: [activity]}
+      - {name: recording_sources.cleanup_after, purpose: Bound repeat reconciliation frequency, necessity: required, data_classes: [activity]}
+    attribution: {mode: manual, explanation: The actor is the upstream authorized uploader and is not inferred to be a recorded participant.}
+    legal_basis: {status: pending_legal, reference: null}
+    retention: {status: pending_legal, rule: null, action: none}
+    cleanup: {mode: none, implementation: [], evidence: []}
+  - id: asset.recording-source-attempts
+    owner: asset-api
+    purpose: Keep server-owned encode and source copy scopes discoverable after crashes for safe byte cleanup.
+    necessity: required
+    storage: {kind: postgres, resource: recording_source_attempts, sources: [{path: internal/postgres/recording_source_job.go, symbol: RecordingSourceStore.ClaimSourceProcessing}]}
+    subject_keys: []
+    data_classes: [security, activity]
+    fields:
+      - {name: recording_source_attempts.claim_id, purpose: Identify isolated encode and source copy prefixes, necessity: required, data_classes: [security]}
+      - {name: recording_source_attempts.source_id, purpose: Link the processing attempt to its input, necessity: required, data_classes: [activity]}
+      - {name: recording_source_attempts.state, purpose: Distinguish active and abandoned output, necessity: required, data_classes: [activity]}
+      - {name: recording_source_attempts.created_at, purpose: Order processing attempts, necessity: required, data_classes: [activity]}
+      - {name: recording_source_attempts.finished_at, purpose: Anchor stale-worker cleanup grace, necessity: required, data_classes: [activity]}
+    attribution: {mode: manual, explanation: The source carries uploader provenance; attempts do not identify recorded participants.}
+    legal_basis: {status: pending_legal, reference: null}
+    retention: {status: pending_legal, rule: null, action: none}
+    cleanup: {mode: none, implementation: [], evidence: []}
   - id: asset.recording-packages
     owner: asset-api
     purpose: Bind immutable HLS inventory and durable upload completion to the authorized CMS actor without entering the ordinary Blob scan pipeline.

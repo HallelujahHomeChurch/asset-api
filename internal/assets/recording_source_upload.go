@@ -15,21 +15,28 @@ const RecordingSourceRetention = 7 * 24 * time.Hour
 // Sources are private recording inputs, never ordinary assets or scan jobs.
 // The durable finalizing row is the receipt permitting the browser to close.
 type RecordingSource struct {
-	ID             string     `json:"sourceId"`
-	OwnerService   string     `json:"-"`
-	ActorID        string     `json:"-"`
-	RecordingID    string     `json:"recordingId"`
-	IdempotencyKey string     `json:"-"`
-	FileName       string     `json:"fileName"`
-	SizeBytes      int64      `json:"sizeBytes"`
-	ChecksumSHA256 string     `json:"checksumSHA256"`
-	BlockCount     int        `json:"blockCount"`
-	State          string     `json:"state"`
-	CreatedAt      time.Time  `json:"createdAt"`
-	ExpiresAt      time.Time  `json:"expiresAt"`
-	CompletedAt    *time.Time `json:"completedAt,omitempty"`
-	RetryUntil     *time.Time `json:"retryUntil,omitempty"`
-	StagingETag    string     `json:"-"`
+	ID                 string     `json:"sourceId"`
+	OwnerService       string     `json:"-"`
+	ActorID            string     `json:"-"`
+	RecordingID        string     `json:"recordingId"`
+	IdempotencyKey     string     `json:"-"`
+	FileName           string     `json:"fileName"`
+	SizeBytes          int64      `json:"sizeBytes"`
+	ChecksumSHA256     string     `json:"checksumSHA256"`
+	BlockCount         int        `json:"blockCount"`
+	State              string     `json:"state"`
+	CreatedAt          time.Time  `json:"createdAt"`
+	ExpiresAt          time.Time  `json:"expiresAt"`
+	CompletedAt        *time.Time `json:"completedAt,omitempty"`
+	RetryUntil         *time.Time `json:"retryUntil,omitempty"`
+	StagingETag        string     `json:"-"`
+	CopyAttemptID      string     `json:"-"`
+	SourceKey          string     `json:"-"`
+	SourceETag         string     `json:"-"`
+	SourceVerifiedAt   *time.Time `json:"-"`
+	ProcessingAttempts int        `json:"-"`
+	FailureCode        string     `json:"failureCode,omitempty"`
+	PackageID          string     `json:"packageId,omitempty"`
 }
 
 type CreateRecordingSourceInput struct {
@@ -58,6 +65,50 @@ type RecordingSourceRepository interface {
 	Create(context.Context, RecordingSource) error
 	Get(context.Context, string) (RecordingSource, error)
 	Finalize(context.Context, string, string, time.Time) error
+	Retry(context.Context, string, time.Time) error
+}
+
+// Ready projection belongs to the CMS owner, not an uploader's active session.
+// This grants no upload capability or bytes; package access is checked separately.
+func (s *RecordingSourceService) GetReady(ctx context.Context, id, recordingID string) (RecordingSource, error) {
+	if !mediaID.MatchString(id) || !mediaID.MatchString(recordingID) {
+		return RecordingSource{}, ErrInvalidInput
+	}
+	p, err := s.repository.Get(ctx, id)
+	if err != nil {
+		return RecordingSource{}, err
+	}
+	if p.OwnerService != "hhc-web-api" || p.RecordingID != recordingID {
+		return RecordingSource{}, ErrNotFound
+	}
+	if p.State != "ready" || p.PackageID == "" {
+		return RecordingSource{}, ErrConflict
+	}
+	return p, nil
+}
+
+func (s *RecordingSourceService) Retry(ctx context.Context, id, actor string) (RecordingSource, error) {
+	p, err := s.Get(ctx, id, actor)
+	if err != nil {
+		return RecordingSource{}, err
+	}
+	if p.State == "ready" {
+		return p, nil
+	}
+	if p.RetryUntil == nil || !s.now().Before(*p.RetryUntil) {
+		return RecordingSource{}, ErrConflict
+	}
+	switch p.State {
+	case "finalizing", "queued", "processing":
+		return p, nil
+	case "failed":
+		if err := s.repository.Retry(ctx, id, s.now().UTC()); err != nil {
+			return RecordingSource{}, err
+		}
+		return s.Get(ctx, id, actor)
+	default:
+		return RecordingSource{}, ErrConflict
+	}
 }
 
 type RecordingSourceObjectStore interface {

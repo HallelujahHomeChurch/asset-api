@@ -13,7 +13,7 @@ import (
 
 func TestRecordingSourceRoutesFailClosed(t *testing.T) {
 	h := New(nil, nil, map[string]bool{"hhc-web-api": true, "account-api": true}, true, "", WorkloadAuthConfig{}, nil).Routes()
-	for _, route := range []struct{ method, path string }{{"POST", "/priv/recording-sources"}, {"GET", "/priv/recording-sources/source-a"}, {"POST", "/priv/recording-sources/source-a/sign"}, {"POST", "/priv/recording-sources/source-a/complete"}} {
+	for _, route := range []struct{ method, path string }{{"POST", "/priv/recording-sources"}, {"GET", "/priv/recording-sources/source-a"}, {"POST", "/priv/recording-sources/source-a/sign"}, {"POST", "/priv/recording-sources/source-a/complete"}, {"POST", "/priv/recording-sources/source-a/retry-processing"}} {
 		for _, tc := range []struct {
 			caller string
 			want   int
@@ -26,6 +26,31 @@ func TestRecordingSourceRoutesFailClosed(t *testing.T) {
 				t.Fatalf("%s %s: %d %s", route.path, tc.caller, w.Code, w.Body.String())
 			}
 		}
+	}
+}
+
+func TestSourceReadyLookupIsOwnerScopedAndDoesNotRequireHumanSession(t *testing.T) {
+	repo := &httpSourceRepo{p: assets.RecordingSource{ID: strings.Repeat("a", 32), OwnerService: "hhc-web-api", RecordingID: "recording-a", State: "processing"}}
+	h := New(nil, nil, map[string]bool{"hhc-web-api": true, "account-api": true}, true, "", WorkloadAuthConfig{}, nil).WithRecordingSources(assets.NewRecordingSourceService(repo, httpSourceObjects{}, time.Now)).Routes()
+	request := func(caller, recording string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("GET", "/priv/recording-sources/"+repo.p.ID+"/ready?recordingId="+recording, nil)
+		r.Header.Set("X-Internal-Caller-App-Id", caller)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+	if w := request("hhc-web-api", "recording-a"); w.Code != 409 {
+		t.Fatalf("pending claimed ready: %d", w.Code)
+	}
+	repo.p.State, repo.p.PackageID = "ready", strings.Repeat("b", 32)
+	if w := request("account-api", "recording-a"); w.Code != 403 {
+		t.Fatalf("cross-service: %d", w.Code)
+	}
+	if w := request("hhc-web-api", "other"); w.Code != 404 {
+		t.Fatalf("cross-recording: %d", w.Code)
+	}
+	if w := request("hhc-web-api", "recording-a"); w.Code != 200 || !strings.Contains(w.Body.String(), repo.p.PackageID) || strings.Contains(w.Body.String(), "fileName") {
+		t.Fatalf("projection: %d %s", w.Code, w.Body.String())
 	}
 }
 

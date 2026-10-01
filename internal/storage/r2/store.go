@@ -26,6 +26,7 @@ var namePattern = regexp.MustCompile(`^[a-z0-9-]+$`)
 var packageStagingKey = regexp.MustCompile(`^recordings/packages/[a-zA-Z0-9-]{1,80}/staging/(master\.m3u8|(720p|1080p)/(index\.m3u8|init\.mp4|seg-[0-9]{6}\.m4s))$`)
 var packageFinalKey = regexp.MustCompile(`^recordings/packages/[a-zA-Z0-9-]{1,80}/final/[a-zA-Z0-9-]{1,80}/(master\.m3u8|(720p|1080p)/(index\.m3u8|init\.mp4|seg-[0-9]{6}\.m4s))$`)
 var packageControlKey = regexp.MustCompile(`^recordings/packages/[a-zA-Z0-9-]{1,80}/final/[a-zA-Z0-9-]{1,80}/package\.json$`)
+var sourceAttemptID = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
 type Store struct {
 	bucket  string
@@ -109,6 +110,40 @@ func (s *Store) PutPackageInventory(ctx context.Context, key string, data []byte
 	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key), Body: bytes.NewReader(data), ContentLength: aws.Int64(int64(len(data))), ContentType: aws.String("application/json"), CacheControl: aws.String("private, no-store")})
 	if err != nil {
 		return fmt.Errorf("write R2 package inventory: %w", err)
+	}
+	return nil
+}
+
+// PutRecordingObject is only for a source Job's bounded, seekable spool. It
+// cannot overwrite an object or write directly into a playable final prefix.
+func (s *Store) PutRecordingObject(ctx context.Context, key string, body io.ReadSeeker, size int64, contentType string) error {
+	if !packageStagingKey.MatchString(key) || body == nil || size <= 0 || size > 128<<20 {
+		return errors.New("invalid recording output")
+	}
+	wantType := "video/mp4"
+	if strings.HasSuffix(key, ".m3u8") {
+		wantType = "application/vnd.apple.mpegurl"
+		if size > 1<<20 {
+			return errors.New("invalid recording playlist output")
+		}
+	}
+	if contentType != wantType {
+		return errors.New("invalid recording output content type")
+	}
+	position, err := body.Seek(0, io.SeekCurrent)
+	if err != nil || position != 0 {
+		return errors.New("invalid recording output position")
+	}
+	length, err := body.Seek(0, io.SeekEnd)
+	if err != nil || length != size {
+		return errors.New("invalid recording output length")
+	}
+	if _, err := body.Seek(0, io.SeekStart); err != nil {
+		return errors.New("invalid recording output seek")
+	}
+	_, err = s.client.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key), Body: body, ContentLength: aws.Int64(size), ContentType: aws.String(contentType), IfNoneMatch: aws.String("*"), CacheControl: aws.String("private, no-store")})
+	if err != nil {
+		return errors.New("recording output upload failed")
 	}
 	return nil
 }
@@ -279,6 +314,46 @@ func (s *Store) DeletePackageObjects(ctx context.Context, keys []string) error {
 	}
 	if len(result.Errors) > 0 {
 		return errors.New("R2 package delete incomplete")
+	}
+	return nil
+}
+
+// Failed source encoding has no complete inventory. List only that durable
+// attempt's two private prefixes and reuse the guarded batched delete path.
+func (s *Store) DeleteSourceAttempt(ctx context.Context, id string) error {
+	if !sourceAttemptID.MatchString(id) {
+		return errors.New("invalid source attempt")
+	}
+	for _, prefix := range []string{"recordings/packages/" + id + "/staging/", "recordings/packages/" + id + "/final/" + id + "/"} {
+		pager := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{Bucket: aws.String(s.bucket), Prefix: aws.String(prefix), MaxKeys: aws.Int32(1000)})
+		count, pages := 0, 0
+		for pager.HasMorePages() {
+			pages++
+			if pages > 11 {
+				return errors.New("source attempt listing exceeds page limit")
+			}
+			page, err := pager.NextPage(ctx)
+			if err != nil {
+				return errors.New("source attempt listing failed")
+			}
+			count += len(page.Contents)
+			if count > 10001 || len(page.Contents) > 1000 {
+				return errors.New("source attempt listing exceeds limit")
+			}
+			keys := make([]string, 0, len(page.Contents))
+			for _, object := range page.Contents {
+				key := aws.ToString(object.Key)
+				if !strings.HasPrefix(key, prefix) {
+					return errors.New("source attempt listing escaped scope")
+				}
+				keys = append(keys, key)
+			}
+			if len(keys) > 0 {
+				if err := s.DeletePackageObjects(ctx, keys); err != nil {
+					return err
+				}
+			}
+		}
 	}
 	return nil
 }

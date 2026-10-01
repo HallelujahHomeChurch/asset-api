@@ -63,6 +63,18 @@ func (h *Handler) getRecordingSource(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, page)
 }
 
+func (h *Handler) getReadyRecordingSource(w http.ResponseWriter, r *http.Request) {
+	if !h.recordingSourceAllowed(w, r) {
+		return
+	}
+	p, err := h.recordingSources.GetReady(r.Context(), r.PathValue("sourceID"), r.URL.Query().Get("recordingId"))
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"sourceId": p.ID, "recordingId": p.RecordingID, "state": p.State, "packageId": p.PackageID})
+}
+
 func (h *Handler) signRecordingSource(w http.ResponseWriter, r *http.Request) {
 	if !h.recordingSourceAllowed(w, r) {
 		return
@@ -86,6 +98,18 @@ func (h *Handler) completeRecordingSource(w http.ResponseWriter, r *http.Request
 		return
 	}
 	p, err := h.recordingSources.Complete(r.Context(), r.PathValue("sourceID"), strings.TrimSpace(r.Header.Get("X-HHC-Actor-ID")))
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, p)
+}
+
+func (h *Handler) retryRecordingSource(w http.ResponseWriter, r *http.Request) {
+	if !h.recordingSourceAllowed(w, r) {
+		return
+	}
+	p, err := h.recordingSources.Retry(r.Context(), r.PathValue("sourceID"), strings.TrimSpace(r.Header.Get("X-HHC-Actor-ID")))
 	if err != nil {
 		handleError(w, err)
 		return

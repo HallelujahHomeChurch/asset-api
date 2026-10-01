@@ -17,6 +17,33 @@ import (
 	"hhc/asset-api/internal/assets"
 )
 
+func TestDeleteSourceOnlyRemovesKnownSourceAndAttempts(t *testing.T) {
+	var paths []string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "DELETE" {
+			t.Fatal("non-delete cleanup")
+		}
+		paths = append(paths, r.URL.Path)
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+	client, err := azblob.NewClientWithNoCredential(server.URL, &azblob.ClientOptions{ClientOptions: azcore.ClientOptions{Transport: server.Client()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &Store{client: client, container: "source-test"}
+	id, attempt := strings.Repeat("a", 32), strings.Repeat("b", 32)
+	if err := store.DeleteRecordingSource(context.Background(), id, []string{attempt, "../asset"}); err == nil || len(paths) != 0 {
+		t.Fatal("invalid deletion partially executed")
+	}
+	if err := store.DeleteRecordingSource(context.Background(), id, []string{attempt}); err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 2 || paths[0] != "/source-test/recording-sources/"+id+"/staging" || paths[1] != "/source-test/recording-sources/"+id+"/final/"+attempt+"/source" {
+		t.Fatalf("wrong keys: %v", paths)
+	}
+}
+
 func TestSourceBlockSASIsWriteOnlySingleBlobAndShortLived(t *testing.T) {
 	keys := 0
 	now := time.Now().UTC()

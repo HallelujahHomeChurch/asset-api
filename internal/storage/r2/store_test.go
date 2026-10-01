@@ -2,6 +2,7 @@ package r2
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,40 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
+
+func TestDeleteSourceAttemptRejectsEscapedListing(t *testing.T) {
+	id := strings.Repeat("a", 32)
+	bad, deletes := true, 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		if r.Method == "GET" {
+			prefix := r.URL.Query().Get("prefix")
+			if prefix != "recordings/packages/"+id+"/staging/" && prefix != "recordings/packages/"+id+"/final/"+id+"/" {
+				t.Errorf("unbounded list %s", prefix)
+			}
+			key := prefix + "720p/init.mp4"
+			if bad {
+				key = "recordings/packages/other/staging/720p/init.mp4"
+			}
+			fmt.Fprintf(w, `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>%s</Key></Contents></ListBucketResult>`, key)
+			return
+		}
+		if r.Method != "POST" || !r.URL.Query().Has("delete") {
+			t.Errorf("unexpected request")
+		}
+		deletes++
+		fmt.Fprint(w, `<DeleteResult/>`)
+	}))
+	defer server.Close()
+	store := &Store{bucket: "test", client: s3.New(s3.Options{BaseEndpoint: aws.String(server.URL), Region: "auto", UsePathStyle: true, Credentials: credentials.NewStaticCredentialsProvider("key", "secret", ""), HTTPClient: server.Client(), RetryMaxAttempts: 1})}
+	if err := store.DeleteSourceAttempt(context.Background(), id); err == nil || deletes != 0 {
+		t.Fatal("escaped listing deleted")
+	}
+	bad = false
+	if err := store.DeleteSourceAttempt(context.Background(), id); err != nil || deletes != 2 {
+		t.Fatalf("cleanup: %v deletes=%d", err, deletes)
+	}
+}
 
 func TestDeletePackageObjectsRejectsMixedScopeAndProviderPartialFailure(t *testing.T) {
 	requests := 0
@@ -68,6 +103,41 @@ func TestR2DoesNotSendUnsupportedAutomaticChecksumHeaders(t *testing.T) {
 	}
 	if store.client.Options().RequestChecksumCalculation != aws.RequestChecksumCalculationWhenRequired {
 		t.Fatal("R2 adapter must not enable optional AWS checksum headers")
+	}
+}
+
+func TestRecordingSpoolWriteIsBoundedAndNeverOverwrites(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		data, _ := io.ReadAll(r.Body)
+		if r.Method != "PUT" || r.Header.Get("If-None-Match") != "*" || r.ContentLength != 5 || r.Header.Get("Content-Type") != "video/mp4" || string(data) != "media" {
+			t.Error("incorrect bounded conditional PUT")
+		}
+		if r.Header.Get("X-Amz-Sdk-Checksum-Algorithm") != "" {
+			t.Error("unsupported automatic checksum")
+		}
+		w.Header().Set("ETag", `"stored"`)
+	}))
+	defer server.Close()
+	store := &Store{bucket: "test", client: s3.New(s3.Options{BaseEndpoint: aws.String(server.URL), Region: "auto", UsePathStyle: true, Credentials: credentials.NewStaticCredentialsProvider("key", "secret", ""), HTTPClient: server.Client(), RetryMaxAttempts: 1, RequestChecksumCalculation: aws.RequestChecksumCalculationWhenRequired})}
+	key := "recordings/packages/attempt-a/staging/720p/seg-000000.m4s"
+	for _, bad := range []string{"ordinary/blob", strings.Replace(key, "/staging/", "/final/claim/", 1)} {
+		if err := store.PutRecordingObject(context.Background(), bad, strings.NewReader("media"), 5, "video/mp4"); err == nil {
+			t.Fatal("accepted wrong scope")
+		}
+	}
+	if err := store.PutRecordingObject(context.Background(), key, strings.NewReader("media"), 129<<20, "video/mp4"); err == nil {
+		t.Fatal("accepted oversized object")
+	}
+	if calls != 0 {
+		t.Fatal("invalid request reached R2")
+	}
+	if err := store.PutRecordingObject(context.Background(), key, strings.NewReader("media"), 5, "video/mp4"); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatal("unexpected PUT count")
 	}
 }
 

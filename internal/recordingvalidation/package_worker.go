@@ -17,7 +17,7 @@ func RunPackageValidation(ctx context.Context, repository *postgres.RecordingPac
 	if err != nil {
 		return err
 	}
-	return runPackageClaim(ctx, func(ctx context.Context) error {
+	return RunProcessingClaim(ctx, func(ctx context.Context) error {
 		return repository.HeartbeatPackageValidation(ctx, claim.Package.ID, claim.ClaimID)
 	}, func(ctx context.Context) error {
 		_, err := FreezeRecordingPackage(ctx, claim.Package, claim.ClaimID, objects, probe.Validate)
@@ -27,7 +27,9 @@ func RunPackageValidation(ctx context.Context, repository *postgres.RecordingPac
 	}, 30*time.Second)
 }
 
-func runPackageClaim(ctx context.Context, heartbeat, validate func(context.Context) error, finish func(context.Context, bool, string) error, interval time.Duration) error {
+// RunProcessingClaim shares the processing deadline and lease cancellation
+// between direct HLS validation and browser source conversion.
+func RunProcessingClaim(ctx context.Context, heartbeat, validate func(context.Context) error, finish func(context.Context, bool, string) error, interval time.Duration) error {
 	jobCtx, cancel := context.WithTimeout(ctx, 330*time.Minute)
 	defer cancel()
 	done := make(chan error, 1)
@@ -63,7 +65,7 @@ func runPackageClaim(ctx context.Context, heartbeat, validate func(context.Conte
 		return finish(ctx, true, "")
 	}
 	failure := "retry"
-	if errors.Is(err, assets.ErrInvalidUpload) || errors.Is(err, assets.ErrInvalidInput) {
+	if errors.Is(err, assets.ErrInvalidUpload) || errors.Is(err, assets.ErrInvalidInput) || errors.Is(err, assets.ErrRecordingPackageTooLarge) || errors.Is(err, assets.ErrRecordingPackageEstimateTooLarge) {
 		failure = "invalid"
 	}
 	return finish(ctx, false, failure)

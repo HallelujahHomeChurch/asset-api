@@ -6,6 +6,34 @@ import (
 	"time"
 )
 
+func TestSourceStorageIsExplicitSeparateAndRequiresHLS(t *testing.T) {
+	t.Setenv("ASSET_RECORDING_SOURCE_ENABLED", "false")
+	if account, _, err := RecordingSourceStorage(false); err != nil || account != "" {
+		t.Fatal("source enabled by default")
+	}
+	t.Setenv("ASSET_RECORDING_SOURCE_ENABLED", "true")
+	t.Setenv("ASSET_RECORDING_SOURCE_ACCOUNT_URL", "https://source.blob.core.windows.net")
+	t.Setenv("ASSET_RECORDING_SOURCE_CONTAINER", "recording-sources")
+	if _, _, err := RecordingSourceStorage(false); err == nil {
+		t.Fatal("source enabled without HLS")
+	}
+	if account, container, err := RecordingSourceStorage(true); err != nil || account == "" || container != "recording-sources" {
+		t.Fatal("valid source rejected", err)
+	}
+	t.Setenv("ASSET_AZURE_ACCOUNT_URL", "https://source.blob.core.windows.net/")
+	t.Setenv("ASSET_AZURE_CONTAINER", "recording-sources")
+	if _, _, err := RecordingSourceStorage(true); err == nil {
+		t.Fatal("ordinary scan container reused")
+	}
+	t.Setenv("ASSET_AZURE_CONTAINER", "assets")
+	for _, url := range []string{"", "http://source.blob.core.windows.net", "https://source.blob.core.windows.net?sig=credential", "https://source.blob.core.windows.net/container", "https://example.com"} {
+		t.Setenv("ASSET_RECORDING_SOURCE_ACCOUNT_URL", url)
+		if _, _, err := RecordingSourceStorage(true); err == nil {
+			t.Fatal("unsafe endpoint accepted")
+		}
+	}
+}
+
 func TestRecordingHLSIsExplicitAndRequiresStorage(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://test")
 	t.Setenv("ASSET_ALLOW_DEV_CALLER_HEADER", "true")

@@ -96,6 +96,13 @@ func run() error {
 		handler.WithRecordingUpload(assets.NewRecordingUploadService(recordings, objects, time.Now)).WithRecordingGrants(recordings, signer)
 		if cfg.RecordingHLSEnabled {
 			handler.WithRecordingPackages(assets.NewRecordingPackageService(postgres.NewRecordingPackageStore(db), objects, time.Now))
+			if cfg.RecordingSourceAccountURL != "" {
+				sources, err := azurestorage.New(cfg.RecordingSourceAccountURL, cfg.RecordingSourceContainer)
+				if err != nil {
+					return err
+				}
+				handler.WithRecordingSources(assets.NewRecordingSourceService(postgres.NewRecordingSourceStore(db), sources, time.Now))
+			}
 		}
 	}
 	server := &http.Server{Addr: ":" + cfg.Port, Handler: handler.Routes(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 2 * time.Minute, IdleTimeout: 2 * time.Minute}

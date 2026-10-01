@@ -992,6 +992,53 @@ paths:
         '409': { $ref: '#/components/responses/Error' }
         '422': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
+  /priv/recording-sources/{sourceID}/ready:
+    parameters:
+      - { $ref: '#/components/parameters/RecordingSourceID' }
+      - { name: recordingId, in: query, required: true, schema: { type: string, pattern: '^[a-zA-Z0-9-]{1,80}$' } }
+    get:
+      operationId: getReadyRecordingSource
+      summary: Resolve the ready output for CMS background reconciliation.
+      description: CMS-owner and recording binding are mandatory; no human uploader session is required. Returns only the source/recording/package IDs and ready state, never source bytes or capabilities. Package readiness and expiry must still be checked using the package contract.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      responses:
+        '200':
+          description: Ready source output projection.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sourceId, recordingId, packageId, state]
+                properties:
+                  sourceId: { type: string }
+                  recordingId: { type: string }
+                  packageId: { type: string }
+                  state: { type: string, enum: [ready] }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /priv/recording-sources/{sourceID}/retry-processing:
+    parameters: [ { $ref: '#/components/parameters/RecordingSourceID' }, { $ref: '#/components/parameters/RecordingActorID' } ]
+    post:
+      operationId: retryRecordingSource
+      summary: Retry a transient source-processing failure within its original budget.
+      description: Reuses the verified immutable source when available. Maximum three attempts including crashed executions; no reset of the original seven-day deadline. Invalid media and exhausted/expired work cannot retry. A lost-response replay of queued or active work is a no-op. An actor with another active source cannot enqueue a second source.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      responses:
+        '202': { description: Accepted retry or active/ready replay., content: { application/json: { schema: { $ref: '#/components/schemas/RecordingSource' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
   /priv/recording-packages:
     post:
       operationId: createRecordingPackage
@@ -1335,6 +1382,8 @@ components:
       additionalProperties: false
       required: [sourceId, recordingId, fileName, sizeBytes, checksumSHA256, blockCount, state, createdAt, expiresAt]
       properties:
+        failureCode: { type: string, enum: [invalid, retry, exhausted] }
+        packageId: { type: string, description: Present only after the whole package is verified and ready. }
         sourceId: { type: string, pattern: '^[a-f0-9]{32}$' }
         recordingId: { type: string }
         fileName: { type: string }
@@ -1351,6 +1400,8 @@ components:
       additionalProperties: false
       required: [sourceId, recordingId, fileName, sizeBytes, checksumSHA256, blockCount, state, createdAt, expiresAt, confirmedBlocks, nextCursor]
       properties:
+        failureCode: { type: string, enum: [invalid, retry, exhausted] }
+        packageId: { type: string, description: Present only after the whole package is verified and ready. }
         sourceId: { type: string, pattern: '^[a-f0-9]{32}$' }
         recordingId: { type: string }
         fileName: { type: string }

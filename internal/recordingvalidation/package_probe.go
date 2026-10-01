@@ -86,7 +86,7 @@ func (p PackageMediaProbe) Validate(ctx context.Context, inv assets.RecordingPac
 			if err := errors.Join(copyErr, file.Close()); err != nil {
 				return err
 			}
-			data, err := boundedProbeCommand(ctx, p.FFprobe, "-v", "error", "-protocol_whitelist", "file", "-enable_drefs", "0", "-use_absolute_path", "0", "-show_data", "-show_streams", "-show_packets", "-show_entries", "stream=index,codec_type,codec_name,width,height,pix_fmt,sample_rate,channels,profile,r_frame_rate,sample_aspect_ratio,extradata:packet=stream_index,pts_time,duration_time,flags", "-of", "json", path)
+			data, err := ProbeCommand(ctx, p.FFprobe, "-v", "error", "-protocol_whitelist", "file", "-enable_drefs", "0", "-use_absolute_path", "0", "-show_data", "-show_streams", "-show_packets", "-show_entries", "stream=index,codec_type,codec_name,width,height,pix_fmt,sample_rate,channels,profile,r_frame_rate,sample_aspect_ratio,extradata:packet=stream_index,pts_time,duration_time,flags", "-of", "json", path)
 			if err != nil {
 				return err
 			}
@@ -94,7 +94,7 @@ func (p PackageMediaProbe) Validate(ctx context.Context, inv assets.RecordingPac
 			if err != nil {
 				return fmt.Errorf("segment stream or timeline: %w", err)
 			}
-			first, err := boundedProbeCommand(ctx, p.FFprobe, "-v", "error", "-protocol_whitelist", "file", "-enable_drefs", "0", "-use_absolute_path", "0", "-select_streams", "v:0", "-read_intervals", "%+#1", "-show_packets", "-show_data", "-show_entries", "packet=flags,data", "-of", "json", path)
+			first, err := ProbeCommand(ctx, p.FFprobe, "-v", "error", "-protocol_whitelist", "file", "-enable_drefs", "0", "-use_absolute_path", "0", "-select_streams", "v:0", "-read_intervals", "%+#1", "-show_packets", "-show_data", "-show_entries", "packet=flags,data", "-of", "json", path)
 			if err != nil {
 				return err
 			}
@@ -162,7 +162,10 @@ func (p PackageMediaProbe) Validate(ctx context.Context, inv assets.RecordingPac
 	return nil
 }
 
-func boundedProbeCommand(ctx context.Context, binary string, args ...string) ([]byte, error) {
+// ProbeCommand shares the existing bounded, deadline-limited metadata runner
+// with source processing. Callers must supply their restricted protocol/demuxer
+// arguments and only a server-owned source URL or private fragment path.
+func ProbeCommand(ctx context.Context, binary string, args ...string) ([]byte, error) {
 	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(probeCtx, binary, args...)
@@ -240,20 +243,11 @@ func validatePackageSegmentProbe(data []byte, r assets.RecordingRendition) (segm
 			if video != -1 || s.Index < 0 || s.Codec != "h264" || s.Width != r.Width || s.Height != r.Height || s.PixelFormat != "yuv420p" || s.Aspect != "1:1" || e1 != nil || e2 != nil || !finite(n) || !finite(d) || d <= 0 || math.Abs(n/d-r.FrameRate) > 0.001 {
 				return invalid()
 			}
-			// AVCC starts with configurationVersion, profile, compatibility, level.
-			lines := strings.Split(strings.TrimSpace(s.Extra), "\n")
-			if len(lines) == 0 {
+			var err error
+			codecs, err = avccCodecs(s.Extra)
+			if err != nil {
 				return invalid()
 			}
-			fields := strings.Fields(lines[0])
-			if len(fields) < 4 || fields[0] != "00000000:" || len(fields[3]) < 2 {
-				return invalid()
-			}
-			avcc, err := hex.DecodeString(fields[1] + fields[2] + fields[3][:2])
-			if err != nil || len(avcc) != 5 || avcc[0] != 1 || avcc[4] != 0xff {
-				return invalid()
-			}
-			codecs = "avc1." + hex.EncodeToString(avcc[1:4]) + ",mp4a.40.2"
 			video = s.Index
 		case "audio":
 			if audio != -1 || s.Index < 0 || s.Codec != "aac" || s.Profile != "LC" || s.SampleRate != "48000" || s.Channels < 1 || s.Channels > 2 {
@@ -328,6 +322,102 @@ func validatePackageSegmentProbe(data []byte, r assets.RecordingRendition) (segm
 		return invalid()
 	}
 	return segmentProbe{Start: v[0].pts, End: end, Codecs: codecs}, nil
+}
+
+func avccCodecs(extra string) (string, error) {
+	// AVCC starts with configurationVersion, profile, compatibility, level.
+	first := strings.Split(strings.TrimSpace(extra), "\n")[0]
+	fields := strings.Fields(first)
+	if len(fields) < 4 || fields[0] != "00000000:" || len(fields[3]) < 2 {
+		return "", assets.ErrInvalidUpload
+	}
+	avcc, err := hex.DecodeString(fields[1] + fields[2] + fields[3][:2])
+	if err != nil || len(avcc) != 5 || avcc[0] != 1 || avcc[4] != 0xff {
+		return "", assets.ErrInvalidUpload
+	}
+	return "avc1." + hex.EncodeToString(avcc[1:4]) + ",mp4a.40.2", nil
+}
+
+// InitCodecs derives the master playlist's codec labels from the actual encoded
+// initialization object. Full packet/IDR/decode checks still run in Validate.
+func (p PackageMediaProbe) InitCodecs(ctx context.Context, prefix, name string, size int64) (codecs string, result error) {
+	if p.Objects == nil || !filepath.IsAbs(p.FFprobe) || (name != "720p" && name != "1080p") || size <= 0 || size > assets.RecordingObjectMaxBytes {
+		return "", assets.ErrInvalidInput
+	}
+	dir, err := os.MkdirTemp(p.ScratchRoot, "hhc-init-")
+	if err != nil {
+		return "", err
+	}
+	defer func() { result = errors.Join(result, os.RemoveAll(dir)) }()
+	var disk syscall.Statfs_t
+	if err := syscall.Statfs(dir, &disk); err != nil {
+		return "", err
+	}
+	if disk.Bsize <= 0 || uint64(size+(64<<20))/uint64(disk.Bsize)+1 > disk.Bavail {
+		return "", errors.New("insufficient init scratch capacity")
+	}
+	path := filepath.Join(dir, "init.mp4")
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return "", err
+	}
+	body, err := p.Objects.Open(ctx, prefix+name+"/init.mp4")
+	if err != nil {
+		file.Close()
+		return "", err
+	}
+	n, err := io.CopyBuffer(file, io.LimitReader(body, size+1), make([]byte, 64<<10))
+	if err = errors.Join(err, body.Close(), file.Close()); err != nil {
+		return "", err
+	}
+	if n != size {
+		return "", assets.ErrInvalidUpload
+	}
+	data, err := ProbeCommand(ctx, p.FFprobe, "-v", "error", "-protocol_whitelist", "file", "-format_whitelist", "mov", "-enable_drefs", "0", "-use_absolute_path", "0", "-show_streams", "-show_data", "-show_entries", "stream=codec_type,codec_name,profile,extradata", "-of", "json", path)
+	if err != nil {
+		return "", err
+	}
+	var output struct {
+		Streams []struct {
+			Type    string `json:"codec_type"`
+			Codec   string `json:"codec_name"`
+			Profile string `json:"profile"`
+			Extra   string `json:"extradata"`
+		} `json:"streams"`
+	}
+	if json.Unmarshal(data, &output) != nil || len(output.Streams) != 2 {
+		return "", assets.ErrInvalidUpload
+	}
+	video, audio := false, false
+	for _, stream := range output.Streams {
+		switch {
+		case stream.Type == "video" && stream.Codec == "h264" && !video:
+			codecs, err = avccCodecs(stream.Extra)
+			if err != nil {
+				return "", err
+			}
+			video = true
+		case stream.Type == "audio" && stream.Codec == "aac" && !audio:
+			// An init-only file has no decoded packets, so ffprobe may omit
+			// profile. AudioSpecificConfig's first five bits are the object
+			// type: 2 is AAC-LC. Full decode validates the packets afterwards.
+			fields := strings.Fields(strings.Split(strings.TrimSpace(stream.Extra), "\n")[0])
+			if len(fields) < 2 || fields[0] != "00000000:" || len(fields[1]) < 2 {
+				return "", assets.ErrInvalidUpload
+			}
+			first, err := strconv.ParseUint(fields[1][:2], 16, 8)
+			if err != nil || first>>3 != 2 {
+				return "", assets.ErrInvalidUpload
+			}
+			audio = true
+		default:
+			return "", assets.ErrInvalidUpload
+		}
+	}
+	if !video || !audio {
+		return "", assets.ErrInvalidUpload
+	}
+	return codecs, nil
 }
 
 func finite(n float64) bool { return !math.IsNaN(n) && !math.IsInf(n, 0) }

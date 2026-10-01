@@ -20,6 +20,30 @@ import (
 
 var recordingSourceID = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
+// DeleteRecordingSource cannot accept an arbitrary Blob key or container.
+// The repository supplies all <=3 durable attempt IDs, including failed copies.
+func (s *Store) DeleteRecordingSource(ctx context.Context, id string, attempts []string) error {
+	staging, err := recordingSourceKey(id)
+	if err != nil || len(attempts) > 3 {
+		return assets.ErrInvalidInput
+	}
+	keys := []string{staging}
+	seen := map[string]bool{}
+	for _, attempt := range attempts {
+		if !recordingSourceID.MatchString(attempt) || seen[attempt] {
+			return assets.ErrInvalidInput
+		}
+		seen[attempt] = true
+		keys = append(keys, "recording-sources/"+id+"/final/"+attempt+"/source")
+	}
+	for _, key := range keys {
+		if err := s.Delete(ctx, key); err != nil {
+			return recordingSourceError(err)
+		}
+	}
+	return nil
+}
+
 func recordingSourceKey(id string) (string, error) {
 	if !recordingSourceID.MatchString(id) {
 		return "", assets.ErrInvalidInput

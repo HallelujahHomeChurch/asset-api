@@ -22,11 +22,11 @@ func (s *RecordingSourceStore) WithSessionLock(ctx context.Context, id string, f
 	return s.locks.WithSessionLock(ctx, "source-"+id, fn)
 }
 
-const recordingSourceColumns = `id,owner_service,actor_id,recording_id,idempotency_key,file_name,size_bytes,checksum_sha256,block_count,state,created_at,expires_at,completed_at,retry_until,COALESCE(staging_etag,'')`
+const recordingSourceColumns = `id,owner_service,actor_id,recording_id,idempotency_key,file_name,size_bytes,checksum_sha256,block_count,state,created_at,expires_at,completed_at,retry_until,COALESCE(staging_etag,''),COALESCE(copy_attempt_id,''),COALESCE(source_key,''),COALESCE(source_etag,''),source_verified_at,processing_attempts,COALESCE(processing_error,''),COALESCE(package_id,'')`
 
 func scanRecordingSource(row *sql.Row) (assets.RecordingSource, error) {
 	var p assets.RecordingSource
-	err := row.Scan(&p.ID, &p.OwnerService, &p.ActorID, &p.RecordingID, &p.IdempotencyKey, &p.FileName, &p.SizeBytes, &p.ChecksumSHA256, &p.BlockCount, &p.State, &p.CreatedAt, &p.ExpiresAt, &p.CompletedAt, &p.RetryUntil, &p.StagingETag)
+	err := row.Scan(&p.ID, &p.OwnerService, &p.ActorID, &p.RecordingID, &p.IdempotencyKey, &p.FileName, &p.SizeBytes, &p.ChecksumSHA256, &p.BlockCount, &p.State, &p.CreatedAt, &p.ExpiresAt, &p.CompletedAt, &p.RetryUntil, &p.StagingETag, &p.CopyAttemptID, &p.SourceKey, &p.SourceETag, &p.SourceVerifiedAt, &p.ProcessingAttempts, &p.FailureCode, &p.PackageID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return p, assets.ErrNotFound
 	}

@@ -2,57 +2,61 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 )
 
 type Config struct {
-	Port                 string
-	DatabaseURL          string
-	PublicBaseURL        string
-	StorageBackend       string
-	LocalDirectory       string
-	LocalUploadBaseURL   string
-	LocalSigningKey      string
-	AzureAccountURL      string
-	AzureContainer       string
-	R2AccountID          string
-	R2Bucket             string
-	R2AccessKeyID        string
-	R2SecretAccessKey    string
-	RecordingHLSEnabled  bool
-	MediaPrivateKeyPEM   string
-	MediaKeyID           string
-	MediaIssuer          string
-	ScanQueueURL         string
-	DerivativeQueueURL   string
-	ScanDispatchEnabled  bool
-	EmbeddedScanEnabled  bool
-	ClamAVHost           string
-	ClamAVPort           int
-	ClamAVTimeout        time.Duration
-	ClamAVMaxFileSize    int64
-	ClamAVMaxRetries     int
-	DBMaxOpenConns       int
-	DBMaxIdleConns       int
-	DBConnMaxLifetime    time.Duration
-	AllowedCallers       map[string]bool
-	ReaderCallerAppID    string
-	AllowDevCallerHeader bool
-	AppAPIToken          string
-	WorkloadTenantID     string
-	WorkloadIssuer       string
-	WorkloadAudience     string
-	WorkloadRequiredRole string
-	LineWorkloadClientID string
-	LineWorkloadObjectID string
-	ShutdownTimeout      time.Duration
-	AuditDispatchEnabled bool
-	AuditAppID           string
-	AuditToken           string
-	DaprHTTPPort         int
+	Port                      string
+	DatabaseURL               string
+	PublicBaseURL             string
+	StorageBackend            string
+	LocalDirectory            string
+	LocalUploadBaseURL        string
+	LocalSigningKey           string
+	AzureAccountURL           string
+	AzureContainer            string
+	R2AccountID               string
+	R2Bucket                  string
+	R2AccessKeyID             string
+	R2SecretAccessKey         string
+	RecordingHLSEnabled       bool
+	RecordingSourceAccountURL string
+	RecordingSourceContainer  string
+	MediaPrivateKeyPEM        string
+	MediaKeyID                string
+	MediaIssuer               string
+	ScanQueueURL              string
+	DerivativeQueueURL        string
+	ScanDispatchEnabled       bool
+	EmbeddedScanEnabled       bool
+	ClamAVHost                string
+	ClamAVPort                int
+	ClamAVTimeout             time.Duration
+	ClamAVMaxFileSize         int64
+	ClamAVMaxRetries          int
+	DBMaxOpenConns            int
+	DBMaxIdleConns            int
+	DBConnMaxLifetime         time.Duration
+	AllowedCallers            map[string]bool
+	ReaderCallerAppID         string
+	AllowDevCallerHeader      bool
+	AppAPIToken               string
+	WorkloadTenantID          string
+	WorkloadIssuer            string
+	WorkloadAudience          string
+	WorkloadRequiredRole      string
+	LineWorkloadClientID      string
+	LineWorkloadObjectID      string
+	ShutdownTimeout           time.Duration
+	AuditDispatchEnabled      bool
+	AuditAppID                string
+	AuditToken                string
+	DaprHTTPPort              int
 }
 
 func Load() (Config, error) {
@@ -131,6 +135,10 @@ func Load() (Config, error) {
 	}
 	if cfg.RecordingHLSEnabled && r2Configured != len(r2Values) {
 		return Config{}, fmt.Errorf("R2 recording configuration is required when HLS is enabled")
+	}
+	cfg.RecordingSourceAccountURL, cfg.RecordingSourceContainer, err = RecordingSourceStorage(cfg.RecordingHLSEnabled)
+	if err != nil {
+		return Config{}, err
 	}
 	if cfg.AllowedCallers[cfg.ReaderCallerAppID] {
 		return Config{}, fmt.Errorf("ASSET_READER_CALLER_APP_ID must not be in ASSET_ALLOWED_CALLERS")
@@ -226,6 +234,33 @@ func RecordingHLSFlag() (bool, error) {
 		return false, fmt.Errorf("invalid ASSET_RECORDING_HLS_ENABLED")
 	}
 	return enabled, nil
+}
+
+var sourceContainerPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$`)
+
+// A separate opt-in keeps both source ingress and Job processing dark until
+// source storage, CORS, managed identity and resource limits are approved.
+func RecordingSourceStorage(hls bool) (string, string, error) {
+	enabled, err := strconv.ParseBool(value("ASSET_RECORDING_SOURCE_ENABLED", "false"))
+	if err != nil {
+		return "", "", fmt.Errorf("invalid ASSET_RECORDING_SOURCE_ENABLED")
+	}
+	if !enabled {
+		return "", "", nil
+	}
+	if !hls {
+		return "", "", fmt.Errorf("recording source processing requires HLS")
+	}
+	account := strings.TrimRight(strings.TrimSpace(os.Getenv("ASSET_RECORDING_SOURCE_ACCOUNT_URL")), "/")
+	container := strings.TrimSpace(os.Getenv("ASSET_RECORDING_SOURCE_CONTAINER"))
+	u, err := url.Parse(account)
+	if err != nil || u.Scheme != "https" || !strings.HasSuffix(u.Hostname(), ".blob.core.windows.net") || u.Port() != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "" || !sourceContainerPattern.MatchString(container) || strings.Contains(container, "--") {
+		return "", "", fmt.Errorf("invalid recording source storage configuration")
+	}
+	if account == strings.TrimRight(strings.TrimSpace(os.Getenv("ASSET_AZURE_ACCOUNT_URL")), "/") && container == value("ASSET_AZURE_CONTAINER", "assets") {
+		return "", "", fmt.Errorf("recording source storage must use a separate container")
+	}
+	return account, container, nil
 }
 
 func positiveInt(key string, destination *int) error {
