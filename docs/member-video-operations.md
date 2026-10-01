@@ -1,5 +1,35 @@
 # Member video operations
 
+## Gated HLS package path (not yet activated)
+
+The new Pages route is
+`/videos/{recording}/packages/{package}/sessions/{scope}/{object}`. Only
+`master.m3u8`, `720p|1080p/index.m3u8`, `init.mp4` and `seg-NNNNNN.m4s`
+are served. Inventory, arbitrary keys, query credentials and encoded paths are
+not media routes. Package cookies contain a signer-authorized immutable final
+prefix, never an upload/staging prefix. Exchange and renewal preserve the
+package/session cookie path; the player does not need a new source URL.
+
+Authorization runs before every R2 read and internal cache lookup. The cache key
+uses the immutable final object identity and omits viewer cookies/session IDs;
+cached bytes can be shared internally only after each viewer is authenticated.
+All viewer responses remain `private, no-store`. Full successful GETs may be
+cached internally for one day; Range responses are not inserted. Cache failure
+falls back to private R2 without bypassing authentication. HEAD and conditional
+or Range hits remain protected. Cache expiry does not extend playback grant or
+recording retention. The synthetic cache path itself is not publicly routable.
+See [Cloudflare Cache API](https://developers.cloudflare.com/workers/runtime-apis/cache/)
+for local-cache and Range behavior. Edge placement/cache-hit ratio and charges
+still require production measurements.
+
+Local checks include the signed-cookie/R2/Cache flow in Wrangler's pinned
+Cloudflare runtime, but are not deployment or browser/device acceptance.
+Keep `ASSET_RECORDING_HLS_ENABLED` off until CMS, Gateway and player cutover
+checks pass. The following legacy MP4 procedures remain applicable only until
+that separately reviewed cutover; ordinary Blob scanning stays unchanged.
+
+## Existing MP4 path
+
 The recording path is isolated from Blob uploads and ClamAV. It accepts only
 MP4 candidates through private R2 multipart sessions, validates SHA-256 and
 media format, and serves ready versions through the Pages media function. Format

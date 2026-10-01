@@ -16,6 +16,7 @@ import (
 )
 
 var mediaID = regexp.MustCompile(`^[a-zA-Z0-9-]{1,80}$`)
+var recordingFinalPrefix = regexp.MustCompile(`^recordings/packages/[a-zA-Z0-9-]{1,80}/final/[a-zA-Z0-9-]{1,80}/$`)
 
 type RecordingSigner struct {
 	key    *ecdsa.PrivateKey
@@ -47,6 +48,20 @@ func (s *RecordingSigner) Issue(recordingID, assetVersionID, scopeID, objectKey 
 	if !mediaID.MatchString(recordingID) || !mediaID.MatchString(assetVersionID) || !mediaID.MatchString(scopeID) || !strings.HasPrefix(objectKey, "recordings/") || strings.Contains(objectKey, "..") {
 		return RecordingGrant{}, ErrInvalidInput
 	}
+	return s.issue(map[string]any{"recordingId": recordingID, "assetVersionId": assetVersionID, "scopeId": scopeID}, map[string]any{"objectKey": objectKey}, recordingExpiry, now)
+}
+
+func (s *RecordingSigner) IssuePackage(p RecordingPackage, scopeID string, recordingExpiry, now time.Time) (RecordingGrant, error) {
+	if !mediaID.MatchString(p.ID) || !mediaID.MatchString(p.RecordingID) || !mediaID.MatchString(scopeID) || p.State != "ready" || p.OwnerService != "hhc-web-api" || p.ReadyAt == nil || p.MediaExpiresAt == nil || !recordingFinalPrefix.MatchString(p.FinalPrefix) || strings.Split(p.FinalPrefix, "/")[2] != p.ID {
+		return RecordingGrant{}, ErrInvalidInput
+	}
+	if p.MediaExpiresAt.Before(recordingExpiry) {
+		recordingExpiry = *p.MediaExpiresAt
+	}
+	return s.issue(map[string]any{"recordingId": p.RecordingID, "packageId": p.ID, "scopeId": scopeID}, map[string]any{"prefix": p.FinalPrefix}, recordingExpiry, now)
+}
+
+func (s *RecordingSigner) issue(base, resource map[string]any, recordingExpiry, now time.Time) (RecordingGrant, error) {
 	now = now.UTC()
 	expiry := now.Add(time.Hour)
 	if recordingExpiry.Before(expiry) {
@@ -55,14 +70,13 @@ func (s *RecordingSigner) Issue(recordingID, assetVersionID, scopeID, objectKey 
 	if expiry.Unix() <= now.Unix() {
 		return RecordingGrant{}, ErrForbidden
 	}
-	base := map[string]any{
-		"iss": s.issuer, "aud": "hhc-media", "recordingId": recordingID,
-		"assetVersionId": assetVersionID, "scopeId": scopeID, "nbf": now.Unix(),
-	}
+	base["iss"], base["aud"], base["nbf"] = s.issuer, "hhc-media", now.Unix()
 	playback := cloneClaims(base)
 	playback["typ"] = "playback"
 	playback["exp"] = expiry.Unix()
-	playback["objectKey"] = objectKey
+	for key, value := range resource {
+		playback[key] = value
+	}
 	playbackToken, err := s.sign(playback)
 	if err != nil {
 		return RecordingGrant{}, err

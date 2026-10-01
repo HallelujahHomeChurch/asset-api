@@ -17,6 +17,7 @@ type recordingLockConnKey struct{}
 type recordingStatements interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 	QueryRowContext(context.Context, string, ...any) *sql.Row
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }
 
 func (s *RecordingUploadStore) statements(ctx context.Context) recordingStatements {

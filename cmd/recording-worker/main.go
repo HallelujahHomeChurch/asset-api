@@ -14,9 +14,12 @@ import (
 	"time"
 
 	"hhc/asset-api/internal/assets"
+	"hhc/asset-api/internal/config"
 	"hhc/asset-api/internal/logging"
 	"hhc/asset-api/internal/postgres"
+	"hhc/asset-api/internal/recordingprocessing"
 	"hhc/asset-api/internal/recordingvalidation"
+	azurestorage "hhc/asset-api/internal/storage/azure"
 	"hhc/asset-api/internal/storage/r2"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -36,6 +39,14 @@ func main() {
 }
 
 func run(ctx context.Context) error {
+	hlsEnabled, err := config.RecordingHLSFlag()
+	if err != nil {
+		return err
+	}
+	sourceAccount, sourceContainer, err := config.RecordingSourceStorage(hlsEnabled)
+	if err != nil {
+		return err
+	}
 	dsn := strings.TrimSpace(os.Getenv("DATABASE_URL"))
 	if dsn == "" {
 		return errors.New("DATABASE_URL is required")
@@ -50,6 +61,27 @@ func run(ctx context.Context) error {
 	}
 	defer db.Close()
 	db.SetMaxOpenConns(3)
+	if hlsEnabled {
+		packages := postgres.NewRecordingPackageStore(db)
+		probe := recordingvalidation.PackageMediaProbe{Objects: objects, FFmpeg: "/usr/bin/ffmpeg", FFprobe: "/usr/bin/ffprobe"}
+		cleanupErr := packages.ReconcilePackages(ctx, objects.DeletePackageObjects)
+		if sourceAccount != "" {
+			sources, err := azurestorage.New(sourceAccount, sourceContainer)
+			if err != nil {
+				return errors.Join(cleanupErr, err)
+			}
+			repository := postgres.NewRecordingSourceStore(db)
+			cleanupErr = errors.Join(cleanupErr, repository.ReconcileSources(ctx, sources.DeleteRecordingSource, objects.DeleteSourceAttempt))
+			// One long processing claim per execution keeps the 5.5-hour app
+			// deadline inside the six-hour platform Job timeout.
+			processed, err := recordingprocessing.RunSourceProcessing(ctx, repository, sources, objects, probe)
+			if processed || err != nil {
+				return errors.Join(cleanupErr, err)
+			}
+		}
+		validationErr := recordingvalidation.RunPackageValidation(ctx, packages, objects, probe)
+		return errors.Join(validationErr, cleanupErr)
+	}
 	repository := postgres.NewRecordingUploadStore(db)
 	worker := recordingvalidation.New(repository, objects.Open, func(ctx context.Context, key string) ([]byte, error) {
 		url, err := objects.PresignProbeRead(ctx, key, 15*time.Minute)

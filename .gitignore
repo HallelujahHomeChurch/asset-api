@@ -6,6 +6,7 @@ bin/
 coverage.out
 infra/main.bicepparam
 workers/member-media/node_modules/
+workers/member-media/.artifacts/
 workers/member-media/dist/
 workers/member-media/**/.wrangler/
 workers/member-media/pages/*/dist/
