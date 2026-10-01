@@ -56,6 +56,29 @@ az deployment group what-if -g alive -f infra/recording-source.bicep \
 
 ## Existing assets
 
+### Recording cutover release checklist
+
+The source account bootstrap completed separately from runtime activation.
+Before enabling `RECORDING_HLS_ENABLED=true` and
+`RECORDING_SOURCE_ENABLED=true`, verify the HLS-only CMS, Gateway, shared client,
+Admin uploader, member player and media Worker releases. Keep
+`MEMBER_VIDEO_ENABLED=true`; do not change ordinary scan, retention or storage
+settings as part of this cutover. Use a newly merged release checkpoint so its
+immutable image and governance evidence identify the activation release.
+
+The reviewed activation delta is limited to the API's two recording flags and
+the dedicated recording Job's matching flags, runtime managed-identity selector,
+4 vCPU / 8 GiB, 21,600-second timeout and zero platform retries. ARM may express
+unchanged registry and Key Vault references differently; resolve those references
+before accepting the preview. Any other resource change requires investigation.
+
+After CI/CD succeeds, verify the API's ready revision, the exact recording Job
+image/configuration and an unauthenticated HLS object denial. Then exercise a
+controlled CLI package and browser source through server-confirmed readiness.
+Publication/notification and real-device acceptance are separate checks, not
+implied by a successful deployment. On failure, use the release rollback path;
+never drop historical schema or delete source/R2 data to make a release pass.
+
 The template creates `asset-api` in the existing `alive-env`, enables Dapr
 with app id `asset-api`, creates a private Blob container, and assigns its
 dedicated pull identity ACR pull, plus its system identity container-scoped
