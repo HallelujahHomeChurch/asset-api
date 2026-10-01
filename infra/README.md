@@ -40,6 +40,12 @@ change set, then dispatch with `apply=true` and confirmation
 `create-recording-source-storage`. Its guard permits only new resources under
 the exact source account, never modifications/deletions. Do not grant extra
 pipeline RBAC implicitly if provisioning reports insufficient permission.
+The source workflow uses full `Provider` permission validation, not
+`ProviderNoRbac`. The currently inspected production deployer has Contributor
+only and cannot bootstrap role assignments: this workflow is not deployable
+under that identity until a separate authorization decision. A one-time
+operator bootstrap from merged code requires its own explicit approval; it
+must not be silently substituted for CI or expand pipeline permissions.
 Rolling back application images does not
 delete sources, published R2 objects, or database state.
 

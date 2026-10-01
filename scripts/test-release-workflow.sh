@@ -2,6 +2,7 @@
 set -eu
 
 workflow=.github/workflows/release.yml
+grep -Fq -- '--validation-level Provider' .github/workflows/recording-source.yml
 
 grep -q 'workflow_dispatch:' "$workflow"
 grep -q 'fail_openapi_before_pointer:' "$workflow"
