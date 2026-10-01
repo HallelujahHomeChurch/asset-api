@@ -66,7 +66,12 @@ Blob keys: 16 MiB blocks, up to 2,981 blocks for the independent 50 GB source
 budget, exact block IDs/tail sizes and write-only blob-scoped user-delegation
 SAS capped at fifteen minutes. Commit checks the returned ETag and size, without
 reading/copying/hashing the whole source in the API request. These primitives
-are not yet exposed as source-ingest routes or wired into the processing Job.
+back private `/priv/recording-sources` create/status/sign/complete handlers.
+Completion commits only validated block metadata and persists one ETag-pinned
+`finalizing` receipt; retries never extend its seven-day retention window.
+PostgreSQL enforces one active source per actor. Status pages support all 2,981
+blocks without a 1,000-block truncation. The handlers remain disabled in server
+wiring until immutable source finalization and the processing Job are complete.
 They do not create normal asset records or invoke the existing malware scanner.
 A write SAS can still overwrite its staging blob; immutable ETag-fenced
 finalization and server-side SHA-256 validation remain required before encode.

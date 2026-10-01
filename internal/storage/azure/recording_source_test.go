@@ -2,6 +2,7 @@ package azure
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"net/http"
@@ -56,6 +57,73 @@ func TestSourceBlockSASIsWriteOnlySingleBlobAndShortLived(t *testing.T) {
 	}
 	if keys != 1 {
 		t.Fatal("invalid requests reached credential provider")
+	}
+}
+
+func TestSourceCopyResumesPendingWithoutRewritingImmutableDestination(t *testing.T) {
+	id, attempt := strings.Repeat("a", 32), strings.Repeat("b", 32)
+	source := assets.RecordingSource{ID: id, SizeBytes: 5, ChecksumSHA256: strings.Repeat("c", 64), StagingETag: `"staging-v2"`}
+	storedETagHash := fmt.Sprintf("%x", sha256.Sum256([]byte(source.StagingETag)))
+	created, copies, state := false, 0, "pending"
+	target := "/source-fixture/recording-sources/" + id + "/final/" + attempt + "/source"
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != target {
+			t.Error("unexpected source/destination path")
+			w.WriteHeader(400)
+			return
+		}
+		switch r.Method {
+		case "HEAD":
+			if !created {
+				w.Header().Set("x-ms-error-code", "BlobNotFound")
+				w.WriteHeader(404)
+				return
+			}
+			w.Header().Set("x-ms-copy-id", "copy-a")
+			w.Header().Set("x-ms-copy-status", state)
+			w.Header().Set("ETag", `"immutable-v3"`)
+			w.Header().Set("Content-Length", "5")
+			w.Header().Set("x-ms-meta-hhc_source", id)
+			w.Header().Set("x-ms-meta-hhc_etag", storedETagHash)
+			w.Header().Set("x-ms-meta-hhc_sha256", source.ChecksumSHA256)
+		case "PUT":
+			copies++
+			created = true
+			from, err := url.Parse(r.Header.Get("x-ms-copy-source"))
+			if err != nil || from.Path != "/source-fixture/recording-sources/"+id+"/staging" || from.RawQuery != "" || r.Header.Get("x-ms-source-if-match") != source.StagingETag || r.Header.Get("If-None-Match") != "*" {
+				t.Error("copy must fence source and never replace destination or use public SAS")
+			}
+			if r.Header.Get("x-ms-meta-hhc_source") != id || r.Header.Get("x-ms-meta-hhc_sha256") != source.ChecksumSHA256 {
+				t.Error("copy identity missing")
+			}
+			w.Header().Set("x-ms-copy-id", "copy-a")
+			w.Header().Set("x-ms-copy-status", "pending")
+			w.WriteHeader(202)
+		default:
+			t.Error("copy API must not download source bytes")
+			w.WriteHeader(400)
+		}
+	}))
+	defer server.Close()
+	client, err := azblob.NewClientWithNoCredential(server.URL, &azblob.ClientOptions{ClientOptions: azcore.ClientOptions{Transport: server.Client()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &Store{client: client, container: "source-fixture"}
+	for i := 0; i < 2; i++ {
+		copy, err := store.CopyRecordingSource(context.Background(), source, attempt)
+		if err != nil || copy.State != "pending" || copy.CopyID != "copy-a" {
+			t.Fatalf("pending copy: %+v %v", copy, err)
+		}
+	}
+	state = "success"
+	copy, err := store.CopyRecordingSource(context.Background(), source, attempt)
+	if err != nil || copy.State != "success" || copy.ETag != `"immutable-v3"` || copy.SizeBytes != 5 || copies != 1 {
+		t.Fatalf("recovered copy %+v %v calls=%d", copy, err, copies)
+	}
+	source.StagingETag = `"changed"`
+	if _, err := store.CopyRecordingSource(context.Background(), source, attempt); err == nil {
+		t.Fatal("reused destination for changed source version")
 	}
 }
 

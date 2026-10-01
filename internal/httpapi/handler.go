@@ -33,6 +33,7 @@ type Handler struct {
 	audit                *auditoutbox.Store
 	recordingUpload      *assets.RecordingUploadService
 	recordingPackages    *assets.RecordingPackageService
+	recordingSources     *assets.RecordingSourceService
 	recordingAssets      interface {
 		GetByVersion(context.Context, string) (assets.RecordingUploadSession, error)
 	}
@@ -64,6 +65,10 @@ func (h *Handler) WithRecordingUpload(service *assets.RecordingUploadService) *H
 }
 func (h *Handler) WithRecordingPackages(service *assets.RecordingPackageService) *Handler {
 	h.recordingPackages = service
+	return h
+}
+func (h *Handler) WithRecordingSources(service *assets.RecordingSourceService) *Handler {
+	h.recordingSources = service
 	return h
 }
 func (h *Handler) WithRecordingGrants(repository interface {
@@ -128,6 +133,10 @@ func (h *Handler) Routes() http.Handler {
 	mux.Handle("POST /priv/assets/upload-sessions", h.internal(http.HandlerFunc(h.createUpload)))
 	mux.Handle("POST /priv/recording-uploads", h.internal(http.HandlerFunc(h.createRecordingUpload)))
 	mux.Handle("POST /priv/recording-packages", h.internal(http.HandlerFunc(h.createRecordingPackage)))
+	mux.Handle("POST /priv/recording-sources", h.internal(http.HandlerFunc(h.createRecordingSource)))
+	mux.Handle("GET /priv/recording-sources/{sourceID}", h.internal(http.HandlerFunc(h.getRecordingSource)))
+	mux.Handle("POST /priv/recording-sources/{sourceID}/sign", h.internal(http.HandlerFunc(h.signRecordingSource)))
+	mux.Handle("POST /priv/recording-sources/{sourceID}/complete", h.internal(http.HandlerFunc(h.completeRecordingSource)))
 	mux.Handle("GET /priv/recording-packages/{packageID}", h.internal(http.HandlerFunc(h.getRecordingPackage)))
 	mux.Handle("GET /priv/recording-packages/{packageID}/ready", h.internal(http.HandlerFunc(h.getReadyRecordingPackage)))
 	mux.Handle("POST /priv/recording-packages/{packageID}/sign", h.internal(http.HandlerFunc(h.signRecordingPackage)))
@@ -1208,6 +1217,8 @@ func handleError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, "AST_NOT_FOUND", "asset not found")
 	case errors.Is(err, assets.ErrAuditUnavailable):
 		writeError(w, http.StatusServiceUnavailable, "AST_AUDIT_UNAVAILABLE", "audit logging is unavailable")
+	case errors.Is(err, assets.ErrRecordingStorageUnavailable):
+		writeError(w, http.StatusServiceUnavailable, "AST_UNAVAILABLE", "recording source storage is unavailable")
 	default:
 		writeError(w, http.StatusInternalServerError, "AST_INTERNAL", "internal error")
 	}

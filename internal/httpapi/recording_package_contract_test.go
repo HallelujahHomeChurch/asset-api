@@ -28,11 +28,14 @@ func TestRecordingPackageWireFieldsMatchOpenAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, value := range map[string]any{
-		"RecordingPackage":          assets.RecordingPackage{},
-		"RecordingPackageStatus":    assets.RecordingPackageStatus{},
-		"RecordingPackageInventory": assets.RecordingPackageInventory{InventoryDigest: strings.Repeat("a", 64)},
-		"RecordingPackageObject":    assets.RecordingPackageObject{},
-		"RecordingRendition":        assets.RecordingRendition{},
+		"RecordingSource":            assets.RecordingSource{},
+		"RecordingSourceStatus":      assets.RecordingSourceStatus{},
+		"SignedRecordingSourceBlock": assets.SignedRecordingSourceBlock{},
+		"RecordingPackage":           assets.RecordingPackage{},
+		"RecordingPackageStatus":     assets.RecordingPackageStatus{},
+		"RecordingPackageInventory":  assets.RecordingPackageInventory{InventoryDigest: strings.Repeat("a", 64)},
+		"RecordingPackageObject":     assets.RecordingPackageObject{},
+		"RecordingRendition":         assets.RecordingRendition{},
 	} {
 		t.Run(name, func(t *testing.T) {
 			data, err := json.Marshal(value)

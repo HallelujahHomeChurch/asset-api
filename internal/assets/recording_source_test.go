@@ -64,3 +64,15 @@ func TestSourceBlockClosureRejectsMissingExtraDuplicateAndWrongSizes(t *testing.
 		}
 	}
 }
+
+func TestSourceConfirmedBlocksAreOrderedPartialAndValidated(t *testing.T) {
+	first, _ := RecordingSourceBlockID(1)
+	last, _ := RecordingSourceBlockID(2981)
+	blocks, err := ConfirmedRecordingSourceBlocks(RecordingSourceMaxBytes, nil, []RecordingSourceBlock{{ID: last, SizeBytes: RecordingSourceMaxBytes - 2980*RecordingSourceBlockBytes}, {ID: first, SizeBytes: RecordingSourceBlockBytes}})
+	if err != nil || len(blocks) != 2 || blocks[0] != 1 || blocks[1] != 2981 {
+		t.Fatalf("partial blocks: %v %v", blocks, err)
+	}
+	if _, err := ConfirmedRecordingSourceBlocks(5, nil, []RecordingSourceBlock{{ID: first, SizeBytes: 6}}); err == nil {
+		t.Fatal("oversized partial block accepted")
+	}
+}

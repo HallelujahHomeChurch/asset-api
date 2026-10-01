@@ -22,6 +22,12 @@ type RecordingSourceBlockList struct {
 	ETag        string
 }
 
+// Internal provider result, never a browser DTO or proof of a verified hash.
+type RecordingSourceCopy struct {
+	Key, CopyID, State, ETag string
+	SizeBytes                int64
+}
+
 // Browser sources use Azure block blobs, not the legacy 597-part R2 upload.
 func RecordingSourceBlockCount(size int64) (int, error) {
 	if err := ValidateRecordingSourceSize(size); err != nil {
@@ -42,6 +48,24 @@ func RecordingSourceBlockID(number int) (string, error) {
 // duplicate IDs within either set, missing blocks and incorrect tails fail closed.
 // This is metadata validation, not verification of the source SHA-256/media.
 func ValidateRecordingSourceBlocks(size int64, committed, uncommitted []RecordingSourceBlock) ([]string, error) {
+	confirmed, err := ConfirmedRecordingSourceBlocks(size, committed, uncommitted)
+	if err != nil {
+		return nil, err
+	}
+	count, _ := RecordingSourceBlockCount(size)
+	if len(confirmed) != count {
+		return nil, ErrInvalidUpload
+	}
+	ids := make([]string, count)
+	for i, number := range confirmed {
+		ids[i], _ = RecordingSourceBlockID(number)
+	}
+	return ids, nil
+}
+
+// ConfirmedRecordingSourceBlocks validates every returned block even when a
+// caller requests just one page. No untrusted or oversized block is resumable.
+func ConfirmedRecordingSourceBlocks(size int64, committed, uncommitted []RecordingSourceBlock) ([]int, error) {
 	count, err := RecordingSourceBlockCount(size)
 	if err != nil {
 		return nil, err
@@ -71,8 +95,11 @@ func ValidateRecordingSourceBlocks(size int64, committed, uncommitted []Recordin
 			seen[block.ID], all[block.ID] = true, true
 		}
 	}
-	if len(all) != count {
-		return nil, ErrInvalidUpload
+	confirmed := make([]int, 0, len(all))
+	for i, id := range ids {
+		if all[id] {
+			confirmed = append(confirmed, i+1)
+		}
 	}
-	return ids, nil
+	return confirmed, nil
 }
