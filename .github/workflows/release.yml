@@ -506,7 +506,7 @@ jobs:
           ../../node_modules/.bin/wrangler pages deploy dist --project-name hhc-member-media --branch main --commit-hash "$GITHUB_SHA"
       - name: Verify unauthenticated media is denied
         run: |
-          url='https://hhc-member-media.pages.dev/videos/rec-1/files/file-1/sessions/scope-1/content'
+          url='https://hhc-member-media.pages.dev/videos/rec-1/packages/0123456789abcdef0123456789abcdef/sessions/scope-1/master.m3u8'
           for method in GET HEAD; do
             status=''
             for attempt in {1..20}; do

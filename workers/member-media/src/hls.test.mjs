@@ -50,6 +50,22 @@ test('every HLS object and metadata read requires the package-scoped cookie', as
   assert.equal(f.calls.length, 0);
 });
 
+test('retired single-file routes reject even valid legacy grants without reading R2', async () => {
+  const f = await fixture();
+  const playback = await f.sign({ iss: f.scope.iss, aud: 'hhc-media', typ: 'playback', exp: f.now + 3600,
+    recordingId: 'rec-1', assetVersionId: 'file-1', scopeId: 'scope-1', objectKey: 'recordings/file-1.mp4' });
+  const credential = await f.sign({ iss: f.scope.iss, aud: 'hhc-media', typ: 'exchange', exp: f.now + 60,
+    recordingId: 'rec-1', assetVersionId: 'file-1', scopeId: 'scope-1', playback });
+  for (const [method, resource] of [['GET', 'content'], ['HEAD', 'content'], ['POST', 'cookie']]) {
+    const response = await worker.fetch(new Request(`https://media.alive.org.tw/videos/rec-1/files/file-1/sessions/scope-1/${resource}`, {
+      method, headers: { Origin: origin, Cookie: `hhc_media=${playback}` },
+      ...(method === 'POST' ? { body: JSON.stringify({ credential }) } : {}),
+    }), f.env);
+    assert.equal(response.status, 404);
+  }
+  assert.equal(f.calls.length, 0);
+});
+
 test('HLS exchange and renewal retain the exact package/session cookie path', async () => {
   const f = await fixture();
   for (let i = 0; i < 2; i++) {

@@ -55,8 +55,10 @@ global DB slots, renewable fenced leases and bounded per-fragment media validati
 it does not re-encode CLI packages. Ready retention is thirty days, with a one-hour
 existing-grant cleanup grace. Staging and failed attempt deletion are retried and
 reconciled daily to sweep late writes; provider acceptance remains required.
-The additive package table and OpenAPI do not change existing recording uploads
-or the ordinary Blob scan lifecycle. The Pages function accepts package-scoped
+Single-file recording upload and playback routes are retired; clients must use
+HLS packages or browser source sessions. The empty legacy table is retained only
+for release rollback and is not used by this runtime. The ordinary Blob scan
+lifecycle is unchanged. The Pages function accepts package-scoped
 HLS grants and authorizes every playlist/init/segment, including internal cache
 hits. Browser source ingest/encode is independently gated; CMS/player integration
 and provider acceptance remain subsequent work. Enabling these producers is not
