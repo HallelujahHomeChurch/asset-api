@@ -28,6 +28,8 @@ param retentionScheduleEnabled bool = false
 param retentionApplyEnabled bool = false
 param scanWorkerImage string = runtimeImage
 param memberVideoEnabled bool = false
+param recordingHLSEnabled bool = false
+param recordingSourceEnabled bool = false
 param recordingImage string = runtimeImage
 param recordingR2AccountId string = ''
 param mediaKeyId string = ''
@@ -49,6 +51,12 @@ var keyVaultSecretsUserRole = subscriptionResourceId('Microsoft.Authorization/ro
 var workloadAuthEnabled = workloadAuthClientId != '' && workloadAuthAudience != '' && lineAttachmentClientId != '' && lineAttachmentObjectId != ''
 var workloadAuthIssuer = 'https://sts.windows.net/${subscription().tenantId}/'
 var recordingBucket = 'hhc-member-recordings-prod'
+var recordingProcessingEnv = [
+  { name: 'ASSET_RECORDING_HLS_ENABLED', value: string(recordingHLSEnabled) }
+  { name: 'ASSET_RECORDING_SOURCE_ENABLED', value: string(recordingSourceEnabled) }
+  { name: 'ASSET_RECORDING_SOURCE_ACCOUNT_URL', value: 'https://aliverecordingsprod.blob.${az.environment().suffixes.storage}' }
+  { name: 'ASSET_RECORDING_SOURCE_CONTAINER', value: 'recording-sources' }
+]
 var mediaIssuer = 'hhc-media-prod'
 var recordingSecrets = [
   { name: 'r2-access-key-id', keyVaultUrl: '${runtimeVault.properties.vaultUri}secrets/member-video-r2-access-key-id', identity: runtimeIdentity.id }
@@ -63,7 +71,7 @@ var recordingR2Env = [
   { name: 'ASSET_R2_ACCESS_KEY_ID', secretRef: 'r2-access-key-id' }
   { name: 'ASSET_R2_SECRET_ACCESS_KEY', secretRef: 'r2-secret-access-key' }
 ]
-var mediaRuntimeEnv = concat(recordingR2Env, [
+var mediaRuntimeEnv = concat(recordingR2Env, recordingProcessingEnv, [
   { name: 'ASSET_MEDIA_PRIVATE_KEY_PEM', secretRef: 'media-private-key' }
   { name: 'ASSET_MEDIA_KEY_ID', value: mediaKeyId }
   { name: 'ASSET_MEDIA_ISSUER', value: mediaIssuer }
@@ -1068,10 +1076,12 @@ resource recordingJob 'Microsoft.App/jobs@2025-07-01' = if (memberVideoEnabled) 
     environmentId: environment.id
     workloadProfileName: 'Consumption'
     configuration: {
-      replicaTimeout: 1200
-      replicaRetryLimit: 1
+      replicaTimeout: recordingHLSEnabled ? 21600 : 1200
+      replicaRetryLimit: recordingHLSEnabled ? 0 : 1
       triggerType: 'Schedule'
-      // ponytail: overlapping schedules are serialized per upload by the DB claim; use a queue trigger if concurrency grows.
+      // HLS executions share exactly two fenced DB processing slots. Extra
+      // scheduled executions exit without encoding; platform parallelism is
+      // per execution, not the global concurrency limit.
       scheduleTriggerConfig: {
         cronExpression: '*/1 * * * *'
         parallelism: 1
@@ -1091,8 +1101,10 @@ resource recordingJob 'Microsoft.App/jobs@2025-07-01' = if (memberVideoEnabled) 
           image: recordingImage
           env: concat([
             { name: 'DATABASE_URL', secretRef: 'database-url' }
-          ], recordingR2Env)
-          resources: { cpu: json('0.5'), memory: '1Gi' }
+          ], recordingR2Env, recordingProcessingEnv, recordingSourceEnabled ? [
+            { name: 'AZURE_CLIENT_ID', value: runtimeIdentity.properties.clientId }
+          ] : [])
+          resources: { cpu: recordingHLSEnabled ? json('4.0') : json('0.5'), memory: recordingHLSEnabled ? '8Gi' : '1Gi' }
         }
       ]
     }

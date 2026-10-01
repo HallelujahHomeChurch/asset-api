@@ -171,7 +171,31 @@ grep -Fq 'ASSET_WORKLOAD_AUDIENCE LINE_ATTACHMENT_CLIENT_ID LINE_ATTACHMENT_OBJE
 grep -q 'name: Verify scan warmer release' "$workflow"
 test "$(grep -c 'retentionScheduleEnabled="$RETENTION_SCHEDULE_ENABLED"' "$workflow")" = 2
 test "$(grep -c 'retentionApplyEnabled="$RETENTION_APPLY_ENABLED"' "$workflow")" = 2
-grep -Fq 'for name in RETENTION_SCHEDULE_ENABLED RETENTION_APPLY_ENABLED; do' "$workflow"
+grep -Fq 'for name in RETENTION_SCHEDULE_ENABLED RETENTION_APPLY_ENABLED RECORDING_HLS_ENABLED RECORDING_SOURCE_ENABLED; do' "$workflow"
+for gate in RECORDING_HLS_ENABLED RECORDING_SOURCE_ENABLED; do
+  grep -Fq "$gate: \${{ vars.$gate || 'false' }}" "$workflow"
+done
+for parameter in recordingHLSEnabled recordingSourceEnabled; do
+  grep -Fq "param $parameter bool = false" infra/main.bicep
+  test "$(grep -c "$parameter=\"" "$workflow")" = 2
+done
+grep -Fq "HLS requires member video" "$workflow"
+grep -Fq "Source processing requires HLS" "$workflow"
+recording_job_block="$(sed -n '/resource recordingJob /,/^}/p' infra/main.bicep)"
+printf '%s\n' "$recording_job_block" | grep -Fq 'replicaTimeout: recordingHLSEnabled ? 21600 : 1200'
+printf '%s\n' "$recording_job_block" | grep -Fq 'replicaRetryLimit: recordingHLSEnabled ? 0 : 1'
+printf '%s\n' "$recording_job_block" | grep -Fq "cpu: recordingHLSEnabled ? json('4.0') : json('0.5'), memory: recordingHLSEnabled ? '8Gi' : '1Gi'"
+# Keep the API's system identity: switching it would break ordinary Blob uploads.
+if printf '%s\n' "$asset_runtime_block" | grep -Fq "name: 'AZURE_CLIENT_ID'"; then
+  echo 'asset-api must preserve its system-assigned Blob identity' >&2
+  exit 1
+fi
+printf '%s\n' "$recording_job_block" | grep -Fq "name: 'AZURE_CLIENT_ID'"
+grep -Fq 'var sourcePrincipals = [app.identity.principalId, runtimeIdentity.properties.principalId]' infra/recording-source.bicep
+grep -Fq 'allowSharedKeyAccess: false' infra/recording-source.bicep
+grep -Fq 'publicAccess: '\''None'\''' infra/recording-source.bicep
+grep -Fq "allowedOrigins: ['https://admin.alive.org.tw']" infra/recording-source.bicep
+grep -Fq "malwareScanning: { onUpload: { isEnabled: false } }" infra/recording-source.bicep
 grep -Fq 'case "${!name}" in' "$workflow"
 grep -Fq 'true|false) ;;' "$workflow"
 if grep -q 'ACTIVATE_QUEUE_SCANNING/true/false' "$workflow"; then

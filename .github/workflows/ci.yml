@@ -83,6 +83,8 @@ jobs:
           bash scripts/test-publish-data-governance.sh
           go vet ./...
           ./scripts/test-release-workflow.sh
+          az bicep build --file infra/recording-source.bicep --stdout >/dev/null
+          az bicep build --file infra/main.bicep --stdout >/dev/null
           docker build -t asset-api:verify .
           docker export "$(docker create asset-api:verify)" | tar -tf - | grep -Fx 'asset-derivative-worker' >/dev/null
           docker export "$(docker create asset-api:verify)" | tar -tf - | grep -Fx 'asset-scan-warmer' >/dev/null

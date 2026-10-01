@@ -149,6 +149,8 @@ jobs:
       MEETING_API_BASE_URL: ${{ vars.MEETING_API_BASE_URL }}
       MEETING_API_AUDIENCE: ${{ vars.MEETING_API_AUDIENCE }}
       MEMBER_VIDEO_ENABLED: ${{ vars.MEMBER_VIDEO_ENABLED || 'false' }}
+      RECORDING_HLS_ENABLED: ${{ vars.RECORDING_HLS_ENABLED || 'false' }}
+      RECORDING_SOURCE_ENABLED: ${{ vars.RECORDING_SOURCE_ENABLED || 'false' }}
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       MEDIA_KEY_ID: ${{ vars.ASSET_MEDIA_KEY_ID }}
       RELEASE_CONFIRMATION: ${{ github.event_name == 'push' && 'deploy-asset-api-production' || inputs.confirmation }}
@@ -166,7 +168,7 @@ jobs:
           for name in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID ASSET_WORKLOAD_CLIENT_ID ASSET_WORKLOAD_AUDIENCE LINE_ATTACHMENT_CLIENT_ID LINE_ATTACHMENT_OBJECT_ID MEETING_API_BASE_URL MEETING_API_AUDIENCE; do
             test -n "${!name:-}" || { echo "Missing repository variable: ${name}" >&2; exit 1; }
           done
-          for name in RETENTION_SCHEDULE_ENABLED RETENTION_APPLY_ENABLED; do
+          for name in RETENTION_SCHEDULE_ENABLED RETENTION_APPLY_ENABLED RECORDING_HLS_ENABLED RECORDING_SOURCE_ENABLED; do
             case "${!name}" in
               true|false) ;;
               *) echo "${name} must be true or false" >&2; exit 1 ;;
@@ -179,6 +181,12 @@ jobs:
             false) ;;
             *) echo 'MEMBER_VIDEO_ENABLED must be true or false' >&2; exit 1 ;;
           esac
+          if [[ "$RECORDING_HLS_ENABLED" == true ]]; then
+            [[ "$MEMBER_VIDEO_ENABLED" == true ]] || { echo 'HLS requires member video' >&2; exit 1; }
+          fi
+          if [[ "$RECORDING_SOURCE_ENABLED" == true ]]; then
+            [[ "$RECORDING_HLS_ENABLED" == true ]] || { echo 'Source processing requires HLS' >&2; exit 1; }
+          fi
       - name: Set image tag
         run: echo "IMAGE_TAG=main-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
       - name: Sign in to Azure with OIDC
@@ -232,6 +240,15 @@ jobs:
           if [[ "$MEMBER_VIDEO_ENABLED" == true ]]; then
             for secret in member-video-r2-access-key-id member-video-r2-secret-access-key member-video-media-private-key-pem; do
               [[ "$(az resource show --ids "${runtime_vault}/secrets/${secret}" --api-version 2024-11-01 --query properties.attributes.enabled -o tsv --only-show-errors)" == true ]]
+            done
+          fi
+          if [[ "$RECORDING_SOURCE_ENABLED" == true ]]; then
+            source_storage_id="$(az storage account show -g "$RESOURCE_GROUP" -n aliverecordingsprod --query id -o tsv --only-show-errors)"
+            source_scope="${source_storage_id}/blobServices/default/containers/recording-sources"
+            [[ "$(az resource show --ids "$source_scope" --api-version 2023-05-01 --query properties.publicAccess -o tsv --only-show-errors)" == None ]]
+            for source_principal in "$app_principal" "$runtime_principal"; do
+              [[ "$(az role assignment list --scope "$source_scope" --assignee-object-id "$source_principal" --query "[?roleDefinitionName=='Storage Blob Data Contributor'] | length(@)" -o tsv --only-show-errors)" == 1 ]]
+              [[ "$(az role assignment list --scope "$source_storage_id" --assignee-object-id "$source_principal" --query "[?roleDefinitionName=='Storage Blob Delegator'] | length(@)" -o tsv --only-show-errors)" == 1 ]]
             done
           fi
       - name: Capture rollback revision
@@ -341,7 +358,7 @@ jobs:
           az deployment group what-if \
             --resource-group "$RESOURCE_GROUP" \
             --template-file infra/main.bicep \
-            --parameters storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" scanWorkerImage="$SCAN_IMAGE_REF" recordingImage="$RECORDING_IMAGE_REF" memberVideoEnabled="$MEMBER_VIDEO_ENABLED" recordingR2AccountId="$CLOUDFLARE_ACCOUNT_ID" mediaKeyId="$MEDIA_KEY_ID" deployRuntime=true deployMigrationJob=true deployScanJob=true deployScanWorker=true deployScanWarmer=true provisionScanWarmInfrastructure=false deploySignatureRefreshJob=true deployDerivativeJob=true deployRetentionJob="$DEPLOY_RETENTION_JOB" retentionScheduleEnabled="$RETENTION_SCHEDULE_ENABLED" retentionApplyEnabled="$RETENTION_APPLY_ENABLED" scanDispatchEnabled="$ACTIVATE_QUEUE_SCANNING" embeddedScanEnabled="$EMBEDDED_SCAN_ENABLED" workloadAuthClientId="$ASSET_WORKLOAD_CLIENT_ID" workloadAuthAudience="$ASSET_WORKLOAD_AUDIENCE" lineAttachmentClientId="$LINE_ATTACHMENT_CLIENT_ID" lineAttachmentObjectId="$LINE_ATTACHMENT_OBJECT_ID" readerCallerAppId="$ASSET_READER_CALLER_APP_ID" meetingApiBaseUrl="$MEETING_API_BASE_URL" meetingApiAudience="$MEETING_API_AUDIENCE" provisionPermissions=false manageSharedInfrastructure=false \
+            --parameters recordingHLSEnabled="$RECORDING_HLS_ENABLED" recordingSourceEnabled="$RECORDING_SOURCE_ENABLED" storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" scanWorkerImage="$SCAN_IMAGE_REF" recordingImage="$RECORDING_IMAGE_REF" memberVideoEnabled="$MEMBER_VIDEO_ENABLED" recordingR2AccountId="$CLOUDFLARE_ACCOUNT_ID" mediaKeyId="$MEDIA_KEY_ID" deployRuntime=true deployMigrationJob=true deployScanJob=true deployScanWorker=true deployScanWarmer=true provisionScanWarmInfrastructure=false deploySignatureRefreshJob=true deployDerivativeJob=true deployRetentionJob="$DEPLOY_RETENTION_JOB" retentionScheduleEnabled="$RETENTION_SCHEDULE_ENABLED" retentionApplyEnabled="$RETENTION_APPLY_ENABLED" scanDispatchEnabled="$ACTIVATE_QUEUE_SCANNING" embeddedScanEnabled="$EMBEDDED_SCAN_ENABLED" workloadAuthClientId="$ASSET_WORKLOAD_CLIENT_ID" workloadAuthAudience="$ASSET_WORKLOAD_AUDIENCE" lineAttachmentClientId="$LINE_ATTACHMENT_CLIENT_ID" lineAttachmentObjectId="$LINE_ATTACHMENT_OBJECT_ID" readerCallerAppId="$ASSET_READER_CALLER_APP_ID" meetingApiBaseUrl="$MEETING_API_BASE_URL" meetingApiAudience="$MEETING_API_AUDIENCE" provisionPermissions=false manageSharedInfrastructure=false \
             --validation-level Provider --result-format FullResourcePayloads --no-pretty-print --only-show-errors \
             --output json > what-if.json
           ./scripts/check-what-if.sh what-if.json
@@ -374,7 +391,7 @@ jobs:
           az deployment group create \
             --name "asset-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --resource-group "$RESOURCE_GROUP" --template-file infra/main.bicep \
-            --parameters storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" scanWorkerImage="$SCAN_IMAGE_REF" recordingImage="$RECORDING_IMAGE_REF" memberVideoEnabled="$MEMBER_VIDEO_ENABLED" recordingR2AccountId="$CLOUDFLARE_ACCOUNT_ID" mediaKeyId="$MEDIA_KEY_ID" deployRuntime=true deployMigrationJob=true deployScanJob=true deployScanWorker=true deployScanWarmer=true provisionScanWarmInfrastructure=false deploySignatureRefreshJob=true deployDerivativeJob=true deployRetentionJob="$DEPLOY_RETENTION_JOB" retentionScheduleEnabled="$RETENTION_SCHEDULE_ENABLED" retentionApplyEnabled="$RETENTION_APPLY_ENABLED" scanDispatchEnabled="$ACTIVATE_QUEUE_SCANNING" embeddedScanEnabled="$EMBEDDED_SCAN_ENABLED" workloadAuthClientId="$ASSET_WORKLOAD_CLIENT_ID" workloadAuthAudience="$ASSET_WORKLOAD_AUDIENCE" lineAttachmentClientId="$LINE_ATTACHMENT_CLIENT_ID" lineAttachmentObjectId="$LINE_ATTACHMENT_OBJECT_ID" readerCallerAppId="$ASSET_READER_CALLER_APP_ID" meetingApiBaseUrl="$MEETING_API_BASE_URL" meetingApiAudience="$MEETING_API_AUDIENCE" provisionPermissions=false manageSharedInfrastructure=false \
+            --parameters recordingHLSEnabled="$RECORDING_HLS_ENABLED" recordingSourceEnabled="$RECORDING_SOURCE_ENABLED" storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" scanWorkerImage="$SCAN_IMAGE_REF" recordingImage="$RECORDING_IMAGE_REF" memberVideoEnabled="$MEMBER_VIDEO_ENABLED" recordingR2AccountId="$CLOUDFLARE_ACCOUNT_ID" mediaKeyId="$MEDIA_KEY_ID" deployRuntime=true deployMigrationJob=true deployScanJob=true deployScanWorker=true deployScanWarmer=true provisionScanWarmInfrastructure=false deploySignatureRefreshJob=true deployDerivativeJob=true deployRetentionJob="$DEPLOY_RETENTION_JOB" retentionScheduleEnabled="$RETENTION_SCHEDULE_ENABLED" retentionApplyEnabled="$RETENTION_APPLY_ENABLED" scanDispatchEnabled="$ACTIVATE_QUEUE_SCANNING" embeddedScanEnabled="$EMBEDDED_SCAN_ENABLED" workloadAuthClientId="$ASSET_WORKLOAD_CLIENT_ID" workloadAuthAudience="$ASSET_WORKLOAD_AUDIENCE" lineAttachmentClientId="$LINE_ATTACHMENT_CLIENT_ID" lineAttachmentObjectId="$LINE_ATTACHMENT_OBJECT_ID" readerCallerAppId="$ASSET_READER_CALLER_APP_ID" meetingApiBaseUrl="$MEETING_API_BASE_URL" meetingApiAudience="$MEETING_API_AUDIENCE" provisionPermissions=false manageSharedInfrastructure=false \
             --only-show-errors --output none
       - name: Verify revision health
         run: |
