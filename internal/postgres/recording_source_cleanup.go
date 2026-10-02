@@ -5,16 +5,17 @@ import (
 	"time"
 )
 
+const sourceCleanupEligible = `(state IN ('ready','failed','expired') OR (state='uploading' AND expires_at<=clock_timestamp()) OR
+ (retry_until<=clock_timestamp() AND (claimed_until IS NULL OR claimed_until<=clock_timestamp())) OR
+ EXISTS (SELECT 1 FROM recording_source_attempts a WHERE a.source_id=s.id AND a.state IN ('failed','abandoned','purged')))`
+
 // ReconcileSources retains failed inputs for the original retry window. Ready
 // HLS bytes belong to recording_packages; this only purges source Blob bytes
 // and abandoned server-owned encode prefixes, never a ready package's output.
 func (s *RecordingSourceStore) ReconcileSources(ctx context.Context, deleteSource func(context.Context, string, []string) error, deleteAttempt func(context.Context, string) error) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM recording_sources s WHERE cleanup_after<=clock_timestamp() AND
- (state IN ('ready','failed','expired') OR (state='uploading' AND expires_at<=clock_timestamp()) OR
- (retry_until<=clock_timestamp() AND (claimed_until IS NULL OR claimed_until<=clock_timestamp())) OR
- EXISTS (SELECT 1 FROM recording_source_attempts a WHERE a.source_id=s.id AND a.state IN ('failed','abandoned','purged')))
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM recording_sources s WHERE cleanup_after<=clock_timestamp() AND `+sourceCleanupEligible+`
  ORDER BY cleanup_after LIMIT 10`)
 	if err != nil {
 		return err

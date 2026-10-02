@@ -61,6 +61,14 @@ func run(ctx context.Context) error {
 	}
 	defer db.Close()
 	db.SetMaxOpenConns(3)
+	// Observability must not prevent cleanup or processing on a transient query
+	// failure. No actor, filename, URL, credential or object key enters this log.
+	if health, err := postgres.RecordingHealth(ctx, db); err != nil {
+		slog.Warn("recording_health_unavailable")
+	} else {
+		slog.Info("recording_health", "package_cleanup_overdue", health.PackageCleanupOverdue,
+			"source_cleanup_overdue", health.SourceCleanupOverdue, "waiting", health.Waiting, "active_slots", health.ActiveSlots)
+	}
 	if hlsEnabled {
 		packages := postgres.NewRecordingPackageStore(db)
 		probe := recordingvalidation.PackageMediaProbe{Objects: objects, FFmpeg: "/usr/bin/ffmpeg", FFprobe: "/usr/bin/ffprobe"}
