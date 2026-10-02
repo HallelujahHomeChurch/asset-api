@@ -1,10 +1,40 @@
 # Member video operations
 
-The recording path is isolated from Blob uploads and ClamAV. It accepts only
-MP4 candidates through private R2 multipart sessions, validates SHA-256 and
-media format, and serves ready versions through the Pages media function. Format
-validation is not malware scanning. Keep the bucket private and disable public
-`r2.dev` access.
+## Gated HLS package path (not yet activated)
+
+The new Pages route is
+`/videos/{recording}/packages/{package}/sessions/{scope}/{object}`. Only
+`master.m3u8`, `720p|1080p/index.m3u8`, `init.mp4` and `seg-NNNNNN.m4s`
+are served. Inventory, arbitrary keys, query credentials and encoded paths are
+not media routes. Package cookies contain a signer-authorized immutable final
+prefix, never an upload/staging prefix. Exchange and renewal preserve the
+package/session cookie path; the player does not need a new source URL.
+
+Authorization runs before every R2 read and internal cache lookup. The cache key
+uses the immutable final object identity and omits viewer cookies/session IDs;
+cached bytes can be shared internally only after each viewer is authenticated.
+All viewer responses remain `private, no-store`. Full successful GETs may be
+cached internally for one day; Range responses are not inserted. Cache failure
+falls back to private R2 without bypassing authentication. HEAD and conditional
+or Range hits remain protected. Cache expiry does not extend playback grant or
+recording retention. The synthetic cache path itself is not publicly routable.
+See [Cloudflare Cache API](https://developers.cloudflare.com/workers/runtime-apis/cache/)
+for local-cache and Range behavior. Edge placement/cache-hit ratio and charges
+still require production measurements.
+
+Local checks include the signed-cookie/R2/Cache flow in Wrangler's pinned
+Cloudflare runtime, but are not deployment or browser/device acceptance.
+Keep `ASSET_RECORDING_HLS_ENABLED` off until CMS, Gateway and player cutover
+checks pass. Ordinary Blob scanning stays unchanged.
+
+## Retired single-file path
+
+Single-file recording routes and multipart helpers are removed. Old media URLs
+return 404 even with a valid old grant. No MP4 migration or playback fallback is
+provided. The empty legacy database table remains solely for release rollback;
+do not drop it while old revisions remain rollback candidates. Original browser
+sources and HLS initialization fragments can still be MP4. Format validation is
+not malware scanning. Keep the bucket private and disable public `r2.dev` access.
 
 ## Activation gate
 
@@ -65,26 +95,27 @@ activation/configuration change first, then release that new commit.
 
 ## Routine and incident handling
 
-- Failed/resumed upload: have the Admin reselect the identical original MP4;
-  the browser reuses its session and checks completed parts. Different bytes
+- Failed/resumed upload: have the Admin reselect the identical original source;
+  the browser reuses its session and checks completed Blob blocks. Different bytes
   require a new recording, never another session on the original recording.
-  A failed/cancelled session and its R2 parts are
+  A failed/cancelled session and its staged bytes are
   cleaned by the recording worker; inspect session status without logging
   presigned URLs.
 - Validation failure: inspect structured status and worker errors, not signed
-  `ffprobe` URLs or video bytes in logs. Re-encode to H.264/AAC fast-start MP4
-  locally and create a new recording. Each attempt is bounded to 15 minutes;
-  the claim lease and scheduled Job allow cleanup after that deadline. Do not
+  source URLs or video bytes in logs. CLI packages require H.264/AAC fMP4 HLS.
+  Browser source processing can be retried at most three times without extending
+  source retention. Each processing attempt is bounded to 5.5 hours;
+  the fenced claim lease allows recovery after a crash. Do not
   bypass format or hash checks.
 - Files cannot be replaced. Unpublishing stops new grants; existing scoped
   playback cookies can remain valid for up to one hour. Do not promise instant
   revocation. Editing or republishing never extends the original deadline.
-- Cleanup: CMS denies new grants at uploadedAt + 720 hours and retries deleting
-  completed Asset files every 15 minutes. The Asset worker owns incomplete
-  24-hour session cleanup, serialized with completion. A committed R2 object in
-  completing state is recovered into validation instead of deleted. Completion
-  time is persisted once; HHC reconciles missing completion metadata every five
-  minutes. Deleted rows retain immutable recording/file identity.
+- Cleanup: CMS denies new grants at the earlier of unpublish time and readyAt
+  + 30 days. The Asset worker owns HLS expiry, one-hour existing-grant grace,
+  incomplete 24-hour session cleanup and repeated late-write sweeps. Browser
+  sources are removed after success; failed sources expire seven days after the
+  first durable completion. The independent Blob lifecycle is a nine-day fallback.
+  Metadata receipts retain immutable recording/package identity.
   Investigate cleanup lag over one
   hour; escalate at 24 hours. Never extend retention by reuploading.
 - Key rotation: add the new public key to `MEDIA_PUBLIC_KEYS`, release the
@@ -96,7 +127,7 @@ activation/configuration change first, then release that new commit.
   signing key alone does not retract bytes already delivered to a player.
 - Recovery: restore CMS metadata through existing database backup procedures;
   recover the existing object/version only through a reviewed operational repair
-  without changing uploadedAt or its deadline. Ordinary reupload creates a new
+  without changing readyAt or its deadline. Ordinary reupload creates a new
   recording. R2 is not the original recording backup. A past-deadline recording
   must stay unavailable.
 
@@ -105,3 +136,32 @@ Pages request latency, abandoned/expired deletion age, R2 storage and request
 counts. Configure test notifications and the approved monthly-cost alerts
 before enabling members. A CI pass or successful dry-run is not a live smoke
 test.
+
+### Recording health signals
+
+The recording Job emits `msg=recording_health` at each execution before cleanup,
+with `package_cleanup_overdue`, `source_cleanup_overdue`, `waiting` and
+`active_slots`. These are aggregate counts only, with no identities, filenames,
+keys or signed URLs. Cleanup counts use the same eligibility predicates as the
+reconcilers and mean a due sweep is over one hour late; they are not a claim that
+every byte remains present. Repeated successful sweeps move the next check forward.
+The query is bounded to five seconds; failure emits `recording_health_unavailable`
+without blocking processing. Keep this Job's `LOG_LEVEL=info` for heartbeat alerts.
+
+Alert definitions belong to the shared `azure-infra` observability configuration:
+review a create-only Terraform plan before enabling notifications. Monitor a
+15-minute missing heartbeat, worker errors, persistent cleanup backlog, and the
+isolated `aliverecordingsprod` account's `UsedCapacity`. Do not apply scan-queue
+alarms to these recordings: their source pipeline does not run antivirus.
+
+On a health alert, inspect Job execution status first, then private session state.
+Do not paste raw worker errors into chat: inspect in the restricted log console.
+Compare consecutive health snapshots before replaying cleanup; never edit states
+or deletion deadlines manually. Missing heartbeat can indicate scheduling, image,
+database or logging failure; absence of errors alone does not prove health.
+
+Azure storage capacity is actual provider usage; HLS metadata sizes are not a
+replacement for billing metrics. Track this source account and the recording Job
+separately in Cost Management. Track R2 storage/Class A/Class B and Workers paid
+usage in Cloudflare, including the base plan as feature cost. Cost observations,
+alert delivery tests, and positive member playback remain separate acceptance gates.

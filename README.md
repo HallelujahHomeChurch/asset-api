@@ -48,6 +48,61 @@ custom caller fallback is accepted only when the development setting is enabled.
 The dedicated `hhc-web-bulletin-worker` is delegated to its owning `hhc-web-api`
 service for these private asset operations.
 
+## HLS package producer contract
+
+`/priv/recording-packages` provides create, paginated status, batched single-object
+PUT signing and durable completion handlers. These routes fail closed with 503
+unless `ASSET_RECORDING_HLS_ENABLED=true` is set for the API and recording Job.
+The flag defaults off and must remain off until the reviewed HLS cutover.
+Completion means `freezing`, not ready. In HLS mode the recording Job uses two
+global DB slots, renewable fenced leases and bounded per-fragment media validation;
+it does not re-encode CLI packages. Ready retention is thirty days, with a one-hour
+existing-grant cleanup grace. Staging and failed attempt deletion are retried and
+reconciled daily to sweep late writes; provider acceptance remains required.
+Single-file recording upload and playback routes are retired; clients must use
+HLS packages or browser source sessions. The empty legacy table is retained only
+for release rollback and is not used by this runtime. The ordinary Blob scan
+lifecycle is unchanged. The Pages function accepts package-scoped
+HLS grants and authorizes every playlist/init/segment, including internal cache
+hits. Browser source ingest/encode is independently gated; CMS/player integration
+and provider acceptance remain subsequent work. Enabling these producers is not
+end-to-end readiness.
+
+Browser source storage primitives use separate `recording-sources/{id}/staging`
+Blob keys: 16 MiB blocks, up to 2,981 blocks for the independent 50 GB source
+budget, exact block IDs/tail sizes and write-only blob-scoped user-delegation
+SAS capped at fifteen minutes. Commit checks the returned ETag and size, without
+reading/copying/hashing the whole source in the API request. These primitives
+back private `/priv/recording-sources` create/status/sign/complete handlers.
+Completion commits only validated block metadata and persists one ETag-pinned
+`finalizing` receipt; retries never extend its seven-day retention window.
+PostgreSQL enforces one active source per actor. Status pages support all 2,981
+blocks without a 1,000-block truncation. Source handlers and processing remain
+disabled unless `ASSET_RECORDING_SOURCE_ENABLED=true` and HLS is enabled. Set
+`ASSET_RECORDING_SOURCE_ACCOUNT_URL` and `ASSET_RECORDING_SOURCE_CONTAINER` to
+an explicitly separate private Blob container; no account key is used. Apply
+reviewed managed-identity permissions, browser CORS, lifecycle safeguards and
+Job resources before activating either runtime. Defaults do not change.
+They do not create normal asset records or invoke the existing malware scanner.
+A write SAS can still overwrite its staging blob; immutable ETag-fenced
+finalization and server-side SHA-256 validation run before encode. The Job pins
+all subsequent range reads to that verified ETag, never downloads the full input
+to local disk, and encodes each rendition directly from the original. Native
+FFmpeg HTTP PUT backpressure spools one bounded fragment at a time into R2.
+Control files use measured bitrates and initialization codecs; the existing
+immutable-copy/hash/full-decode validator must pass before an atomic ready commit.
+
+Source processing and CLI package validation share two global DB slots and a
+5.5-hour processing deadline, with one long claim per Job execution. Source
+attempts are limited to three, including crashes; `retry-processing` reuses the
+verified input and never extends the original seven-day deadline. Cleanup runs
+before processing: ready sources and expired source sessions are removed from
+Blob, failed output attempts are reclaimed after a six-hour stale-worker grace,
+and daily repeated sweeps catch late writes. Ready HLS retention remains owned
+by the package lifecycle. Metadata receipts are retained; their legal retention
+policy is not inferred from byte cleanup. Full 20–50 GB runtime/cost acceptance
+and production resource activation are still separate delivery gates.
+
 ## Scan lifecycle
 
 After upload completion, the runtime dispatches a durable queue message. The

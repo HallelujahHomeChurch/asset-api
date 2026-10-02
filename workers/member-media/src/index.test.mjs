@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import { before, test } from 'node:test';
 import worker from './index.ts';
 
-const path = '/videos/rec-1/files/file-1/sessions/scope-1/';
+const pkg = '0123456789abcdef0123456789abcdef';
+const path = `/videos/rec-1/packages/${pkg}/sessions/scope-1/`;
+const prefix = `recordings/packages/${pkg}/final/attempt-1/`;
 const origin = 'https://www.alive.org.tw';
 let keys;
 let env;
@@ -16,14 +18,14 @@ async function sign(payload) {
 }
 
 async function credentials(exp = Math.floor(Date.now() / 1000) + 1800) {
-  const scope = { iss: 'hhc-media-test', aud: 'hhc-media', recordingId: 'rec-1', assetVersionId: 'file-1', scopeId: 'scope-1' };
-  const playback = await sign({ ...scope, typ: 'playback', exp, objectKey: 'recordings/file-1.mp4' });
+  const scope = { iss: 'hhc-media-test', aud: 'hhc-media', recordingId: 'rec-1', packageId: pkg, scopeId: 'scope-1' };
+  const playback = await sign({ ...scope, typ: 'playback', exp, prefix });
   return sign({ ...scope, typ: 'exchange', exp: Math.floor(Date.now() / 1000) + 60, playback });
 }
 
 async function playback(exp, scopeId = 'scope-1') {
   return sign({ iss: 'hhc-media-test', aud: 'hhc-media', typ: 'playback', exp,
-    recordingId: 'rec-1', assetVersionId: 'file-1', scopeId, objectKey: 'recordings/file-1.mp4' });
+    recordingId: 'rec-1', packageId: pkg, scopeId, prefix });
 }
 
 before(async () => {
@@ -34,7 +36,7 @@ before(async () => {
     ALLOWED_ORIGINS: origin,
     MEDIA_BUCKET: {
       async get(key, options) {
-        assert.equal(key, 'recordings/file-1.mp4');
+        assert.equal(key, prefix + '720p/seg-000000.m4s');
         const range = options?.range;
         const bytes = range?.offset === 0 && range?.length === 2 ? 'ab' : 'abcdef';
         return { body: new Response(bytes).body, size: 6, httpEtag: '"v1"', range };
@@ -46,7 +48,7 @@ before(async () => {
 
 test('shared content URL without a scoped cookie cannot read bytes or metadata', async () => {
   for (const method of ['GET', 'HEAD']) {
-    const response = await worker.fetch(new Request(`https://media.alive.org.tw${path}content`, { method }), env);
+    const response = await worker.fetch(new Request(`https://media.alive.org.tw${path}720p/seg-000000.m4s`, { method }), env);
     assert.equal(response.status, 401);
     assert.equal(response.headers.get('Content-Length'), null);
   }
@@ -61,9 +63,9 @@ test('exchange sets a path-scoped cookie and permits streamed Range reads', asyn
   const cookie = setup.headers.get('Set-Cookie');
   assert.match(cookie, /HttpOnly/);
   assert.match(cookie, /SameSite=Strict/);
-  assert.match(cookie, /Path=\/videos\/rec-1\/files\/file-1\/sessions\/scope-1\//);
+  assert.ok(cookie.includes(`Path=${path};`));
   assert.doesNotMatch(cookie, /Domain=/);
-  const response = await worker.fetch(new Request(`https://media.alive.org.tw${path}content`, {
+  const response = await worker.fetch(new Request(`https://media.alive.org.tw${path}720p/seg-000000.m4s`, {
     headers: { Cookie: cookie.split(';')[0], Range: 'bytes=0-1', Origin: origin },
   }), env);
   assert.equal(response.status, 206);
@@ -75,7 +77,7 @@ test('expired playback cookie cannot authorize HEAD or Range', async () => {
   const expired = await playback(Math.floor(Date.now() / 1000) - 1);
   const cookie = `hhc_media=${expired}`;
   for (const method of ['HEAD', 'GET']) {
-    const response = await worker.fetch(new Request(`https://media.alive.org.tw${path}content`, {
+    const response = await worker.fetch(new Request(`https://media.alive.org.tw${path}720p/seg-000000.m4s`, {
       method, headers: { Cookie: cookie, Range: 'bytes=0-1' },
     }), env);
     assert.equal(response.status, 401);
@@ -84,7 +86,7 @@ test('expired playback cookie cannot authorize HEAD or Range', async () => {
 
 test('another page scope cannot reuse a valid cookie', async () => {
   const token = await playback(Math.floor(Date.now() / 1000) + 1800, 'scope-2');
-  const response = await worker.fetch(new Request(`https://media.alive.org.tw${path}content`, {
+  const response = await worker.fetch(new Request(`https://media.alive.org.tw${path}720p/seg-000000.m4s`, {
     headers: { Cookie: `hhc_media=${token}` },
   }), env);
   assert.equal(response.status, 401);
@@ -93,7 +95,7 @@ test('another page scope cannot reuse a valid cookie', async () => {
 test('invalid and multiple byte ranges are rejected after authorization', async () => {
   const token = await playback(Math.floor(Date.now() / 1000) + 1800);
   for (const range of ['bytes=8-10', 'bytes=0-1,4-5']) {
-    const response = await worker.fetch(new Request(`https://media.alive.org.tw${path}content`, {
+    const response = await worker.fetch(new Request(`https://media.alive.org.tw${path}720p/seg-000000.m4s`, {
       headers: { Cookie: `hhc_media=${token}`, Range: range },
     }), env);
     assert.equal(response.status, 416);

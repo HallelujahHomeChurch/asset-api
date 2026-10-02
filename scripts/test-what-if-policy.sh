@@ -1,6 +1,21 @@
 #!/bin/sh
 set -eu
 
+source_preview='{"status":"Succeeded","changes":[{"resourceId":"/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/alive/providers/Microsoft.Storage/storageAccounts/aliverecordingsprod","changeType":"Create"}]}'
+printf '%s' "$source_preview" | ./scripts/check-source-what-if.sh /dev/stdin
+for change in Modify Delete Unsupported; do
+  if printf '%s' "$source_preview" | jq --arg change "$change" '.changes[0].changeType=$change' | ./scripts/check-source-what-if.sh /dev/stdin; then
+    echo "source bootstrap accepted $change" >&2
+    exit 1
+  fi
+done
+for resource in aliverecordingsprod-other alivestoragebb99ee6e; do
+  if printf '%s' "$source_preview" | jq --arg resource "$resource" '.changes[0].resourceId |= sub("aliverecordingsprod$"; $resource)' | ./scripts/check-source-what-if.sh /dev/stdin; then
+    echo "source bootstrap accepted unrelated storage" >&2
+    exit 1
+  fi
+done
+
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 

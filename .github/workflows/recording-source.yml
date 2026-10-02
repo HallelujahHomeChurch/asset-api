@@ -1,0 +1,63 @@
+name: Recording source infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: Apply the separately approved source-storage preview
+        type: boolean
+        default: false
+      confirmation:
+        description: For apply, enter create-recording-source-storage
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: recording-source-infrastructure
+  cancel-in-progress: false
+
+jobs:
+  provision:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      APPLY: ${{ inputs.apply }}
+      CONFIRMATION: ${{ inputs.confirmation }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Validate explicit approval
+        run: |
+          if [[ "$APPLY" == true ]]; then
+            [[ "$CONFIRMATION" == create-recording-source-storage ]]
+          fi
+      - uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Preview isolated source storage
+        run: |
+          az deployment group what-if -g alive -f infra/recording-source.bicep \
+            -p location=eastasia storageAccountName=aliverecordingsprod \
+            --validation-level Provider --no-pretty-print --only-show-errors -o json > source-what-if.json
+          ./scripts/check-source-what-if.sh source-what-if.json
+      - name: Retain reviewed change set
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: recording-source-preview-${{ github.sha }}
+          path: source-what-if.json
+          if-no-files-found: error
+      - name: Create approved isolated resources
+        if: inputs.apply
+        run: |
+          az deployment group create -g alive -f infra/recording-source.bicep \
+            -n "recording-source-${GITHUB_RUN_ID}" \
+            -p location=eastasia storageAccountName=aliverecordingsprod \
+            --only-show-errors -o none

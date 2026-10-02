@@ -7,16 +7,16 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
-	"time"
 
-	"hhc/asset-api/internal/assets"
+	"hhc/asset-api/internal/config"
 	"hhc/asset-api/internal/logging"
 	"hhc/asset-api/internal/postgres"
+	"hhc/asset-api/internal/recordingprocessing"
 	"hhc/asset-api/internal/recordingvalidation"
+	azurestorage "hhc/asset-api/internal/storage/azure"
 	"hhc/asset-api/internal/storage/r2"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -36,6 +36,17 @@ func main() {
 }
 
 func run(ctx context.Context) error {
+	hlsEnabled, err := config.RecordingHLSFlag()
+	if err != nil {
+		return err
+	}
+	if !hlsEnabled {
+		return nil
+	}
+	sourceAccount, sourceContainer, err := config.RecordingSourceStorage(hlsEnabled)
+	if err != nil {
+		return err
+	}
 	dsn := strings.TrimSpace(os.Getenv("DATABASE_URL"))
 	if dsn == "" {
 		return errors.New("DATABASE_URL is required")
@@ -50,48 +61,34 @@ func run(ctx context.Context) error {
 	}
 	defer db.Close()
 	db.SetMaxOpenConns(3)
-	repository := postgres.NewRecordingUploadStore(db)
-	worker := recordingvalidation.New(repository, objects.Open, func(ctx context.Context, key string) ([]byte, error) {
-		url, err := objects.PresignProbeRead(ctx, key, 15*time.Minute)
-		if err != nil {
-			return nil, err
-		}
-		probeCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-		defer cancel()
-		// Never log the signed URL or ffprobe stderr.
-		output, err := exec.CommandContext(probeCtx, "ffprobe", "-v", "error", "-show_entries", "stream=codec_type,codec_name:format=duration", "-of", "json", url.URL).Output()
-		if err != nil {
-			return nil, errors.New("ffprobe failed")
-		}
-		if len(output) > 1<<20 {
-			return nil, errors.New("ffprobe output too large")
-		}
-		return output, nil
-	}, time.Now)
-	uploads := assets.NewRecordingUploadService(repository, objects, time.Now)
-	return runOnce(ctx, worker.RunOnce, repository.ExpiredAbandoned, uploads.DeleteAbandoned, time.Now)
-}
-
-func runOnce(
-	ctx context.Context,
-	validate func(context.Context) error,
-	expired func(context.Context, time.Time) ([]string, error),
-	deleteAbandoned func(context.Context, string, time.Time) error,
-	now func() time.Time,
-) error {
-	var errs []error
-	if err := validate(ctx); err != nil {
-		errs = append(errs, fmt.Errorf("recording validation: %w", err))
-	}
-	versions, err := expired(ctx, now())
-	if err != nil {
-		errs = append(errs, fmt.Errorf("recording cleanup query: %w", err))
+	// Observability must not prevent cleanup or processing on a transient query
+	// failure. No actor, filename, URL, credential or object key enters this log.
+	if health, err := postgres.RecordingHealth(ctx, db); err != nil {
+		slog.Warn("recording_health_unavailable")
 	} else {
-		for _, versionID := range versions {
-			if err := deleteAbandoned(ctx, versionID, now()); err != nil {
-				errs = append(errs, fmt.Errorf("recording cleanup %s: %w", versionID, err))
+		slog.Info("recording_health", "package_cleanup_overdue", health.PackageCleanupOverdue,
+			"source_cleanup_overdue", health.SourceCleanupOverdue, "waiting", health.Waiting, "active_slots", health.ActiveSlots)
+	}
+	if hlsEnabled {
+		packages := postgres.NewRecordingPackageStore(db)
+		probe := recordingvalidation.PackageMediaProbe{Objects: objects, FFmpeg: "/usr/bin/ffmpeg", FFprobe: "/usr/bin/ffprobe"}
+		cleanupErr := packages.ReconcilePackages(ctx, objects.DeletePackageObjects)
+		if sourceAccount != "" {
+			sources, err := azurestorage.New(sourceAccount, sourceContainer)
+			if err != nil {
+				return errors.Join(cleanupErr, err)
+			}
+			repository := postgres.NewRecordingSourceStore(db)
+			cleanupErr = errors.Join(cleanupErr, repository.ReconcileSources(ctx, sources.DeleteRecordingSource, objects.DeleteSourceAttempt))
+			// One long processing claim per execution keeps the 5.5-hour app
+			// deadline inside the six-hour platform Job timeout.
+			processed, err := recordingprocessing.RunSourceProcessing(ctx, repository, sources, objects, probe)
+			if processed || err != nil {
+				return errors.Join(cleanupErr, err)
 			}
 		}
+		validationErr := recordingvalidation.RunPackageValidation(ctx, packages, objects, probe)
+		return errors.Join(validationErr, cleanupErr)
 	}
-	return errors.Join(errs...)
+	return nil
 }

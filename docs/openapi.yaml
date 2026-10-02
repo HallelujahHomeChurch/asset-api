@@ -898,10 +898,11 @@ paths:
       responses:
         '202': { description: Scan requeue accepted. }
         '409': { $ref: '#/components/responses/Error' }
-  /priv/recording-uploads:
+  /priv/recording-sources:
     post:
-      operationId: createRecordingUpload
-      summary: Create or resume a private R2 multipart upload; never enters the Blob scan pipeline.
+      operationId: createRecordingSource
+      summary: Create or replay a private browser source upload.
+      description: Gated source-ingest API, disabled until the source worker is wired. One active source per actor. Only MP4 inputs, at most 50,000,000,000 bytes; 16MiB Azure blocks, including more than 1000 blocks. Does not create ordinary assets or scan jobs.
       tags: [Private]
       x-hhc-visibility: private
       x-hhc-callers: [hhc-web-api]
@@ -913,104 +914,266 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [recordingId, fileName, sizeBytes, checksumSHA256]
               properties:
-                recordingId: { type: string, format: uuid }
-                fileName: { type: string, pattern: '\.mp4$' }
-                sizeBytes: { type: integer, format: int64, minimum: 1, maximum: 10000000000 }
-                checksumSHA256: { type: string, pattern: '^[0-9a-fA-F]{64}$' }
+                recordingId: { type: string, pattern: '^[a-zA-Z0-9-]{1,80}$' }
+                fileName: { type: string, minLength: 5, maxLength: 255, description: 'MP4 basename; maximum 255 UTF-8 bytes, no separators or control characters.' }
+                sizeBytes: { type: integer, format: int64, minimum: 1, maximum: 50000000000 }
+                checksumSHA256: { type: string, pattern: '^[a-fA-F0-9]{64}$' }
       responses:
-        '201': { $ref: '#/components/responses/RecordingUpload' }
+        '201': { description: Created or exact replay; no byte verification yet., content: { application/json: { schema: { $ref: '#/components/schemas/RecordingSource' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
-  /priv/recording-uploads/{sessionID}:
-    parameters: [ { $ref: '#/components/parameters/RecordingSessionID' }, { $ref: '#/components/parameters/RecordingActorID' } ]
+        '413': { description: source_too_large, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '503': { $ref: '#/components/responses/Error' }
+  /priv/recording-sources/{sourceID}:
+    parameters: [ { $ref: '#/components/parameters/RecordingSourceID' }, { $ref: '#/components/parameters/RecordingActorID' } ]
     get:
-      operationId: getRecordingUpload
-      summary: Get an owner-scoped recording upload session.
+      operationId: getRecordingSource
+      summary: Query durable source state and confirmed block numbers for resume.
+      description: Confirms exact block sizes, not SHA-256 or media readiness. Traverse nextCursor until zero. Expired or non-uploading sources do not query mutable staging. State finalizing means the browser may close, not that media is playable.
       tags: [Private]
       x-hhc-visibility: private
       x-hhc-callers: [hhc-web-api]
       security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      parameters:
+        - { name: cursor, in: query, schema: { type: integer, minimum: 0, maximum: 2981, default: 0 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 1000, default: 100 } }
       responses:
-        '200': { $ref: '#/components/responses/RecordingUpload' }
-    delete:
-      operationId: abortRecordingUpload
-      summary: Cancel an owner-scoped recording upload session.
-      tags: [Private]
-      x-hhc-visibility: private
-      x-hhc-callers: [hhc-web-api]
-      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
-      responses:
-        '204': { description: Session cancelled; already signed part URLs may work briefly but cannot complete. }
-  /priv/recording-uploads/{sessionID}/parts:
-    parameters: [ { $ref: '#/components/parameters/RecordingSessionID' }, { $ref: '#/components/parameters/RecordingActorID' } ]
-    get:
-      operationId: listRecordingUploadedParts
-      summary: Return only complete part numbers for owner-scoped resume.
-      tags: [Private]
-      x-hhc-visibility: private
-      x-hhc-callers: [hhc-web-api]
-      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
-      responses:
-        '200': { description: Complete part numbers, content: { application/json: { schema: { type: array, items: { type: integer, minimum: 1, maximum: 597 } } } } }
-  /priv/recording-uploads/{sessionID}/parts/{partNumber}:
-    parameters: [ { $ref: '#/components/parameters/RecordingSessionID' }, { $ref: '#/components/parameters/RecordingActorID' }, { name: partNumber, in: path, required: true, schema: { type: integer, minimum: 1, maximum: 597 } } ]
+        '200': { description: Source upload and processing state., content: { application/json: { schema: { $ref: '#/components/schemas/RecordingSourceStatus' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /priv/recording-sources/{sourceID}/sign:
+    parameters: [ { $ref: '#/components/parameters/RecordingSourceID' }, { $ref: '#/components/parameters/RecordingActorID' } ]
     post:
-      operationId: signRecordingPart
-      summary: Sign one fifteen-minute UploadPart URL; browser uploads directly to private R2.
-      tags: [Private]
-      x-hhc-visibility: private
-      x-hhc-callers: [hhc-web-api]
-      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
-      responses:
-        '200': { $ref: '#/components/responses/RecordingPart' }
-  /priv/recording-uploads/{sessionID}/complete:
-    parameters: [ { $ref: '#/components/parameters/RecordingSessionID' }, { $ref: '#/components/parameters/RecordingActorID' } ]
-    post:
-      operationId: completeRecordingUpload
-      summary: Verify all parts and enqueue independent media-format validation; no malware scan.
-      tags: [Private]
-      x-hhc-visibility: private
-      x-hhc-callers: [hhc-web-api]
-      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
-      responses:
-        '200': { $ref: '#/components/responses/RecordingUpload' }
-        '409': { $ref: '#/components/responses/Error' }
-  /priv/recording-assets/{assetVersionID}:
-    parameters: [ { $ref: '#/components/parameters/RecordingVersionID' } ]
-    get:
-      operationId: getRecordingAsset
-      summary: Get a validated private recording asset.
-      tags: [Private]
-      x-hhc-visibility: private
-      x-hhc-callers: [hhc-web-api]
-      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
-      responses:
-        '200': { $ref: '#/components/responses/RecordingAsset' }
-    delete:
-      operationId: deleteRecordingAsset
-      summary: Delete a private recording asset version.
-      tags: [Private]
-      x-hhc-visibility: private
-      x-hhc-callers: [hhc-web-api]
-      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
-      responses:
-        '204': { description: Version deleted or already absent. }
-  /priv/recording-assets/{assetVersionID}/grants:
-    parameters: [ { $ref: '#/components/parameters/RecordingVersionID' } ]
-    post:
-      operationId: issueRecordingGrant
-      summary: Sign an owner-matched ready version for one recording and playback scope.
+      operationId: signRecordingSource
+      summary: Sign a bounded set of staging block PUT requests.
+      description: Returns a single-blob write capability valid at most 15 minutes and no later than session expiry. No read/list/delete permission. The bearer SAS is not a byte quota, browser identity binding, or immutable grant. The worker must isolate and verify the committed input. Responses are no-store and URLs must never be logged.
       tags: [Private]
       x-hhc-visibility: private
       x-hhc-callers: [hhc-web-api]
       security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
       requestBody:
         required: true
-        content: { application/json: { schema: { type: object, required: [recordingId, scopeId, recordingExpiresAt], properties: { recordingId: { type: string, format: uuid }, scopeId: { type: string }, recordingExpiresAt: { type: string, format: date-time } } } } }
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [numbers]
+              properties:
+                numbers: { type: array, minItems: 1, maxItems: 100, uniqueItems: true, items: { type: integer, minimum: 1, maximum: 2981 } }
+      responses:
+        '200': { description: Signed source block requests., content: { application/json: { schema: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/SignedRecordingSourceBlock' } } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /priv/recording-sources/{sourceID}/complete:
+    parameters: [ { $ref: '#/components/parameters/RecordingSourceID' }, { $ref: '#/components/parameters/RecordingActorID' } ]
+    post:
+      operationId: completeRecordingSource
+      summary: Commit the block list and durably accept source finalization.
+      description: Checks bounded block metadata and pins the commit ETag before persisting finalizing. No full source read, hash, copy or encode in this request. 202 permits closing the browser but is not ready/publication. Replays return the original source job without recommitting or extending its seven-day retry window. A subsequent asynchronous verification failure remains visible in source status.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      responses:
+        '202': { description: Durable finalization receipt or accepted completion replay., content: { application/json: { schema: { $ref: '#/components/schemas/RecordingSource' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /priv/recording-sources/{sourceID}/ready:
+    parameters:
+      - { $ref: '#/components/parameters/RecordingSourceID' }
+      - { name: recordingId, in: query, required: true, schema: { type: string, pattern: '^[a-zA-Z0-9-]{1,80}$' } }
+    get:
+      operationId: getReadyRecordingSource
+      summary: Resolve the ready output for CMS background reconciliation.
+      description: CMS-owner and recording binding are mandatory; no human uploader session is required. Returns only the source/recording/package IDs and ready state, never source bytes or capabilities. Package readiness and expiry must still be checked using the package contract.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      responses:
+        '200':
+          description: Ready source output projection.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sourceId, recordingId, packageId, state]
+                properties:
+                  sourceId: { type: string }
+                  recordingId: { type: string }
+                  packageId: { type: string }
+                  state: { type: string, enum: [ready] }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /priv/recording-sources/{sourceID}/retry-processing:
+    parameters: [ { $ref: '#/components/parameters/RecordingSourceID' }, { $ref: '#/components/parameters/RecordingActorID' } ]
+    post:
+      operationId: retryRecordingSource
+      summary: Retry a transient source-processing failure within its original budget.
+      description: Reuses the verified immutable source when available. Maximum three attempts including crashed executions; no reset of the original seven-day deadline. Invalid media and exhausted/expired work cannot retry. A lost-response replay of queued or active work is a no-op. An actor with another active source cannot enqueue a second source.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      responses:
+        '202': { description: Accepted retry or active/ready replay., content: { application/json: { schema: { $ref: '#/components/schemas/RecordingSource' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /priv/recording-packages:
+    post:
+      operationId: createRecordingPackage
+      summary: Create or replay an actor-bound HLS package upload.
+      description: Gated producer API; unavailable until wired with the package worker. Inventory is bounded to 8MiB; total package bytes include its canonical serialized bytes. At most two active packages per actor and one package per recording.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/RecordingActorID' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [recordingId, inventory]
+              properties:
+                recordingId: { type: string, pattern: '^[a-zA-Z0-9-]{1,80}$' }
+                inventory: { $ref: '#/components/schemas/RecordingPackageInventory' }
+      responses:
+        '201': { description: Created or exact replay; not yet ready., content: { application/json: { schema: { $ref: '#/components/schemas/RecordingPackage' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '413': { description: 'package_too_large: total package exceeds 10GB.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '503': { $ref: '#/components/responses/Error' }
+  /priv/recording-packages/{packageID}:
+    parameters: [ { $ref: '#/components/parameters/RecordingPackageID' }, { $ref: '#/components/parameters/RecordingActorID' } ]
+    get:
+      operationId: getRecordingPackage
+      summary: Query state and a bounded page of remotely observed upload objects.
+      description: confirmedObjects means remote size matches the inventory, not verified SHA-256 or ready media. Objects are examined in sorted path order; use nextCursor until empty. Non-uploading states do not query mutable staging objects.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      parameters:
+        - { name: cursor, in: query, schema: { type: string }, description: Last examined object path from the previous page. }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 1000, default: 100 } }
+      responses:
+        '200': { description: Actor-scoped upload status., content: { application/json: { schema: { $ref: '#/components/schemas/RecordingPackageStatus' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /priv/recording-packages/{packageID}/ready:
+    parameters: [ { $ref: '#/components/parameters/RecordingPackageID' } ]
+    get:
+      operationId: getReadyRecordingPackage
+      summary: Read the recording-bound ready package projection for its owning CMS.
+      description: Owner-only and gated with HLS. Does not require uploader identity or expose inventory/storage paths. CMS must independently authorize its viewer or publication operation. Failed, incomplete, expired and mismatched packages are denied.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      parameters:
+        - { name: recordingId, in: query, required: true, schema: { type: string, pattern: '^[a-zA-Z0-9-]{1,80}$' } }
+      responses:
+        '200': { description: Bounded ready projection., content: { application/json: { schema: { $ref: '#/components/schemas/RecordingPackageStatus' } } } }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /priv/recording-packages/{packageID}/sign:
+    parameters: [ { $ref: '#/components/parameters/RecordingPackageID' }, { $ref: '#/components/parameters/RecordingActorID' } ]
+    post:
+      operationId: signRecordingPackage
+      summary: Sign up to 100 fixed-size staging object PUT URLs.
+      description: Validates the entire batch before signing. Only inventory paths are accepted. URLs last at most 15 minutes or the remaining upload session, never target final storage and must not be logged. No new URLs after complete.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [paths]
+              properties:
+                paths: { type: array, minItems: 1, maxItems: 100, uniqueItems: true, items: { type: string } }
+      responses:
+        '200': { description: Single-object PUT capabilities., content: { application/json: { schema: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/SignedRecordingObject' } } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /priv/recording-packages/{packageID}/complete:
+    parameters: [ { $ref: '#/components/parameters/RecordingPackageID' }, { $ref: '#/components/parameters/RecordingActorID' } ]
+    post:
+      operationId: completeRecordingPackage
+      summary: Durably freeze the inventory and queue asynchronous copy and validation.
+      description: Returns only after the freezing state is persisted. An exact replay returns the accepted state, even after the upload session expires. Does not verify all uploaded bytes in the request or make the package ready.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      responses:
+        '202': { description: Durable freezing receipt or accepted completion replay., content: { application/json: { schema: { $ref: '#/components/schemas/RecordingPackage' } } } }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /priv/recording-packages/{packageID}/grant:
+    parameters: [ { $ref: '#/components/parameters/RecordingPackageID' } ]
+    post:
+      operationId: issueRecordingPackageGrant
+      summary: Issue an immutable package-prefix playback exchange after CMS entitlement checks.
+      description: Requires a ready CMS-owned package matching recordingId. The owning CMS must check the current viewer entitlement and publication before calling. Media retention and the supplied publication expiry clamp the one-hour playback credential; no mutable staging path is signed.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [recordingId, scopeId, recordingExpiresAt]
+              properties:
+                recordingId: { type: string }
+                scopeId: { type: string }
+                recordingExpiresAt: { type: string, format: date-time }
       responses:
         '200': { $ref: '#/components/responses/RecordingGrant' }
+        '400': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
 components:
   securitySchemes:
     daprCaller:
@@ -1034,6 +1197,7 @@ components:
       name: X-HHC-User-ID
       description: Gateway-injected identity. X-HHC-User-ID and X-HHC-Token-Expires-At are required; X-HHC-Role-IDs optionally carries deduplicated immutable Account role UUIDs. X-HHC-Token-ID, X-HHC-Session-ID, and X-HHC-Auth-Provider remain optional trusted context. Reader authorization is active collection ACL only.
   parameters:
+    RecordingSourceID: { name: sourceID, in: path, required: true, schema: { type: string, pattern: '^[a-f0-9]{32}$' } }
     AssetID: { name: assetID, in: path, required: true, schema: { $ref: '#/components/schemas/OpaqueID' } }
     CollectionID: { name: collectionID, in: path, required: true, schema: { $ref: '#/components/schemas/OpaqueID' } }
     ItemID: { name: itemID, in: path, required: true, schema: { $ref: '#/components/schemas/OpaqueID' } }
@@ -1042,8 +1206,7 @@ components:
     Variant: { name: variant, in: path, required: true, schema: { type: string, enum: [small, medium, large] } }
     IdempotencyKey: { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 1, maxLength: 128 } }
     RecordingActorID: { name: X-HHC-Actor-ID, in: header, required: true, schema: { type: string, format: uuid } }
-    RecordingSessionID: { name: sessionID, in: path, required: true, schema: { type: string, pattern: '^[a-f0-9]{32}$' } }
-    RecordingVersionID: { name: assetVersionID, in: path, required: true, schema: { type: string, pattern: '^[a-f0-9]{32}$' } }
+    RecordingPackageID: { name: packageID, in: path, required: true, schema: { type: string, pattern: '^[a-f0-9]{32}$' } }
     ACLActorUserID: { name: X-HHC-Actor-ID, in: header, required: true, description: Verified Account manager user UUID recorded in the successful ACL mutation audit event., schema: { type: string, format: uuid } }
     RequestID: { name: X-HHC-Request-ID, in: header, required: true, description: Request correlation ID recorded in the successful ACL mutation audit event., schema: { type: string, minLength: 1 } }
     GrantIdempotencyKey: { name: Idempotency-Key, in: header, required: false, description: Required when body idempotencyKey is absent., schema: { type: string, minLength: 1, maxLength: 128 } }
@@ -1063,9 +1226,6 @@ components:
     CreatedUpload:
       description: Idempotent upload session with a short-lived upload target.
       content: { application/json: { schema: { $ref: '#/components/schemas/CreatedUpload' } } }
-    RecordingUpload: { description: Owner-scoped private R2 upload session., content: { application/json: { schema: { $ref: '#/components/schemas/RecordingUploadSession' } } } }
-    RecordingPart: { description: Fifteen-minute presigned R2 part request., content: { application/json: { schema: { $ref: '#/components/schemas/RecordingPartTarget' } } } }
-    RecordingAsset: { description: Private validated media version., content: { application/json: { schema: { $ref: '#/components/schemas/RecordingAssetState' } } } }
     RecordingGrant: { description: 'One-minute exchange credential, never a public URL.', content: { application/json: { schema: { $ref: '#/components/schemas/RecordingMediaGrant' } } } }
     Grant:
       description: Asset access grant.
@@ -1099,26 +1259,142 @@ components:
     CollectionACLMutation: { description: Collection ACL mutation., content: { application/json: { schema: { $ref: '#/components/schemas/CollectionACLMutation' } } } }
     DeleteCollectionItems: { description: Collection deletion result., content: { application/json: { schema: { $ref: '#/components/schemas/DeleteCollectionItemsResult' } } } }
   schemas:
-    RecordingUploadSession:
+    RecordingSource:
       type: object
-      required: [id, assetVersionId, ownerService, adminId, recordingId, fileName, objectKey, uploadId, idempotencyKey, status, sizeBytes, checksumSHA256, createdAt, expiresAt, uploadedAt]
+      additionalProperties: false
+      required: [sourceId, recordingId, fileName, sizeBytes, checksumSHA256, blockCount, state, createdAt, expiresAt]
       properties:
-        id: { type: string }
-        assetVersionId: { type: string }
-        ownerService: { type: string, const: hhc-web-api }
-        adminId: { type: string, format: uuid }
-        recordingId: { type: string, format: uuid }
+        failureCode: { type: string, enum: [invalid, retry, exhausted] }
+        packageId: { type: string, description: Present only after the whole package is verified and ready. }
+        sourceId: { type: string, pattern: '^[a-f0-9]{32}$' }
+        recordingId: { type: string }
         fileName: { type: string }
-        objectKey: { type: string, description: Internal R2 key; never sent to the browser. }
-        uploadId: { type: string, description: Internal multipart ID; never sent to the browser. }
-        idempotencyKey: { type: string }
-        status: { type: string, enum: [created, completing, validating, ready, failed, cancelled, deleting, deleted] }
-        sizeBytes: { type: integer, format: int64 }
-        checksumSHA256: { type: string }
-        durationSeconds: { type: number }
+        sizeBytes: { type: integer, format: int64, minimum: 1, maximum: 50000000000 }
+        checksumSHA256: { type: string, pattern: '^[a-f0-9]{64}$' }
+        blockCount: { type: integer, minimum: 1, maximum: 2981 }
+        state: { type: string, enum: [uploading, finalizing, queued, processing, ready, failed, expired] }
+        createdAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time, description: 'Original upload session deadline, not the processing deadline.' }
+        completedAt: { type: string, format: date-time }
+        retryUntil: { type: string, format: date-time, description: 'First durable completion plus seven days, never extended by retry.' }
+    RecordingSourceStatus:
+      type: object
+      additionalProperties: false
+      required: [sourceId, recordingId, fileName, sizeBytes, checksumSHA256, blockCount, state, createdAt, expiresAt, confirmedBlocks, nextCursor]
+      properties:
+        failureCode: { type: string, enum: [invalid, retry, exhausted] }
+        packageId: { type: string, description: Present only after the whole package is verified and ready. }
+        sourceId: { type: string, pattern: '^[a-f0-9]{32}$' }
+        recordingId: { type: string }
+        fileName: { type: string }
+        sizeBytes: { type: integer, format: int64, minimum: 1, maximum: 50000000000 }
+        checksumSHA256: { type: string, pattern: '^[a-f0-9]{64}$' }
+        blockCount: { type: integer, minimum: 1, maximum: 2981 }
+        state: { type: string, enum: [uploading, finalizing, queued, processing, ready, failed, expired] }
         createdAt: { type: string, format: date-time }
         expiresAt: { type: string, format: date-time }
-        uploadedAt: { type: [string, 'null'], format: date-time, description: Persisted once when upload completion is confirmed; independent of validation and publication. }
+        completedAt: { type: string, format: date-time }
+        retryUntil: { type: string, format: date-time }
+        confirmedBlocks: { type: array, maxItems: 1000, items: { type: integer, minimum: 1, maximum: 2981 } }
+        nextCursor: { type: integer, minimum: 0, maximum: 2981, description: Last returned block number; zero when this pass is complete. }
+    SignedRecordingSourceBlock:
+      type: object
+      additionalProperties: false
+      required: [number, url, method, headers, expiresAt]
+      properties:
+        number: { type: integer, minimum: 1, maximum: 2981 }
+        url: { type: string, format: uri }
+        method: { type: string, const: PUT }
+        headers: { type: object, additionalProperties: { type: string } }
+        expiresAt: { type: string, format: date-time }
+    RecordingPackage:
+      type: object
+      additionalProperties: false
+      required: [packageId, sessionId, recordingId, state, sizeBytes, createdAt, expiresAt, inventory]
+      properties:
+        packageId: { type: string }
+        sessionId: { type: string, description: Same identifier as packageId; one immutable inventory per upload session. }
+        recordingId: { type: string }
+        state: { type: string, enum: [uploading, freezing, validating, ready, failed, expired] }
+        sizeBytes: { type: integer, format: int64, minimum: 1, maximum: 10000000000 }
+        createdAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time, description: Upload session expiry; not the ready media retention deadline. }
+        inventory: { $ref: '#/components/schemas/RecordingPackageInventory' }
+        readyAt: { type: string, format: date-time }
+        mediaExpiresAt: { type: string, format: date-time, description: First ready time plus thirty days; distinct from upload expiry. }
+    RecordingPackageStatus:
+      type: object
+      additionalProperties: false
+      required: [packageId, sessionId, recordingId, state, sizeBytes, expiresAt, confirmedObjects, nextCursor]
+      properties:
+        packageId: { type: string }
+        sessionId: { type: string }
+        recordingId: { type: string }
+        state: { type: string, enum: [uploading, freezing, validating, ready, failed, expired] }
+        sizeBytes: { type: integer, format: int64 }
+        expiresAt: { type: string, format: date-time }
+        confirmedObjects: { type: array, maxItems: 1000, items: { type: string } }
+        nextCursor: { type: string, description: Last examined path; empty when this pass is complete. }
+        readyAt: { type: string, format: date-time }
+        mediaExpiresAt: { type: string, format: date-time }
+        renditions: { type: array, minItems: 1, maxItems: 2, items: { $ref: '#/components/schemas/RecordingRendition' } }
+    SignedRecordingObject:
+      allOf:
+        - { $ref: '#/components/schemas/RecordingPartTarget' }
+        - type: object
+          required: [path]
+          properties:
+            path: { type: string }
+    RecordingPackageInventory:
+      type: object
+      additionalProperties: false
+      description: >-
+        HLS v1 declared inventory for the gated package upload contract; current MP4 routes do not consume it.
+        SHA-256 inventoryDigest hashes UTF-8 encoding/json-compatible serialization with this field omitted,
+        objects sorted by path, renditions sorted by name, and fields in the order shown below.
+        Objects exclude package.json itself; total package bytes include the serialized inventory.
+        Metadata and hashes are declarations, not proof of readiness. Final bytes and media are verified by the recording Job.
+        Master BANDWIDTH and optional AVERAGE-BANDWIDTH must match measured media segment bytes and EXTINF durations
+        under RFC 8216 section 4.1, not configured encoder bitrates. Ineligible short-tail windows are excluded from peak bandwidth.
+      required: [schemaVersion, presetVersion, objects, renditions, inventoryDigest]
+      properties:
+        schemaVersion: { type: integer, const: 1 }
+        presetVersion: { type: string, pattern: '^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$' }
+        objects:
+          type: array
+          minItems: 4
+          maxItems: 10000
+          items: { $ref: '#/components/schemas/RecordingPackageObject' }
+        renditions:
+          type: array
+          minItems: 1
+          maxItems: 2
+          items: { $ref: '#/components/schemas/RecordingRendition' }
+        inventoryDigest: { type: string, pattern: '^[a-f0-9]{64}$' }
+    RecordingPackageObject:
+      type: object
+      additionalProperties: false
+      required: [path, sizeBytes, sha256]
+      properties:
+        path:
+          type: string
+          pattern: '^(master\.m3u8|(720p|1080p)/(index\.m3u8|init\.mp4|seg-[0-9]{6}\.m4s))$'
+          description: Canonical relative path. Unique paths and every declared rendition's complete contiguous segment list are required. No URLs, encoded paths, queries or package.json.
+        sizeBytes: { type: integer, format: int64, minimum: 1, maximum: 134217728, description: 'Playlists additionally have a 1048576-byte limit. Package total including inventory must be at most 10000000000 bytes.' }
+        sha256: { type: string, pattern: '^[a-f0-9]{64}$' }
+    RecordingRendition:
+      type: object
+      additionalProperties: false
+      required: [name, width, height, frameRate, videoBitrate, audioBitrate, durationSeconds, segmentCount]
+      properties:
+        name: { type: string, enum: [720p, 1080p], description: '720p is mandatory; 1080p optional. Names are unique.' }
+        width: { type: integer, minimum: 2, maximum: 1920, multipleOf: 2, description: '720p maximum width is 1280; source must never be upscaled.' }
+        height: { type: integer, minimum: 2, maximum: 1080, multipleOf: 2, description: '720p maximum height is 720. Actual dimensions are retained for smaller sources.' }
+        frameRate: { type: number, exclusiveMinimum: 0, maximum: 30 }
+        videoBitrate: { type: integer, minimum: 500000, maximum: 8000000 }
+        audioBitrate: { type: integer, const: 128000 }
+        durationSeconds: { type: number, exclusiveMinimum: 0, maximum: 43200 }
+        segmentCount: { type: integer, minimum: 1, maximum: 1440, description: 'ceil(durationSeconds/30); both renditions require aligned actual boundaries.' }
     RecordingPartTarget:
       type: object
       required: [url, method, headers]
@@ -1126,16 +1402,6 @@ components:
         url: { type: string, format: uri }
         method: { type: string, const: PUT }
         headers: { type: object, additionalProperties: { type: array, items: { type: string } } }
-    RecordingAssetState:
-      type: object
-      required: [assetVersionId, recordingId, status, sizeBytes, durationSeconds, uploadedAt]
-      properties:
-        assetVersionId: { type: string }
-        recordingId: { type: string, format: uuid }
-        status: { type: string }
-        sizeBytes: { type: integer, format: int64 }
-        durationSeconds: { type: number }
-        uploadedAt: { type: [string, 'null'], format: date-time }
     RecordingMediaGrant:
       type: object
       required: [exchangeCredential, expiresAt]

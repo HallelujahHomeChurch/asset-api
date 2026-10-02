@@ -2,7 +2,9 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -22,6 +24,9 @@ type Config struct {
 	R2Bucket                  string
 	R2AccessKeyID             string
 	R2SecretAccessKey         string
+	RecordingHLSEnabled       bool
+	RecordingSourceAccountURL string
+	RecordingSourceContainer  string
 	MediaPrivateKeyPEM        string
 	MediaKeyID                string
 	MediaIssuer               string
@@ -127,6 +132,18 @@ func Load() (Config, error) {
 	if r2Configured == len(r2Values) && (cfg.MediaPrivateKeyPEM == "" || cfg.MediaKeyID == "" || cfg.MediaIssuer == "") {
 		return Config{}, fmt.Errorf("R2 media signing configuration is incomplete")
 	}
+	var err error
+	cfg.RecordingHLSEnabled, err = RecordingHLSFlag()
+	if err != nil {
+		return Config{}, err
+	}
+	if cfg.RecordingHLSEnabled && r2Configured != len(r2Values) {
+		return Config{}, fmt.Errorf("R2 recording configuration is required when HLS is enabled")
+	}
+	cfg.RecordingSourceAccountURL, cfg.RecordingSourceContainer, err = RecordingSourceStorage(cfg.RecordingHLSEnabled)
+	if err != nil {
+		return Config{}, err
+	}
 	if cfg.AllowedCallers[cfg.ReaderCallerAppID] {
 		return Config{}, fmt.Errorf("ASSET_READER_CALLER_APP_ID must not be in ASSET_ALLOWED_CALLERS")
 	}
@@ -221,6 +238,41 @@ func Load() (Config, error) {
 		cfg.ShutdownTimeout = time.Duration(seconds) * time.Second
 	}
 	return cfg, nil
+}
+
+func RecordingHLSFlag() (bool, error) {
+	enabled, err := strconv.ParseBool(value("ASSET_RECORDING_HLS_ENABLED", "false"))
+	if err != nil {
+		return false, fmt.Errorf("invalid ASSET_RECORDING_HLS_ENABLED")
+	}
+	return enabled, nil
+}
+
+var sourceContainerPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$`)
+
+// A separate opt-in keeps both source ingress and Job processing dark until
+// source storage, CORS, managed identity and resource limits are approved.
+func RecordingSourceStorage(hls bool) (string, string, error) {
+	enabled, err := strconv.ParseBool(value("ASSET_RECORDING_SOURCE_ENABLED", "false"))
+	if err != nil {
+		return "", "", fmt.Errorf("invalid ASSET_RECORDING_SOURCE_ENABLED")
+	}
+	if !enabled {
+		return "", "", nil
+	}
+	if !hls {
+		return "", "", fmt.Errorf("recording source processing requires HLS")
+	}
+	account := strings.TrimRight(strings.TrimSpace(os.Getenv("ASSET_RECORDING_SOURCE_ACCOUNT_URL")), "/")
+	container := strings.TrimSpace(os.Getenv("ASSET_RECORDING_SOURCE_CONTAINER"))
+	u, err := url.Parse(account)
+	if err != nil || u.Scheme != "https" || !strings.HasSuffix(u.Hostname(), ".blob.core.windows.net") || u.Port() != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "" || !sourceContainerPattern.MatchString(container) || strings.Contains(container, "--") {
+		return "", "", fmt.Errorf("invalid recording source storage configuration")
+	}
+	if account == strings.TrimRight(strings.TrimSpace(os.Getenv("ASSET_AZURE_ACCOUNT_URL")), "/") && container == value("ASSET_AZURE_CONTAINER", "assets") {
+		return "", "", fmt.Errorf("recording source storage must use a separate container")
+	}
+	return account, container, nil
 }
 
 func positiveInt(key string, destination *int) error {

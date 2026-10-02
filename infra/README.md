@@ -1,5 +1,84 @@
 # Asset API Azure deployment
 
+## Recording HLS and temporary sources
+
+`RECORDING_HLS_ENABLED` and `RECORDING_SOURCE_ENABLED` repository variables
+default to `false`. HLS requires `MEMBER_VIDEO_ENABLED`; browser source
+processing additionally requires HLS. Deploy compatible producers before
+enabling consumers. Enabling HLS changes only `asset-recording-validation`
+to 4 vCPU / 8 GiB, a six-hour platform timeout, and no platform retry. Its
+application deadline is 5.5 hours; retries and the two global processing slots
+are database-fenced. Scheduled executions that cannot acquire a slot exit
+without encoding. This is a limit of two active processors, not a platform
+limit of two concurrent containers.
+
+`recording-source.bicep` owns the independent `aliverecordingsprod` storage
+account and private `recording-sources` container. It must be provisioned from
+reviewed, merged code after an approved what-if, before enabling source
+processing. Do not change the account-name parameter independently of the
+runtime configuration and gateway CSP. The template touches no ordinary asset
+storage, scan queues, DNS, or application resources. API access uses its
+existing system-assigned identity; only the recording Job selects the runtime
+user-assigned identity. Each receives container-scoped Blob contributor and
+account-scoped delegation rights. No account key is enabled or required.
+
+Browser uploads use narrowly scoped user-delegation SAS, with CORS restricted
+to `https://admin.alive.org.tw`. Recording sources do not enter ClamAV; Defender
+upload scanning is disabled only for this new storage account. Ordinary asset
+scanning remains unchanged. Sources and generated HLS never persist in the
+ordinary assets container. Application cleanup removes ready sources within
+24 hours and failed sources seven days after first completion. A nine-day
+Blob lifecycle rule is a fallback; soft delete and versioning are disabled on
+this disposable source account. Only validated HLS remains in private R2.
+
+The release preflight rejects source activation if the private container or
+either identity's required roles are absent. The normal runtime what-if guard
+continues to reject storage mutations; source provisioning is a separate,
+reviewed infrastructure operation through the main-only **Recording source
+infrastructure** workflow. Run its default preview first, approve the exact
+change set, then dispatch with `apply=true` and confirmation
+`create-recording-source-storage`. Its guard permits only new resources under
+the exact source account, never modifications/deletions. Do not grant extra
+pipeline RBAC implicitly if provisioning reports insufficient permission.
+The source workflow uses full `Provider` permission validation, not
+`ProviderNoRbac`. The currently inspected production deployer has Contributor
+only and cannot bootstrap role assignments: this workflow is not deployable
+under that identity until a separate authorization decision. A one-time
+operator bootstrap from merged code requires its own explicit approval; it
+must not be silently substituted for CI or expand pipeline permissions.
+Rolling back application images does not
+delete sources, published R2 objects, or database state.
+
+```sh
+az deployment group what-if -g alive -f infra/recording-source.bicep \
+  -p location=eastasia storageAccountName=aliverecordingsprod
+```
+
+## Existing assets
+
+### Recording cutover release checklist
+
+The source account bootstrap completed separately from runtime activation.
+Before enabling `RECORDING_HLS_ENABLED=true` and
+`RECORDING_SOURCE_ENABLED=true`, verify the HLS-only CMS, Gateway, shared client,
+Admin uploader, member player and media Worker releases. Keep
+`MEMBER_VIDEO_ENABLED=true`; do not change ordinary scan, retention or storage
+settings as part of this cutover. Use a newly merged release checkpoint so its
+immutable image and governance evidence identify the activation release.
+
+The reviewed activation delta is limited to the API's two recording flags and
+the dedicated recording Job's matching flags, runtime managed-identity selector,
+4 vCPU / 8 GiB, 21,600-second timeout and zero platform retries. ARM may express
+unchanged registry and Key Vault references differently; resolve those references
+before accepting the preview. Any other resource change requires investigation.
+
+After CI/CD succeeds, verify the API's ready revision, the exact recording Job
+image/configuration and an unauthenticated HLS object denial. Then exercise a
+controlled CLI package and browser source through server-confirmed readiness.
+Publication/notification and real-device acceptance are separate checks, not
+implied by a successful deployment. On failure, use the release rollback path;
+never drop historical schema or delete source/R2 data to make a release pass.
+
 The template creates `asset-api` in the existing `alive-env`, enables Dapr
 with app id `asset-api`, creates a private Blob container, and assigns its
 dedicated pull identity ACR pull, plus its system identity container-scoped
