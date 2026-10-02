@@ -5,10 +5,11 @@ import (
 	"time"
 )
 
+const packageCleanupEligible = `(state IN ('ready','failed','expired') OR (state='uploading' AND expires_at<=clock_timestamp()) OR
+ EXISTS (SELECT 1 FROM recording_package_attempts a WHERE a.package_id=p.id AND a.state IN ('failed','abandoned','purged')))`
+
 func (s *RecordingPackageStore) PackageCleanupCandidates(ctx context.Context) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM recording_packages p WHERE cleanup_after<=clock_timestamp() AND
- (state IN ('ready','failed','expired') OR (state='uploading' AND expires_at<=clock_timestamp()) OR
- EXISTS (SELECT 1 FROM recording_package_attempts a WHERE a.package_id=p.id AND a.state IN ('failed','abandoned','purged')))
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM recording_packages p WHERE cleanup_after<=clock_timestamp() AND `+packageCleanupEligible+`
  ORDER BY cleanup_after LIMIT 10`)
 	if err != nil {
 		return nil, err

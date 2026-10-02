@@ -136,3 +136,32 @@ Pages request latency, abandoned/expired deletion age, R2 storage and request
 counts. Configure test notifications and the approved monthly-cost alerts
 before enabling members. A CI pass or successful dry-run is not a live smoke
 test.
+
+### Recording health signals
+
+The recording Job emits `msg=recording_health` at each execution before cleanup,
+with `package_cleanup_overdue`, `source_cleanup_overdue`, `waiting` and
+`active_slots`. These are aggregate counts only, with no identities, filenames,
+keys or signed URLs. Cleanup counts use the same eligibility predicates as the
+reconcilers and mean a due sweep is over one hour late; they are not a claim that
+every byte remains present. Repeated successful sweeps move the next check forward.
+The query is bounded to five seconds; failure emits `recording_health_unavailable`
+without blocking processing. Keep this Job's `LOG_LEVEL=info` for heartbeat alerts.
+
+Alert definitions belong to the shared `azure-infra` observability configuration:
+review a create-only Terraform plan before enabling notifications. Monitor a
+15-minute missing heartbeat, worker errors, persistent cleanup backlog, and the
+isolated `aliverecordingsprod` account's `UsedCapacity`. Do not apply scan-queue
+alarms to these recordings: their source pipeline does not run antivirus.
+
+On a health alert, inspect Job execution status first, then private session state.
+Do not paste raw worker errors into chat: inspect in the restricted log console.
+Compare consecutive health snapshots before replaying cleanup; never edit states
+or deletion deadlines manually. Missing heartbeat can indicate scheduling, image,
+database or logging failure; absence of errors alone does not prove health.
+
+Azure storage capacity is actual provider usage; HLS metadata sizes are not a
+replacement for billing metrics. Track this source account and the recording Job
+separately in Cost Management. Track R2 storage/Class A/Class B and Workers paid
+usage in Cloudflare, including the base plan as feature cost. Cost observations,
+alert delivery tests, and positive member playback remain separate acceptance gates.
