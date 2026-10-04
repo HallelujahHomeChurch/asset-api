@@ -108,6 +108,9 @@ func (s *httpPackageRepo) WithSessionLock(ctx context.Context, _ string, fn func
 
 type httpPackageObjects struct{}
 
+func (httpPackageObjects) ListPackageObjects(context.Context, string, int) (map[string]int64, error) {
+	return map[string]int64{}, nil
+}
 func (httpPackageObjects) Head(context.Context, string) (int64, string, error) {
 	return 0, "", r2.ErrNotFound
 }
@@ -157,6 +160,15 @@ func TestRecordingPackageCreateAndCompleteHTTP(t *testing.T) {
 		t.Fatalf("create: %d %s", w.Code, w.Body.String())
 	}
 	path := "/priv/recording-packages/" + repo.p.ID
+	w = request("GET", path+"?limit=1000", "", "actor-a")
+	var status assets.RecordingPackageStatus
+	if err := json.Unmarshal(w.Body.Bytes(), &status); err != nil || w.Code != 200 || status.PackageID != repo.p.ID || status.State != "uploading" || status.ConfirmedObjects == nil || len(status.ConfirmedObjects) != 0 || status.NextCursor != "" || w.Header().Get("Cache-Control") != "private, no-store" {
+		t.Fatalf("status contract: %d %s", w.Code, w.Body.String())
+	}
+	w = request("GET", path+"?limit=1000", "", "other-actor")
+	if w.Code != 403 {
+		t.Fatalf("cross-actor status: %d", w.Code)
+	}
 	w = request("POST", path+"/complete", "", "other-actor")
 	if w.Code != 403 {
 		t.Fatalf("cross-actor: %d", w.Code)
