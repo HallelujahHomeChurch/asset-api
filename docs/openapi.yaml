@@ -1151,7 +1151,7 @@ paths:
     post:
       operationId: issueRecordingPackageGrant
       summary: Issue an immutable package-prefix playback exchange after CMS entitlement checks.
-      description: Requires a ready CMS-owned package matching recordingId. The owning CMS must check the current viewer entitlement and publication before calling. Media retention and the supplied publication expiry clamp the one-hour playback credential; no mutable staging path is signed.
+      description: Requires a ready CMS-owned package matching recordingId. The owning CMS must check the current viewer entitlement and publication before calling. Media retention and the supplied publication expiry clamp the one-hour playback credential; no mutable staging path is signed. The authenticated playback base optionally serves previews/index.vtt (text/vtt) and previews/seg-NNNNNN.jpg (image/jpeg), each bounded to 1 MiB and authorized identically to HLS including cache hits. WEBVTT cues reference five-second 160x90 sprite cells relative to the index; absent previews return 404 without affecting video readiness. Derived paths are server-only and excluded from producer inventories and PUT signing. See docs/member-video-operations.md for the canonical preview contract.
       tags: [Private]
       x-hhc-visibility: private
       x-hhc-callers: [hhc-web-api]

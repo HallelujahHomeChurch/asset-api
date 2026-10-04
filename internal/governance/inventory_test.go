@@ -33,6 +33,7 @@ var governedTables = map[string]bool{
 	"recording_packages":               true,
 	"recording_processing_slots":       true,
 	"recording_package_attempts":       true,
+	"recording_preview_attempts":       true,
 	"assets":                           true,
 	"upload_sessions":                  true,
 	"asset_grants":                     true,
@@ -55,7 +56,7 @@ func TestDataGovernanceManifest(t *testing.T) {
 	ids := []string{
 		"asset.recording-sources", "asset.recording-source-attempts",
 		"asset.recording-packages",
-		"asset.recording-processing-slots", "asset.recording-package-attempts",
+		"asset.recording-processing-slots", "asset.recording-package-attempts", "asset.recording-preview-attempts",
 		"asset.account-artifact-content", "asset.account-artifact-metadata", "asset.account-upload-sessions",
 		"asset.account-grants", "asset.account-scan-and-derivative-state", "asset.account-poison-events", "asset.account-purge-lifecycle",
 		"asset.account-cleanup-receipts",
@@ -250,7 +251,7 @@ func migratedColumns(t *testing.T) (map[string]struct{}, map[string]bool) {
 	tableNames := []string{
 		"recording_sources", "recording_source_attempts",
 		"recording_packages",
-		"recording_processing_slots", "recording_package_attempts",
+		"recording_processing_slots", "recording_package_attempts", "recording_preview_attempts",
 		"assets", "upload_sessions", "asset_grants", "asset_scan_events", "asset_derivatives",
 		"asset_scan_outbox", "asset_scan_poison_events", "asset_derivative_outbox", "asset_derivative_poison_events",
 		"audit_outboxes", "asset_account_cleanup_operations",
