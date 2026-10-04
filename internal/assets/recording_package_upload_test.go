@@ -61,6 +61,16 @@ func (o *packageObjects) Head(_ context.Context, key string) (int64, string, err
 	}
 	return 0, "", r2.ErrNotFound
 }
+func (o *packageObjects) ListPackageObjects(_ context.Context, id string, _ int) (map[string]int64, error) {
+	values := make(map[string]int64)
+	prefix := "recordings/packages/" + id + "/staging/"
+	for key, size := range o.sizes {
+		if strings.HasPrefix(key, prefix) {
+			values[strings.TrimPrefix(key, prefix)] = size
+		}
+	}
+	return values, nil
+}
 func newPackageTest(t *testing.T) (*RecordingPackageService, *packageRepo, *packageObjects, *time.Time, CreateRecordingPackageInput) {
 	t.Helper()
 	now := time.Now().UTC()

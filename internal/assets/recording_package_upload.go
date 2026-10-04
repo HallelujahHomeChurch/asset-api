@@ -67,7 +67,7 @@ type RecordingPackageRepository interface {
 
 type RecordingPackageObjectStore interface {
 	PresignPackageObject(context.Context, string, int64, string, time.Duration) (r2.PresignedPart, error)
-	Head(context.Context, string) (int64, string, error)
+	ListPackageObjects(context.Context, string, int) (map[string]int64, error)
 }
 
 type RecordingPackageService struct {
@@ -244,18 +244,18 @@ func (s *RecordingPackageService) Status(ctx context.Context, id, actor, cursor 
 	if end < len(objects) {
 		page.NextCursor = objects[end-1].Path
 	}
-	if p.State != "uploading" || !s.now().Before(p.ExpiresAt) {
+	if start == end || p.State != "uploading" || !s.now().Before(p.ExpiresAt) {
 		return page, nil
 	}
+	// R2's strongly consistent listing supplies the same remote size evidence
+	// without one serial network round-trip per HLS fragment. Hash/media checks
+	// remain the validation worker's responsibility, never inferred from status.
+	sizes, err := s.objects.ListPackageObjects(ctx, p.ID, RecordingPackageMaxObjects)
+	if err != nil {
+		return RecordingPackageStatus{}, err
+	}
 	for _, object := range objects[start:end] {
-		size, _, err := s.objects.Head(ctx, p.StagingKey(object.Path))
-		if errors.Is(err, r2.ErrNotFound) {
-			continue
-		}
-		if err != nil {
-			return RecordingPackageStatus{}, err
-		}
-		if size == object.SizeBytes {
+		if size, exists := sizes[object.Path]; exists && size == object.SizeBytes {
 			page.ConfirmedObjects = append(page.ConfirmedObjects, object.Path)
 		}
 	}

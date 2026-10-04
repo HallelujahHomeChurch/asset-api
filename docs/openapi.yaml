@@ -1072,7 +1072,7 @@ paths:
     get:
       operationId: getRecordingPackage
       summary: Query state and a bounded page of remotely observed upload objects.
-      description: confirmedObjects means remote size matches the inventory, not verified SHA-256 or ready media. Objects are examined in sorted path order; use nextCursor until empty. Non-uploading states do not query mutable staging objects.
+      description: confirmedObjects means remote size matches the inventory, not verified SHA-256 or ready media. A strongly consistent R2 listing is scoped to the package staging prefix and bounded to 10000 objects; provider failures never imply missing or confirmed objects. Results follow sorted inventory path order; use nextCursor until empty. Non-uploading states do not query mutable staging objects.
       tags: [Private]
       x-hhc-visibility: private
       x-hhc-callers: [hhc-web-api]
