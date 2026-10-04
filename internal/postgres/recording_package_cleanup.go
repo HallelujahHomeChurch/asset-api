@@ -149,7 +149,7 @@ func (s *RecordingPackageStore) CleanupPackage(ctx context.Context, id string, d
 		}
 		// ponytail: daily declared-key sweep retains metadata; add bounded metadata
 		// compaction only after retention policy and provider late-write bounds agree.
-		_, err = s.locks.statements(ctx).ExecContext(ctx, `UPDATE recording_packages SET cleanup_after=clock_timestamp()+interval '24 hours' WHERE id=$1`, id)
+		_, err = s.locks.statements(ctx).ExecContext(ctx, `UPDATE recording_packages SET cleanup_after=CASE WHEN state='expired' AND media_expires_at+interval '1 hour'>clock_timestamp() THEN media_expires_at+interval '1 hour' ELSE clock_timestamp()+interval '24 hours' END WHERE id=$1`, id)
 		return err
 	})
 }

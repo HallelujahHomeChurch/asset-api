@@ -49,6 +49,9 @@ func (s *RecordingSourceStore) Create(ctx context.Context, p assets.RecordingSou
 		return err
 	}
 	defer tx.Rollback()
+	if err := checkRecordingNotDeleted(ctx, tx, p.RecordingID); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('recording-source-actor:' || $1,0))`, p.ActorID); err != nil {
 		return err
 	}

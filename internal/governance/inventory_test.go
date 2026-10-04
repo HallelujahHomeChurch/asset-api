@@ -28,6 +28,7 @@ var operationalColumnExclusions = map[string]string{
 }
 
 var governedTables = map[string]bool{
+	"recording_deletions": true,
 	"recording_sources":                true,
 	"recording_source_attempts":        true,
 	"recording_packages":               true,
@@ -54,6 +55,7 @@ func TestDataGovernanceManifest(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(raw), "account.avatar, account.dsr-export and account.dsr-supplement")
 	ids := []string{
+		"asset.recording-deletions",
 		"asset.recording-sources", "asset.recording-source-attempts",
 		"asset.recording-packages",
 		"asset.recording-processing-slots", "asset.recording-package-attempts", "asset.recording-preview-attempts",
@@ -249,6 +251,7 @@ func migratedColumns(t *testing.T) (map[string]struct{}, map[string]bool) {
 		t.Fatal(err)
 	}
 	tableNames := []string{
+		"recording_deletions",
 		"recording_sources", "recording_source_attempts",
 		"recording_packages",
 		"recording_processing_slots", "recording_package_attempts", "recording_preview_attempts",

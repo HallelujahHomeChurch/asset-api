@@ -18,6 +18,22 @@ tags:
   - name: Private
     description: Dapr-authenticated service operations.
 paths:
+  /priv/recordings/{recordingID}:
+    delete:
+      operationId: deleteRecordingMedia
+      summary: Fence recording media and schedule byte cleanup
+      description: Idempotent owner tombstone stops new upload sessions, validation, source processing and preview work. Existing cleanup removes private Blob, R2 staging, HLS and previews, retries failures and sweeps late writes. Ready media keeps the existing one-hour grant grace. No CMS business records are changed.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [{ daprCaller: [] }]
+      parameters: [{name: recordingID, in: path, required: true, schema: {type: string, pattern: '^[a-zA-Z0-9-]{1,80}$'}}]
+      responses:
+        '204': {description: 'Durable deletion accepted, including a repeat command.'}
+        '400': {$ref: '#/components/responses/Error'}
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
   /health:
     get:
       summary: Asset API operation

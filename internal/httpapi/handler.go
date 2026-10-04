@@ -34,6 +34,7 @@ type Handler struct {
 	recordingPackages    *assets.RecordingPackageService
 	recordingSources     *assets.RecordingSourceService
 	recordingSigner      *assets.RecordingSigner
+	recordingDeletion    RecordingDeleter
 }
 
 type WorkloadCaller struct {
@@ -122,6 +123,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.Handle("GET /api/assets/content", h.collectionTicket(http.HandlerFunc(h.ticketContent)))
 	mux.Handle("POST /priv/assets/upload-sessions", h.internal(http.HandlerFunc(h.createUpload)))
 	mux.Handle("POST /priv/recording-packages", h.internal(http.HandlerFunc(h.createRecordingPackage)))
+	mux.Handle("DELETE /priv/recordings/{recordingID}", h.internal(http.HandlerFunc(h.deleteRecording)))
 	mux.Handle("POST /priv/recording-sources", h.internal(http.HandlerFunc(h.createRecordingSource)))
 	mux.Handle("GET /priv/recording-sources/{sourceID}", h.internal(http.HandlerFunc(h.getRecordingSource)))
 	mux.Handle("POST /priv/recording-sources/{sourceID}/sign", h.internal(http.HandlerFunc(h.signRecordingSource)))
