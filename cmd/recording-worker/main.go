@@ -87,6 +87,12 @@ func run(ctx context.Context) error {
 				return errors.Join(cleanupErr, err)
 			}
 		}
+		// Preview claims defer to waiting validation/source work in SQL and
+		// use the same global slots. Only one long claim runs per execution.
+		processed, previewErr := recordingvalidation.RunPackagePreview(ctx, packages, objects, probe)
+		if processed || previewErr != nil {
+			return errors.Join(cleanupErr, previewErr)
+		}
 		validationErr := recordingvalidation.RunPackageValidation(ctx, packages, objects, probe)
 		return errors.Join(validationErr, cleanupErr)
 	}

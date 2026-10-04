@@ -4,7 +4,8 @@
 
 The new Pages route is
 `/videos/{recording}/packages/{package}/sessions/{scope}/{object}`. Only
-`master.m3u8`, `720p|1080p/index.m3u8`, `init.mp4` and `seg-NNNNNN.m4s`
+`master.m3u8`, `720p|1080p/index.m3u8`, `init.mp4`, `seg-NNNNNN.m4s`,
+`previews/index.vtt` and `previews/seg-NNNNNN.jpg`
 are served. Inventory, arbitrary keys, query credentials and encoded paths are
 not media routes. Package cookies contain a signer-authorized immutable final
 prefix, never an upload/staging prefix. Exchange and renewal preserve the
@@ -26,6 +27,49 @@ Local checks include the signed-cookie/R2/Cache flow in Wrangler's pinned
 Cloudflare runtime, but are not deployment or browser/device acceptance.
 Keep `ASSET_RECORDING_HLS_ENABLED` off until CMS, Gateway and player cutover
 checks pass. Ordinary Blob scanning stays unchanged.
+
+## Seek preview contract
+
+The optional VTT and JPEG routes use the exact playback Cookie, scope, expiry,
+CORS, GET/HEAD/Range and cache authorization as HLS, including on cache hits.
+MIME types are `text/vtt` and `image/jpeg`; each object is capped at 1 MiB.
+The standard WEBVTT cues sample every five seconds. Each 30-second media
+fragment has one 960x90 JPEG with six horizontal 160x90 cells, referenced as
+`seg-000000.jpg#xywh=0,0,160,90` relative to `previews/index.vtt`. Final cues end
+at the recording duration and never reference unpopulated tail cells. The VTT
+is published only after every sprite. A 404 means previews are not available;
+it does not change video readiness or publication.
+
+The scheduled recording Job selects the lowest-resolution validated rendition,
+decodes one bounded init+fragment at a time with FFmpeg file-only protocols,
+resets fragment PTS, and emits only preview JPEGs. It never downloads the full
+package/original or re-encodes source video. Scratch is at most two bounded
+media objects plus one 1 MiB JPEG; existing CPU 4 / memory 8 GiB stay unchanged.
+Preview claims share the existing two global slots, renewable fenced leases,
+and 5.5-hour deadline. Waiting upload validation and source jobs take priority.
+Migration 031's default pending state includes existing ready packages; three
+attempts total include crashes, with five-minute retry delay and no work after
+media expiry. Failed previews leave `state=ready` untouched.
+
+Storage is server-only under the immutable final prefix:
+`previews/{preview-claim}/{index.vtt|seg-NNNNNN.jpg}`. A bounded private
+`previews/current.json` pointer selects the completed attempt. Publication holds
+the shared slot and package lease locks; all writes use conditional create-only
+PUTs. Thus an ambiguous/stale write cannot overwrite an existing winner. The
+Worker resolves this pointer after authentication and validates its attempt ID;
+neither internal attempt paths nor the pointer are routable. No upload inventory
+or client signing path accepts these keys. At most three attempts are retained
+until media expiry plus the existing one-hour grant grace, then daily declared
+key sweeps remove all derived objects, including late writes. Attempts are kept
+through expiry to preserve a successful pointer whose DB response was lost.
+
+After release, verify an older ready package progresses to preview ready, a new
+upload remains playable before previews finish, and real authenticated VTT/JPEG
+GETs work. Recheck unauthenticated, cross-scope, expired-cookie and cached denial,
+final-tail seek behavior, Job slots/resources/duration, and expiry cleanup.
+Local tests and migration success do not establish production backfill or
+browser/device acceptance. Roll back API/Job and Pages using their existing
+release paths; the additive schema and optional objects remain compatible.
 
 ## Retired single-file path
 

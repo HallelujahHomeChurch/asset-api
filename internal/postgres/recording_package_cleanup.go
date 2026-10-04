@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -100,6 +101,49 @@ func (s *RecordingPackageStore) CleanupPackage(ctx context.Context, id string, d
 				return err
 			}
 			if _, err := s.locks.statements(ctx).ExecContext(ctx, `UPDATE recording_package_attempts SET state='purged' WHERE claim_id=$1 AND package_id=$2`, attempt, id); err != nil {
+				return err
+			}
+		}
+		// At most three preview attempts per package. Preserve all attempts
+		// until media expiry + grant grace, including an ambiguous successful
+		// pointer publication. Repeat declared-key sweeps to catch late writes.
+		if gracePassed && p.FinalPrefix != "" {
+			rows, err := s.locks.statements(ctx).QueryContext(ctx, `SELECT claim_id FROM recording_preview_attempts WHERE package_id=$1`, id)
+			if err != nil {
+				return err
+			}
+			var previews []string
+			for rows.Next() {
+				var claim string
+				if err := rows.Scan(&claim); err != nil {
+					rows.Close()
+					return err
+				}
+				previews = append(previews, claim)
+			}
+			err = rows.Err()
+			rows.Close()
+			if err != nil {
+				return err
+			}
+			for _, claim := range previews {
+				keys := []string{p.FinalPrefix + "previews/" + claim + "/index.vtt"}
+				for i := 0; i < p.Inventory.Renditions[0].SegmentCount; i++ {
+					keys = append(keys, fmt.Sprintf("%spreviews/%s/seg-%06d.jpg", p.FinalPrefix, claim, i))
+					if len(keys) == 1000 {
+						if err := deleteObjects(ctx, keys); err != nil {
+							return err
+						}
+						keys = nil
+					}
+				}
+				if len(keys) > 0 {
+					if err := deleteObjects(ctx, keys); err != nil {
+						return err
+					}
+				}
+			}
+			if err := deleteObjects(ctx, []string{p.FinalPrefix + "previews/current.json"}); err != nil {
 				return err
 			}
 		}

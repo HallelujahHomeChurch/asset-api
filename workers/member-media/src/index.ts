@@ -32,7 +32,7 @@ type Claims = {
 };
 
 const cookieName = 'hhc_media';
-const packageRoute = /^\/videos\/([a-zA-Z0-9-]{1,80})\/packages\/([a-f0-9]{32})\/sessions\/([a-zA-Z0-9-]{1,80})\/(cookie|master\.m3u8|(?:720p|1080p)\/(?:index\.m3u8|init\.mp4|seg-\d{6}\.m4s))$/;
+const packageRoute = /^\/videos\/([a-zA-Z0-9-]{1,80})\/packages\/([a-f0-9]{32})\/sessions\/([a-zA-Z0-9-]{1,80})\/(cookie|master\.m3u8|previews\/(?:index\.vtt|seg-\d{6}\.jpg)|(?:720p|1080p)\/(?:index\.m3u8|init\.mp4|seg-\d{6}\.m4s))$/;
 const finalPrefix = /^recordings\/packages\/([a-f0-9]{32})\/final\/[a-zA-Z0-9-]{1,80}\/$/;
 const encoder = new TextEncoder();
 
@@ -160,7 +160,28 @@ async function handle(request: Request, env: Env, ctx?: ExecutionContext): Promi
   const cookie = request.headers.get('Cookie')?.split(';').map(value => value.trim()).find(value => value.startsWith(`${cookieName}=`))?.slice(cookieName.length + 1);
   const playback = cookie && await verify(cookie, 'playback', env, Math.floor(Date.now() / 1000));
   if (!playback || !scoped(playback, ids) || !validResource(playback)) return failure(401);
-  const objectKey = playback.prefix! + match[4];
+  let objectKey = playback.prefix! + match[4];
+  if (match[4].startsWith('previews/')) {
+    const pointer = await env.MEDIA_BUCKET.get(playback.prefix! + 'previews/current.json');
+    if (!pointer) return failure(404);
+    if (!pointer.body || !Number.isSafeInteger(pointer.size) || pointer.size <= 0 || pointer.size > 128) return failure(503);
+    const reader = pointer.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > 128) { await reader.cancel(); return failure(503); }
+      chunks.push(value);
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    const attempt = /^\{"attempt":"([a-zA-Z0-9-]{1,80})"\}$/.exec(new TextDecoder().decode(bytes))?.[1];
+    if (!attempt) return failure(503);
+    objectKey = playback.prefix! + `previews/${attempt}/` + match[4].slice('previews/'.length);
+  }
   const cache = (globalThis.caches as CacheStorage & { default?: Cache } | undefined)?.default;
   const cacheKey = new Request(`${url.origin}/__hhc_media_cache/${objectKey}`);
   if (cache && !request.headers.has('If-Range')) {
@@ -178,8 +199,8 @@ async function handle(request: Request, env: Env, ctx?: ExecutionContext): Promi
   }
   const object = await env.MEDIA_BUCKET.head(objectKey);
   if (!object) return failure(404);
-  if (!Number.isSafeInteger(object.size) || object.size <= 0 || object.size > (match[4].endsWith('.m3u8') ? 1 << 20 : 128 << 20)) return failure(503);
-  const mime = match[4].endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : match[4].endsWith('.m4s') ? 'video/iso.segment' : 'video/mp4';
+  if (!Number.isSafeInteger(object.size) || object.size <= 0 || object.size > (match[4].endsWith('.m3u8') || match[4].startsWith('previews/') ? 1 << 20 : 128 << 20)) return failure(503);
+  const mime = match[4].endsWith('.vtt') ? 'text/vtt' : match[4].endsWith('.jpg') ? 'image/jpeg' : match[4].endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : match[4].endsWith('.m4s') ? 'video/iso.segment' : 'video/mp4';
   const headers = new Headers({ 'Cache-Control': 'private, no-store', 'Content-Type': mime, 'X-Content-Type-Options': 'nosniff', 'Accept-Ranges': 'bytes', ETag: object.httpEtag });
   if (request.headers.get('If-None-Match') === object.httpEtag) {
     const response = new Response(null, { status: 304, headers });

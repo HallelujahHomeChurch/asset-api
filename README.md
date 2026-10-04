@@ -70,6 +70,14 @@ hits. Browser source ingest/encode is independently gated; CMS/player integratio
 and provider acceptance remain subsequent work. Enabling these producers is not
 end-to-end readiness.
 
+Optional seek previews are generated from ready immutable HLS by the same
+recording Job, behind waiting validation/source work and sharing its two global
+slots. Migration 031 also queues existing unexpired ready packages. No CLI,
+upload inventory, CMS publication, ready state, or source/scanning change is
+required. The existing authenticated playback base serves `previews/index.vtt`
+and `previews/seg-NNNNNN.jpg`; missing previews return 404 while video plays.
+See [the preview contract and acceptance checklist](docs/member-video-operations.md#seek-preview-contract).
+
 Browser source storage primitives use separate `recording-sources/{id}/staging`
 Blob keys: 16 MiB blocks, up to 2,981 blocks for the independent 50 GB source
 budget, exact block IDs/tail sizes and write-only blob-scoped user-delegation

@@ -40,7 +40,7 @@ async function fixture() {
 
 test('every HLS object and metadata read requires the package-scoped cookie', async () => {
   const f = await fixture();
-  for (const object of ['master.m3u8', '720p/index.m3u8', '720p/init.mp4', '720p/seg-000000.m4s']) {
+  for (const object of ['master.m3u8', '720p/index.m3u8', '720p/init.mp4', '720p/seg-000000.m4s', 'previews/index.vtt', 'previews/seg-000000.jpg']) {
     for (const method of ['GET', 'HEAD']) {
       const response = await f.get(object, { Range: 'bytes=0-1' }, method);
       assert.equal(response.status, 401);
@@ -64,6 +64,47 @@ test('retired single-file routes reject even valid legacy grants without reading
     assert.equal(response.status, 404);
   }
   assert.equal(f.calls.length, 0);
+});
+
+test('preview routes resolve only a bounded private attempt and authorize before cache', async () => {
+  const f = await fixture();
+  let pointer = '{"attempt":"preview-1"}';
+  const original = f.env.MEDIA_BUCKET.get;
+  f.env.MEDIA_BUCKET.get = async (key, options) => key.endsWith('/current.json')
+    ? { size: Buffer.byteLength(pointer), body: new Response(pointer).body, httpEtag: '"pointer"' }
+    : original(key, options);
+  for (const [name, mime] of [['index.vtt', 'text/vtt'], ['seg-000000.jpg', 'image/jpeg']]) {
+    const response = await f.get(`previews/${name}`, { Cookie: `hhc_media=${f.playback}`, Origin: origin });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('Content-Type'), mime);
+    assert.equal(response.headers.get('Access-Control-Allow-Credentials'), 'true');
+    assert.equal(response.headers.get('Cache-Control'), 'private, no-store');
+    assert.ok(f.calls.some(([op, key]) => op === 'get' && key === prefix + `previews/preview-1/${name}`));
+  }
+  for (const bad of ['{"attempt":"../../other"}', '{"attempt":"preview-1","prefix":"other"}', 'x'.repeat(129)]) {
+    pointer = bad;
+    assert.equal((await f.get('previews/index.vtt', { Cookie: `hhc_media=${f.playback}` })).status, 503);
+  }
+  pointer = '{"attempt":"preview-1"}';
+  const oldCaches = globalThis.caches;
+  let hits = 0;
+  globalThis.caches = { default: { async match() { hits++; return new Response('cached'); } } };
+  try {
+    for (const object of ['previews/index.vtt', 'previews/seg-000000.jpg']) {
+      for (const claims of [{ ...f.scope, exp: f.now - 1 }, { ...f.scope, exp: f.now + 60, scopeId: 'other' }, { ...f.scope, exp: f.now + 60, packageId: 'a'.repeat(32) }]) {
+        const token = await f.sign({ ...claims, typ: 'playback', prefix });
+        assert.equal((await f.get(object, { Cookie: `hhc_media=${token}` })).status, 401);
+      }
+    }
+    assert.equal(hits, 0);
+    assert.equal((await f.get('previews/index.vtt', { Cookie: `hhc_media=${f.playback}` })).status, 200);
+    assert.equal(hits, 1);
+  } finally { globalThis.caches = oldCaches; }
+  f.env.MEDIA_BUCKET.head = async () => ({ size: (1 << 20) + 1, httpEtag: '"too-large"' });
+  assert.equal((await f.get('previews/seg-000000.jpg', { Cookie: `hhc_media=${f.playback}` })).status, 503);
+  for (const name of ['current.json', 'preview-1/index.vtt', '../master.m3u8']) {
+    assert.notEqual((await f.get(`previews/${name}`, { Cookie: `hhc_media=${f.playback}` })).status, 200);
+  }
 });
 
 test('HLS exchange and renewal retain the exact package/session cookie path', async () => {
