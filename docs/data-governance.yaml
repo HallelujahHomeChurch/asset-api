@@ -1,6 +1,20 @@
 schema_version: 1
 service: asset-api
 datasets:
+  - id: asset.recording-deletions
+    owner: asset-api
+    purpose: Fence late uploads and preserve retryable owner deletion commands.
+    necessity: required
+    storage: {kind: postgres, resource: recording_deletions, sources: [{path: internal/postgres/recording_deletion.go, symbol: RecordingDeletionStore.DeleteRecording}]}
+    subject_keys: []
+    data_classes: [identity, security, activity]
+    fields:
+      - {name: recording_deletions.recording_id, purpose: Prevent recreation of deleted media, necessity: required, data_classes: [identity, security]}
+      - {name: recording_deletions.requested_at, purpose: Anchor the immutable deletion receipt, necessity: required, data_classes: [activity]}
+    attribution: {mode: manual, explanation: CMS owns the recording and administrator provenance; this receipt contains no viewer identity.}
+    legal_basis: {status: pending_legal, reference: null}
+    retention: {status: pending_legal, rule: null, action: none}
+    cleanup: {mode: none, implementation: [], evidence: []}
   - id: asset.recording-sources
     owner: asset-api
     purpose: Bind temporary browser recording inputs to authorized CMS actors and retain fenced processing and retry receipts without entering the ordinary asset scan pipeline.

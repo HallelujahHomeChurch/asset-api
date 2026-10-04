@@ -65,6 +65,9 @@ func (s *RecordingPackageStore) Create(ctx context.Context, p assets.RecordingPa
 		return err
 	}
 	defer tx.Rollback()
+	if err := checkRecordingNotDeleted(ctx, tx, p.RecordingID); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('recording-package-actor:' || $1,0))`, p.ActorID); err != nil {
 		return err
 	}

@@ -46,6 +46,13 @@ service for these private asset operations.
 
 ## HLS package producer contract
 
+`DELETE /priv/recordings/{recordingID}` is an idempotent owner command available
+only to `hhc-web-api` with HLS enabled. A durable recording tombstone rejects
+late source/package creation, expires all associated media and fences processing
+leases. Existing cleanup jobs remove temporary Blob and R2 HLS/preview objects
+with retries; package finals retain the existing one-hour grant safety window.
+No public asset deletion permission or extra container is introduced.
+
 `/priv/recording-packages` provides create, paginated status, batched single-object
 PUT signing and durable completion handlers. These routes fail closed with 503
 unless `ASSET_RECORDING_HLS_ENABLED=true` is set for the API and recording Job.

@@ -36,6 +36,7 @@ func TestOpenAPIContract(t *testing.T) {
 		{"GET", "/api/assets/shared-folders/{grantID}/items/{itemID}/content", "[api-gateway]"},
 		{"DELETE", "/api/assets/shared-folders/{grantID}", "[api-gateway]"},
 		{"POST", "/priv/account-cleanup", "[account-api]"},
+		{"DELETE", "/priv/recordings/{recordingID}", "[hhc-web-api]"},
 		{"POST", "/priv/assets/upload-sessions", "[account-api, hhc-web-api, hhc-line-function-bot]"},
 		{"GET", "/priv/assets/operations", "[account-api, hhc-web-api, hhc-line-function-bot]"},
 		{"GET", "/priv/assets/collections", "[hhc-line-function-bot]"},
