@@ -319,6 +319,13 @@ func TestPackageCleanupRetriesAndNeverDeletesActiveAttempt(t *testing.T) {
 		t.Fatalf("delete failure: %v", err)
 	}
 	ids, err := store.PackageCleanupCandidates(ctx)
+	if err != nil || len(ids) != 0 {
+		t.Fatalf("failed item immediately retried: %v %v", ids, err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE recording_packages SET cleanup_after=clock_timestamp()-interval '1 second' WHERE id=$1`, p.ID); err != nil {
+		t.Fatal(err)
+	}
+	ids, err = store.PackageCleanupCandidates(ctx)
 	if err != nil || len(ids) != 1 || ids[0] != p.ID {
 		t.Fatalf("retry omitted: %v %v", ids, err)
 	}

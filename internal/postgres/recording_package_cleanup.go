@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -43,6 +44,10 @@ func (s *RecordingPackageStore) CleanupPackage(ctx context.Context, id string, d
 		}
 		if !due {
 			return nil
+		}
+		// Persist before provider calls so even a timeout cannot starve later items.
+		if _, err := s.locks.statements(ctx).ExecContext(ctx, `UPDATE recording_packages SET cleanup_after=clock_timestamp()+interval '5 minutes' WHERE id=$1`, id); err != nil {
+			return err
 		}
 		if p.State == "uploading" && uploadExpired || p.State == "ready" && mediaExpired {
 			if _, err := s.locks.statements(ctx).ExecContext(ctx, `UPDATE recording_packages SET state='expired' WHERE id=$1 AND state=$2`, id, p.State); err != nil {
@@ -162,10 +167,14 @@ func (s *RecordingPackageStore) ReconcilePackages(ctx context.Context, deleteObj
 	}
 	cleanupCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
+	var failures error
 	for _, id := range ids {
+		if err := cleanupCtx.Err(); err != nil {
+			return errors.Join(failures, err)
+		}
 		if err := s.CleanupPackage(cleanupCtx, id, deleteObjects); err != nil {
-			return err
+			failures = errors.Join(failures, err)
 		}
 	}
-	return nil
+	return failures
 }
