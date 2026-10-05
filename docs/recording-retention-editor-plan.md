@@ -8,7 +8,7 @@
 
 **Tech Stack:** Go, PostgreSQL, TypeScript/React, existing shared UI, Cloudflare Worker/R2.
 
-**Spec:** [Approved design scope](recording-retention-editor-design.md). This plan is pending review; no feature implementation claimed.
+**Spec:** [Approved design scope](recording-retention-editor-design.md). Implementation and independent review are recorded in the task ledger; merge, release and production activation remain separate gates.
 
 ## Global constraints
 
@@ -77,5 +77,6 @@
 - [ ] Resolve existing failing CI security findings with minimal patched dependencies and full checks; do not suppress CVEs or bypass required checks. Asset's observed blocker is scan-image perl-base 5.36.0-7+deb12u3, scanner-reported fixed version deb12u4; verify actual package availability before changing pins.
 - [ ] Update the existing per-repository PRs; Admin PR follows published SDK and exact registry lock refresh. All required CI must pass before merge.
 - [ ] Sequence compatible producers, CMS/Gateway, SDK and consumers. Keep retention activation disabled until old consumers are gone and the real-data dry-run is approved. No ad hoc production deployment.
+  - Review correction: 480p-compatible Web and Worker must precede the Asset encoder and CLI. Asset's workflow gates runtime deployment on successful media deployment when member video is enabled. CLI also consumes additive retention timestamps; it has no policy-editing flags.
 - [ ] Verify deployed health and relevant routes, then present activation impact separately. Physical Windows video and mobile/watermark acceptance remain distinct; recording privacy-notice publication still requires its pending approval.
 - [ ] Remove only clean task-owned temporary worktrees after release/smoke and no remaining work; otherwise preserve them.

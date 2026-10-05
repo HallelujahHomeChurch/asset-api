@@ -95,6 +95,7 @@ func run() error {
 		handler.WithRecordingSigner(signer)
 		if cfg.RecordingHLSEnabled {
 			handler.WithRecordingPackages(assets.NewRecordingPackageService(postgres.NewRecordingPackageStore(db), objects, time.Now))
+			handler.WithRecordingRetention(postgres.NewRecordingPackageStore(db))
 			handler.WithRecordingDeletion(postgres.NewRecordingDeletionStore(db))
 			handler.WithRecordingCovers(postgres.NewRecordingCoverStore(db), objects)
 			if cfg.RecordingSourceAccountURL != "" {

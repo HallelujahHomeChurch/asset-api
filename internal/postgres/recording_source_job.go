@@ -62,7 +62,7 @@ func (s *RecordingSourceStore) ClaimSourceProcessing(ctx context.Context) (Recor
 }
 
 func (s *RecordingSourceStore) sourceClaimTransaction(ctx context.Context, id, claim string, fn func(*sql.Tx, assets.RecordingSource) error) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := beginRecordingPolicyTx(ctx, s.db)
 	if err != nil {
 		return err
 	}
@@ -182,7 +182,7 @@ func (s *RecordingSourceStore) FinishSourceProcessing(ctx context.Context, id, c
 		// Each encode attempt uses its claim ID as its package ID, so existing
 		// staging/final mechanics remain isolated without a second storage layout.
 		prefix := "recordings/packages/" + claim + "/final/" + claim + "/"
-		_, err := tx.ExecContext(ctx, `INSERT INTO recording_packages(id,session_id,owner_service,actor_id,recording_id,idempotency_key,state,size_bytes,inventory,created_at,expires_at,completed_at,final_prefix,ready_at,media_expires_at) VALUES($1,$1,'hhc-web-api',$2,$3,$4,'ready',$5,$6,$7,$8,$9,$10,now(),now()+interval '30 days')`, claim, p.ActorID, p.RecordingID, "source-hls:"+id, size, data, p.CreatedAt, p.ExpiresAt, p.CompletedAt, prefix)
+		_, err := tx.ExecContext(ctx, `INSERT INTO recording_packages(id,session_id,owner_service,actor_id,recording_id,idempotency_key,state,size_bytes,inventory,created_at,expires_at,completed_at,final_prefix,ready_at,media_expires_at,retention_revision) VALUES($1,$1,'hhc-web-api',$2,$3,$4,'ready',$5,$6,$7,$8,$9,$10,now(),(SELECT CASE WHEN activated_at IS NULL THEN now()+interval '30 days' ELSE $9::timestamptz+(retention_days*interval '24 hours') END FROM recording_retention_policy WHERE singleton),(SELECT revision FROM recording_retention_policy WHERE singleton))`, claim, p.ActorID, p.RecordingID, "source-hls:"+id, size, data, p.CreatedAt, p.ExpiresAt, p.CompletedAt, prefix)
 		if err != nil {
 			return mapCollectionError(err)
 		}

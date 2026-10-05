@@ -33,7 +33,7 @@ func (s *RecordingCoverStore) Create(ctx context.Context, pkg, recording, actor,
 	if actor == "" || len(actor) > 160 || key == "" || len(key) > 160 {
 		return empty, assets.ErrInvalidInput
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := beginRecordingPolicyTx(ctx, s.db)
 	if err != nil {
 		return empty, err
 	}

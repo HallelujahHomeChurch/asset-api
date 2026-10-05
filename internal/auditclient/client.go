@@ -223,6 +223,8 @@ func validResource(grammar, value string) bool {
 		return assetID.MatchString(value)
 	case "empty":
 		return value == ""
+	case "singleton":
+		return value == "singleton"
 	default:
 		return false
 	}
@@ -242,6 +244,8 @@ func validMetadata(schema string, metadata Metadata) bool {
 		return exactCounts(metadata, map[string][2]int64{"normalizedUniqueItemCount": {1, 100}})
 	case "items_deleted":
 		return exactCounts(metadata, map[string][2]int64{"normalizedUniqueItemCount": {0, 2147483647}, "deletedCount": {0, 2147483647}, "alreadyAbsentCount": {0, 2147483647}})
+	case "recording_retention":
+		return exactCounts(metadata, map[string][2]int64{"previousDays": {1, 365}, "retentionDays": {1, 365}, "revision": {1, 2147483647}})
 	case "items_updated":
 		return exactCounts(metadata, map[string][2]int64{"normalizedUniqueItemCount": {0, 2147483647}, "updatedCount": {0, 2147483647}, "alreadyAbsentCount": {0, 2147483647}})
 	case "upload":

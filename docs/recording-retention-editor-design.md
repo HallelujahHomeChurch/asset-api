@@ -1,7 +1,7 @@
 # 錄影動態保留期限與後台編輯體驗
 
 日期：2026-10-05（Asia/Taipei）
-狀態：使用者已同意設計並要求 PR／merge；實作計劃已補齊待審閱，尚未實作或套用正式資料。
+狀態：使用者已同意設計並要求 PR／merge；程式已實作、獨立審查修正與最終 CI 進行中，尚未合併、發布或套用正式資料。
 
 ## 使用者需求
 
@@ -45,7 +45,11 @@
 
 涉及 Asset（政策、完成時間、授權與清理）、CMS（管理 API、同步／清單／發布）、Gateway（精確管理路由）、SDK（canonical OpenAPI）、Admin（設定及封面狀態）、Web（列表文案）；Audit catalog 納入政策變更事件。不要求 CLI 新參數或操作流程。
 
-Asset／CMS 的完成時間與政策相關欄位採 additive contract，先發布相容 producer，再更新 consumer。動態政策啟用前必須移除 CMS 固定 720 小時驗證，並完成既有資料 dry-run；不得在 consumer 尚未相容時改正式期限。
+Asset／CMS 的完成時間與政策相關欄位採 additive contract。動態政策啟用前必須移除 CMS 與 CLI 固定 720 小時驗證，並完成既有資料 dry-run；不得在 consumer 尚未相容時改正式期限。
+
+本輪亦包含 480p producer：先發布相容 Web 與 Worker，再發布 Asset encoder／CLI。Asset release 必須等待 Worker 成功才部署啟用中的影音 producer；Worker 失敗不可繼續 producer。其後依序發布 CMS、Gateway、正式 SDK 版本的 Admin。初始政策維持 inactive，不依合併順序推定已取得正式清理授權。
+
+預覽涵蓋已完成上傳但仍在處理的 CLI package／browser source；同一 recording 只計一次。處理中的 browser source 以來源容量估計，非承諾最終 HLS 大小。
 
 保留目前 PR／worktree，完成擴充後重新測試、review 與更新 PR。正式隱私告知補充仍是獨立待核准項，不視本次「請處理」為其授權。
 
