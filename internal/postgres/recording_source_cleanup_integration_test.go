@@ -76,6 +76,9 @@ func TestSourceCleanupRetainsRetryInputAndNeverDeletesReadyOutput(t *testing.T) 
 	if err := store.ReconcileSources(ctx, func(context.Context, string, []string) error { return fail }, deleteOutput); !errors.Is(err, fail) {
 		t.Fatalf("cleanup failure lost: %v", err)
 	}
+	if _, err := db.ExecContext(ctx, `UPDATE recording_sources SET cleanup_after=clock_timestamp()-interval '1 second' WHERE id=$1`, p.ID); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.ReconcileSources(ctx, deleteBlob, deleteOutput); err != nil {
 		t.Fatal(err)
 	}

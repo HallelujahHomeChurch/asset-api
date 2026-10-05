@@ -112,6 +112,9 @@ func TestRecordingDeletionFencesSourceJobAndRetriesCleanup(t *testing.T) {
 		t.Fatalf("failure lost: %v", err)
 	}
 	deleted := false
+	if _, err := db.ExecContext(ctx, `UPDATE recording_sources SET cleanup_after=clock_timestamp()-interval '1 second' WHERE id=$1`, p.ID); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.ReconcileSources(ctx, func(_ context.Context, id string, _ []string) error { deleted = id == p.ID; return nil }, func(context.Context, string) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
