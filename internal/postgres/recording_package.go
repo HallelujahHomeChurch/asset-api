@@ -204,6 +204,9 @@ func (s *RecordingPackageStore) FinishPackageValidation(ctx context.Context, id,
 			if _, err := tx.ExecContext(ctx, `UPDATE recording_packages SET state='ready',final_prefix=$2,ready_at=now(),media_expires_at=now()+interval '30 days',claim_id=NULL,claimed_until=NULL,validation_error=NULL,cleanup_after=now() WHERE id=$1`, id, prefix); err != nil {
 				return err
 			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO recording_covers(id,package_id,recording_id,actor_id,idempotency_key,kind,state,expires_at) SELECT $2,id,recording_id,actor_id,'auto','auto','pending',media_expires_at FROM recording_packages WHERE id=$1 ON CONFLICT DO NOTHING`, id, newStoreID()); err != nil {
+				return err
+			}
 		} else {
 			if _, err := tx.ExecContext(ctx, `UPDATE recording_packages SET state=CASE WHEN $2='invalid' OR validation_attempts=3 THEN 'failed' ELSE 'validating' END,validation_error=$2,claim_id=NULL,claimed_until=NULL,next_attempt_at=clock_timestamp()+interval '5 minutes',cleanup_after=now() WHERE id=$1`, id, failure); err != nil {
 				return err

@@ -20,6 +20,7 @@ import (
 	"hhc/asset-api/internal/assets"
 	"hhc/asset-api/internal/auditclient"
 	"hhc/asset-api/internal/auditoutbox"
+	"hhc/asset-api/internal/storage/r2"
 )
 
 type Handler struct {
@@ -35,6 +36,8 @@ type Handler struct {
 	recordingSources     *assets.RecordingSourceService
 	recordingSigner      *assets.RecordingSigner
 	recordingDeletion    RecordingDeleter
+	recordingCovers      RecordingCoverStore
+	coverObjects         *r2.Store
 }
 
 type WorkloadCaller struct {
@@ -123,6 +126,11 @@ func (h *Handler) Routes() http.Handler {
 	mux.Handle("GET /api/assets/content", h.collectionTicket(http.HandlerFunc(h.ticketContent)))
 	mux.Handle("POST /priv/assets/upload-sessions", h.internal(http.HandlerFunc(h.createUpload)))
 	mux.Handle("POST /priv/recording-packages", h.internal(http.HandlerFunc(h.createRecordingPackage)))
+	mux.Handle("GET /priv/recording-packages/{packageID}/covers", h.internal(http.HandlerFunc(h.listRecordingCovers)))
+	mux.Handle("POST /priv/recording-packages/{packageID}/cover-uploads", h.internal(http.HandlerFunc(h.uploadRecordingCover)))
+	mux.Handle("GET /priv/recording-packages/{packageID}/covers/{coverID}/content", h.internal(http.HandlerFunc(h.readRecordingCover)))
+	mux.Handle("POST /priv/recording-packages/{packageID}/covers/{coverID}/retain", h.internal(http.HandlerFunc(h.retainRecordingCover)))
+	mux.Handle("DELETE /priv/recording-packages/{packageID}/covers/{coverID}/references/{referenceID}", h.internal(http.HandlerFunc(h.releaseRecordingCover)))
 	mux.Handle("DELETE /priv/recordings/{recordingID}", h.internal(http.HandlerFunc(h.deleteRecording)))
 	mux.Handle("POST /priv/recording-sources", h.internal(http.HandlerFunc(h.createRecordingSource)))
 	mux.Handle("GET /priv/recording-sources/{sourceID}", h.internal(http.HandlerFunc(h.getRecordingSource)))

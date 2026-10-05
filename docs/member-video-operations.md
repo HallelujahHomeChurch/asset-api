@@ -209,3 +209,49 @@ replacement for billing metrics. Track this source account and the recording Job
 separately in Cost Management. Track R2 storage/Class A/Class B and Workers paid
 usage in Cloudflare, including the base plan as feature cost. Cost observations,
 alert delivery tests, and positive member playback remain separate acceptance gates.
+# Recording cover operations
+
+Recording covers use private R2 `recordings/covers/{recordingId}/{attempt}/`,
+outside immutable HLS inventory. The existing recording Job shares its two DB
+slots with validation/source processing; covers defer to waiting video work.
+Each image job has a two-minute deadline, three-minute fenced lease, at most
+three attempts and a five-minute retry delay. Failure never changes HLS ready.
+New ready packages enqueue three candidates at 20/50/80 percent. Custom inputs
+are limited to 5 MiB JPEG/PNG, 24 MP and 8192 px per edge; non-normal EXIF,
+animation and non-16:9 custom input are rejected. Isolated FFmpeg and JPEG
+re-encoding produce metadata-free 1280×720 images no larger than 1 MiB.
+No normal Blob asset, scan event or new container is created.
+
+Only CMS can use the private cover endpoints documented in OpenAPI. CMS owns
+selection and viewer authorization; image reads never grant video access.
+Retain a ready image with a unique selection reference before committing its
+CMS pointer. Release obsolete/failed selection references durably; do not
+delete a pointer's reference on an ambiguous CMS commit. Cover jobs, attempts
+and reference metadata are operational receipts, not a legal erasure policy.
+
+Cleanup deletes accepted custom inputs immediately, and retries input/output
+deletion through the existing Job. Unselected custom images expire after
+24 hours; references preserve selected output only until the recording expires
+or is deleted. Abandoned attempts receive a six-hour stale-writer grace.
+Repeated sweeps catch late R2 writes and retry provider failure; failed items
+rotate so they cannot starve later cleanup. Expired images fail closed before
+provider deletion. R2 failure is not evidence of completed byte removal.
+
+Existing recordings require an explicitly reviewed backfill:
+
+```sh
+go run ./cmd/recording-cover-backfill --limit 20
+# After approval of the exact page; DATABASE_URL must target the reviewed DB:
+go run ./cmd/recording-cover-backfill --limit 20 --apply
+# For another reviewed page, pass its prior nextAfter cursor with --after.
+```
+
+Dry-run is the default; each page is bounded to 100. Replays skip existing
+auto jobs, and deleted/expired packages are excluded. This only enqueues image
+work: it never changes the recording selection, HLS inventory, publication,
+notifications or expiry. Do not run production apply without explicit approval.
+
+Acceptance must separately prove an authenticated pre-play cover read, custom
+upload/selection, replacement, CLI resume and recording deletion. Local tests
+do not establish production R2 permissions or successful cleanup. Observe cover
+state/attempt counts and retry timestamps without logging images or credentials.

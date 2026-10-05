@@ -54,3 +54,13 @@ func TestCoverWritesPrivateImmutableAndBounded(t *testing.T) {
 		t.Fatalf("puts %d", calls)
 	}
 }
+
+func TestCoverInputRejectsInvalidScopeBeforeProvider(t *testing.T) {
+	store := &Store{}
+	if err := store.PutCoverInput(context.Background(), "recordings/packages/p/input", []byte("x"), "image/png"); err == nil {
+		t.Fatal("wrong namespace")
+	}
+	if err := store.DeleteCoverObjects(context.Background(), []string{"recordings/covers/a/x/input", "recordings/covers/b/y/input"}); err == nil {
+		t.Fatal("mixed recording delete")
+	}
+}
