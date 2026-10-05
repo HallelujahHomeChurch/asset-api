@@ -96,6 +96,7 @@ func run() error {
 		if cfg.RecordingHLSEnabled {
 			handler.WithRecordingPackages(assets.NewRecordingPackageService(postgres.NewRecordingPackageStore(db), objects, time.Now))
 			handler.WithRecordingDeletion(postgres.NewRecordingDeletionStore(db))
+			handler.WithRecordingCovers(postgres.NewRecordingCoverStore(db), objects)
 			if cfg.RecordingSourceAccountURL != "" {
 				sources, err := azurestorage.New(cfg.RecordingSourceAccountURL, cfg.RecordingSourceContainer)
 				if err != nil {

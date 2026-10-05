@@ -1119,6 +1119,142 @@ paths:
         '403': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
+  /priv/recording-packages/{packageID}/covers:
+    parameters:
+      - { $ref: '#/components/parameters/RecordingPackageID' }
+      - { name: recordingId, in: query, required: true, schema: { type: string } }
+    get:
+      operationId: listRecordingCovers
+      summary: List recording-bound image jobs and candidates without storage locations.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      responses:
+        '200':
+          description: Private no-store candidate list. Custom jobs retain the upload operation key for response-loss recovery.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/RecordingCover' }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /priv/recording-packages/{packageID}/cover-uploads:
+    parameters:
+      - { $ref: '#/components/parameters/RecordingPackageID' }
+      - { name: recordingId, in: query, required: true, schema: { type: string } }
+    post:
+      operationId: uploadRecordingCover
+      summary: Accept at most 5 MiB JPEG or PNG into private R2 for bounded normalization.
+      description: Exact actor and idempotency replay; changed bytes conflict. Only a ready nonexpired CMS-owned package is eligible. This does not select or publish an image. Images never enter the ordinary Blob scan lifecycle.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      parameters:
+        - { name: X-HHC-Actor-ID, in: header, required: true, schema: { type: string, maxLength: 160 } }
+        - { name: Idempotency-Key, in: header, required: true, schema: { type: string, maxLength: 160 } }
+      requestBody:
+        required: true
+        content:
+          image/jpeg: { schema: { type: string, format: binary } }
+          image/png: { schema: { type: string, format: binary } }
+      responses:
+        '202':
+          description: Durable processing receipt; not a selection receipt.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [uploadId, state]
+                properties:
+                  uploadId: { type: string }
+                  state: { type: string, enum: [uploading, pending, processing, ready, failed, expired] }
+        '413': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /priv/recording-packages/{packageID}/covers/{coverID}/content:
+    parameters:
+      - { $ref: '#/components/parameters/RecordingPackageID' }
+      - { name: recordingId, in: query, required: true, schema: { type: string } }
+      - { name: coverID, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: readRecordingCover
+      summary: Read a ready recording-bound standardized JPEG.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      responses:
+        '200':
+          description: Private no-store image/jpeg with nosniff; at most 1 MiB.
+          content:
+            image/jpeg: { schema: { type: string, format: binary } }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /priv/recording-packages/{packageID}/covers/{coverID}/retain:
+    parameters:
+      - { $ref: '#/components/parameters/RecordingPackageID' }
+      - { name: recordingId, in: query, required: true, schema: { type: string } }
+      - { name: coverID, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: retainRecordingCover
+      summary: Idempotently protect a ready image using a CMS selection reference.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [referenceId]
+              properties:
+                referenceId: { type: string, minLength: 1, maxLength: 160 }
+      responses:
+        '204': { description: Reference retained; conflicting reference reuse is rejected. }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /priv/recording-packages/{packageID}/covers/{coverID}/references/{referenceID}:
+    parameters:
+      - { $ref: '#/components/parameters/RecordingPackageID' }
+      - { name: recordingId, in: query, required: true, schema: { type: string } }
+      - { name: coverID, in: path, required: true, schema: { type: string } }
+      - { name: referenceID, in: path, required: true, schema: { type: string } }
+    delete:
+      operationId: releaseRecordingCover
+      summary: Idempotently release exactly one CMS image selection reference.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      responses:
+        '204': { description: Reference released or already absent. }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
   /priv/recording-packages/{packageID}/sign:
     parameters: [ { $ref: '#/components/parameters/RecordingPackageID' }, { $ref: '#/components/parameters/RecordingActorID' } ]
     post:
@@ -1323,6 +1459,15 @@ components:
         method: { type: string, const: PUT }
         headers: { type: object, additionalProperties: { type: string } }
         expiresAt: { type: string, format: date-time }
+    RecordingCover:
+      type: object
+      required: [id, uploadId, kind, state]
+      properties:
+        id: { type: string, description: Opaque image identifier; not an object key. }
+        uploadId: { type: string }
+        kind: { type: string, enum: [auto, custom] }
+        state: { type: string, enum: [uploading, pending, processing, ready, failed, expired] }
+        operationKey: { type: string, description: Custom upload idempotency key. }
     RecordingPackage:
       type: object
       additionalProperties: false

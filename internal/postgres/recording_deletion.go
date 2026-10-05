@@ -44,7 +44,10 @@ func (s *RecordingDeletionStore) DeleteRecording(ctx context.Context, id string)
 	if _, err = tx.ExecContext(ctx, `UPDATE recording_source_attempts SET state='abandoned',finished_at=clock_timestamp() WHERE state='processing' AND source_id IN(SELECT id FROM recording_sources WHERE recording_id=$1)`, id); err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE recording_processing_slots SET job_id=NULL,claim_id=NULL,leased_until=NULL WHERE job_id IN(SELECT id FROM recording_packages WHERE recording_id=$1 UNION SELECT id FROM recording_sources WHERE recording_id=$1)`, id); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE recording_covers SET state='expired',claim_id=NULL,claimed_until=NULL,cleanup_after=now() WHERE recording_id=$1`, id); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE recording_processing_slots SET job_id=NULL,claim_id=NULL,leased_until=NULL WHERE job_id IN(SELECT id FROM recording_packages WHERE recording_id=$1 UNION SELECT id FROM recording_sources WHERE recording_id=$1 UNION SELECT id FROM recording_covers WHERE recording_id=$1)`, id); err != nil {
 		return err
 	}
 	return tx.Commit()

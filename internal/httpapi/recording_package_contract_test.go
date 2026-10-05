@@ -28,6 +28,7 @@ func TestRecordingPackageWireFieldsMatchOpenAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, value := range map[string]any{
+		"RecordingCover":             coverItem{OperationKey: "cover-upload"},
 		"RecordingSource":            assets.RecordingSource{},
 		"RecordingSourceStatus":      assets.RecordingSourceStatus{},
 		"SignedRecordingSourceBlock": assets.SignedRecordingSourceBlock{},
