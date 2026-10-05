@@ -1498,7 +1498,7 @@ components:
         nextCursor: { type: string, description: Last examined path; empty when this pass is complete. }
         readyAt: { type: string, format: date-time }
         mediaExpiresAt: { type: string, format: date-time }
-        renditions: { type: array, minItems: 1, maxItems: 2, items: { $ref: '#/components/schemas/RecordingRendition' } }
+        renditions: { type: array, minItems: 1, maxItems: 3, items: { $ref: '#/components/schemas/RecordingRendition' } }
     SignedRecordingObject:
       allOf:
         - { $ref: '#/components/schemas/RecordingPartTarget' }
@@ -1529,7 +1529,7 @@ components:
         renditions:
           type: array
           minItems: 1
-          maxItems: 2
+          maxItems: 3
           items: { $ref: '#/components/schemas/RecordingRendition' }
         inventoryDigest: { type: string, pattern: '^[a-f0-9]{64}$' }
     RecordingPackageObject:
@@ -1539,7 +1539,7 @@ components:
       properties:
         path:
           type: string
-          pattern: '^(master\.m3u8|(720p|1080p)/(index\.m3u8|init\.mp4|seg-[0-9]{6}\.m4s))$'
+          pattern: '^(master\.m3u8|(480p|720p|1080p)/(index\.m3u8|init\.mp4|seg-[0-9]{6}\.m4s))$'
           description: Canonical relative path. Unique paths and every declared rendition's complete contiguous segment list are required. No URLs, encoded paths, queries or package.json.
         sizeBytes: { type: integer, format: int64, minimum: 1, maximum: 134217728, description: 'Playlists additionally have a 1048576-byte limit. Package total including inventory must be at most 10000000000 bytes.' }
         sha256: { type: string, pattern: '^[a-f0-9]{64}$' }
@@ -1548,14 +1548,14 @@ components:
       additionalProperties: false
       required: [name, width, height, frameRate, videoBitrate, audioBitrate, durationSeconds, segmentCount]
       properties:
-        name: { type: string, enum: [720p, 1080p], description: '720p is mandatory; 1080p optional. Names are unique.' }
-        width: { type: integer, minimum: 2, maximum: 1920, multipleOf: 2, description: '720p maximum width is 1280; source must never be upscaled.' }
-        height: { type: integer, minimum: 2, maximum: 1080, multipleOf: 2, description: '720p maximum height is 720. Actual dimensions are retained for smaller sources.' }
+        name: { type: string, enum: [480p, 720p, 1080p], description: '720p is mandatory for backward compatibility; 480p and 1080p optional. Names are unique; each additional rung has distinct dimensions and ordered bitrates.' }
+        width: { type: integer, minimum: 2, maximum: 1920, multipleOf: 2, description: '480p maximum width is 854; 720p maximum width is 1280; source must never be upscaled.' }
+        height: { type: integer, minimum: 2, maximum: 1080, multipleOf: 2, description: '480p maximum height is 480; 720p maximum height is 720. Actual dimensions are retained for smaller sources.' }
         frameRate: { type: number, exclusiveMinimum: 0, maximum: 30 }
         videoBitrate: { type: integer, minimum: 500000, maximum: 8000000 }
         audioBitrate: { type: integer, const: 128000 }
         durationSeconds: { type: number, exclusiveMinimum: 0, maximum: 43200 }
-        segmentCount: { type: integer, minimum: 1, maximum: 1440, description: 'ceil(durationSeconds/30); both renditions require aligned actual boundaries.' }
+        segmentCount: { type: integer, minimum: 1, maximum: 1440, description: 'ceil(durationSeconds/30); all renditions require aligned actual boundaries.' }
     RecordingPartTarget:
       type: object
       required: [url, method, headers]

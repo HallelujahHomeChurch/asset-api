@@ -348,7 +348,7 @@ func avccCodecs(extra string) (string, error) {
 // InitCodecs derives the master playlist's codec labels from the actual encoded
 // initialization object. Full packet/IDR/decode checks still run in Validate.
 func (p PackageMediaProbe) InitCodecs(ctx context.Context, prefix, name string, size int64) (codecs string, result error) {
-	if p.Objects == nil || !filepath.IsAbs(p.FFprobe) || (name != "720p" && name != "1080p") || size <= 0 || size > assets.RecordingObjectMaxBytes {
+	if p.Objects == nil || !filepath.IsAbs(p.FFprobe) || (name != "480p" && name != "720p" && name != "1080p") || size <= 0 || size > assets.RecordingObjectMaxBytes {
 		return "", assets.ErrInvalidInput
 	}
 	dir, err := os.MkdirTemp(p.ScratchRoot, "hhc-init-")

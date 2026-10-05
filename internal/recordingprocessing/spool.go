@@ -23,7 +23,7 @@ import (
 
 var (
 	spoolPackageID     = regexp.MustCompile(`^[a-f0-9]{32}$`)
-	spoolPath          = regexp.MustCompile(`^(720p|1080p)/(index\.m3u8|init\.mp4|seg-[0-9]{6}\.m4s)$`)
+	spoolPath          = regexp.MustCompile(`^(480p|720p|1080p)/(index\.m3u8|init\.mp4|seg-[0-9]{6}\.m4s)$`)
 	ErrScratchCapacity = errors.New("recording_scratch_capacity_exhausted")
 	ErrOutputUpload    = errors.New("recording_output_upload_failed")
 )
@@ -158,8 +158,8 @@ func (s *OutputSpool) receiveObject(w http.ResponseWriter, r *http.Request, path
 		}
 		return nil // Exact replay after a lost PUT response, never rewrite bytes.
 	}
-	const controlReserve = assets.RecordingInventoryMaxBytes + 3*assets.RecordingPlaylistMaxBytes
-	if len(s.media) >= assets.RecordingPackageMaxObjects-3 || n > assets.RecordingPackageMaxBytes-controlReserve-s.bytes {
+	const controlReserve = assets.RecordingInventoryMaxBytes + 4*assets.RecordingPlaylistMaxBytes
+	if len(s.media) >= assets.RecordingPackageMaxObjects-4 || n > assets.RecordingPackageMaxBytes-controlReserve-s.bytes {
 		return assets.ErrRecordingPackageTooLarge
 	}
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
