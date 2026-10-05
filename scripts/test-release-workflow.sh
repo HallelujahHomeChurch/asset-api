@@ -56,6 +56,11 @@ test "$(grep -c 'memberVideoEnabled="$MEMBER_VIDEO_ENABLED"' "$workflow")" = 2
 grep -q 'recordingImage="$RECORDING_IMAGE_REF"' "$workflow"
 grep -q 'name: Verify recording validation job release' "$workflow"
 grep -q '^  deploy_media:' "$workflow"
+deploy_dependencies="$(sed -n '/^  deploy:/,/^    runs-on:/p' "$workflow")"
+printf '%s\n' "$deploy_dependencies" | grep -Fq 'needs: [verify, deploy_media]'
+printf '%s\n' "$deploy_dependencies" | grep -Fq "needs.deploy_media.result == 'success'"
+media_dependencies="$(sed -n '/^  deploy_media:/,/^    runs-on:/p' "$workflow")"
+printf '%s\n' "$media_dependencies" | grep -q '^    needs: verify$'
 grep -Fq "if: \${{ vars.MEMBER_MEDIA_DEPLOY_ENABLED == 'true' }}" "$workflow"
 grep -q 'name: member-media-${{ github.sha }}' "$workflow"
 grep -q 'pages deploy dist --project-name hhc-member-media' "$workflow"

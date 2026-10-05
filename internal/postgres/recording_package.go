@@ -24,12 +24,12 @@ func (s *RecordingPackageStore) WithSessionLock(ctx context.Context, id string, 
 }
 
 const recordingPackageColumns = `id,session_id,owner_service,actor_id,recording_id,idempotency_key,state,size_bytes,created_at,expires_at,inventory`
-const recordingPackageSelectColumns = recordingPackageColumns + `,COALESCE(final_prefix,''),ready_at,media_expires_at`
+const recordingPackageSelectColumns = recordingPackageColumns + `,COALESCE(final_prefix,''),ready_at,media_expires_at,completed_at,retention_revision`
 
 func scanRecordingPackage(row *sql.Row) (assets.RecordingPackage, error) {
 	var p assets.RecordingPackage
 	var inventory []byte
-	err := row.Scan(&p.ID, &p.SessionID, &p.OwnerService, &p.ActorID, &p.RecordingID, &p.IdempotencyKey, &p.State, &p.SizeBytes, &p.CreatedAt, &p.ExpiresAt, &inventory, &p.FinalPrefix, &p.ReadyAt, &p.MediaExpiresAt)
+	err := row.Scan(&p.ID, &p.SessionID, &p.OwnerService, &p.ActorID, &p.RecordingID, &p.IdempotencyKey, &p.State, &p.SizeBytes, &p.CreatedAt, &p.ExpiresAt, &inventory, &p.FinalPrefix, &p.ReadyAt, &p.MediaExpiresAt, &p.UploadedAt, &p.RetentionRevision)
 	if errors.Is(err, sql.ErrNoRows) {
 		return p, assets.ErrNotFound
 	}
@@ -41,7 +41,7 @@ func scanRecordingPackage(row *sql.Row) (assets.RecordingPackage, error) {
 }
 
 func (s *RecordingPackageStore) Get(ctx context.Context, id string) (assets.RecordingPackage, error) {
-	return scanRecordingPackage(s.locks.statements(ctx).QueryRowContext(ctx, `SELECT `+recordingPackageSelectColumns+` FROM recording_packages WHERE id=$1`, id))
+	return scanRecordingPackage(s.locks.statements(ctx).QueryRowContext(ctx, `SELECT `+recordingPackageSelectColumns+` FROM recording_packages WHERE id=$1 AND EXISTS(SELECT 1 FROM recording_retention_policy WHERE singleton)`, id))
 }
 
 func (s *RecordingPackageStore) FindByIdempotency(ctx context.Context, key string) (assets.RecordingPackage, error) {
@@ -157,7 +157,7 @@ func (s *RecordingPackageStore) ClaimPackageValidation(ctx context.Context) (Rec
 // Lock slot then package in the same order as claim. Expired workers cannot
 // revive their lease, extend a new worker's slot, or commit a stale ready state.
 func (s *RecordingPackageStore) packageClaimTransaction(ctx context.Context, id, claimID string, fn func(*sql.Tx) error) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := beginRecordingPolicyTx(ctx, s.db)
 	if err != nil {
 		return err
 	}
@@ -201,7 +201,7 @@ func (s *RecordingPackageStore) FinishPackageValidation(ctx context.Context, id,
 	return s.packageClaimTransaction(ctx, id, claimID, func(tx *sql.Tx) error {
 		if ready {
 			prefix := "recordings/packages/" + id + "/final/" + claimID + "/"
-			if _, err := tx.ExecContext(ctx, `UPDATE recording_packages SET state='ready',final_prefix=$2,ready_at=now(),media_expires_at=now()+interval '30 days',claim_id=NULL,claimed_until=NULL,validation_error=NULL,cleanup_after=now() WHERE id=$1`, id, prefix); err != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE recording_packages SET state='ready',final_prefix=$2,ready_at=now(),media_expires_at=(SELECT CASE WHEN activated_at IS NULL THEN now()+interval '30 days' ELSE completed_at+(retention_days*interval '24 hours') END FROM recording_retention_policy WHERE singleton),retention_revision=(SELECT revision FROM recording_retention_policy WHERE singleton),claim_id=NULL,claimed_until=NULL,validation_error=NULL,cleanup_after=now() WHERE id=$1`, id, prefix); err != nil {
 				return err
 			}
 			if _, err := tx.ExecContext(ctx, `INSERT INTO recording_covers(id,package_id,recording_id,actor_id,idempotency_key,kind,state,expires_at) SELECT $2,id,recording_id,actor_id,'auto','auto','pending',media_expires_at FROM recording_packages WHERE id=$1 ON CONFLICT DO NOTHING`, id, newStoreID()); err != nil {

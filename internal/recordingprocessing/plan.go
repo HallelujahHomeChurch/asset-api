@@ -79,14 +79,14 @@ func PlanBrowserSource(data []byte) (SourcePlan, error) {
 		name          string
 		width, height float64
 		bitrate       int64
-	}{{"720p", 1280, 720, 1500000}, {"1080p", 1920, 1080, 3000000}} {
+	}{{"720p", 1280, 720, 1500000}, {"1080p", 1920, 1080, 3000000}, {"480p", 854, 480, 800000}} {
 		scale := min(1, limit.width/width, limit.height/height)
 		w, h := int(math.Floor(width*scale/2))*2, int(math.Floor(height*scale/2))*2
 		if w < 2 || h < 2 {
 			return SourcePlan{}, assets.ErrInvalidUpload
 		}
-		if len(plan.Renditions) > 0 && h <= plan.Renditions[0].Height {
-			break
+		if len(plan.Renditions) > 0 && (limit.name == "1080p" && h <= plan.Renditions[0].Height || limit.name == "480p" && h >= plan.Renditions[0].Height) {
+			continue
 		}
 		plan.Renditions = append(plan.Renditions, assets.RecordingRendition{Name: limit.name, Width: w, Height: h, FrameRate: min(30, rate), VideoBitrate: limit.bitrate, AudioBitrate: 128000, DurationSeconds: duration, SegmentCount: int(math.Ceil(duration / 30))})
 		bitrates = append(bitrates, limit.bitrate)

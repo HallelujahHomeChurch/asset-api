@@ -27,7 +27,7 @@ func BuildSourcePackage(ctx context.Context, plan SourcePlan, spool *OutputSpool
 	invalid := func(err error) (assets.RecordingPackageInventory, error) {
 		return assets.RecordingPackageInventory{}, err
 	}
-	if len(inv.Renditions) < 1 || len(inv.Renditions) > 2 || len(lists) != len(inv.Renditions) {
+	if len(inv.Renditions) < 1 || len(inv.Renditions) > 3 || len(lists) != len(inv.Renditions) {
 		return invalid(assets.ErrInvalidUpload)
 	}
 	sizes := make(map[string]int64, len(media))

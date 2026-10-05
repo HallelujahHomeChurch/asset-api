@@ -11,20 +11,22 @@ import (
 )
 
 type RecordingPackage struct {
-	ID             string                    `json:"packageId"`
-	SessionID      string                    `json:"sessionId"`
-	OwnerService   string                    `json:"-"`
-	ActorID        string                    `json:"-"`
-	RecordingID    string                    `json:"recordingId"`
-	IdempotencyKey string                    `json:"-"`
-	State          string                    `json:"state"`
-	SizeBytes      int64                     `json:"sizeBytes"`
-	CreatedAt      time.Time                 `json:"createdAt"`
-	ExpiresAt      time.Time                 `json:"expiresAt"`
-	Inventory      RecordingPackageInventory `json:"inventory"`
-	FinalPrefix    string                    `json:"-"`
-	ReadyAt        *time.Time                `json:"readyAt,omitempty"`
-	MediaExpiresAt *time.Time                `json:"mediaExpiresAt,omitempty"`
+	ID                string                    `json:"packageId"`
+	SessionID         string                    `json:"sessionId"`
+	OwnerService      string                    `json:"-"`
+	ActorID           string                    `json:"-"`
+	RecordingID       string                    `json:"recordingId"`
+	IdempotencyKey    string                    `json:"-"`
+	State             string                    `json:"state"`
+	SizeBytes         int64                     `json:"sizeBytes"`
+	CreatedAt         time.Time                 `json:"createdAt"`
+	ExpiresAt         time.Time                 `json:"expiresAt"`
+	Inventory         RecordingPackageInventory `json:"inventory"`
+	FinalPrefix       string                    `json:"-"`
+	ReadyAt           *time.Time                `json:"readyAt,omitempty"`
+	MediaExpiresAt    *time.Time                `json:"mediaExpiresAt,omitempty"`
+	UploadedAt        *time.Time                `json:"uploadedAt,omitempty"`
+	RetentionRevision int64                     `json:"retentionRevision"`
 }
 
 func (p RecordingPackage) StagingKey(path string) string {
@@ -39,17 +41,19 @@ type CreateRecordingPackageInput struct {
 }
 
 type RecordingPackageStatus struct {
-	PackageID        string               `json:"packageId"`
-	SessionID        string               `json:"sessionId"`
-	RecordingID      string               `json:"recordingId"`
-	State            string               `json:"state"`
-	SizeBytes        int64                `json:"sizeBytes"`
-	ExpiresAt        time.Time            `json:"expiresAt"`
-	ConfirmedObjects []string             `json:"confirmedObjects"`
-	NextCursor       string               `json:"nextCursor"`
-	ReadyAt          *time.Time           `json:"readyAt,omitempty"`
-	MediaExpiresAt   *time.Time           `json:"mediaExpiresAt,omitempty"`
-	Renditions       []RecordingRendition `json:"renditions,omitempty"`
+	PackageID         string               `json:"packageId"`
+	SessionID         string               `json:"sessionId"`
+	RecordingID       string               `json:"recordingId"`
+	State             string               `json:"state"`
+	SizeBytes         int64                `json:"sizeBytes"`
+	ExpiresAt         time.Time            `json:"expiresAt"`
+	ConfirmedObjects  []string             `json:"confirmedObjects"`
+	NextCursor        string               `json:"nextCursor"`
+	ReadyAt           *time.Time           `json:"readyAt,omitempty"`
+	MediaExpiresAt    *time.Time           `json:"mediaExpiresAt,omitempty"`
+	Renditions        []RecordingRendition `json:"renditions,omitempty"`
+	UploadedAt        *time.Time           `json:"uploadedAt,omitempty"`
+	RetentionRevision int64                `json:"retentionRevision"`
 }
 
 type SignedRecordingObject struct {
@@ -132,6 +136,17 @@ func (s *RecordingPackageService) GetReady(ctx context.Context, id, recordingID 
 		return RecordingPackage{}, ErrForbidden
 	}
 	return p, nil
+}
+
+// The callback must issue the grant while holding the policy/package lock.
+func (s *RecordingPackageService) WithReady(ctx context.Context, id, recordingID string, use func(RecordingPackage) error) error {
+	return s.repository.WithSessionLock(ctx, id, func(ctx context.Context) error {
+		p, err := s.GetReady(ctx, id, recordingID)
+		if err != nil {
+			return err
+		}
+		return use(p)
+	})
 }
 
 func (s *RecordingPackageService) Sign(ctx context.Context, id, actor string, paths []string) ([]SignedRecordingObject, error) {
@@ -235,6 +250,7 @@ func (s *RecordingPackageService) Status(ctx context.Context, id, actor, cursor 
 	end := min(start+limit, len(objects))
 	page := RecordingPackageStatus{PackageID: p.ID, SessionID: p.SessionID, RecordingID: p.RecordingID, State: p.State, SizeBytes: p.SizeBytes, ExpiresAt: p.ExpiresAt, ConfirmedObjects: []string{}}
 	page.ReadyAt, page.MediaExpiresAt = p.ReadyAt, p.MediaExpiresAt
+	page.UploadedAt, page.RetentionRevision = p.UploadedAt, p.RetentionRevision
 	if p.State == "ready" {
 		page.Renditions = slices.Clone(p.Inventory.Renditions)
 		if p.MediaExpiresAt != nil && !s.now().Before(*p.MediaExpiresAt) {

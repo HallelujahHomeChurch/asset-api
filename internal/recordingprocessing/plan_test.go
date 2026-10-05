@@ -12,10 +12,10 @@ const sourceProbeFixture = `{"streams":[{"codec_type":"video","width":1920,"heig
 
 func TestBrowserSourcePlanMatchesCLIContract(t *testing.T) {
 	plan, err := PlanBrowserSource([]byte(sourceProbeFixture))
-	if err != nil || len(plan.Renditions) != 2 || plan.Renditions[0].VideoBitrate != 1500000 || plan.Renditions[1].VideoBitrate != 3000000 || plan.Renditions[0].AudioBitrate != 128000 || plan.Renditions[0].SegmentCount != 300 || plan.Renditions[1].Width != 1920 || plan.Renditions[0].FrameRate != 30000.0/1001 {
+	if err != nil || len(plan.Renditions) != 3 || plan.Renditions[2].Name != "480p" || plan.Renditions[2].VideoBitrate != 800000 || plan.Renditions[0].VideoBitrate != 1500000 || plan.Renditions[1].VideoBitrate != 3000000 || plan.Renditions[0].AudioBitrate != 128000 || plan.Renditions[0].SegmentCount != 300 || plan.Renditions[1].Width != 1920 || plan.Renditions[0].FrameRate != 30000.0/1001 {
 		t.Fatalf("plan %+v %v", plan, err)
 	}
-	want, err := assets.EstimateRecordingPackageSize(9000, []int64{1500000, 3000000})
+	want, err := assets.EstimateRecordingPackageSize(9000, []int64{1500000, 3000000, 800000})
 	if err != nil || plan.EstimatedBytes != want {
 		t.Fatal("estimate drift")
 	}

@@ -33,6 +33,7 @@ type Handler struct {
 	localUpload          http.HandlerFunc
 	audit                *auditoutbox.Store
 	recordingPackages    *assets.RecordingPackageService
+	recordingRetention   RecordingRetentionStore
 	recordingSources     *assets.RecordingSourceService
 	recordingSigner      *assets.RecordingSigner
 	recordingDeletion    RecordingDeleter
@@ -126,6 +127,10 @@ func (h *Handler) Routes() http.Handler {
 	mux.Handle("GET /api/assets/content", h.collectionTicket(http.HandlerFunc(h.ticketContent)))
 	mux.Handle("POST /priv/assets/upload-sessions", h.internal(http.HandlerFunc(h.createUpload)))
 	mux.Handle("POST /priv/recording-packages", h.internal(http.HandlerFunc(h.createRecordingPackage)))
+	mux.Handle("GET /priv/recordings/retention-policy", h.internal(http.HandlerFunc(h.getRecordingRetention)))
+	mux.Handle("POST /priv/recordings/lifecycle", h.internal(http.HandlerFunc(h.recordingLifecycle)))
+	mux.Handle("POST /priv/recordings/retention-policy/preview", h.internal(http.HandlerFunc(h.previewRecordingRetention)))
+	mux.Handle("PUT /priv/recordings/retention-policy", h.internal(http.HandlerFunc(h.updateRecordingRetention)))
 	mux.Handle("GET /priv/recording-packages/{packageID}/covers", h.internal(http.HandlerFunc(h.listRecordingCovers)))
 	mux.Handle("POST /priv/recording-packages/{packageID}/cover-uploads", h.internal(http.HandlerFunc(h.uploadRecordingCover)))
 	mux.Handle("GET /priv/recording-packages/{packageID}/covers/{coverID}/content", h.internal(http.HandlerFunc(h.readRecordingCover)))

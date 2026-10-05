@@ -55,6 +55,28 @@ func (s *recordingSessionStore) WithSessionLock(ctx context.Context, id string, 
 		return err
 	}
 	defer conn.Close()
+	// Shared across package grants/cleanup and source completion; updates take
+	// the exclusive counterpart before touching any package or cover row.
+	var policyLocked bool
+	if err := conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock_shared(`+retentionLock+`)`).Scan(&policyLocked); err != nil {
+		return err
+	}
+	if !policyLocked {
+		return assets.ErrConflict
+	}
+	defer func() {
+		unlockCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stop()
+		var released bool
+		err := conn.QueryRowContext(unlockCtx, `SELECT pg_advisory_unlock_shared(`+retentionLock+`)`).Scan(&released)
+		if err != nil || !released {
+			if err == nil {
+				err = errors.New("recording policy lock was not held")
+			}
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+			resultErr = errors.Join(resultErr, err)
+		}
+	}()
 	var acquired bool
 	if err := conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock(hashtextextended('recording-session:' || $1,0))`, id).Scan(&acquired); err != nil {
 		return err

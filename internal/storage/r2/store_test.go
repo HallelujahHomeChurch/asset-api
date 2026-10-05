@@ -126,7 +126,7 @@ func TestPresignPackageOnlyWritesOneSizedStagingObject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := "recordings/packages/package-a/staging/720p/seg-000001.m4s"
+	key := "recordings/packages/package-a/staging/480p/seg-000001.m4s"
 	signed, err := store.PresignPackageObject(context.Background(), key, 123, "video/mp4", 15*time.Minute)
 	if err != nil {
 		t.Fatal(err)
@@ -157,6 +157,11 @@ func TestPresignPackageOnlyWritesOneSizedStagingObject(t *testing.T) {
 }
 
 func TestPackageCopyPinsSourceETagAndCannotCrossPackage(t *testing.T) {
+	for _, name := range []string{"480p", "720p", "1080p"} {
+		if !packageStagingKey.MatchString("recordings/packages/package-a/staging/"+name+"/init.mp4") || !packageFinalKey.MatchString("recordings/packages/package-a/final/attempt-a/"+name+"/init.mp4") {
+			t.Fatalf("quality %s cannot be frozen", name)
+		}
+	}
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++

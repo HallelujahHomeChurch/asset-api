@@ -49,14 +49,14 @@ func TestBrowserEncodeReadsRangesAndSpoolsThirtySecondHLS(t *testing.T) {
 	}
 	defer spool.Close()
 	plan, err := EncodeSource(ctx, source, spool, ffmpeg, ffprobe)
-	if err != nil || len(plan.Renditions) != 2 {
+	if err != nil || len(plan.Renditions) != 3 {
 		t.Fatalf("encode plan %+v %v", plan, err)
 	}
 	objects, lists, err := spool.Snapshot()
-	if err != nil || len(objects) != 6 || len(lists) != 2 {
+	if err != nil || len(objects) != 9 || len(lists) != 3 {
 		t.Fatalf("encoded closure %d %d %v", len(objects), len(lists), err)
 	}
-	for _, name := range []string{"720p", "1080p"} {
+	for _, name := range []string{"480p", "720p", "1080p"} {
 		if !strings.Contains(string(lists[name+"/index.m3u8"]), "#EXTINF:30.000000,") || !strings.Contains(string(lists[name+"/index.m3u8"]), "#EXT-X-ENDLIST") {
 			t.Fatalf("missing 30-second VOD %s", name)
 		}
@@ -84,7 +84,7 @@ func TestBrowserEncodeReadsRangesAndSpoolsThirtySecondHLS(t *testing.T) {
 		}
 		checkpointed := false
 		inv, err := processSourceClaim(ctx, claim, func(_ context.Context, copy assets.RecordingSourceCopy) error { checkpointed = true; return nil }, sources, outputs, probe)
-		if err != nil || !checkpointed || len(inv.Renditions) != 2 {
+		if err != nil || !checkpointed || len(inv.Renditions) != 3 {
 			t.Fatalf("source pipeline: %v checkpoint=%t", err, checkpointed)
 		}
 		entries, err := os.ReadDir(probe.ScratchRoot)

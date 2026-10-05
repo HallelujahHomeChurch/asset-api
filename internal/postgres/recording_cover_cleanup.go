@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"hhc/asset-api/internal/assets"
 	"time"
@@ -55,11 +56,20 @@ func (s *RecordingCoverStore) Reconcile(ctx context.Context, remove func(context
 }
 func (s *RecordingCoverStore) coverCleanupKeys(ctx context.Context, id string) ([]string, time.Time, error) {
 	var cursor time.Time
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := beginRecordingPolicyTx(ctx, s.db)
 	if err != nil {
 		return nil, cursor, err
 	}
 	defer tx.Rollback()
+	// Match owner deletion and policy updates: package before its cover rows.
+	var packageID string
+	err = tx.QueryRowContext(ctx, `SELECT p.id FROM recording_packages p JOIN recording_covers c ON c.package_id=p.id WHERE c.id=$1 AND c.cleanup_after<=now() FOR UPDATE OF p`, id).Scan(&packageID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, cursor, nil
+	}
+	if err != nil {
+		return nil, cursor, err
+	}
 	c, err := scanCover(tx.QueryRowContext(ctx, `SELECT `+coverColumns+` FROM recording_covers c WHERE id=$1 AND cleanup_after<=now() FOR UPDATE`, id))
 	if errors.Is(err, assets.ErrNotFound) {
 		return nil, cursor, nil
@@ -72,6 +82,11 @@ func (s *RecordingCoverStore) coverCleanupKeys(ctx context.Context, id string) (
 		return nil, cursor, err
 	}
 	expired = expired || (c.Kind == "custom" && stale && !retained)
+	// An expiry sweep can remove covers before the package sweep runs. Fence
+	// that package too so a subsequent policy extension cannot revive it.
+	if _, err := tx.ExecContext(ctx, `UPDATE recording_packages SET state='expired',cleanup_after=clock_timestamp() WHERE id=$1 AND state='ready' AND media_expires_at<=clock_timestamp()`, c.PackageID); err != nil {
+		return nil, cursor, err
+	}
 	if err := tx.QueryRowContext(ctx, `UPDATE recording_covers SET cleanup_after=clock_timestamp()+interval '5 minutes',state=CASE WHEN $2 THEN 'expired' ELSE state END WHERE id=$1 RETURNING cleanup_after`, id, expired).Scan(&cursor); err != nil {
 		return nil, cursor, err
 	}

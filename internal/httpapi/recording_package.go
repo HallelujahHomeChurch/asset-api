@@ -39,12 +39,12 @@ func (h *Handler) issueRecordingPackageGrant(w http.ResponseWriter, r *http.Requ
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	p, err := h.recordingPackages.GetReady(r.Context(), r.PathValue("packageID"), input.RecordingID)
-	if err != nil {
-		handleError(w, err)
-		return
-	}
-	grant, err := h.recordingSigner.IssuePackage(p, input.ScopeID, input.RecordingExpiresAt, time.Now())
+	var grant assets.RecordingGrant
+	err := h.recordingPackages.WithReady(r.Context(), r.PathValue("packageID"), input.RecordingID, func(p assets.RecordingPackage) error {
+		var err error
+		grant, err = h.recordingSigner.IssuePackage(p, input.ScopeID, input.RecordingExpiresAt, time.Now())
+		return err
+	})
 	if err != nil {
 		handleError(w, err)
 		return
@@ -115,7 +115,7 @@ func (h *Handler) getReadyRecordingPackage(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	w.Header().Set("Cache-Control", "private, no-store")
-	writeJSON(w, http.StatusOK, assets.RecordingPackageStatus{PackageID: p.ID, SessionID: p.SessionID, RecordingID: p.RecordingID, State: p.State, SizeBytes: p.SizeBytes, ExpiresAt: p.ExpiresAt, ReadyAt: p.ReadyAt, MediaExpiresAt: p.MediaExpiresAt, Renditions: p.Inventory.Renditions, ConfirmedObjects: []string{}})
+	writeJSON(w, http.StatusOK, assets.RecordingPackageStatus{PackageID: p.ID, SessionID: p.SessionID, RecordingID: p.RecordingID, State: p.State, SizeBytes: p.SizeBytes, ExpiresAt: p.ExpiresAt, ReadyAt: p.ReadyAt, MediaExpiresAt: p.MediaExpiresAt, UploadedAt: p.UploadedAt, RetentionRevision: p.RetentionRevision, Renditions: p.Inventory.Renditions, ConfirmedObjects: []string{}})
 }
 
 func (h *Handler) signRecordingPackage(w http.ResponseWriter, r *http.Request) {

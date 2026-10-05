@@ -38,7 +38,7 @@ func (s *RecordingPackageStore) CleanupPackage(ctx context.Context, id string, d
 			return err
 		}
 		var uploadExpired, mediaExpired, gracePassed, due bool
-		err = s.locks.statements(ctx).QueryRowContext(ctx, `SELECT expires_at<=clock_timestamp(),COALESCE(media_expires_at<=clock_timestamp(),false),COALESCE(media_expires_at+interval '1 hour'<=clock_timestamp(),false),cleanup_after<=clock_timestamp() FROM recording_packages WHERE id=$1`, id).Scan(&uploadExpired, &mediaExpired, &gracePassed, &due)
+		err = s.locks.statements(ctx).QueryRowContext(ctx, `SELECT expires_at<=clock_timestamp(),COALESCE(media_expires_at<=clock_timestamp(),false),COALESCE(GREATEST(media_expires_at+interval '1 hour',grant_cleanup_after)<=clock_timestamp(),false),cleanup_after<=clock_timestamp() FROM recording_packages WHERE id=$1`, id).Scan(&uploadExpired, &mediaExpired, &gracePassed, &due)
 		if err != nil {
 			return err
 		}
@@ -154,7 +154,7 @@ func (s *RecordingPackageStore) CleanupPackage(ctx context.Context, id string, d
 		}
 		// ponytail: daily declared-key sweep retains metadata; add bounded metadata
 		// compaction only after retention policy and provider late-write bounds agree.
-		_, err = s.locks.statements(ctx).ExecContext(ctx, `UPDATE recording_packages SET cleanup_after=CASE WHEN state='expired' AND media_expires_at+interval '1 hour'>clock_timestamp() THEN media_expires_at+interval '1 hour' ELSE clock_timestamp()+interval '24 hours' END WHERE id=$1`, id)
+		_, err = s.locks.statements(ctx).ExecContext(ctx, `UPDATE recording_packages SET cleanup_after=CASE WHEN state='expired' AND GREATEST(media_expires_at+interval '1 hour',grant_cleanup_after)>clock_timestamp() THEN GREATEST(media_expires_at+interval '1 hour',grant_cleanup_after) ELSE clock_timestamp()+interval '24 hours' END WHERE id=$1`, id)
 		return err
 	})
 }

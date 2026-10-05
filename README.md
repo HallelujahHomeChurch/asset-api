@@ -46,6 +46,16 @@ service for these private asset operations.
 
 ## HLS package producer contract
 
+Human CMS administrators can preview and confirm one global retention policy
+(1–365 days) through `/priv/recordings/retention-policy`. Active policy uses
+immutable accepted upload completion, including browser sources before encoding.
+Preview estimates include unfinished accepted uploads without double-counting
+materialized sources. Revision, actor-bound five-minute preview, idempotency and
+atomic audit protect updates. Migration 034 initially leaves legacy expiry
+unchanged; production activation requires a separately approved impact preview.
+Terminal cleanup never revives. The owner-only `/priv/recordings/lifecycle`
+snapshot lets CMS apply the authoritative expiry before list filtering.
+
 `DELETE /priv/recordings/{recordingID}` is an idempotent owner command available
 only to `hhc-web-api` with HLS enabled. A durable recording tombstone rejects
 late source/package creation, expires all associated media and fences processing
@@ -65,7 +75,7 @@ confirmation is not SHA-256/media validation or evidence of `ready`.
 The flag defaults off and must remain off until the reviewed HLS cutover.
 Completion means `freezing`, not ready. In HLS mode the recording Job uses two
 global DB slots, renewable fenced leases and bounded per-fragment media validation;
-it does not re-encode CLI packages. Ready retention is thirty days, with a one-hour
+it does not re-encode CLI packages. Retention defaults to thirty days, with a one-hour
 existing-grant cleanup grace. Staging and failed attempt deletion are retried and
 reconciled daily to sweep late writes; provider acceptance remains required.
 Single-file recording upload and playback routes are retired; clients must use

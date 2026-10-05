@@ -11,7 +11,7 @@ func (s *RecordingCoverStore) Backfill(ctx context.Context, after string, limit 
 	if limit < 1 || limit > 100 {
 		return nil, assets.ErrInvalidInput
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := beginRecordingPolicyTx(ctx, s.db)
 	if err != nil {
 		return nil, err
 	}

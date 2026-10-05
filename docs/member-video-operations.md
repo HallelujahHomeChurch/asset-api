@@ -4,7 +4,7 @@
 
 The new Pages route is
 `/videos/{recording}/packages/{package}/sessions/{scope}/{object}`. Only
-`master.m3u8`, `720p|1080p/index.m3u8`, `init.mp4`, `seg-NNNNNN.m4s`,
+`master.m3u8`, `480p|720p|1080p/index.m3u8`, `init.mp4`, `seg-NNNNNN.m4s`,
 `previews/index.vtt` and `previews/seg-NNNNNN.jpg`
 are served. Inventory, arbitrary keys, query credentials and encoded paths are
 not media routes. Package cookies contain a signer-authorized immutable final

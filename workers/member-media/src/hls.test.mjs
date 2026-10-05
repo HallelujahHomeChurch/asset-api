@@ -90,7 +90,7 @@ test('preview routes resolve only a bounded private attempt and authorize before
   let hits = 0;
   globalThis.caches = { default: { async match() { hits++; return new Response('cached'); } } };
   try {
-    for (const object of ['previews/index.vtt', 'previews/seg-000000.jpg']) {
+    for (const object of ['previews/index.vtt', 'previews/seg-000000.jpg', '480p/seg-000000.m4s']) {
       for (const claims of [{ ...f.scope, exp: f.now - 1 }, { ...f.scope, exp: f.now + 60, scopeId: 'other' }, { ...f.scope, exp: f.now + 60, packageId: 'a'.repeat(32) }]) {
         const token = await f.sign({ ...claims, typ: 'playback', prefix });
         assert.equal((await f.get(object, { Cookie: `hhc_media=${token}` })).status, 401);
@@ -122,7 +122,7 @@ test('HLS exchange and renewal retain the exact package/session cookie path', as
 test('authorized HLS requests select only immutable final objects with correct MIME and Range', async () => {
   const f = await fixture();
   const cookie = `hhc_media=${f.playback}`;
-  for (const [object, mime] of [['master.m3u8', 'application/vnd.apple.mpegurl'], ['1080p/index.m3u8', 'application/vnd.apple.mpegurl'], ['720p/init.mp4', 'video/mp4'], ['720p/seg-000000.m4s', 'video/iso.segment']]) {
+  for (const [object, mime] of [['master.m3u8', 'application/vnd.apple.mpegurl'], ['480p/index.m3u8', 'application/vnd.apple.mpegurl'], ['480p/init.mp4', 'video/mp4'], ['480p/seg-000000.m4s', 'video/iso.segment'], ['1080p/index.m3u8', 'application/vnd.apple.mpegurl'], ['720p/init.mp4', 'video/mp4'], ['720p/seg-000000.m4s', 'video/iso.segment']]) {
     const response = await f.get(object, { Cookie: cookie, Origin: origin });
     assert.equal(response.status, 200);
     assert.equal(response.headers.get('Content-Type'), mime);
@@ -143,7 +143,7 @@ test('cross-package credentials, staging prefixes and arbitrary paths fail close
     const token = await f.sign({ ...f.scope, typ: 'playback', exp: f.now + 3600, prefix, ...changes });
     assert.equal((await f.get('master.m3u8', { Cookie: `hhc_media=${token}` })).status, 401);
   }
-  for (const object of ['inventory.json', '720p/seg-1.m4s', '480p/index.m3u8', '720p/%2finit.mp4', '720p/INIT.mp4', 'master.m3u8?token=anything']) {
+  for (const object of ['inventory.json', '720p/seg-1.m4s', '360p/index.m3u8', '720p/%2finit.mp4', '720p/INIT.mp4', 'master.m3u8?token=anything']) {
     assert.equal((await f.get(object, { Cookie: `hhc_media=${f.playback}` })).status, 404);
   }
   assert.equal(f.calls.length, 0);
