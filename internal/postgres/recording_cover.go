@@ -100,7 +100,10 @@ func (s *RecordingCoverStore) List(ctx context.Context, pkg, recording string) (
 	if !allowed {
 		return nil, assets.ErrNotFound
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT `+coverColumns+` FROM recording_covers c WHERE package_id=$1 AND recording_id=$2 AND c.state<>'expired' AND (c.kind='auto' OR c.created_at>now()-interval '24 hours' OR EXISTS(SELECT 1 FROM recording_cover_references r WHERE r.cover_id=c.id AND r.released_at IS NULL)) ORDER BY created_at DESC`, pkg, recording)
+	// Keep metadata receipts for interrupted clients until the recording expires.
+	// Byte reads still reject stale uploads, even before the cleanup worker runs.
+	columns := strings.Replace(coverColumns, "c.state", `CASE WHEN c.expires_at<=now() OR (c.kind='custom' AND c.created_at<=now()-interval '24 hours' AND NOT EXISTS(SELECT 1 FROM recording_cover_references r WHERE r.cover_id=c.id AND r.released_at IS NULL)) THEN 'expired' ELSE c.state END`, 1)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+columns+` FROM recording_covers c WHERE package_id=$1 AND recording_id=$2 ORDER BY created_at DESC`, pkg, recording)
 	if err != nil {
 		return nil, err
 	}

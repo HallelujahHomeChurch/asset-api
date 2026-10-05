@@ -5,6 +5,7 @@ import (
 	"errors"
 	"hhc/asset-api/internal/assets"
 	"hhc/asset-api/internal/migrations"
+	"slices"
 	"sync"
 	"testing"
 )
@@ -139,6 +140,11 @@ func TestCoverReferenceProtectsCurrentAndCleanupRetries(t *testing.T) {
 	if _, err := s.Get(ctx, pkg.ID, pkg.RecordingID, c.ID); !errors.Is(err, assets.ErrNotFound) {
 		t.Fatal("unretained stale cover remains readable", err)
 	}
+	items, err := s.List(ctx, pkg.ID, pkg.RecordingID)
+	index := slices.IndexFunc(items, func(item RecordingCover) bool { return item.ID == c.ID })
+	if err != nil || index < 0 || items[index].State != "expired" || items[index].OperationKey != c.OperationKey {
+		t.Fatalf("missing bounded expired receipt before cleanup: %#v %v", items, err)
+	}
 	if err := s.Retain(ctx, pkg.ID, pkg.RecordingID, c.ID, "late-selection"); !errors.Is(err, assets.ErrNotFound) {
 		t.Fatal("expired unselected cover was retained", err)
 	}
@@ -151,6 +157,11 @@ func TestCoverReferenceProtectsCurrentAndCleanupRetries(t *testing.T) {
 	var state string
 	if err := db.QueryRow(`SELECT state FROM recording_covers WHERE id=$1`, c.ID).Scan(&state); err != nil || state != "expired" {
 		t.Fatalf("not fenced %s %v", state, err)
+	}
+	items, err = s.List(ctx, pkg.ID, pkg.RecordingID)
+	index = slices.IndexFunc(items, func(item RecordingCover) bool { return item.ID == c.ID })
+	if err != nil || index < 0 || items[index].State != "expired" {
+		t.Fatalf("missing expired receipt after cleanup: %#v %v", items, err)
 	}
 }
 

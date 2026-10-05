@@ -239,6 +239,12 @@ provider deletion. R2 failure is not evidence of completed byte removal.
 
 Existing recordings require an explicitly reviewed backfill:
 
+Management lists preserve expired upload metadata until the owning recording
+expires, so interrupted CLI operations can distinguish an expired attempt from
+an unknown upload. This does not permit reading or retaining expired bytes.
+The existing 20-upload daily quota and 30-day recording lifetime bound these
+receipts; all consumers accept at most 1,000 cover items.
+
 ```sh
 go run ./cmd/recording-cover-backfill --limit 20
 # After approval of the exact page; DATABASE_URL must target the reviewed DB:
