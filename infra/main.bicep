@@ -37,6 +37,8 @@ param workloadAuthClientId string = ''
 param workloadAuthAudience string = ''
 param lineAttachmentClientId string = ''
 param lineAttachmentObjectId string = ''
+param extractorClientId string = ''
+param extractorObjectId string = ''
 param readerCallerAppId string = 'api-gateway'
 param meetingApiBaseUrl string = ''
 param meetingApiAudience string = ''
@@ -49,6 +51,7 @@ param uploadAllowedOrigins array = [
 
 var keyVaultSecretsUserRole = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
 var workloadAuthEnabled = workloadAuthClientId != '' && workloadAuthAudience != '' && lineAttachmentClientId != '' && lineAttachmentObjectId != ''
+var extractorAuthEnabled = workloadAuthEnabled && extractorClientId != '' && extractorObjectId != ''
 var workloadAuthIssuer = 'https://sts.windows.net/${subscription().tenantId}/'
 var recordingBucket = 'hhc-member-recordings-prod'
 var recordingProcessingEnv = [
@@ -458,6 +461,8 @@ resource app 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
             { name: 'ASSET_WORKLOAD_REQUIRED_ROLE', value: 'Asset.Invoke' }
             { name: 'ASSET_LINE_WORKLOAD_CLIENT_ID', value: workloadAuthEnabled ? lineAttachmentClientId : '' }
             { name: 'ASSET_LINE_WORKLOAD_OBJECT_ID', value: workloadAuthEnabled ? lineAttachmentObjectId : '' }
+            { name: 'ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID', value: workloadAuthEnabled ? extractorClientId : '' }
+            { name: 'ASSET_EXTRACTOR_WORKLOAD_OBJECT_ID', value: workloadAuthEnabled ? extractorObjectId : '' }
             { name: 'AUDIT_DISPATCH_ENABLED', value: 'true' }
             { name: 'AUDIT_APP_ID', value: 'audit-log' }
             { name: 'AUDIT_TOKEN', secretRef: 'audit-token' }
@@ -527,8 +532,8 @@ resource workloadAuth 'Microsoft.App/containerApps/authConfigs@2025-01-01' = if 
         validation: {
           allowedAudiences: [workloadAuthAudience]
           defaultAuthorizationPolicy: {
-            allowedApplications: [lineAttachmentClientId]
-            allowedPrincipals: { identities: [lineAttachmentObjectId] }
+            allowedApplications: concat([lineAttachmentClientId], extractorAuthEnabled ? [extractorClientId] : [])
+            allowedPrincipals: { identities: concat([lineAttachmentObjectId], extractorAuthEnabled ? [extractorObjectId] : []) }
           }
         }
       }

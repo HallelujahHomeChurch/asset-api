@@ -42,6 +42,16 @@ printf '%s\n' '{"changes":[
 ]}' >"$tmp/safe.json"
 ./scripts/check-what-if.sh "$tmp/safe.json"
 
+printf '%s\n' '{"changes":[{"resourceId":"/subscriptions/test/resourceGroups/alive/providers/Microsoft.App/containerApps/asset-api/authConfigs/current","changeType":"Modify","delta":[{"path":"properties.identityProviders.azureActiveDirectory.validation.defaultAuthorizationPolicy.allowedApplications","propertyChangeType":"Array","before":["line"],"after":["line","cms"]}]}]}' >"$tmp/extractor-auth.json"
+./scripts/check-what-if.sh "$tmp/extractor-auth.json"
+for resource in Microsoft.ManagedIdentity/userAssignedIdentities/bulletin-extractor-identity Microsoft.Authorization/roleAssignments/extractor-owner; do
+  printf '{"changes":[{"resourceId":"/subscriptions/test/resourceGroups/alive/providers/%s","changeType":"Create","delta":[]}]}' "$resource" >"$tmp/unexpected-extractor-permission.json"
+  if ./scripts/check-what-if.sh "$tmp/unexpected-extractor-permission.json"; then
+    echo 'Extractor must not create a new identity or broad ARM permission' >&2
+    exit 1
+  fi
+done
+
 printf '%s\n' '{"changes":[{"resourceId":"/subscriptions/test/resourceGroups/alive/providers/Microsoft.App/containerApps/asset-scan-worker","changeType":"Modify","delta":[{"after":null,"before":100,"children":null,"path":"properties.configuration.maxInactiveRevisions","propertyChangeType":"Delete"},{"after":null,"before":null,"children":[{"after":null,"before":null,"children":[{"after":null,"before":{"accountName":"alive","queueLength":1,"queueName":"asset-scan"},"children":null,"path":"azureQueue","propertyChangeType":"Delete"}],"path":"0","propertyChangeType":"Modify"}],"path":"properties.template.scale.rules","propertyChangeType":"Array"}]}]}' >"$tmp/scan-worker-schema-migration.json"
 ./scripts/check-what-if.sh "$tmp/scan-worker-schema-migration.json"
 

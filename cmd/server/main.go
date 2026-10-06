@@ -75,14 +75,7 @@ func run() error {
 	auditStore := auditoutbox.New(db)
 	repository.WithAudit(auditStore)
 	service := assets.NewService(repository, blobStore, cfg.PublicBaseURL, time.Now)
-	workloadCallers := map[string]httpapi.WorkloadCaller{}
-	if cfg.LineWorkloadClientID != "" {
-		workloadCallers[cfg.LineWorkloadClientID] = httpapi.WorkloadCaller{ObjectID: cfg.LineWorkloadObjectID, Service: "hhc-line-function-bot"}
-	}
-	handler := httpapi.New(service, db, cfg.AllowedCallers, cfg.AllowDevCallerHeader, cfg.AppAPIToken, httpapi.WorkloadAuthConfig{
-		TenantID: cfg.WorkloadTenantID, Issuer: cfg.WorkloadIssuer, Audience: cfg.WorkloadAudience,
-		RequiredRole: cfg.WorkloadRequiredRole, ReaderCallerAppID: cfg.ReaderCallerAppID, Callers: workloadCallers,
-	}, localUpload).WithAudit(auditStore)
+	handler := httpapi.New(service, db, cfg.AllowedCallers, cfg.AllowDevCallerHeader, cfg.AppAPIToken, workloadAuth(cfg), localUpload).WithAudit(auditStore)
 	if cfg.R2AccountID != "" {
 		objects, err := r2storage.New(cfg.R2AccountID, cfg.R2Bucket, cfg.R2AccessKeyID, cfg.R2SecretAccessKey)
 		if err != nil {
@@ -175,4 +168,15 @@ func run() error {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer shutdownCancel()
 	return server.Shutdown(shutdownCtx)
+}
+
+func workloadAuth(cfg config.Config) httpapi.WorkloadAuthConfig {
+	callers := map[string]httpapi.WorkloadCaller{}
+	if cfg.LineWorkloadClientID != "" {
+		callers[cfg.LineWorkloadClientID] = httpapi.WorkloadCaller{ObjectID: cfg.LineWorkloadObjectID, Service: "hhc-line-function-bot"}
+	}
+	if cfg.ExtractorWorkloadClientID != "" {
+		callers[cfg.ExtractorWorkloadClientID] = httpapi.WorkloadCaller{ObjectID: cfg.ExtractorWorkloadObjectID, Service: "hhc-web-api"}
+	}
+	return httpapi.WorkloadAuthConfig{TenantID: cfg.WorkloadTenantID, Issuer: cfg.WorkloadIssuer, Audience: cfg.WorkloadAudience, RequiredRole: cfg.WorkloadRequiredRole, ReaderCallerAppID: cfg.ReaderCallerAppID, Callers: callers}
 }

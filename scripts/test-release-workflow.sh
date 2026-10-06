@@ -471,6 +471,13 @@ migration_line="$(grep -n -- '- name: Run migrations' "$workflow" | cut -d: -f1)
 deploy_line="$(grep -n -- '- name: Deploy API' "$workflow" | cut -d: -f1)"
 test "$migration_line" -lt "$deploy_line"
 test -f internal/migrations/sql/014_asset_derivative_outbox.sql
+grep -q 'ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID' "$workflow"
+grep -q 'ASSET_EXTRACTOR_WORKLOAD_OBJECT_ID' "$workflow"
+grep -Eq 'EXTRACTOR_ROLE_APPROVED:.*github.event_name.*workflow_dispatch.*inputs.approve_extractor_app_role' "$workflow"
+grep -Fq 'bash scripts/ensure-workload-app-role.sh check' "$workflow"
+grep -Fq 'bash scripts/ensure-workload-app-role.sh apply' "$workflow"
+grep -Fq "allowedApplications: concat([lineAttachmentClientId], extractorAuthEnabled ? [extractorClientId] : [])" infra/main.bicep
+grep -Fq "allowedPrincipals: { identities: concat([lineAttachmentObjectId], extractorAuthEnabled ? [extractorObjectId] : []) }" infra/main.bicep
 
 if grep -Eiq 'migrate[[:space:]_-]*down|migration[[:space:]_-]*rollback' "$workflow"; then
   echo 'release workflow must not roll back database migrations automatically' >&2

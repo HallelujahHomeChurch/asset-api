@@ -1311,6 +1311,42 @@ func TestInternalAllowsValidatedEntraWorkload(t *testing.T) {
 	}
 }
 
+func TestExtractorIdentityHasOnlyItsExistingCMSOwnerAndValidClaims(t *testing.T) {
+	auth := WorkloadAuthConfig{TenantID: "tenant-1", Audience: "api://asset-api", Issuer: "https://sts.windows.net/tenant-1/", RequiredRole: "Asset.Invoke", Callers: map[string]WorkloadCaller{
+		"extractor-client": {ObjectID: "extractor-object", Service: "hhc-web-api"},
+		"line-client":      {ObjectID: "line-object", Service: "hhc-line-function-bot"},
+	}}
+	base := map[string]string{"tid": auth.TenantID, "iss": auth.Issuer, "aud": auth.Audience, "appid": "extractor-client", "oid": "extractor-object", "roles": auth.RequiredRole}
+	check := func(claims map[string]string, want int) {
+		t.Helper()
+		handler := (&Handler{allowedCallers: map[string]bool{"hhc-web-api": true, "hhc-line-function-bot": true}, workloadAuth: auth}).internal(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if callerFromRequest(r, false) != "hhc-web-api" {
+				t.Fatal("extractor changed asset ownership")
+			}
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		request := httptest.NewRequest(http.MethodGet, "/priv/assets/owned-asset", nil)
+		request.Header.Set("X-MS-CLIENT-PRINCIPAL", encodedPrincipal(t, claims))
+		request.Header.Set("Dapr-Caller-App-Id", "account-api")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != want {
+			t.Fatalf("status=%d, want=%d", response.Code, want)
+		}
+	}
+	check(base, http.StatusNoContent)
+	for _, key := range []string{"tid", "iss", "aud", "roles", "appid", "oid"} {
+		claims := maps.Clone(base)
+		claims[key] = "wrong"
+		check(claims, http.StatusForbidden)
+	}
+	for key, value := range map[string]string{"appid": "line-client", "oid": "line-object"} {
+		claims := maps.Clone(base)
+		claims[key] = value
+		check(claims, http.StatusForbidden)
+	}
+}
+
 func TestManagedIdentityV1IssuerMustMatchConfiguredIssuer(t *testing.T) {
 	config := WorkloadAuthConfig{
 		TenantID: "tenant-1", Audience: "api://asset-api", Issuer: "https://sts.windows.net/tenant-1/",

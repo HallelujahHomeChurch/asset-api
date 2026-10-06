@@ -15,6 +15,10 @@ Dapr. Production leaves it disabled. Container Apps invoke through Dapr with
 the matching `APP_API_TOKEN`; the LINE attachment Job uses a dedicated managed
 identity against internal ingress. ACA authentication validates the token before
 Asset also checks tenant, issuer, audience, client, object id, and `Asset.Invoke`.
+The isolated bulletin extractor can reuse `hhc-web-api-identity` through the
+optional exact `ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID` / `OBJECT_ID` pair. It maps
+to the existing `hhc-web-api` owner, not a new asset owner. Both identifiers
+must be configured together; leaving both empty preserves existing behavior.
 
 ## Routes
 
