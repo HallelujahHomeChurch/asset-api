@@ -11,8 +11,9 @@ import (
 )
 
 type RecordingSourceClaim struct {
-	Source  assets.RecordingSource
-	ClaimID string
+	Source    assets.RecordingSource
+	ClaimID   string
+	StartedAt time.Time
 }
 
 func (s *RecordingSourceStore) ClaimSourceProcessing(ctx context.Context) (RecordingSourceClaim, error) {
@@ -45,7 +46,12 @@ func (s *RecordingSourceStore) ClaimSourceProcessing(ctx context.Context) (Recor
 	if _, err := tx.ExecContext(ctx, `UPDATE recording_source_attempts SET state='abandoned',finished_at=clock_timestamp() WHERE source_id=$1 AND state='processing'`, id); err != nil {
 		return claim, err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE recording_sources SET state=CASE WHEN source_verified_at IS NULL THEN 'finalizing' ELSE 'processing' END,claim_id=$2,claimed_until=clock_timestamp()+interval '2 minutes',processing_attempts=processing_attempts+1,processing_error=NULL,copy_attempt_id=COALESCE(copy_attempt_id,$2) WHERE id=$1`, id, claim.ClaimID); err != nil {
+	var attempts int
+	var phase string
+	if err := tx.QueryRowContext(ctx, `UPDATE recording_sources SET state=CASE WHEN source_verified_at IS NULL THEN 'finalizing' ELSE 'processing' END,claim_id=$2,claimed_until=clock_timestamp()+interval '2 minutes',processing_attempts=processing_attempts+1,processing_error=NULL,copy_attempt_id=COALESCE(copy_attempt_id,$2) WHERE id=$1 RETURNING processing_attempts,clock_timestamp(),CASE WHEN source_verified_at IS NULL THEN 'source_finalization' ELSE 'encoding' END`, id, claim.ClaimID).Scan(&attempts, &claim.StartedAt, &phase); err != nil {
+		return claim, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE recording_sources SET processing_progress=$2 WHERE id=$1`, id, initialRecordingProgress(attempts, phase, claim.StartedAt)); err != nil {
 		return claim, err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE recording_processing_slots SET job_id=$2,claim_id=$3,leased_until=clock_timestamp()+interval '2 minutes' WHERE slot=$1`, slot, id, claim.ClaimID); err != nil {
@@ -94,7 +100,7 @@ func (s *RecordingSourceStore) HeartbeatSourceProcessing(ctx context.Context, id
 		if _, err := tx.ExecContext(ctx, `UPDATE recording_processing_slots SET leased_until=clock_timestamp()+interval '2 minutes' WHERE claim_id=$1`, claim); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, `UPDATE recording_sources SET claimed_until=clock_timestamp()+interval '2 minutes' WHERE id=$1`, id)
+		_, err := tx.ExecContext(ctx, `UPDATE recording_sources SET claimed_until=clock_timestamp()+interval '2 minutes',processing_progress=CASE WHEN processing_progress IS NULL THEN NULL ELSE jsonb_set(processing_progress,'{heartbeatAt}',to_jsonb(clock_timestamp())) END WHERE id=$1`, id)
 		return err
 	})
 }
