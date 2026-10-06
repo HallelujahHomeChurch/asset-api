@@ -164,11 +164,11 @@ if result.RequestedActionSatisfied { t.Fatal("failed requested cover was reporte
 
 **Files:** `hhc-web/scripts/subset-display-font.sh`、`src/components/display-font.test.tsx`、`src/assets/fonts/{chenyuluoyan,ma-shan-zheng,klee-one,hhc-pen-hangul}/*HHC-Banners.woff2`（只有實際需要更新的字集）、`src/app/fonts.ts`與`src/app/[locale]/member-videos/page.tsx`（只有根因需要時修改）。
 
-**Interfaces:** 復用現有 banner font／locale 與 subset script。唯讀初查發現字集來源列出 home／news／about／literatureMinistry，尚需確認 latest main 是否包含 memberVideos；字集缺字是待驗證假說，不當成已確認根因。
+**Interfaces:** 復用現有 banner font／locale 與 subset script。唯讀核對 origin/main 已將 memberVideos 納入 subset 文案，但目前副標已是「近期聚會錄影」，仍需比對實際生成字體的 cmap／部署資產；不能以 script 有列文案就推定資產一定涵蓋「期」。字集缺字是待驗證假說，不當成已確認根因。
 
 - [ ] 實作前讀 hhc-web AGENTS／README 與此版本 Next.js 本機指南；沿頁面→共享 Hero→font class→實際 woff2 cmap 確認「期」U+671F 及整句文字實際使用的 glyph，先重現桌面／手機差異並記錄 rendered font。不能只用 font-family computed style 證明無 fallback。
 - [ ] 加回歸測試 `includes every member-video banner character in its locale subset`：以各語系 `memberVideos.heroTitle`／`heroSubtitle` 列出的非空白字元檢查 subset cmap；另斷言副標沿用該 locale 的 banner class。先確認現有資產是否使字集測試失敗。
-- [ ] 若根因為 subset，將 memberVideos banner 文案納入既有 script 並重產必要字體；不得只硬塞「期」或載入整套大字體。若 cmap 已含字，改修實際字體載入／locale／class 根因，不做无關重產。保留 font source／license pinned hash、static budget 與其他 banner。
+- [ ] 若根因為 subset，沿既有 memberVideos banner 文案來源重產必要字體，並補上文案改動後漏重產的回歸檢查；不得只硬塞「期」或載入整套大字體。若 cmap 已含字，改修實際字體載入／locale／class 根因，不做無關重產。保留 font source／license pinned hash、static budget 與其他 banner。
 - [ ] 跑 `corepack pnpm test:run`、`corepack pnpm lint`、`corepack pnpm build`；沿既有字集工具驗證生成產物與 static budgets。桌面／手機畫面確認「近期聚會錄影」整句字型、字重一致，不改文字與尺寸；其他語系／既有banner無回歸。
 - [ ] 以獨立 hhc-web 分支／PR 提交 `fix: keep member video banner glyphs consistent`；沿既有 merged-main release／public route smoke，與 Task 8 分開記錄此 UI 修正的測試、發布與實機驗收。
 
