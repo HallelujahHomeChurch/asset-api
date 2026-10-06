@@ -17,12 +17,25 @@ func RunPackageValidation(ctx context.Context, repository *postgres.RecordingPac
 	if err != nil {
 		return err
 	}
+	progress := NewProcessingProgressTracker(*claim.Package.ProcessingProgress)
+	probe.OnProgress = progress.Report
+	flush := func(ctx context.Context) error {
+		return progress.Flush(ctx, time.Now().UTC(), func(ctx context.Context, value assets.RecordingProcessingProgress) error {
+			return repository.UpdatePackageProcessingProgress(ctx, claim.Package.ID, claim.ClaimID, value)
+		})
+	}
 	return RunProcessingClaim(ctx, func(ctx context.Context) error {
+		if err := flush(ctx); err != nil {
+			return err
+		}
 		return repository.HeartbeatPackageValidation(ctx, claim.Package.ID, claim.ClaimID)
 	}, func(ctx context.Context) error {
-		_, err := FreezeRecordingPackage(ctx, claim.Package, claim.ClaimID, objects, probe.Validate)
+		_, err := FreezeRecordingPackage(ctx, claim.Package, claim.ClaimID, objects, probe)
 		return err
 	}, func(ctx context.Context, ready bool, failure string) error {
+		if err := flush(ctx); err != nil {
+			return err
+		}
 		return repository.FinishPackageValidation(ctx, claim.Package.ID, claim.ClaimID, ready, failure)
 	}, 30*time.Second)
 }

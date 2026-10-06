@@ -11,22 +11,23 @@ import (
 )
 
 type RecordingPackage struct {
-	ID                string                    `json:"packageId"`
-	SessionID         string                    `json:"sessionId"`
-	OwnerService      string                    `json:"-"`
-	ActorID           string                    `json:"-"`
-	RecordingID       string                    `json:"recordingId"`
-	IdempotencyKey    string                    `json:"-"`
-	State             string                    `json:"state"`
-	SizeBytes         int64                     `json:"sizeBytes"`
-	CreatedAt         time.Time                 `json:"createdAt"`
-	ExpiresAt         time.Time                 `json:"expiresAt"`
-	Inventory         RecordingPackageInventory `json:"inventory"`
-	FinalPrefix       string                    `json:"-"`
-	ReadyAt           *time.Time                `json:"readyAt,omitempty"`
-	MediaExpiresAt    *time.Time                `json:"mediaExpiresAt,omitempty"`
-	UploadedAt        *time.Time                `json:"uploadedAt,omitempty"`
-	RetentionRevision int64                     `json:"retentionRevision"`
+	ID                 string                       `json:"packageId"`
+	SessionID          string                       `json:"sessionId"`
+	OwnerService       string                       `json:"-"`
+	ActorID            string                       `json:"-"`
+	RecordingID        string                       `json:"recordingId"`
+	IdempotencyKey     string                       `json:"-"`
+	State              string                       `json:"state"`
+	SizeBytes          int64                        `json:"sizeBytes"`
+	CreatedAt          time.Time                    `json:"createdAt"`
+	ExpiresAt          time.Time                    `json:"expiresAt"`
+	Inventory          RecordingPackageInventory    `json:"inventory"`
+	FinalPrefix        string                       `json:"-"`
+	ReadyAt            *time.Time                   `json:"readyAt,omitempty"`
+	MediaExpiresAt     *time.Time                   `json:"mediaExpiresAt,omitempty"`
+	UploadedAt         *time.Time                   `json:"uploadedAt,omitempty"`
+	RetentionRevision  int64                        `json:"retentionRevision"`
+	ProcessingProgress *RecordingProcessingProgress `json:"-"`
 }
 
 func (p RecordingPackage) StagingKey(path string) string {
@@ -41,19 +42,20 @@ type CreateRecordingPackageInput struct {
 }
 
 type RecordingPackageStatus struct {
-	PackageID         string               `json:"packageId"`
-	SessionID         string               `json:"sessionId"`
-	RecordingID       string               `json:"recordingId"`
-	State             string               `json:"state"`
-	SizeBytes         int64                `json:"sizeBytes"`
-	ExpiresAt         time.Time            `json:"expiresAt"`
-	ConfirmedObjects  []string             `json:"confirmedObjects"`
-	NextCursor        string               `json:"nextCursor"`
-	ReadyAt           *time.Time           `json:"readyAt,omitempty"`
-	MediaExpiresAt    *time.Time           `json:"mediaExpiresAt,omitempty"`
-	Renditions        []RecordingRendition `json:"renditions,omitempty"`
-	UploadedAt        *time.Time           `json:"uploadedAt,omitempty"`
-	RetentionRevision int64                `json:"retentionRevision"`
+	ProcessingProgress *RecordingProcessingProgress `json:"processingProgress,omitempty"`
+	PackageID          string                       `json:"packageId"`
+	SessionID          string                       `json:"sessionId"`
+	RecordingID        string                       `json:"recordingId"`
+	State              string                       `json:"state"`
+	SizeBytes          int64                        `json:"sizeBytes"`
+	ExpiresAt          time.Time                    `json:"expiresAt"`
+	ConfirmedObjects   []string                     `json:"confirmedObjects"`
+	NextCursor         string                       `json:"nextCursor"`
+	ReadyAt            *time.Time                   `json:"readyAt,omitempty"`
+	MediaExpiresAt     *time.Time                   `json:"mediaExpiresAt,omitempty"`
+	Renditions         []RecordingRendition         `json:"renditions,omitempty"`
+	UploadedAt         *time.Time                   `json:"uploadedAt,omitempty"`
+	RetentionRevision  int64                        `json:"retentionRevision"`
 }
 
 type SignedRecordingObject struct {
@@ -248,7 +250,7 @@ func (s *RecordingPackageService) Status(ctx context.Context, id, actor, cursor 
 		start = index + 1
 	}
 	end := min(start+limit, len(objects))
-	page := RecordingPackageStatus{PackageID: p.ID, SessionID: p.SessionID, RecordingID: p.RecordingID, State: p.State, SizeBytes: p.SizeBytes, ExpiresAt: p.ExpiresAt, ConfirmedObjects: []string{}}
+	page := RecordingPackageStatus{ProcessingProgress: p.ProcessingProgress, PackageID: p.ID, SessionID: p.SessionID, RecordingID: p.RecordingID, State: p.State, SizeBytes: p.SizeBytes, ExpiresAt: p.ExpiresAt, ConfirmedObjects: []string{}}
 	page.ReadyAt, page.MediaExpiresAt = p.ReadyAt, p.MediaExpiresAt
 	page.UploadedAt, page.RetentionRevision = p.UploadedAt, p.RetentionRevision
 	if p.State == "ready" {

@@ -30,6 +30,20 @@ type RecordingLifecycleBinding struct {
 }
 
 type RecordingLifecycleSnapshot struct {
-	Policy RecordingRetentionPolicy `json:"policy"`
-	Items  []RecordingPackageStatus `json:"items"`
+	Policy      RecordingRetentionPolicy         `json:"policy"`
+	Items       []RecordingPackageStatus         `json:"items"`
+	SourceItems []RecordingSourceLifecycleStatus `json:"sourceItems,omitempty"`
+}
+
+type RecordingSourceLifecycleBinding struct {
+	RecordingID string `json:"recordingId"`
+	SourceID    string `json:"sourceId"`
+}
+
+// Owner-bound status deliberately excludes uploader identity and upload capabilities.
+type RecordingSourceLifecycleStatus struct {
+	RecordingID        string                       `json:"recordingId"`
+	SourceID           string                       `json:"sourceId"`
+	State              string                       `json:"state"`
+	ProcessingProgress *RecordingProcessingProgress `json:"processingProgress,omitempty"`
 }

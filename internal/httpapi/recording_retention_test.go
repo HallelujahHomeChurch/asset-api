@@ -11,7 +11,7 @@ import (
 
 type retentionStoreStub struct{ calls int }
 
-func (s *retentionStoreStub) RecordingLifecycle(context.Context, []assets.RecordingLifecycleBinding) (assets.RecordingLifecycleSnapshot, error) {
+func (s *retentionStoreStub) RecordingLifecycle(context.Context, []assets.RecordingLifecycleBinding, []assets.RecordingSourceLifecycleBinding) (assets.RecordingLifecycleSnapshot, error) {
 	s.calls++
 	return assets.RecordingLifecycleSnapshot{}, nil
 }
@@ -37,6 +37,8 @@ func TestRecordingRetentionOwnerAndHumanMutationBoundary(t *testing.T) {
 		method, path, caller, actor, body string
 		status                            int
 	}{
+		{"POST", "/priv/recordings/lifecycle", "hhc-web-api", "", `{"items":[],"sourceItems":[{"recordingId":"recording-1","sourceId":"source-1"}]}`, 200},
+		{"POST", "/priv/recordings/lifecycle", "account-api", "", `{"items":[],"sourceItems":[]}`, 403},
 		{"GET", "/priv/recordings/retention-policy", "hhc-web-api", "", "", 200},
 		{"GET", "/priv/recordings/retention-policy", "account-api", "", "", 403},
 		{"POST", "/priv/recordings/retention-policy/preview", "hhc-web-api", "", `{"retentionDays":14}`, 403},
@@ -53,7 +55,7 @@ func TestRecordingRetentionOwnerAndHumanMutationBoundary(t *testing.T) {
 			t.Fatalf("%+v: %d %s", tc, w.Code, w.Body.String())
 		}
 	}
-	if s.calls != 2 {
+	if s.calls != 3 {
 		t.Fatalf("unauthorized calls reached store: %d", s.calls)
 	}
 }

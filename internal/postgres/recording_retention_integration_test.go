@@ -156,7 +156,7 @@ func TestRecordingRetentionNewBrowserAndCLIPackagesUseUploadCompletion(t *testin
 		t.Fatal(err)
 	}
 	bindings := []assets.RecordingLifecycleBinding{{PackageID: cli.ID, RecordingID: cli.RecordingID}, {PackageID: sourceClaim.ClaimID, RecordingID: source.RecordingID}}
-	snapshot, err := packages.RecordingLifecycle(ctx, bindings)
+	snapshot, err := packages.RecordingLifecycle(ctx, bindings, nil)
 	if err != nil || len(snapshot.Items) != 2 || snapshot.Policy.Revision != policy.Revision {
 		t.Fatalf("snapshot: %+v %v", snapshot, err)
 	}
@@ -166,7 +166,7 @@ func TestRecordingRetentionNewBrowserAndCLIPackagesUseUploadCompletion(t *testin
 		}
 	}
 	bindings[0].RecordingID = "wrong-recording"
-	if _, err := packages.RecordingLifecycle(ctx, bindings); !errors.Is(err, assets.ErrForbidden) {
+	if _, err := packages.RecordingLifecycle(ctx, bindings, nil); !errors.Is(err, assets.ErrForbidden) {
 		t.Fatalf("wrong binding accepted: %v", err)
 	}
 	if _, err := db.ExecContext(ctx, `UPDATE recording_packages SET completed_at=$2,media_expires_at=$2::timestamptz+interval '60 days' WHERE id=$1`, sourceClaim.ClaimID, oldUpload); err != nil {

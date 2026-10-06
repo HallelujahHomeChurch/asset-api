@@ -73,7 +73,7 @@ func TestBrowserEncodeReadsRangesAndSpoolsThirtySecondHLS(t *testing.T) {
 		t.Fatal(err)
 	}
 	pkg := assets.RecordingPackage{ID: strings.Repeat("c", 32), Inventory: inv, SizeBytes: size}
-	if _, err := recordingvalidation.FreezeRecordingPackage(ctx, pkg, pkg.ID, storage, probe.Validate); err != nil {
+	if _, err := recordingvalidation.FreezeRecordingPackage(ctx, pkg, pkg.ID, storage, probe); err != nil {
 		t.Fatalf("encoded package failed independent full validation: %v", err)
 	}
 	t.Run("fenced source orchestration", func(t *testing.T) {
@@ -81,11 +81,11 @@ func TestBrowserEncodeReadsRangesAndSpoolsThirtySecondHLS(t *testing.T) {
 		outputs := &spoolObjects{}
 		claim := postgres.RecordingSourceClaim{ClaimID: strings.Repeat("d", 32), Source: assets.RecordingSource{ID: strings.Repeat("a", 32), CopyAttemptID: strings.Repeat("b", 32), SizeBytes: int64(len(data)), ChecksumSHA256: fmt.Sprintf("%x", sha256.Sum256(data))}}
 		probe.ScratchRoot = t.TempDir()
-		if _, err := processSourceClaim(ctx, claim, func(context.Context, assets.RecordingSourceCopy) error { return assets.ErrConflict }, sources, outputs, probe); !errors.Is(err, assets.ErrConflict) || len(outputs.writes) != 0 {
+		if _, err := processSourceClaim(ctx, claim, func(context.Context, assets.RecordingSourceCopy) error { return assets.ErrConflict }, sources, outputs, probe, nil); !errors.Is(err, assets.ErrConflict) || len(outputs.writes) != 0 {
 			t.Fatalf("stale checkpoint encoded output: %v", err)
 		}
 		checkpointed := false
-		inv, err := processSourceClaim(ctx, claim, func(_ context.Context, copy assets.RecordingSourceCopy) error { checkpointed = true; return nil }, sources, outputs, probe)
+		inv, err := processSourceClaim(ctx, claim, func(_ context.Context, copy assets.RecordingSourceCopy) error { checkpointed = true; return nil }, sources, outputs, probe, nil)
 		if err != nil || !checkpointed || len(inv.Renditions) != 3 {
 			t.Fatalf("source pipeline: %v checkpoint=%t", err, checkpointed)
 		}

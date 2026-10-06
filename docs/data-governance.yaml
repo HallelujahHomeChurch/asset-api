@@ -130,6 +130,7 @@ datasets:
       - {name: recording_sources.checksum_sha256, purpose: Verify immutable source integrity, necessity: required, data_classes: [security]}
       - {name: recording_sources.block_count, purpose: Require complete bounded block closure, necessity: required, data_classes: [content]}
       - {name: recording_sources.state, purpose: Report durable processing progress, necessity: required, data_classes: [activity]}
+      - {name: recording_sources.processing_progress, purpose: Expose capability-free fenced processing counters and timestamps without changing source retention, necessity: required, data_classes: [activity]}
       - {name: recording_sources.created_at, purpose: Anchor upload lifetime, necessity: required, data_classes: [activity]}
       - {name: recording_sources.expires_at, purpose: Bound upload capabilities, necessity: required, data_classes: [activity]}
       - {name: recording_sources.completed_at, purpose: Persist durable acceptance, necessity: required, data_classes: [activity]}
@@ -181,6 +182,7 @@ datasets:
       - {name: recording_packages.recording_id, purpose: Link bytes to the CMS business record, necessity: required, data_classes: [identity]}
       - {name: recording_packages.idempotency_key, purpose: Replay the same upload without changing inventory or ownership, necessity: required, data_classes: [security]}
       - {name: recording_packages.state, purpose: Track upload and validation lifecycle, necessity: required, data_classes: [activity]}
+      - {name: recording_packages.processing_progress, purpose: Expose capability-free fenced validation counters and timestamps under existing receipt retention, necessity: required, data_classes: [activity]}
       - {name: recording_packages.size_bytes, purpose: Enforce total package byte budget, necessity: required, data_classes: [content]}
       - {name: recording_packages.inventory, purpose: Preserve declared object hashes and rendition metadata for subsequent validation, necessity: required, data_classes: [content, security]}
       - {name: recording_packages.created_at, purpose: Record package creation time, necessity: required, data_classes: [activity]}
