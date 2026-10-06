@@ -12,6 +12,8 @@
 
 ## Global Constraints
 
+2026-10-07 使用者調整驗收順序：代表性長片由使用者於 release 後在 Windows 測試。本輪先完成 PR／required CI，merge／release 前仍需確認；不再要求先提供本機長片。此決定不把短片 benchmark 當成長片、雙長 Job 容量或完整成本證明，也不免除安全／正確性／CI 門檻。實際端到端改善、資源峰值與 105% 成本目標仍分列為發布後驗收；若觀察到可靠性回歸或超出成本上限，停止推進並走既有相容回滾。
+
 - 每 Job 4 vCPU／8 GiB，全域最多兩個長處理 slot，每 Job 共用最多兩個 fragment worker。
 - scratch 最多 1 GiB，另保留至少 128 MiB free space；不落地完整原始檔或 HLS package。
 - 保留三畫質、現有 bitrate、30 秒分段、兩次 ffprobe、完整解碼、IDR／時間軸／跨畫質／SHA 檢查及 atomic ready。

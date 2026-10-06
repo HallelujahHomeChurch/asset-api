@@ -48,7 +48,14 @@ on a local Apple-M4 Docker VM, not Azure hardware, and establishes neither
 long-recording nor dual-job capacity/cost acceptance. In-memory test storage is
 not R2 network latency. Allocations are not peak RSS or provider billable CPU.
 
-## Release gates still open
+## Delivery gates and post-release acceptance
+
+On 2026-10-07 the user moved representative long-recording testing to their
+Windows machine after release and authorized proceeding with PR/CI preparation.
+The long/capacity/end-to-end/cost items below remain unaccepted, not prerequisites
+for opening PRs under this updated sequence. Correctness, security and required
+CI remain mandatory; merge/release still require approval. No long-recording
+speed, capacity or full-cost guarantee follows from the short measurements.
 
 Prefer Asset-first release, then CMS, SDK and Admin. Missing worker summaries
 remain unknown. The strict legacy Asset decoder rejects `sourceItems`; CMS
@@ -67,7 +74,8 @@ strict legacy decoding and non-bypass behavior have regression tests.
 - Provider usage/cost, including additional fenced progress writes, failed
   attempts, staging/final copies, cleanup, Blob source, preview/cover artifacts
   and idle cron baseline. The 105% ceiling is not proven by fewer GETs alone.
-- Final whole-branch independent review, PR required CI and approved release;
+- Whole-branch independent review completed; three P2 findings were reproduced
+  and fixed with regression tests. PR required CI and approved release remain;
   producer SDK publication before the Admin exact-version lockfile update.
 - Desktop/mobile visual confirmation of the banner and Admin progress. The font
   cmap and DOM checks passed, but the local screenshot service timed out.
@@ -75,5 +83,6 @@ strict legacy decoding and non-bypass behavior have regression tests.
 Upload concurrency stays at three: no matched network/billing evidence justifies
 raising it to six. There is no new public option or auto-tuning framework.
 No production upload, infrastructure update, merge or release was performed for
-these measurements. Keep the performance release gate closed until matched
-end-to-end reliability and complete cost evidence meet the approved limits.
+these measurements. Post-release acceptance must record representative timing,
+resource peaks and complete cost separately; reliability regression or cost above
+105% requires stopping progression and the existing compatible rollback path.
