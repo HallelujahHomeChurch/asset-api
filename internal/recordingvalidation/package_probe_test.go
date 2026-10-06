@@ -114,3 +114,16 @@ func TestFragmentProbeInfersOnlyMissingFirstAACDurationFromNextPTS(t *testing.T)
 		t.Fatalf("missing later duration accepted: %v", err)
 	}
 }
+
+func TestFragmentProbeHandlesMissingCFRVideoDurations(t *testing.T) {
+	r := assets.RecordingRendition{Width: 1280, Height: 720, FrameRate: 30}
+	data := strings.ReplaceAll(segmentProbeFixture, `,"duration_time":"0.033333"`, "")
+	got, err := validatePackageSegmentProbe([]byte(data), r)
+	if err != nil || got.End < 0.066665 || got.End > 0.066668 {
+		t.Fatalf("missing CFR video durations: %+v %v", got, err)
+	}
+	bad := strings.Replace(data, `"pts_time":"0.033333"`, `"pts_time":"0.050000"`, 1)
+	if _, err := validatePackageSegmentProbe([]byte(bad), r); !errors.Is(err, assets.ErrInvalidUpload) {
+		t.Fatalf("non-CFR timestamps accepted: %v", err)
+	}
+}

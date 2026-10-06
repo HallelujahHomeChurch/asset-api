@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
@@ -34,9 +35,21 @@ func (s *RecordingSourceStore) ReconcileSources(ctx context.Context, deleteSourc
 	if err != nil {
 		return err
 	}
+	var failures error
 	for _, id := range ids {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(failures, err)
+		}
 		if err := s.WithSessionLock(ctx, id, func(ctx context.Context) error {
 			q := s.locks.statements(ctx)
+			// Persist before provider calls so even a timeout cannot starve later items.
+			result, err := q.ExecContext(ctx, `UPDATE recording_sources SET cleanup_after=clock_timestamp()+interval '5 minutes' WHERE id=$1 AND cleanup_after<=clock_timestamp()`, id)
+			if err != nil {
+				return err
+			}
+			if count, err := result.RowsAffected(); err != nil || count == 0 {
+				return err
+			}
 			// Expiring a live lease is forbidden; the worker's own retry-deadline
 			// check and lease heartbeat fence all later writes/checkpoints.
 			if _, err := q.ExecContext(ctx, `UPDATE recording_sources SET state='expired' WHERE id=$1 AND state<>'ready' AND
@@ -90,8 +103,8 @@ func (s *RecordingSourceStore) ReconcileSources(ctx context.Context, deleteSourc
 			_, err = q.ExecContext(ctx, `UPDATE recording_sources SET cleanup_after=clock_timestamp()+interval '24 hours' WHERE id=$1`, id)
 			return err
 		}); err != nil {
-			return err
+			failures = errors.Join(failures, err)
 		}
 	}
-	return nil
+	return failures
 }

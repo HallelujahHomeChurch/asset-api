@@ -2,6 +2,8 @@ package postgres
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 )
 
@@ -36,12 +38,16 @@ func (s *RecordingPackageStore) CleanupPackage(ctx context.Context, id string, d
 			return err
 		}
 		var uploadExpired, mediaExpired, gracePassed, due bool
-		err = s.locks.statements(ctx).QueryRowContext(ctx, `SELECT expires_at<=clock_timestamp(),COALESCE(media_expires_at<=clock_timestamp(),false),COALESCE(media_expires_at+interval '1 hour'<=clock_timestamp(),false),cleanup_after<=clock_timestamp() FROM recording_packages WHERE id=$1`, id).Scan(&uploadExpired, &mediaExpired, &gracePassed, &due)
+		err = s.locks.statements(ctx).QueryRowContext(ctx, `SELECT expires_at<=clock_timestamp(),COALESCE(media_expires_at<=clock_timestamp(),false),COALESCE(GREATEST(media_expires_at+interval '1 hour',grant_cleanup_after)<=clock_timestamp(),false),cleanup_after<=clock_timestamp() FROM recording_packages WHERE id=$1`, id).Scan(&uploadExpired, &mediaExpired, &gracePassed, &due)
 		if err != nil {
 			return err
 		}
 		if !due {
 			return nil
+		}
+		// Persist before provider calls so even a timeout cannot starve later items.
+		if _, err := s.locks.statements(ctx).ExecContext(ctx, `UPDATE recording_packages SET cleanup_after=clock_timestamp()+interval '5 minutes' WHERE id=$1`, id); err != nil {
+			return err
 		}
 		if p.State == "uploading" && uploadExpired || p.State == "ready" && mediaExpired {
 			if _, err := s.locks.statements(ctx).ExecContext(ctx, `UPDATE recording_packages SET state='expired' WHERE id=$1 AND state=$2`, id, p.State); err != nil {
@@ -103,9 +109,52 @@ func (s *RecordingPackageStore) CleanupPackage(ctx context.Context, id string, d
 				return err
 			}
 		}
+		// At most three preview attempts per package. Preserve all attempts
+		// until media expiry + grant grace, including an ambiguous successful
+		// pointer publication. Repeat declared-key sweeps to catch late writes.
+		if gracePassed && p.FinalPrefix != "" {
+			rows, err := s.locks.statements(ctx).QueryContext(ctx, `SELECT claim_id FROM recording_preview_attempts WHERE package_id=$1`, id)
+			if err != nil {
+				return err
+			}
+			var previews []string
+			for rows.Next() {
+				var claim string
+				if err := rows.Scan(&claim); err != nil {
+					rows.Close()
+					return err
+				}
+				previews = append(previews, claim)
+			}
+			err = rows.Err()
+			rows.Close()
+			if err != nil {
+				return err
+			}
+			for _, claim := range previews {
+				keys := []string{p.FinalPrefix + "previews/" + claim + "/index.vtt"}
+				for i := 0; i < p.Inventory.Renditions[0].SegmentCount; i++ {
+					keys = append(keys, fmt.Sprintf("%spreviews/%s/seg-%06d.jpg", p.FinalPrefix, claim, i))
+					if len(keys) == 1000 {
+						if err := deleteObjects(ctx, keys); err != nil {
+							return err
+						}
+						keys = nil
+					}
+				}
+				if len(keys) > 0 {
+					if err := deleteObjects(ctx, keys); err != nil {
+						return err
+					}
+				}
+			}
+			if err := deleteObjects(ctx, []string{p.FinalPrefix + "previews/current.json"}); err != nil {
+				return err
+			}
+		}
 		// ponytail: daily declared-key sweep retains metadata; add bounded metadata
 		// compaction only after retention policy and provider late-write bounds agree.
-		_, err = s.locks.statements(ctx).ExecContext(ctx, `UPDATE recording_packages SET cleanup_after=clock_timestamp()+interval '24 hours' WHERE id=$1`, id)
+		_, err = s.locks.statements(ctx).ExecContext(ctx, `UPDATE recording_packages SET cleanup_after=CASE WHEN state='expired' AND GREATEST(media_expires_at+interval '1 hour',grant_cleanup_after)>clock_timestamp() THEN GREATEST(media_expires_at+interval '1 hour',grant_cleanup_after) ELSE clock_timestamp()+interval '24 hours' END WHERE id=$1`, id)
 		return err
 	})
 }
@@ -118,10 +167,14 @@ func (s *RecordingPackageStore) ReconcilePackages(ctx context.Context, deleteObj
 	}
 	cleanupCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
+	var failures error
 	for _, id := range ids {
+		if err := cleanupCtx.Err(); err != nil {
+			return errors.Join(failures, err)
+		}
 		if err := s.CleanupPackage(cleanupCtx, id, deleteObjects); err != nil {
-			return err
+			failures = errors.Join(failures, err)
 		}
 	}
-	return nil
+	return failures
 }

@@ -21,8 +21,8 @@ import (
 var ErrNotFound = errors.New("R2 object not found")
 
 var namePattern = regexp.MustCompile(`^[a-z0-9-]+$`)
-var packageStagingKey = regexp.MustCompile(`^recordings/packages/[a-zA-Z0-9-]{1,80}/staging/(master\.m3u8|(720p|1080p)/(index\.m3u8|init\.mp4|seg-[0-9]{6}\.m4s))$`)
-var packageFinalKey = regexp.MustCompile(`^recordings/packages/[a-zA-Z0-9-]{1,80}/final/[a-zA-Z0-9-]{1,80}/(master\.m3u8|(720p|1080p)/(index\.m3u8|init\.mp4|seg-[0-9]{6}\.m4s))$`)
+var packageStagingKey = regexp.MustCompile(`^recordings/packages/[a-zA-Z0-9-]{1,80}/staging/(master\.m3u8|(480p|720p|1080p)/(index\.m3u8|init\.mp4|seg-[0-9]{6}\.m4s))$`)
+var packageFinalKey = regexp.MustCompile(`^recordings/packages/[a-zA-Z0-9-]{1,80}/final/[a-zA-Z0-9-]{1,80}/(master\.m3u8|(480p|720p|1080p)/(index\.m3u8|init\.mp4|seg-[0-9]{6}\.m4s))$`)
 var packageControlKey = regexp.MustCompile(`^recordings/packages/[a-zA-Z0-9-]{1,80}/final/[a-zA-Z0-9-]{1,80}/package\.json$`)
 var sourceAttemptID = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
@@ -180,7 +180,7 @@ func (s *Store) DeletePackageObjects(ctx context.Context, keys []string) error {
 		current := ""
 		if packageStagingKey.MatchString(key) {
 			current = strings.Join(parts[:4], "/") + "/"
-		} else if packageFinalKey.MatchString(key) || packageControlKey.MatchString(key) {
+		} else if packageFinalKey.MatchString(key) || packageControlKey.MatchString(key) || packagePreviewKey.MatchString(key) {
 			current = strings.Join(parts[:5], "/") + "/"
 		} else {
 			return errors.New("invalid package delete key")

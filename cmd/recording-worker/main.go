@@ -73,6 +73,8 @@ func run(ctx context.Context) error {
 		packages := postgres.NewRecordingPackageStore(db)
 		probe := recordingvalidation.PackageMediaProbe{Objects: objects, FFmpeg: "/usr/bin/ffmpeg", FFprobe: "/usr/bin/ffprobe"}
 		cleanupErr := packages.ReconcilePackages(ctx, objects.DeletePackageObjects)
+		covers := postgres.NewRecordingCoverStore(db)
+		cleanupErr = errors.Join(cleanupErr, covers.Reconcile(ctx, objects.DeleteCoverObjects))
 		if sourceAccount != "" {
 			sources, err := azurestorage.New(sourceAccount, sourceContainer)
 			if err != nil {
@@ -86,6 +88,16 @@ func run(ctx context.Context) error {
 			if processed || err != nil {
 				return errors.Join(cleanupErr, err)
 			}
+		}
+		// Preview claims defer to waiting validation/source work in SQL and
+		// use the same global slots. Only one long claim runs per execution.
+		processed, coverErr := recordingvalidation.RunCoverProcessing(ctx, covers, packages, objects, probe)
+		if processed || coverErr != nil {
+			return errors.Join(cleanupErr, coverErr)
+		}
+		processed, previewErr := recordingvalidation.RunPackagePreview(ctx, packages, objects, probe)
+		if processed || previewErr != nil {
+			return errors.Join(cleanupErr, previewErr)
 		}
 		validationErr := recordingvalidation.RunPackageValidation(ctx, packages, objects, probe)
 		return errors.Join(validationErr, cleanupErr)

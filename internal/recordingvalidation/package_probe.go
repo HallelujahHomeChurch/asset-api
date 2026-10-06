@@ -271,6 +271,13 @@ func validatePackageSegmentProbe(data []byte, r assets.RecordingRendition) (segm
 		pts, e1 := strconv.ParseFloat(p.PTS, 64)
 		duration, e2 := strconv.ParseFloat(p.Duration, 64)
 		missingDuration := p.Stream == audio && p.Duration == ""
+		if p.Stream == video && p.Duration == "" {
+			// ffprobe 5.1 can omit early fMP4 video durations before detecting
+			// the frame rate. The verified CFR interval is checked against every
+			// actual PTS below; full decode and total duration checks still apply.
+			duration = 1 / r.FrameRate
+			e2 = nil
+		}
 		if missingDuration {
 			duration = 0
 			e2 = nil
@@ -341,7 +348,7 @@ func avccCodecs(extra string) (string, error) {
 // InitCodecs derives the master playlist's codec labels from the actual encoded
 // initialization object. Full packet/IDR/decode checks still run in Validate.
 func (p PackageMediaProbe) InitCodecs(ctx context.Context, prefix, name string, size int64) (codecs string, result error) {
-	if p.Objects == nil || !filepath.IsAbs(p.FFprobe) || (name != "720p" && name != "1080p") || size <= 0 || size > assets.RecordingObjectMaxBytes {
+	if p.Objects == nil || !filepath.IsAbs(p.FFprobe) || (name != "480p" && name != "720p" && name != "1080p") || size <= 0 || size > assets.RecordingObjectMaxBytes {
 		return "", assets.ErrInvalidInput
 	}
 	dir, err := os.MkdirTemp(p.ScratchRoot, "hhc-init-")

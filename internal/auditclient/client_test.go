@@ -18,13 +18,16 @@ func TestFixtureAndEveryContractExampleValidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	contracts := fixture.Contracts()
-	if len(contracts) != 19 {
+	if len(contracts) != 20 {
 		t.Fatalf("contracts=%d", len(contracts))
 	}
 	for _, contract := range contracts {
 		resource := hexID
 		if contract.ResourceIDGrammar == "empty" {
 			resource = ""
+		}
+		if contract.ResourceIDGrammar == "singleton" {
+			resource = "singleton"
 		}
 		metadata := exampleMetadata(contract.MetadataSchema)
 		actorType, actor := "user", userID
@@ -82,6 +85,8 @@ func TestCanonicalRoundTripAndAccessReplayIdentity(t *testing.T) {
 
 func exampleMetadata(schema string) Metadata {
 	switch schema {
+	case "recording_retention":
+		return Metadata{"previousDays": 30, "retentionDays": 14, "revision": 2}
 	case "empty", "filters":
 		return Metadata{}
 	case "collection_acl":

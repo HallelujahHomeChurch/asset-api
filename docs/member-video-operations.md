@@ -4,7 +4,8 @@
 
 The new Pages route is
 `/videos/{recording}/packages/{package}/sessions/{scope}/{object}`. Only
-`master.m3u8`, `720p|1080p/index.m3u8`, `init.mp4` and `seg-NNNNNN.m4s`
+`master.m3u8`, `480p|720p|1080p/index.m3u8`, `init.mp4`, `seg-NNNNNN.m4s`,
+`previews/index.vtt` and `previews/seg-NNNNNN.jpg`
 are served. Inventory, arbitrary keys, query credentials and encoded paths are
 not media routes. Package cookies contain a signer-authorized immutable final
 prefix, never an upload/staging prefix. Exchange and renewal preserve the
@@ -26,6 +27,49 @@ Local checks include the signed-cookie/R2/Cache flow in Wrangler's pinned
 Cloudflare runtime, but are not deployment or browser/device acceptance.
 Keep `ASSET_RECORDING_HLS_ENABLED` off until CMS, Gateway and player cutover
 checks pass. Ordinary Blob scanning stays unchanged.
+
+## Seek preview contract
+
+The optional VTT and JPEG routes use the exact playback Cookie, scope, expiry,
+CORS, GET/HEAD/Range and cache authorization as HLS, including on cache hits.
+MIME types are `text/vtt` and `image/jpeg`; each object is capped at 1 MiB.
+The standard WEBVTT cues sample every five seconds. Each 30-second media
+fragment has one 960x90 JPEG with six horizontal 160x90 cells, referenced as
+`seg-000000.jpg#xywh=0,0,160,90` relative to `previews/index.vtt`. Final cues end
+at the recording duration and never reference unpopulated tail cells. The VTT
+is published only after every sprite. A 404 means previews are not available;
+it does not change video readiness or publication.
+
+The scheduled recording Job selects the lowest-resolution validated rendition,
+decodes one bounded init+fragment at a time with FFmpeg file-only protocols,
+resets fragment PTS, and emits only preview JPEGs. It never downloads the full
+package/original or re-encodes source video. Scratch is at most two bounded
+media objects plus one 1 MiB JPEG; existing CPU 4 / memory 8 GiB stay unchanged.
+Preview claims share the existing two global slots, renewable fenced leases,
+and 5.5-hour deadline. Waiting upload validation and source jobs take priority.
+Migration 031's default pending state includes existing ready packages; three
+attempts total include crashes, with five-minute retry delay and no work after
+media expiry. Failed previews leave `state=ready` untouched.
+
+Storage is server-only under the immutable final prefix:
+`previews/{preview-claim}/{index.vtt|seg-NNNNNN.jpg}`. A bounded private
+`previews/current.json` pointer selects the completed attempt. Publication holds
+the shared slot and package lease locks; all writes use conditional create-only
+PUTs. Thus an ambiguous/stale write cannot overwrite an existing winner. The
+Worker resolves this pointer after authentication and validates its attempt ID;
+neither internal attempt paths nor the pointer are routable. No upload inventory
+or client signing path accepts these keys. At most three attempts are retained
+until media expiry plus the existing one-hour grant grace, then daily declared
+key sweeps remove all derived objects, including late writes. Attempts are kept
+through expiry to preserve a successful pointer whose DB response was lost.
+
+After release, verify an older ready package progresses to preview ready, a new
+upload remains playable before previews finish, and real authenticated VTT/JPEG
+GETs work. Recheck unauthenticated, cross-scope, expired-cookie and cached denial,
+final-tail seek behavior, Job slots/resources/duration, and expiry cleanup.
+Local tests and migration success do not establish production backfill or
+browser/device acceptance. Roll back API/Job and Pages using their existing
+release paths; the additive schema and optional objects remain compatible.
 
 ## Retired single-file path
 
@@ -165,3 +209,55 @@ replacement for billing metrics. Track this source account and the recording Job
 separately in Cost Management. Track R2 storage/Class A/Class B and Workers paid
 usage in Cloudflare, including the base plan as feature cost. Cost observations,
 alert delivery tests, and positive member playback remain separate acceptance gates.
+# Recording cover operations
+
+Recording covers use private R2 `recordings/covers/{recordingId}/{attempt}/`,
+outside immutable HLS inventory. The existing recording Job shares its two DB
+slots with validation/source processing; covers defer to waiting video work.
+Each image job has a two-minute deadline, three-minute fenced lease, at most
+three attempts and a five-minute retry delay. Failure never changes HLS ready.
+New ready packages enqueue three candidates at 20/50/80 percent. Custom inputs
+are limited to 5 MiB JPEG/PNG, 24 MP and 8192 px per edge; non-normal EXIF,
+animation and non-16:9 custom input are rejected. Isolated FFmpeg and JPEG
+re-encoding produce metadata-free 1280×720 images no larger than 1 MiB.
+No normal Blob asset, scan event or new container is created.
+
+Only CMS can use the private cover endpoints documented in OpenAPI. CMS owns
+selection and viewer authorization; image reads never grant video access.
+Retain a ready image with a unique selection reference before committing its
+CMS pointer. Release obsolete/failed selection references durably; do not
+delete a pointer's reference on an ambiguous CMS commit. Cover jobs, attempts
+and reference metadata are operational receipts, not a legal erasure policy.
+
+Cleanup deletes accepted custom inputs immediately, and retries input/output
+deletion through the existing Job. Unselected custom images expire after
+24 hours; references preserve selected output only until the recording expires
+or is deleted. Abandoned attempts receive a six-hour stale-writer grace.
+Repeated sweeps catch late R2 writes and retry provider failure; failed items
+rotate so they cannot starve later cleanup. Expired images fail closed before
+provider deletion. R2 failure is not evidence of completed byte removal.
+
+Existing recordings require an explicitly reviewed backfill:
+
+Management lists preserve expired upload metadata until the owning recording
+expires, so interrupted CLI operations can distinguish an expired attempt from
+an unknown upload. This does not permit reading or retaining expired bytes.
+The existing 20-upload daily quota and 30-day recording lifetime bound these
+receipts; all consumers accept at most 1,000 cover items.
+
+```sh
+go run ./cmd/recording-cover-backfill --limit 20
+# After approval of the exact page; DATABASE_URL must target the reviewed DB:
+go run ./cmd/recording-cover-backfill --limit 20 --apply
+# For another reviewed page, pass its prior nextAfter cursor with --after.
+```
+
+Dry-run is the default; each page is bounded to 100. Replays skip existing
+auto jobs, and deleted/expired packages are excluded. This only enqueues image
+work: it never changes the recording selection, HLS inventory, publication,
+notifications or expiry. Do not run production apply without explicit approval.
+
+Acceptance must separately prove an authenticated pre-play cover read, custom
+upload/selection, replacement, CLI resume and recording deletion. Local tests
+do not establish production R2 permissions or successful cleanup. Observe cover
+state/attempt counts and retry timestamps without logging images or credentials.

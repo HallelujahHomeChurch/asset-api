@@ -100,7 +100,7 @@ func ValidateRecordingSourceSize(size int64) error {
 // EstimateRecordingPackageSize reserves 3% for mux/control overhead, but the
 // resulting package must still be checked against actual cumulative bytes.
 func EstimateRecordingPackageSize(duration float64, videoBitrates []int64) (int64, error) {
-	if math.IsNaN(duration) || math.IsInf(duration, 0) || duration <= 0 || duration > RecordingMaxDurationSeconds || len(videoBitrates) < 1 || len(videoBitrates) > 2 {
+	if math.IsNaN(duration) || math.IsInf(duration, 0) || duration <= 0 || duration > RecordingMaxDurationSeconds || len(videoBitrates) < 1 || len(videoBitrates) > 3 {
 		return 0, ErrInvalidInput
 	}
 	var bitsPerSecond int64
@@ -138,7 +138,7 @@ func RecordingInventoryDigest(inv RecordingPackageInventory) (string, error) {
 // total bytes including package.json. Metadata is untrusted until probed.
 func ValidateRecordingInventory(inv RecordingPackageInventory) (int64, error) {
 	invalid := func(reason string) (int64, error) { return 0, fmt.Errorf("%w: %s", ErrInvalidInput, reason) }
-	if inv.SchemaVersion != 1 || !presetVersionPattern.MatchString(inv.PresetVersion) || len(inv.Objects) > RecordingPackageMaxObjects || len(inv.Renditions) < 1 || len(inv.Renditions) > 2 {
+	if inv.SchemaVersion != 1 || !presetVersionPattern.MatchString(inv.PresetVersion) || len(inv.Objects) > RecordingPackageMaxObjects || len(inv.Renditions) < 1 || len(inv.Renditions) > 3 {
 		return invalid("schema or limits")
 	}
 	expected := map[string]bool{"master.m3u8": true}
@@ -148,6 +148,8 @@ func ValidateRecordingInventory(inv RecordingPackageInventory) (int64, error) {
 		maxWidth, maxHeight := 1280, 720
 		if rendition.Name == "1080p" {
 			maxWidth, maxHeight = 1920, 1080
+		} else if rendition.Name == "480p" {
+			maxWidth, maxHeight = 854, 480
 		} else if rendition.Name != "720p" {
 			return invalid("rendition name")
 		}
@@ -172,16 +174,11 @@ func ValidateRecordingInventory(inv RecordingPackageInventory) (int64, error) {
 	if !seenRenditions["720p"] || len(inv.Objects) != len(expected) {
 		return invalid("missing low rendition or object")
 	}
-	if len(inv.Renditions) == 2 {
-		var low, high RecordingRendition
-		for _, r := range inv.Renditions {
-			if r.Name == "720p" {
-				low = r
-			} else {
-				high = r
-			}
-		}
-		if high.VideoBitrate < low.VideoBitrate || high.Height <= low.Height {
+	ordered := slices.Clone(inv.Renditions)
+	slices.SortFunc(ordered, func(a, b RecordingRendition) int { return a.Height - b.Height })
+	for n := 1; n < len(ordered); n++ {
+		low, high := ordered[n-1], ordered[n]
+		if high.Height <= low.Height || high.VideoBitrate < low.VideoBitrate || (low.Name == "1080p") || (high.Name == "480p") {
 			return invalid("rendition ordering")
 		}
 	}

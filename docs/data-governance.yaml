@@ -1,6 +1,117 @@
 schema_version: 1
 service: asset-api
 datasets:
+  - id: asset.recording-retention-policy
+    owner: asset-api
+    purpose: Preserve authoritative retention configuration and confirmed administrator change receipts.
+    necessity: required
+    storage: {kind: postgres, resource: recording_retention_policy, sources: [{path: internal/postgres/recording_retention.go, symbol: RecordingPackageStore.GetRetentionPolicy}]}
+    subject_keys: []
+    data_classes: [security, activity, identity]
+    fields:
+      - {name: recording_retention_policy.singleton, purpose: Identify the sole policy, necessity: required, data_classes: [activity]}
+      - {name: recording_retention_policy.retention_days, purpose: Control media byte retention, necessity: required, data_classes: [activity]}
+      - {name: recording_retention_policy.revision, purpose: Fence stale mutations, necessity: required, data_classes: [activity]}
+      - {name: recording_retention_policy.activated_at, purpose: Preserve safe producer-first rollout, necessity: required, data_classes: [activity]}
+    attribution: {mode: manual, explanation: Administrator provenance is distinct from video participants and viewer receipts.}
+    legal_basis: {status: pending_legal, reference: null}
+    retention: {status: pending_legal, rule: null, action: none}
+    cleanup: {mode: none, implementation: [], evidence: []}
+  - id: asset.recording-retention-previews
+    owner: asset-api
+    purpose: Preserve authoritative retention configuration and confirmed administrator change receipts.
+    necessity: required
+    storage: {kind: postgres, resource: recording_retention_previews, sources: [{path: internal/postgres/recording_retention.go, symbol: RecordingPackageStore.PreviewRetentionPolicy}]}
+    subject_keys: []
+    data_classes: [security, activity, identity]
+    fields:
+      - {name: recording_retention_previews.id, purpose: Bind explicit confirmation, necessity: required, data_classes: [activity]}
+      - {name: recording_retention_previews.actor_id, purpose: Bind the preview and replay to the authorized administrator, necessity: required, data_classes: [identity]}
+      - {name: recording_retention_previews.retention_days, purpose: Bind the proposed days, necessity: required, data_classes: [activity]}
+      - {name: recording_retention_previews.revision, purpose: Prevent stale confirmation, necessity: required, data_classes: [activity]}
+      - {name: recording_retention_previews.evaluated_at, purpose: Bound preview validity to five minutes, necessity: required, data_classes: [activity]}
+      - {name: recording_retention_previews.affected_count, purpose: Record estimated impact, necessity: required, data_classes: [activity]}
+      - {name: recording_retention_previews.affected_bytes, purpose: Record estimated storage impact, necessity: required, data_classes: [activity]}
+      - {name: recording_retention_previews.idempotency_key, purpose: Recover a confirmed policy change, necessity: required, data_classes: [activity]}
+      - {name: recording_retention_previews.result, purpose: Replay the original accepted policy, necessity: required, data_classes: [activity]}
+    attribution: {mode: manual, explanation: Administrator provenance is distinct from video participants and viewer receipts.}
+    legal_basis: {status: pending_legal, reference: null}
+    retention: {status: pending_legal, rule: null, action: none}
+    cleanup: {mode: none, implementation: [], evidence: []}
+  - id: asset.recording-covers
+    owner: asset-api
+    purpose: Preserve recording image processing and retention receipts separately from disposable R2 image bytes.
+    necessity: required
+    storage: {kind: postgres, resource: recording_covers, sources: [{path: internal/postgres/recording_cover.go, symbol: RecordingCoverStore.Create}]}
+    subject_keys: []
+    data_classes: [identity, security, content, activity]
+    fields:
+      - {name: recording_covers.id, purpose: Identify the bounded image job, necessity: required, data_classes: [identity]}
+      - {name: recording_covers.package_id, purpose: Bind images to an immutable package, necessity: required, data_classes: [identity]}
+      - {name: recording_covers.recording_id, purpose: Enforce recording ownership, necessity: required, data_classes: [identity]}
+      - {name: recording_covers.actor_id, purpose: Bind uploader authorization, necessity: required, data_classes: [identity]}
+      - {name: recording_covers.idempotency_key, purpose: Recover accepted uploads, necessity: required, data_classes: [security]}
+      - {name: recording_covers.kind, purpose: Distinguish auto and custom image processing, necessity: required, data_classes: [content]}
+      - {name: recording_covers.mime, purpose: Select the safe image decoder, necessity: required, data_classes: [content]}
+      - {name: recording_covers.digest, purpose: Verify immutable input integrity, necessity: required, data_classes: [security]}
+      - {name: recording_covers.state, purpose: Fence serving and cleanup, necessity: required, data_classes: [activity]}
+      - {name: recording_covers.attempts, purpose: Bound processing retries, necessity: required, data_classes: [activity]}
+      - {name: recording_covers.claim_id, purpose: Fence worker completion, necessity: required, data_classes: [security]}
+      - {name: recording_covers.claimed_until, purpose: Recover abandoned workers, necessity: required, data_classes: [activity]}
+      - {name: recording_covers.output_attempt, purpose: Locate accepted immutable output, necessity: required, data_classes: [security]}
+      - {name: recording_covers.created_at, purpose: Bound unselected input retention, necessity: required, data_classes: [activity]}
+      - {name: recording_covers.expires_at, purpose: Align image lifetime with video, necessity: required, data_classes: [activity]}
+      - {name: recording_covers.next_attempt_at, purpose: Bound retry frequency, necessity: required, data_classes: [activity]}
+      - {name: recording_covers.cleanup_after, purpose: Bound reconciliation frequency, necessity: required, data_classes: [activity]}
+    attribution: {mode: manual, explanation: CMS owns administrator provenance; recording images may contain people other than the uploader.}
+    legal_basis: {status: pending_legal, reference: null}
+    retention: {status: pending_legal, rule: null, action: none}
+    cleanup: {mode: none, implementation: [], evidence: []}
+  - id: asset.recording-cover-attempts
+    owner: asset-api
+    purpose: Preserve recording image processing and retention receipts separately from disposable R2 image bytes.
+    necessity: required
+    storage: {kind: postgres, resource: recording_cover_attempts, sources: [{path: internal/postgres/recording_cover.go, symbol: RecordingCoverStore.Claim}]}
+    subject_keys: []
+    data_classes: [identity, security, content, activity]
+    fields:
+      - {name: recording_cover_attempts.claim_id, purpose: Locate attempt specific output, necessity: required, data_classes: [security]}
+      - {name: recording_cover_attempts.cover_id, purpose: Bind attempt to image lifecycle, necessity: required, data_classes: [identity]}
+      - {name: recording_cover_attempts.created_at, purpose: Bound late writer grace period, necessity: required, data_classes: [activity]}
+    attribution: {mode: manual, explanation: CMS owns administrator provenance; recording images may contain people other than the uploader.}
+    legal_basis: {status: pending_legal, reference: null}
+    retention: {status: pending_legal, rule: null, action: none}
+    cleanup: {mode: none, implementation: [], evidence: []}
+  - id: asset.recording-cover-references
+    owner: asset-api
+    purpose: Preserve recording image processing and retention receipts separately from disposable R2 image bytes.
+    necessity: required
+    storage: {kind: postgres, resource: recording_cover_references, sources: [{path: internal/postgres/recording_cover.go, symbol: RecordingCoverStore.Retain}]}
+    subject_keys: []
+    data_classes: [identity, security, content, activity]
+    fields:
+      - {name: recording_cover_references.reference_id, purpose: Recover selection retention commands, necessity: required, data_classes: [security]}
+      - {name: recording_cover_references.cover_id, purpose: Protect selected image output, necessity: required, data_classes: [identity]}
+      - {name: recording_cover_references.created_at, purpose: Record selection retention time, necessity: required, data_classes: [activity]}
+      - {name: recording_cover_references.released_at, purpose: Fence delayed retain commands after release, necessity: required, data_classes: [security]}
+    attribution: {mode: manual, explanation: CMS owns administrator provenance; recording images may contain people other than the uploader.}
+    legal_basis: {status: pending_legal, reference: null}
+    retention: {status: pending_legal, rule: null, action: none}
+    cleanup: {mode: none, implementation: [], evidence: []}
+  - id: asset.recording-deletions
+    owner: asset-api
+    purpose: Fence late uploads and preserve retryable owner deletion commands.
+    necessity: required
+    storage: {kind: postgres, resource: recording_deletions, sources: [{path: internal/postgres/recording_deletion.go, symbol: RecordingDeletionStore.DeleteRecording}]}
+    subject_keys: []
+    data_classes: [identity, security, activity]
+    fields:
+      - {name: recording_deletions.recording_id, purpose: Prevent recreation of deleted media, necessity: required, data_classes: [identity, security]}
+      - {name: recording_deletions.requested_at, purpose: Anchor the immutable deletion receipt, necessity: required, data_classes: [activity]}
+    attribution: {mode: manual, explanation: CMS owns the recording and administrator provenance; this receipt contains no viewer identity.}
+    legal_basis: {status: pending_legal, reference: null}
+    retention: {status: pending_legal, rule: null, action: none}
+    cleanup: {mode: none, implementation: [], evidence: []}
   - id: asset.recording-sources
     owner: asset-api
     purpose: Bind temporary browser recording inputs to authorized CMS actors and retain fenced processing and retry receipts without entering the ordinary asset scan pipeline.
@@ -80,10 +191,17 @@ datasets:
       - {name: recording_packages.claim_id, purpose: Fence stale worker commits, necessity: required, data_classes: [security]}
       - {name: recording_packages.claimed_until, purpose: Bound worker lease lifetime, necessity: required, data_classes: [security]}
       - {name: recording_packages.final_prefix, purpose: Identify immutable validated media bytes, necessity: required, data_classes: [content]}
-      - {name: recording_packages.ready_at, purpose: Anchor media retention to first ready state, necessity: required, data_classes: [activity]}
-      - {name: recording_packages.media_expires_at, purpose: Bound media access to thirty days, necessity: required, data_classes: [activity]}
+      - {name: recording_packages.ready_at, purpose: Record first successful validation, necessity: required, data_classes: [activity]}
+      - {name: recording_packages.media_expires_at, purpose: Project the authoritative media deadline, necessity: required, data_classes: [activity]}
+      - {name: recording_packages.retention_revision, purpose: Identify the projected policy revision, necessity: required, data_classes: [activity]}
+      - {name: recording_packages.grant_cleanup_after, purpose: Protect issued grants after retroactive policy shortening, necessity: required, data_classes: [security]}
       - {name: recording_packages.validation_error, purpose: Record bounded generic failure classification without provider secrets, necessity: required, data_classes: [activity]}
       - {name: recording_packages.cleanup_after, purpose: Bound repeated late-write reconciliation frequency, necessity: required, data_classes: [activity]}
+      - {name: recording_packages.preview_state, purpose: Track optional preview generation without changing video readiness, necessity: required, data_classes: [activity]}
+      - {name: recording_packages.preview_attempts, purpose: Bound preview retries including crashes, necessity: required, data_classes: [activity]}
+      - {name: recording_packages.preview_claim_id, purpose: Fence preview publication, necessity: required, data_classes: [security]}
+      - {name: recording_packages.preview_claimed_until, purpose: Reclaim lost preview workers, necessity: required, data_classes: [security]}
+      - {name: recording_packages.preview_next_attempt_at, purpose: Apply preview retry backoff, necessity: required, data_classes: [activity]}
     attribution: {mode: manual, explanation: actor_id is the upstream authorized uploader; it is not inferred as a video participant or an Account user until actor provenance is resolved.}
     legal_basis: {status: pending_legal, reference: null}
     retention: {status: pending_legal, rule: null, action: none}
@@ -118,6 +236,20 @@ datasets:
       - {name: recording_package_attempts.created_at, purpose: Schedule orphan cleanup, necessity: required, data_classes: [activity]}
       - {name: recording_package_attempts.finished_at, purpose: Record attempt completion or abandonment, necessity: required, data_classes: [activity]}
     attribution: {mode: manual, explanation: The package carries upstream actor provenance; attempts do not identify video participants.}
+    legal_basis: {status: pending_legal, reference: null}
+    retention: {status: pending_legal, rule: null, action: none}
+    cleanup: {mode: none, implementation: [], evidence: []}
+  - id: asset.recording-preview-attempts
+    owner: asset-api
+    purpose: Preserve bounded preview attempt prefixes for expiry cleanup and ambiguous publication recovery.
+    necessity: required
+    storage: {kind: postgres, resource: recording_preview_attempts, sources: [{path: internal/postgres/recording_preview.go, symbol: RecordingPackageStore.ClaimPackagePreview}]}
+    subject_keys: []
+    data_classes: [security, activity]
+    fields:
+      - {name: recording_preview_attempts.claim_id, purpose: Identify immutable derived byte prefix, necessity: required, data_classes: [security]}
+      - {name: recording_preview_attempts.package_id, purpose: Link preview attempt to authorized package and retention, necessity: required, data_classes: [activity]}
+    attribution: {mode: manual, explanation: Package actor provenance does not identify video participants.}
     legal_basis: {status: pending_legal, reference: null}
     retention: {status: pending_legal, rule: null, action: none}
     cleanup: {mode: none, implementation: [], evidence: []}

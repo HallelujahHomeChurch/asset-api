@@ -4,12 +4,16 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /asset-recording-worker ./cmd/recording-worker
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /asset-recording-cover-backfill ./cmd/recording-cover-backfill
 
 FROM debian:bookworm-slim
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates ffmpeg \
+ && apt-get install -y --no-install-recommends ca-certificates ffmpeg libpcre2-8-0 perl-base \
+ && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' perl-base)" ge '5.36.0-7+deb12u4' \
+ && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libpcre2-8-0)" ge '10.42-1+deb12u2' \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /asset-recording-worker /asset-recording-worker
+COPY --from=build /asset-recording-cover-backfill /asset-recording-cover-backfill
 USER 65532:65532
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["/asset-recording-worker"]

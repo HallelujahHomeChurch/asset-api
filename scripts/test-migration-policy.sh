@@ -19,6 +19,11 @@ for file in "$@"; do
     internal/migrations/sql/007_processing_retry_and_retention.sql)
       legacy_hash='a4916f5d3c4d0799f45d3ba410fd79cb49c902e3f433febfaf5a110a8771788f'
       ;;
+    internal/migrations/sql/034_recording_retention.sql)
+      # Expand-only CHECK replacement: preserves all old rows/writes, drops no
+      # data, and keeps old expiry semantics until separately confirmed activation.
+      legacy_hash='51e032de6c3f27962f23f3510e7bb765a97ee360feaf387a3fbb65f58a7d99f0'
+      ;;
     internal/migrations/sql/016_drop_legacy_ticket_roles.sql)
       contract_hash='55baa077395f0347fee354efd2998f1f31bd0a6db33ec60508ad72fe22d0bc86'
       ;;

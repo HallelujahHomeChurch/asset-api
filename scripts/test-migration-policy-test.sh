@@ -3,6 +3,16 @@ set -eu
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
+policy_script="$PWD/scripts/test-migration-policy.sh"
+retention_migration="internal/migrations/sql/034_recording_retention.sql"
+mkdir -p "$tmp/internal/migrations/sql"
+cp "$retention_migration" "$tmp/$retention_migration"
+(cd "$tmp" && "$policy_script" "$retention_migration")
+printf '%s\n' '-- test mutation' >>"$tmp/$retention_migration"
+if (cd "$tmp" && "$policy_script" "$retention_migration") 2>/dev/null; then
+  echo 'recording retention CHECK replacement was not immutable' >&2
+  exit 1
+fi
 
 printf '%s\n' 'DROP INDEX IF EXISTS old_index;' >"$tmp/safe.sql"
 ./scripts/test-migration-policy.sh "$tmp/safe.sql"

@@ -50,13 +50,36 @@ service for these private asset operations.
 
 ## HLS package producer contract
 
+Human CMS administrators can preview and confirm one global retention policy
+(1–365 days) through `/priv/recordings/retention-policy`. Active policy uses
+immutable accepted upload completion, including browser sources before encoding.
+Preview estimates include unfinished accepted uploads without double-counting
+materialized sources. Revision, actor-bound five-minute preview, idempotency and
+atomic audit protect updates. Migration 034 initially leaves legacy expiry
+unchanged; production activation requires a separately approved impact preview.
+Terminal cleanup never revives. The owner-only `/priv/recordings/lifecycle`
+snapshot lets CMS apply the authoritative expiry before list filtering.
+
+`DELETE /priv/recordings/{recordingID}` is an idempotent owner command available
+only to `hhc-web-api` with HLS enabled. A durable recording tombstone rejects
+late source/package creation, expires all associated media and fences processing
+leases. Existing cleanup jobs remove temporary Blob and R2 HLS/preview objects
+with retries; package finals retain the existing one-hour grant safety window.
+No public asset deletion permission or extra container is introduced.
+
 `/priv/recording-packages` provides create, paginated status, batched single-object
 PUT signing and durable completion handlers. These routes fail closed with 503
 unless `ASSET_RECORDING_HLS_ENABLED=true` is set for the API and recording Job.
+Upload status uses a strongly consistent, package-scoped R2 object listing
+instead of sequential HEAD requests per fragment, so long recordings do not
+exhaust the CMS control-request deadline. Listings are bounded to 10,000 objects;
+only declared inventory paths with matching remote sizes are confirmed. Provider
+errors fail closed. Status paging and owner checks are unchanged, and size
+confirmation is not SHA-256/media validation or evidence of `ready`.
 The flag defaults off and must remain off until the reviewed HLS cutover.
 Completion means `freezing`, not ready. In HLS mode the recording Job uses two
 global DB slots, renewable fenced leases and bounded per-fragment media validation;
-it does not re-encode CLI packages. Ready retention is thirty days, with a one-hour
+it does not re-encode CLI packages. Retention defaults to thirty days, with a one-hour
 existing-grant cleanup grace. Staging and failed attempt deletion are retried and
 reconciled daily to sweep late writes; provider acceptance remains required.
 Single-file recording upload and playback routes are retired; clients must use
@@ -67,6 +90,14 @@ HLS grants and authorizes every playlist/init/segment, including internal cache
 hits. Browser source ingest/encode is independently gated; CMS/player integration
 and provider acceptance remain subsequent work. Enabling these producers is not
 end-to-end readiness.
+
+Optional seek previews are generated from ready immutable HLS by the same
+recording Job, behind waiting validation/source work and sharing its two global
+slots. Migration 031 also queues existing unexpired ready packages. No CLI,
+upload inventory, CMS publication, ready state, or source/scanning change is
+required. The existing authenticated playback base serves `previews/index.vtt`
+and `previews/seg-NNNNNN.jpg`; missing previews return 404 while video plays.
+See [the preview contract and acceptance checklist](docs/member-video-operations.md#seek-preview-contract).
 
 Browser source storage primitives use separate `recording-sources/{id}/staging`
 Blob keys: 16 MiB blocks, up to 2,981 blocks for the independent 50 GB source

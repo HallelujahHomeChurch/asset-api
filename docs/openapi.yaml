@@ -18,6 +18,122 @@ tags:
   - name: Private
     description: Dapr-authenticated service operations.
 paths:
+  /priv/recordings/lifecycle:
+    post:
+      operationId: getRecordingLifecycleSnapshot
+      summary: Read one policy-consistent lifecycle snapshot for CMS projections
+      description: Only exact recording and package bindings owned by hhc-web-api are accepted. Missing or mismatched bindings fail closed. No provider object listing or media download occurs.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [{daprCaller: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  maxItems: 1000
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [recordingId, packageId]
+                    properties:
+                      recordingId: {type: string, minLength: 1, maxLength: 80}
+                      packageId: {type: string, minLength: 1, maxLength: 80}
+      responses:
+        '200':
+          description: No-store authoritative policy and package lifecycle states.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [policy, items]
+                properties:
+                  policy: {$ref: '#/components/schemas/RecordingRetentionPolicy'}
+                  items: {type: array, maxItems: 1000, items: {$ref: '#/components/schemas/RecordingPackageStatus'}}
+        '400': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
+  /priv/recordings/retention-policy:
+    get:
+      operationId: getRecordingRetentionPolicy
+      summary: Read the authoritative recording retention policy
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [{daprCaller: []}]
+      responses:
+        '200': {description: 'Current policy. No fallback on failure.', content: {application/json: {schema: {$ref: '#/components/schemas/RecordingRetentionPolicy'}}}}
+        '403': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
+    put:
+      operationId: updateRecordingRetentionPolicy
+      summary: Confirm a preview and atomically update policy with audit
+      description: Human CMS actor provenance is mandatory. Preview is actor-bound and valid for five minutes. Existing issued playback grants retain a one-hour byte cleanup safety window. Terminal packages never revive. Replays require the same actor, key and preview.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [{daprCaller: []}]
+      parameters:
+        - {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 1, maxLength: 128}}
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/UpdateRecordingRetentionInput'}}}
+      responses:
+        '200': {description: Durable policy and audit committed., content: {application/json: {schema: {$ref: '#/components/schemas/RecordingRetentionPolicy'}}}}
+        '400': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
+  /priv/recordings/retention-policy/preview:
+    post:
+      operationId: previewRecordingRetentionPolicy
+      summary: Preview affected completed uploads under a proposed policy
+      description: Counts and bytes are estimates at evaluatedAt, not a frozen deletion set. Includes ready and processing packages and unmaterialized completed sources, counted once per recording. Source bytes estimate pending HLS output. No media or expiry is changed. Missing immutable completion fails closed.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [{daprCaller: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [retentionDays]
+              properties: {retentionDays: {type: integer, minimum: 1, maximum: 365}}
+      responses:
+        '200': {description: Five-minute actor-bound preview., content: {application/json: {schema: {$ref: '#/components/schemas/RecordingRetentionPreview'}}}}
+        '400': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
+  /priv/recordings/{recordingID}:
+    delete:
+      operationId: deleteRecordingMedia
+      summary: Fence recording media and schedule byte cleanup
+      description: Idempotent owner tombstone stops new upload sessions, validation, source processing and preview work. Existing cleanup removes private Blob, R2 staging, HLS and previews, retries failures and sweeps late writes. Ready media keeps the existing one-hour grant grace. No CMS business records are changed.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [{ daprCaller: [] }]
+      parameters: [{name: recordingID, in: path, required: true, schema: {type: string, pattern: '^[a-zA-Z0-9-]{1,80}$'}}]
+      responses:
+        '204': {description: 'Durable deletion accepted, including a repeat command.'}
+        '400': {$ref: '#/components/responses/Error'}
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
   /health:
     get:
       summary: Asset API operation
@@ -1072,7 +1188,7 @@ paths:
     get:
       operationId: getRecordingPackage
       summary: Query state and a bounded page of remotely observed upload objects.
-      description: confirmedObjects means remote size matches the inventory, not verified SHA-256 or ready media. Objects are examined in sorted path order; use nextCursor until empty. Non-uploading states do not query mutable staging objects.
+      description: confirmedObjects means remote size matches the inventory, not verified SHA-256 or ready media. A strongly consistent R2 listing is scoped to the package staging prefix and bounded to 10000 objects; provider failures never imply missing or confirmed objects. Results follow sorted inventory path order; use nextCursor until empty. Non-uploading states do not query mutable staging objects.
       tags: [Private]
       x-hhc-visibility: private
       x-hhc-callers: [hhc-web-api]
@@ -1102,6 +1218,142 @@ paths:
         '200': { description: Bounded ready projection., content: { application/json: { schema: { $ref: '#/components/schemas/RecordingPackageStatus' } } } }
         '403': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /priv/recording-packages/{packageID}/covers:
+    parameters:
+      - { $ref: '#/components/parameters/RecordingPackageID' }
+      - { name: recordingId, in: query, required: true, schema: { type: string } }
+    get:
+      operationId: listRecordingCovers
+      summary: List recording-bound image jobs and candidates without storage locations.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      responses:
+        '200':
+          description: Private no-store candidate list. Custom jobs retain the upload operation key for response-loss recovery.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/RecordingCover' }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /priv/recording-packages/{packageID}/cover-uploads:
+    parameters:
+      - { $ref: '#/components/parameters/RecordingPackageID' }
+      - { name: recordingId, in: query, required: true, schema: { type: string } }
+    post:
+      operationId: uploadRecordingCover
+      summary: Accept at most 5 MiB JPEG or PNG into private R2 for bounded normalization.
+      description: Exact actor and idempotency replay; changed bytes conflict. Only a ready nonexpired CMS-owned package is eligible. This does not select or publish an image. Images never enter the ordinary Blob scan lifecycle.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      parameters:
+        - { name: X-HHC-Actor-ID, in: header, required: true, schema: { type: string, maxLength: 160 } }
+        - { name: Idempotency-Key, in: header, required: true, schema: { type: string, maxLength: 160 } }
+      requestBody:
+        required: true
+        content:
+          image/jpeg: { schema: { type: string, format: binary } }
+          image/png: { schema: { type: string, format: binary } }
+      responses:
+        '202':
+          description: Durable processing receipt; not a selection receipt.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [uploadId, state]
+                properties:
+                  uploadId: { type: string }
+                  state: { type: string, enum: [uploading, pending, processing, ready, failed, expired] }
+        '413': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /priv/recording-packages/{packageID}/covers/{coverID}/content:
+    parameters:
+      - { $ref: '#/components/parameters/RecordingPackageID' }
+      - { name: recordingId, in: query, required: true, schema: { type: string } }
+      - { name: coverID, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: readRecordingCover
+      summary: Read a ready recording-bound standardized JPEG.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      responses:
+        '200':
+          description: Private no-store image/jpeg with nosniff; at most 1 MiB.
+          content:
+            image/jpeg: { schema: { type: string, format: binary } }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /priv/recording-packages/{packageID}/covers/{coverID}/retain:
+    parameters:
+      - { $ref: '#/components/parameters/RecordingPackageID' }
+      - { name: recordingId, in: query, required: true, schema: { type: string } }
+      - { name: coverID, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: retainRecordingCover
+      summary: Idempotently protect a ready image using a CMS selection reference.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [referenceId]
+              properties:
+                referenceId: { type: string, minLength: 1, maxLength: 160 }
+      responses:
+        '204': { description: Reference retained; conflicting reference reuse is rejected. }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /priv/recording-packages/{packageID}/covers/{coverID}/references/{referenceID}:
+    parameters:
+      - { $ref: '#/components/parameters/RecordingPackageID' }
+      - { name: recordingId, in: query, required: true, schema: { type: string } }
+      - { name: coverID, in: path, required: true, schema: { type: string } }
+      - { name: referenceID, in: path, required: true, schema: { type: string } }
+    delete:
+      operationId: releaseRecordingCover
+      summary: Idempotently release exactly one CMS image selection reference.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      responses:
+        '204': { description: Reference released or already absent. }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
   /priv/recording-packages/{packageID}/sign:
     parameters: [ { $ref: '#/components/parameters/RecordingPackageID' }, { $ref: '#/components/parameters/RecordingActorID' } ]
@@ -1151,7 +1403,7 @@ paths:
     post:
       operationId: issueRecordingPackageGrant
       summary: Issue an immutable package-prefix playback exchange after CMS entitlement checks.
-      description: Requires a ready CMS-owned package matching recordingId. The owning CMS must check the current viewer entitlement and publication before calling. Media retention and the supplied publication expiry clamp the one-hour playback credential; no mutable staging path is signed.
+      description: Requires a ready CMS-owned package matching recordingId. The owning CMS must check the current viewer entitlement and publication before calling. Media retention and the supplied publication expiry clamp the one-hour playback credential; no mutable staging path is signed. The authenticated playback base optionally serves previews/index.vtt (text/vtt) and previews/seg-NNNNNN.jpg (image/jpeg), each bounded to 1 MiB and authorized identically to HLS including cache hits. WEBVTT cues reference five-second 160x90 sprite cells relative to the index; absent previews return 404 without affecting video readiness. Derived paths are server-only and excluded from producer inventories and PUT signing. See docs/member-video-operations.md for the canonical preview contract.
       tags: [Private]
       x-hhc-visibility: private
       x-hhc-callers: [hhc-web-api]
@@ -1307,6 +1559,42 @@ components:
         method: { type: string, const: PUT }
         headers: { type: object, additionalProperties: { type: string } }
         expiresAt: { type: string, format: date-time }
+    RecordingCover:
+      type: object
+      required: [id, uploadId, kind, state]
+      properties:
+        id: { type: string, description: Opaque image identifier; not an object key. }
+        uploadId: { type: string }
+        kind: { type: string, enum: [auto, custom] }
+        state: { type: string, enum: [uploading, pending, processing, ready, failed, expired] }
+        operationKey: { type: string, description: Custom upload idempotency key. }
+    RecordingRetentionPolicy:
+      type: object
+      additionalProperties: false
+      required: [retentionDays, revision, activatedAt]
+      properties:
+        retentionDays: {type: integer, minimum: 1, maximum: 365}
+        revision: {type: integer, format: int64, minimum: 1}
+        activatedAt: {type: [string, 'null'], format: date-time, description: Null preserves legacy ready-time retention until explicit confirmed activation.}
+    RecordingRetentionPreview:
+      type: object
+      additionalProperties: false
+      required: [previewId, retentionDays, revision, evaluatedAt, affectedCount, affectedBytes]
+      properties:
+        previewId: {type: string}
+        retentionDays: {type: integer, minimum: 1, maximum: 365}
+        revision: {type: integer, format: int64, minimum: 1}
+        evaluatedAt: {type: string, format: date-time}
+        affectedCount: {type: integer, format: int64, minimum: 0}
+        affectedBytes: {type: integer, format: int64, minimum: 0}
+    UpdateRecordingRetentionInput:
+      type: object
+      additionalProperties: false
+      required: [retentionDays, expectedRevision, previewId]
+      properties:
+        retentionDays: {type: integer, minimum: 1, maximum: 365}
+        expectedRevision: {type: integer, format: int64, minimum: 1}
+        previewId: {type: string, minLength: 1}
     RecordingPackage:
       type: object
       additionalProperties: false
@@ -1321,7 +1609,9 @@ components:
         expiresAt: { type: string, format: date-time, description: Upload session expiry; not the ready media retention deadline. }
         inventory: { $ref: '#/components/schemas/RecordingPackageInventory' }
         readyAt: { type: string, format: date-time }
-        mediaExpiresAt: { type: string, format: date-time, description: First ready time plus thirty days; distinct from upload expiry. }
+        mediaExpiresAt: { type: string, format: date-time, description: Effective authoritative media expiry under the current retention policy; distinct from upload expiry. }
+        uploadedAt: {type: string, format: date-time, description: Immutable accepted upload completion; browser packages inherit source completion.}
+        retentionRevision: {type: integer, format: int64, minimum: 1}
     RecordingPackageStatus:
       type: object
       additionalProperties: false
@@ -1337,7 +1627,9 @@ components:
         nextCursor: { type: string, description: Last examined path; empty when this pass is complete. }
         readyAt: { type: string, format: date-time }
         mediaExpiresAt: { type: string, format: date-time }
-        renditions: { type: array, minItems: 1, maxItems: 2, items: { $ref: '#/components/schemas/RecordingRendition' } }
+        uploadedAt: {type: string, format: date-time}
+        retentionRevision: {type: integer, format: int64, minimum: 1}
+        renditions: { type: array, minItems: 1, maxItems: 3, items: { $ref: '#/components/schemas/RecordingRendition' } }
     SignedRecordingObject:
       allOf:
         - { $ref: '#/components/schemas/RecordingPartTarget' }
@@ -1368,7 +1660,7 @@ components:
         renditions:
           type: array
           minItems: 1
-          maxItems: 2
+          maxItems: 3
           items: { $ref: '#/components/schemas/RecordingRendition' }
         inventoryDigest: { type: string, pattern: '^[a-f0-9]{64}$' }
     RecordingPackageObject:
@@ -1378,7 +1670,7 @@ components:
       properties:
         path:
           type: string
-          pattern: '^(master\.m3u8|(720p|1080p)/(index\.m3u8|init\.mp4|seg-[0-9]{6}\.m4s))$'
+          pattern: '^(master\.m3u8|(480p|720p|1080p)/(index\.m3u8|init\.mp4|seg-[0-9]{6}\.m4s))$'
           description: Canonical relative path. Unique paths and every declared rendition's complete contiguous segment list are required. No URLs, encoded paths, queries or package.json.
         sizeBytes: { type: integer, format: int64, minimum: 1, maximum: 134217728, description: 'Playlists additionally have a 1048576-byte limit. Package total including inventory must be at most 10000000000 bytes.' }
         sha256: { type: string, pattern: '^[a-f0-9]{64}$' }
@@ -1387,14 +1679,14 @@ components:
       additionalProperties: false
       required: [name, width, height, frameRate, videoBitrate, audioBitrate, durationSeconds, segmentCount]
       properties:
-        name: { type: string, enum: [720p, 1080p], description: '720p is mandatory; 1080p optional. Names are unique.' }
-        width: { type: integer, minimum: 2, maximum: 1920, multipleOf: 2, description: '720p maximum width is 1280; source must never be upscaled.' }
-        height: { type: integer, minimum: 2, maximum: 1080, multipleOf: 2, description: '720p maximum height is 720. Actual dimensions are retained for smaller sources.' }
+        name: { type: string, enum: [480p, 720p, 1080p], description: '720p is mandatory for backward compatibility; 480p and 1080p optional. Names are unique; each additional rung has distinct dimensions and ordered bitrates.' }
+        width: { type: integer, minimum: 2, maximum: 1920, multipleOf: 2, description: '480p maximum width is 854; 720p maximum width is 1280; source must never be upscaled.' }
+        height: { type: integer, minimum: 2, maximum: 1080, multipleOf: 2, description: '480p maximum height is 480; 720p maximum height is 720. Actual dimensions are retained for smaller sources.' }
         frameRate: { type: number, exclusiveMinimum: 0, maximum: 30 }
         videoBitrate: { type: integer, minimum: 500000, maximum: 8000000 }
         audioBitrate: { type: integer, const: 128000 }
         durationSeconds: { type: number, exclusiveMinimum: 0, maximum: 43200 }
-        segmentCount: { type: integer, minimum: 1, maximum: 1440, description: 'ceil(durationSeconds/30); both renditions require aligned actual boundaries.' }
+        segmentCount: { type: integer, minimum: 1, maximum: 1440, description: 'ceil(durationSeconds/30); all renditions require aligned actual boundaries.' }
     RecordingPartTarget:
       type: object
       required: [url, method, headers]

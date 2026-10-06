@@ -28,11 +28,18 @@ var operationalColumnExclusions = map[string]string{
 }
 
 var governedTables = map[string]bool{
+	"recording_retention_policy":       true,
+	"recording_retention_previews":     true,
+	"recording_covers":                 true,
+	"recording_cover_attempts":         true,
+	"recording_cover_references":       true,
+	"recording_deletions":              true,
 	"recording_sources":                true,
 	"recording_source_attempts":        true,
 	"recording_packages":               true,
 	"recording_processing_slots":       true,
 	"recording_package_attempts":       true,
+	"recording_preview_attempts":       true,
 	"assets":                           true,
 	"upload_sessions":                  true,
 	"asset_grants":                     true,
@@ -53,9 +60,12 @@ func TestDataGovernanceManifest(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(raw), "account.avatar, account.dsr-export and account.dsr-supplement")
 	ids := []string{
+		"asset.recording-retention-policy", "asset.recording-retention-previews",
+		"asset.recording-covers", "asset.recording-cover-attempts", "asset.recording-cover-references",
+		"asset.recording-deletions",
 		"asset.recording-sources", "asset.recording-source-attempts",
 		"asset.recording-packages",
-		"asset.recording-processing-slots", "asset.recording-package-attempts",
+		"asset.recording-processing-slots", "asset.recording-package-attempts", "asset.recording-preview-attempts",
 		"asset.account-artifact-content", "asset.account-artifact-metadata", "asset.account-upload-sessions",
 		"asset.account-grants", "asset.account-scan-and-derivative-state", "asset.account-poison-events", "asset.account-purge-lifecycle",
 		"asset.account-cleanup-receipts",
@@ -248,9 +258,12 @@ func migratedColumns(t *testing.T) (map[string]struct{}, map[string]bool) {
 		t.Fatal(err)
 	}
 	tableNames := []string{
+		"recording_retention_policy", "recording_retention_previews",
+		"recording_covers", "recording_cover_attempts", "recording_cover_references",
+		"recording_deletions",
 		"recording_sources", "recording_source_attempts",
 		"recording_packages",
-		"recording_processing_slots", "recording_package_attempts",
+		"recording_processing_slots", "recording_package_attempts", "recording_preview_attempts",
 		"assets", "upload_sessions", "asset_grants", "asset_scan_events", "asset_derivatives",
 		"asset_scan_outbox", "asset_scan_poison_events", "asset_derivative_outbox", "asset_derivative_poison_events",
 		"audit_outboxes", "asset_account_cleanup_operations",
