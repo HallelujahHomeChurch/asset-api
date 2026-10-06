@@ -6,14 +6,86 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
 	"hhc/asset-api/internal/assets"
 )
+
+func TestPackagePipelineToolDeadlineJoinsChildren(t *testing.T) {
+	p, objects, probe := realPackageFixture(t)
+	tools := t.TempDir()
+	pids := filepath.Join(tools, "children")
+	probe.FFmpeg = filepath.Join(tools, "decoder")
+	if err := os.WriteFile(probe.FFmpeg, []byte(fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$$\" >> %q\nexec sleep 30\n", pids)), 0700); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	result := make(chan error, 1)
+	go func() {
+		_, err := FreezeRecordingPackage(ctx, p, "tool-deadline", objects, probe)
+		result <- err
+		close(result)
+	}()
+	defer func() {
+		cancel()
+		for range result {
+		}
+	}()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	var children []string
+	for len(children) < 2 {
+		data, err := os.ReadFile(pids)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+		children = strings.Fields(string(data))
+		if len(children) >= 2 {
+			break
+		}
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
+			t.Fatal("both decoder children did not start before deadline")
+		}
+	}
+	if err := <-result; !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("deadline root lost: %v", err)
+	}
+	for _, value := range children {
+		pid, err := strconv.Atoi(value)
+		if err != nil || !errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
+			t.Fatalf("decoder child not reaped: %q", value)
+		}
+	}
+	entries, err := os.ReadDir(probe.ScratchRoot)
+	if err != nil || len(entries) != 0 || objects.puts != 0 {
+		t.Fatalf("deadline left scratch or published inventory: entries=%v puts=%d err=%v", entries, objects.puts, err)
+	}
+}
+
+func TestPackagePipelineActualLowDisk(t *testing.T) {
+	root := os.Getenv("HHC_TEST_LOW_DISK_ROOT")
+	if root == "" {
+		t.Skip("requires dedicated small temporary filesystem")
+	}
+	p, objects := packageTransferFixture()
+	probe := PackageMediaProbe{FFmpeg: "/usr/bin/false", FFprobe: "/usr/bin/false", ScratchRoot: root}
+	if _, err := FreezeRecordingPackage(context.Background(), p, "low-disk", objects, probe); err == nil || !strings.Contains(err.Error(), "insufficient fragment scratch capacity") {
+		t.Fatalf("low disk not detected before tools: %v", err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 0 || objects.puts != 0 {
+		t.Fatalf("low disk left scratch or inventory: %v %d %v", entries, objects.puts, err)
+	}
+}
 
 func TestPackagePipelineActualFrameRates(t *testing.T) {
 	for _, frameRate := range []int{2, 24} {
