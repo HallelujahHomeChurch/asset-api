@@ -15,28 +15,29 @@ const RecordingSourceRetention = 7 * 24 * time.Hour
 // Sources are private recording inputs, never ordinary assets or scan jobs.
 // The durable finalizing row is the receipt permitting the browser to close.
 type RecordingSource struct {
-	ID                 string     `json:"sourceId"`
-	OwnerService       string     `json:"-"`
-	ActorID            string     `json:"-"`
-	RecordingID        string     `json:"recordingId"`
-	IdempotencyKey     string     `json:"-"`
-	FileName           string     `json:"fileName"`
-	SizeBytes          int64      `json:"sizeBytes"`
-	ChecksumSHA256     string     `json:"checksumSHA256"`
-	BlockCount         int        `json:"blockCount"`
-	State              string     `json:"state"`
-	CreatedAt          time.Time  `json:"createdAt"`
-	ExpiresAt          time.Time  `json:"expiresAt"`
-	CompletedAt        *time.Time `json:"completedAt,omitempty"`
-	RetryUntil         *time.Time `json:"retryUntil,omitempty"`
-	StagingETag        string     `json:"-"`
-	CopyAttemptID      string     `json:"-"`
-	SourceKey          string     `json:"-"`
-	SourceETag         string     `json:"-"`
-	SourceVerifiedAt   *time.Time `json:"-"`
-	ProcessingAttempts int        `json:"-"`
-	FailureCode        string     `json:"failureCode,omitempty"`
-	PackageID          string     `json:"packageId,omitempty"`
+	ID                 string                       `json:"sourceId"`
+	OwnerService       string                       `json:"-"`
+	ActorID            string                       `json:"-"`
+	RecordingID        string                       `json:"recordingId"`
+	IdempotencyKey     string                       `json:"-"`
+	FileName           string                       `json:"fileName"`
+	SizeBytes          int64                        `json:"sizeBytes"`
+	ChecksumSHA256     string                       `json:"checksumSHA256"`
+	BlockCount         int                          `json:"blockCount"`
+	State              string                       `json:"state"`
+	CreatedAt          time.Time                    `json:"createdAt"`
+	ExpiresAt          time.Time                    `json:"expiresAt"`
+	CompletedAt        *time.Time                   `json:"completedAt,omitempty"`
+	RetryUntil         *time.Time                   `json:"retryUntil,omitempty"`
+	StagingETag        string                       `json:"-"`
+	CopyAttemptID      string                       `json:"-"`
+	SourceKey          string                       `json:"-"`
+	SourceETag         string                       `json:"-"`
+	SourceVerifiedAt   *time.Time                   `json:"-"`
+	ProcessingAttempts int                          `json:"-"`
+	FailureCode        string                       `json:"failureCode,omitempty"`
+	PackageID          string                       `json:"packageId,omitempty"`
+	ProcessingProgress *RecordingProcessingProgress `json:"-"`
 }
 
 type CreateRecordingSourceInput struct {
@@ -55,8 +56,9 @@ type SignedRecordingSourceBlock struct {
 
 type RecordingSourceStatus struct {
 	RecordingSource
-	ConfirmedBlocks []int `json:"confirmedBlocks"`
-	NextCursor      int   `json:"nextCursor"`
+	ProcessingProgress *RecordingProcessingProgress `json:"processingProgress,omitempty"`
+	ConfirmedBlocks    []int                        `json:"confirmedBlocks"`
+	NextCursor         int                          `json:"nextCursor"`
 }
 
 type RecordingSourceRepository interface {
@@ -125,7 +127,7 @@ func (s *RecordingSourceService) Status(ctx context.Context, id, actor string, c
 	if limit < 1 || limit > 1000 || cursor < 0 || cursor > p.BlockCount {
 		return RecordingSourceStatus{}, ErrInvalidInput
 	}
-	page := RecordingSourceStatus{RecordingSource: p, ConfirmedBlocks: []int{}}
+	page := RecordingSourceStatus{RecordingSource: p, ProcessingProgress: p.ProcessingProgress, ConfirmedBlocks: []int{}}
 	if p.State != "uploading" {
 		return page, nil
 	}

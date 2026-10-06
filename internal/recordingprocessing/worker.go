@@ -23,14 +23,30 @@ func RunSourceProcessing(ctx context.Context, repository *postgres.RecordingSour
 	}
 	var inventory assets.RecordingPackageInventory
 	var processingErr error
+	progress := recordingvalidation.NewProcessingProgressTracker(*claim.Source.ProcessingProgress)
+	probe.OnProgress = progress.Report
+	flush := func(ctx context.Context) error {
+		return progress.Flush(ctx, time.Now().UTC(), func(ctx context.Context, value assets.RecordingProcessingProgress) error {
+			return repository.UpdateSourceProcessingProgress(ctx, claim.Source.ID, claim.ClaimID, value)
+		})
+	}
 	return true, recordingvalidation.RunProcessingClaim(ctx, func(ctx context.Context) error {
+		if err := flush(ctx); err != nil {
+			return err
+		}
 		return repository.HeartbeatSourceProcessing(ctx, claim.Source.ID, claim.ClaimID)
 	}, func(ctx context.Context) error {
 		inventory, processingErr = processSourceClaim(ctx, claim, func(ctx context.Context, copy assets.RecordingSourceCopy) error {
 			return repository.CheckpointSourceCopy(ctx, claim.Source.ID, claim.ClaimID, copy)
-		}, sources, outputs, probe)
+		}, sources, outputs, probe, func(phase string) error {
+			progress.Phase(phase, time.Now().UTC())
+			return flush(ctx)
+		})
 		return processingErr
 	}, func(ctx context.Context, ready bool, failure string) error {
+		if err := flush(ctx); err != nil {
+			return err
+		}
 		if ready {
 			return repository.FinishSourceProcessing(ctx, claim.Source.ID, claim.ClaimID, inventory)
 		}
@@ -44,7 +60,7 @@ func RunSourceProcessing(ctx context.Context, repository *postgres.RecordingSour
 func processSourceClaim(ctx context.Context, claim postgres.RecordingSourceClaim, checkpoint func(context.Context, assets.RecordingSourceCopy) error, sources SourceFinalizationObjects, outputs interface {
 	RecordingOutputObjects
 	recordingvalidation.PackageObjects
-}, probe recordingvalidation.PackageMediaProbe) (inventory assets.RecordingPackageInventory, result error) {
+}, probe recordingvalidation.PackageMediaProbe, phase func(string) error) (inventory assets.RecordingPackageInventory, result error) {
 	p := claim.Source
 	if p.SourceVerifiedAt == nil {
 		copy, err := FinalizeSource(ctx, p, p.CopyAttemptID, sources)
@@ -55,6 +71,11 @@ func processSourceClaim(ctx context.Context, claim postgres.RecordingSourceClaim
 			return inventory, err
 		}
 		p.SourceKey, p.SourceETag = copy.Key, copy.ETag
+	}
+	if phase != nil {
+		if err := phase("encoding"); err != nil {
+			return inventory, err
+		}
 	}
 	reader, err := NewSourceReader(ctx, sources, p.SourceKey, p.SizeBytes, p.SourceETag)
 	if err != nil {
@@ -80,6 +101,11 @@ func processSourceClaim(ctx context.Context, claim postgres.RecordingSourceClaim
 		return inventory, err
 	}
 	pkg := assets.RecordingPackage{ID: claim.ClaimID, Inventory: inventory, SizeBytes: size}
-	_, err = recordingvalidation.FreezeRecordingPackage(ctx, pkg, claim.ClaimID, outputs, probe.Validate)
+	if phase != nil {
+		if err := phase("package_validation"); err != nil {
+			return inventory, err
+		}
+	}
+	_, err = recordingvalidation.FreezeRecordingPackage(ctx, pkg, claim.ClaimID, outputs, probe)
 	return inventory, err
 }

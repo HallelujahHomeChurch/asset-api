@@ -73,37 +73,52 @@ func packageTransferFixture() (assets.RecordingPackage, *packageMemoryObjects) {
 }
 
 func TestImmutablePackageFinalSurvivesLateStagingPut(t *testing.T) {
-	p, objects := packageTransferFixture()
-	prefix, err := FreezeRecordingPackage(context.Background(), p, "attempt-a", objects, func(_ context.Context, inv assets.RecordingPackageInventory, prefix string) error {
-		objects.bytes[p.StagingKey("720p/seg-000000.m4s")] = []byte("changed")
-		if string(objects.bytes[prefix+"720p/seg-000000.m4s"]) != "segment" {
-			t.Fatal("late PUT changed the copy being probed")
-		}
-		return nil
-	})
+	p, objects, probe := realPackageFixture(t)
+	key := p.StagingKey("720p/seg-000000.m4s")
+	original := bytes.Clone(objects.bytes[key])
+	prefix, err := FreezeRecordingPackage(context.Background(), p, "attempt-a", lateMutationObjects{packageMemoryObjects: objects, key: key}, probe)
 	if err != nil || prefix != "recordings/packages/package-a/final/attempt-a/" {
 		t.Fatalf("freeze: %s %v", prefix, err)
 	}
 	if !bytes.Contains(objects.inventory, []byte(p.Inventory.InventoryDigest)) {
 		t.Fatal("control inventory not persisted")
 	}
+	if !bytes.Equal(objects.bytes[prefix+"720p/seg-000000.m4s"], original) || string(objects.bytes[key]) != "changed" {
+		t.Fatal("late staging write affected immutable validation")
+	}
+}
+
+type lateMutationObjects struct {
+	*packageMemoryObjects
+	key string
+}
+
+func (s lateMutationObjects) CopyPackageObject(ctx context.Context, from, to, etag string) error {
+	if err := s.packageMemoryObjects.CopyPackageObject(ctx, from, to, etag); err != nil {
+		return err
+	}
+	if from == s.key {
+		s.mu.Lock()
+		s.bytes[from] = []byte("changed")
+		s.mu.Unlock()
+	}
+	return nil
 }
 
 func TestPackageHashFailureNeverReachesMediaProbe(t *testing.T) {
 	p, objects := packageTransferFixture()
 	objects.bytes[p.StagingKey("720p/seg-000000.m4s")] = []byte("changed")
-	_, err := FreezeRecordingPackage(context.Background(), p, "attempt-a", objects, func(context.Context, assets.RecordingPackageInventory, string) error {
-		t.Fatal("invalid bytes reached media probe")
-		return nil
-	})
+	// These nonexistent tool paths must never run: hash failure is rejected first.
+	probe := PackageMediaProbe{FFmpeg: "/missing/ffmpeg", FFprobe: "/missing/ffprobe", ScratchRoot: t.TempDir()}
+	_, err := FreezeRecordingPackage(context.Background(), p, "attempt-a", objects, probe)
 	if !errors.Is(err, assets.ErrInvalidUpload) || objects.inventory != nil {
 		t.Fatalf("hash failure accepted: %v", err)
 	}
-	_, err = FreezeRecordingPackage(context.Background(), p, "attempt-a", objects, nil)
+	_, err = FreezeRecordingPackage(context.Background(), p, "attempt-a", objects, PackageMediaProbe{})
 	if !errors.Is(err, assets.ErrInvalidInput) {
 		t.Fatalf("missing media probe accepted: %v", err)
 	}
-	_, err = FreezeRecordingPackage(context.Background(), p, "../escape", objects, func(context.Context, assets.RecordingPackageInventory, string) error { return nil })
+	_, err = FreezeRecordingPackage(context.Background(), p, "../escape", objects, probe)
 	if !errors.Is(err, assets.ErrInvalidInput) {
 		t.Fatalf("unsafe attempt: %v", err)
 	}
@@ -122,10 +137,7 @@ func TestPackageUnsafePlaylistRejectedBeforeProbe(t *testing.T) {
 	}
 	p.Inventory.InventoryDigest, _ = assets.RecordingInventoryDigest(p.Inventory)
 	p.SizeBytes, _ = assets.ValidateRecordingInventory(p.Inventory)
-	_, err := FreezeRecordingPackage(context.Background(), p, "attempt-a", objects, func(context.Context, assets.RecordingPackageInventory, string) error {
-		t.Fatal("unsafe URI reached media probe")
-		return nil
-	})
+	_, err := FreezeRecordingPackage(context.Background(), p, "attempt-a", objects, PackageMediaProbe{FFmpeg: "/missing/ffmpeg", FFprobe: "/missing/ffprobe", ScratchRoot: t.TempDir()})
 	if !errors.Is(err, assets.ErrInvalidUpload) {
 		t.Fatalf("unsafe playlist accepted: %v", err)
 	}

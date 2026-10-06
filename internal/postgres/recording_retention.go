@@ -54,9 +54,9 @@ func retentionActor(ctx context.Context) (auditclient.Provenance, error) {
 
 // One consistent, bounded snapshot lets CMS filter/sort before pagination without
 // one provider request per recording or a second independently editable policy.
-func (s *RecordingPackageStore) RecordingLifecycle(ctx context.Context, bindings []assets.RecordingLifecycleBinding) (assets.RecordingLifecycleSnapshot, error) {
+func (s *RecordingPackageStore) RecordingLifecycle(ctx context.Context, bindings []assets.RecordingLifecycleBinding, sources []assets.RecordingSourceLifecycleBinding) (assets.RecordingLifecycleSnapshot, error) {
 	v := assets.RecordingLifecycleSnapshot{Items: []assets.RecordingPackageStatus{}}
-	if len(bindings) > 1000 {
+	if len(bindings)+len(sources) > 1000 {
 		return v, assets.ErrInvalidInput
 	}
 	ids := make([]string, 0, len(bindings))
@@ -68,6 +68,15 @@ func (s *RecordingPackageStore) RecordingLifecycle(ctx context.Context, bindings
 		wanted[b.PackageID] = b.RecordingID
 		ids = append(ids, b.PackageID)
 	}
+	sourceIDs := make([]string, 0, len(sources))
+	wantedSources := make(map[string]string, len(sources))
+	for _, b := range sources {
+		if b.SourceID == "" || b.RecordingID == "" || len(b.SourceID) > 80 || len(b.RecordingID) > 80 || wantedSources[b.SourceID] != "" {
+			return v, assets.ErrInvalidInput
+		}
+		wantedSources[b.SourceID] = b.RecordingID
+		sourceIDs = append(sourceIDs, b.SourceID)
+	}
 	tx, err := beginRecordingPolicyTx(ctx, s.db)
 	if err != nil {
 		return v, err
@@ -77,13 +86,19 @@ func (s *RecordingPackageStore) RecordingLifecycle(ctx context.Context, bindings
 	if err != nil {
 		return v, err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT id,recording_id,state,size_bytes,expires_at,completed_at,ready_at,media_expires_at,retention_revision FROM recording_packages WHERE id=ANY($1) AND owner_service='hhc-web-api'`, ids)
+	rows, err := tx.QueryContext(ctx, `SELECT id,recording_id,state,size_bytes,expires_at,completed_at,ready_at,media_expires_at,retention_revision,processing_progress FROM recording_packages WHERE id=ANY($1) AND owner_service='hhc-web-api'`, ids)
 	if err != nil {
 		return v, err
 	}
 	for rows.Next() {
 		var p assets.RecordingPackageStatus
-		if err := rows.Scan(&p.PackageID, &p.RecordingID, &p.State, &p.SizeBytes, &p.ExpiresAt, &p.UploadedAt, &p.ReadyAt, &p.MediaExpiresAt, &p.RetentionRevision); err != nil {
+		var progress []byte
+		if err := rows.Scan(&p.PackageID, &p.RecordingID, &p.State, &p.SizeBytes, &p.ExpiresAt, &p.UploadedAt, &p.ReadyAt, &p.MediaExpiresAt, &p.RetentionRevision, &progress); err != nil {
+			rows.Close()
+			return v, err
+		}
+		p.ProcessingProgress, err = decodeRecordingProgress(progress)
+		if err != nil {
 			rows.Close()
 			return v, err
 		}
@@ -101,6 +116,36 @@ func (s *RecordingPackageStore) RecordingLifecycle(ctx context.Context, bindings
 		return v, err
 	}
 	if len(v.Items) != len(bindings) {
+		return v, assets.ErrNotFound
+	}
+	rows, err = tx.QueryContext(ctx, `SELECT id,recording_id,state,processing_progress FROM recording_sources WHERE id=ANY($1) AND owner_service='hhc-web-api'`, sourceIDs)
+	if err != nil {
+		return v, err
+	}
+	for rows.Next() {
+		var p assets.RecordingSourceLifecycleStatus
+		var progress []byte
+		if err := rows.Scan(&p.SourceID, &p.RecordingID, &p.State, &progress); err != nil {
+			rows.Close()
+			return v, err
+		}
+		if wantedSources[p.SourceID] != p.RecordingID {
+			rows.Close()
+			return v, assets.ErrForbidden
+		}
+		p.ProcessingProgress, err = decodeRecordingProgress(progress)
+		if err != nil {
+			rows.Close()
+			return v, err
+		}
+		v.SourceItems = append(v.SourceItems, p)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return v, err
+	}
+	if len(v.SourceItems) != len(sources) {
 		return v, assets.ErrNotFound
 	}
 	return v, tx.Commit()

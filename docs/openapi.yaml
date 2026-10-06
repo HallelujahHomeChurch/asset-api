@@ -46,6 +46,17 @@ paths:
                     properties:
                       recordingId: {type: string, minLength: 1, maxLength: 80}
                       packageId: {type: string, minLength: 1, maxLength: 80}
+                sourceItems:
+                  type: array
+                  maxItems: 1000
+                  description: Optional owner-bound source bindings; combined items and sourceItems count is at most 1000.
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [recordingId, sourceId]
+                    properties:
+                      recordingId: {type: string, minLength: 1, maxLength: 80}
+                      sourceId: {type: string, minLength: 1, maxLength: 80}
       responses:
         '200':
           description: No-store authoritative policy and package lifecycle states.
@@ -58,6 +69,7 @@ paths:
                 properties:
                   policy: {$ref: '#/components/schemas/RecordingRetentionPolicy'}
                   items: {type: array, maxItems: 1000, items: {$ref: '#/components/schemas/RecordingPackageStatus'}}
+                  sourceItems: {type: array, maxItems: 1000, items: {$ref: '#/components/schemas/RecordingSourceLifecycleStatus'}}
         '400': {$ref: '#/components/responses/Error'}
         '403': {$ref: '#/components/responses/Error'}
         '404': {$ref: '#/components/responses/Error'}
@@ -1511,6 +1523,34 @@ components:
     CollectionACLMutation: { description: Collection ACL mutation., content: { application/json: { schema: { $ref: '#/components/schemas/CollectionACLMutation' } } } }
     DeleteCollectionItems: { description: Collection deletion result., content: { application/json: { schema: { $ref: '#/components/schemas/DeleteCollectionItemsResult' } } } }
   schemas:
+    RecordingProcessingProgress:
+      type: object
+      additionalProperties: false
+      description: Advisory attempt-scoped progress only. Missing counters mean unknown; heartbeat never implies forward progress or readiness.
+      required: [attempt, phase, attemptStartedAt, phaseStartedAt, lastProgressAt, heartbeatAt]
+      properties:
+        attempt: {type: integer, minimum: 0, maximum: 3}
+        phase: {type: string, enum: [queued, source_finalization, encoding, package_validation, package_finalization]}
+        rendition: {type: string, enum: [480p, 720p, 1080p]}
+        objectsVerified: {type: integer, format: int64, minimum: 0}
+        objectsTotal: {type: integer, format: int64, minimum: 0}
+        segmentsVerified: {type: integer, format: int64, minimum: 0}
+        segmentsTotal: {type: integer, format: int64, minimum: 0}
+        bytesVerified: {type: integer, format: int64, minimum: 0}
+        bytesTotal: {type: integer, format: int64, minimum: 0}
+        attemptStartedAt: {type: string, format: date-time}
+        phaseStartedAt: {type: string, format: date-time}
+        lastProgressAt: {type: string, format: date-time}
+        heartbeatAt: {type: string, format: date-time}
+    RecordingSourceLifecycleStatus:
+      type: object
+      additionalProperties: false
+      required: [sourceId, recordingId, state]
+      properties:
+        sourceId: {type: string}
+        recordingId: {type: string}
+        state: {type: string, enum: [uploading, finalizing, queued, processing, ready, failed, expired]}
+        processingProgress: {$ref: '#/components/schemas/RecordingProcessingProgress'}
     RecordingSource:
       type: object
       additionalProperties: false
@@ -1534,6 +1574,7 @@ components:
       additionalProperties: false
       required: [sourceId, recordingId, fileName, sizeBytes, checksumSHA256, blockCount, state, createdAt, expiresAt, confirmedBlocks, nextCursor]
       properties:
+        processingProgress: {$ref: '#/components/schemas/RecordingProcessingProgress'}
         failureCode: { type: string, enum: [invalid, retry, exhausted] }
         packageId: { type: string, description: Present only after the whole package is verified and ready. }
         sourceId: { type: string, pattern: '^[a-f0-9]{32}$' }
@@ -1617,6 +1658,7 @@ components:
       additionalProperties: false
       required: [packageId, sessionId, recordingId, state, sizeBytes, expiresAt, confirmedObjects, nextCursor]
       properties:
+        processingProgress: {$ref: '#/components/schemas/RecordingProcessingProgress'}
         packageId: { type: string }
         sessionId: { type: string }
         recordingId: { type: string }

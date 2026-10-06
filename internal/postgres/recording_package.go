@@ -24,19 +24,23 @@ func (s *RecordingPackageStore) WithSessionLock(ctx context.Context, id string, 
 }
 
 const recordingPackageColumns = `id,session_id,owner_service,actor_id,recording_id,idempotency_key,state,size_bytes,created_at,expires_at,inventory`
-const recordingPackageSelectColumns = recordingPackageColumns + `,COALESCE(final_prefix,''),ready_at,media_expires_at,completed_at,retention_revision`
+const recordingPackageSelectColumns = recordingPackageColumns + `,COALESCE(final_prefix,''),ready_at,media_expires_at,completed_at,retention_revision,processing_progress`
 
 func scanRecordingPackage(row *sql.Row) (assets.RecordingPackage, error) {
 	var p assets.RecordingPackage
 	var inventory []byte
-	err := row.Scan(&p.ID, &p.SessionID, &p.OwnerService, &p.ActorID, &p.RecordingID, &p.IdempotencyKey, &p.State, &p.SizeBytes, &p.CreatedAt, &p.ExpiresAt, &inventory, &p.FinalPrefix, &p.ReadyAt, &p.MediaExpiresAt, &p.UploadedAt, &p.RetentionRevision)
+	var progress []byte
+	err := row.Scan(&p.ID, &p.SessionID, &p.OwnerService, &p.ActorID, &p.RecordingID, &p.IdempotencyKey, &p.State, &p.SizeBytes, &p.CreatedAt, &p.ExpiresAt, &inventory, &p.FinalPrefix, &p.ReadyAt, &p.MediaExpiresAt, &p.UploadedAt, &p.RetentionRevision, &progress)
 	if errors.Is(err, sql.ErrNoRows) {
 		return p, assets.ErrNotFound
 	}
 	if err != nil {
 		return p, err
 	}
-	err = json.Unmarshal(inventory, &p.Inventory)
+	if err := json.Unmarshal(inventory, &p.Inventory); err != nil {
+		return p, err
+	}
+	p.ProcessingProgress, err = decodeRecordingProgress(progress)
 	return p, err
 }
 
@@ -193,7 +197,7 @@ func (s *RecordingPackageStore) HeartbeatPackageValidation(ctx context.Context, 
 		if _, err := tx.ExecContext(ctx, `UPDATE recording_processing_slots SET leased_until=clock_timestamp()+interval '2 minutes' WHERE claim_id=$1`, claimID); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, `UPDATE recording_packages SET claimed_until=clock_timestamp()+interval '2 minutes',processing_progress=CASE WHEN processing_progress IS NULL THEN NULL ELSE jsonb_set(processing_progress,'{heartbeatAt}',to_jsonb(clock_timestamp())) END WHERE id=$1`, id)
+		_, err := tx.ExecContext(ctx, `UPDATE recording_packages SET claimed_until=clock_timestamp()+interval '2 minutes',processing_progress=CASE WHEN processing_progress IS NULL THEN NULL ELSE jsonb_set(processing_progress,'{heartbeatAt}',to_jsonb(GREATEST(clock_timestamp(),(processing_progress->>'heartbeatAt')::timestamptz))) END WHERE id=$1`, id)
 		return err
 	})
 }

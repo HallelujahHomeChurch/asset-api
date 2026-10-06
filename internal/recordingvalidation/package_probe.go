@@ -24,128 +24,18 @@ import (
 type PackageMediaProbe struct {
 	Objects                      PackageObjects
 	FFmpeg, FFprobe, ScratchRoot string
+	OnProgress                   func(assets.RecordingProcessingProgress)
 }
 
-// Validate decodes one bounded init+fragment at a time. Untrusted media cannot
+// Validate decodes bounded init+fragments. Untrusted media cannot
 // make ffmpeg open network protocols; scratch never contains the full package.
 func (p PackageMediaProbe) Validate(ctx context.Context, inv assets.RecordingPackageInventory, prefix string) (result error) {
 	if p.Objects == nil || !filepath.IsAbs(p.FFmpeg) || !filepath.IsAbs(p.FFprobe) {
 		return assets.ErrInvalidInput
 	}
-	dir, err := os.MkdirTemp(p.ScratchRoot, "hhc-fragment-")
-	if err != nil {
-		return err
-	}
-	defer func() { result = errors.Join(result, os.RemoveAll(dir)) }()
 	sizes := map[string]int64{}
 	for _, o := range inv.Objects {
 		sizes[o.Path] = o.SizeBytes
-	}
-	var reference []segmentProbe
-	codecs := map[string]string{}
-	for _, r := range inv.Renditions {
-		var timeline []segmentProbe
-		for i := 0; i < r.SegmentCount; i++ {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			path := filepath.Join(dir, "fragment.mp4")
-			var disk syscall.Statfs_t
-			if err := syscall.Statfs(dir, &disk); err != nil {
-				return err
-			}
-			required := sizes[r.Name+"/init.mp4"] + sizes[fmt.Sprintf("%s/seg-%06d.m4s", r.Name, i)] + (64 << 20)
-			if required <= 64<<20 || required > 2*assets.RecordingObjectMaxBytes+(64<<20) || uint64(required)/uint64(disk.Bsize)+1 > disk.Bavail {
-				return errors.New("insufficient fragment scratch capacity")
-			}
-			file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-			if err != nil {
-				return err
-			}
-			copyErr := func() error {
-				for _, name := range []string{r.Name + "/init.mp4", fmt.Sprintf("%s/seg-%06d.m4s", r.Name, i)} {
-					size := sizes[name]
-					if size <= 0 || size > assets.RecordingObjectMaxBytes {
-						return assets.ErrInvalidUpload
-					}
-					body, err := p.Objects.Open(ctx, prefix+name)
-					if err != nil {
-						return err
-					}
-					n, err := io.Copy(file, io.LimitReader(body, size+1))
-					err = errors.Join(err, body.Close())
-					if err != nil {
-						return err
-					}
-					if n != size {
-						return assets.ErrInvalidUpload
-					}
-				}
-				return nil
-			}()
-			if err := errors.Join(copyErr, file.Close()); err != nil {
-				return err
-			}
-			data, err := ProbeCommand(ctx, p.FFprobe, "-v", "error", "-protocol_whitelist", "file", "-enable_drefs", "0", "-use_absolute_path", "0", "-show_data", "-show_streams", "-show_packets", "-show_entries", "stream=index,codec_type,codec_name,width,height,pix_fmt,sample_rate,channels,profile,r_frame_rate,sample_aspect_ratio,extradata:packet=stream_index,pts_time,duration_time,flags", "-of", "json", path)
-			if err != nil {
-				return err
-			}
-			actual, err := validatePackageSegmentProbe(data, r)
-			if err != nil {
-				return fmt.Errorf("segment stream or timeline: %w", err)
-			}
-			first, err := ProbeCommand(ctx, p.FFprobe, "-v", "error", "-protocol_whitelist", "file", "-enable_drefs", "0", "-use_absolute_path", "0", "-select_streams", "v:0", "-read_intervals", "%+#1", "-show_packets", "-show_data", "-show_entries", "packet=flags,data", "-of", "json", path)
-			if err != nil {
-				return err
-			}
-			if err := validateFirstIDRPacket(first); err != nil {
-				return fmt.Errorf("segment IDR: %w", err)
-			}
-			if i == 0 {
-				if actual.Start < -0.1 || actual.Start > 0.25 {
-					return assets.ErrInvalidUpload
-				}
-				codecs[r.Name] = actual.Codecs
-			} else if math.Abs(actual.Start-timeline[i-1].End) > 1/r.FrameRate+0.001 || actual.Codecs != codecs[r.Name] {
-				return fmt.Errorf("segment decode: %w", assets.ErrInvalidUpload)
-			}
-			if i < r.SegmentCount-1 && math.Abs(actual.End-actual.Start-30) > 1/r.FrameRate+0.001 {
-				return assets.ErrInvalidUpload
-			}
-			decodeCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-			err = exec.CommandContext(decodeCtx, p.FFmpeg, "-nostdin", "-v", "error", "-xerror", "-protocol_whitelist", "file", "-enable_drefs", "0", "-use_absolute_path", "0", "-threads", "2", "-i", path, "-map", "0:v:0", "-map", "0:a:0", "-f", "null", "-").Run()
-			deadlineErr := decodeCtx.Err()
-			cancel()
-			if err != nil {
-				if deadlineErr != nil {
-					return deadlineErr
-				}
-				var exit *exec.ExitError
-				if !errors.As(err, &exit) || exit.ExitCode() < 0 {
-					return errors.New("media decoder unavailable or terminated")
-				}
-				return assets.ErrInvalidUpload
-			}
-			if err := os.Remove(path); err != nil {
-				return err
-			}
-			timeline = append(timeline, actual)
-		}
-		if len(timeline) == 0 || math.Abs(timeline[len(timeline)-1].End-timeline[0].Start-r.DurationSeconds) > 1/r.FrameRate+0.001 {
-			return assets.ErrInvalidUpload
-		}
-		if reference != nil {
-			if len(reference) != len(timeline) {
-				return assets.ErrInvalidUpload
-			}
-			for i, t := range timeline {
-				if math.Abs(t.Start-reference[i].Start) > 1/r.FrameRate+0.001 || math.Abs(t.End-reference[i].End) > 1/r.FrameRate+0.001 {
-					return assets.ErrInvalidUpload
-				}
-			}
-		} else {
-			reference = timeline
-		}
 	}
 	body, err := p.Objects.Open(ctx, prefix+"master.m3u8")
 	if err != nil {
@@ -156,10 +46,58 @@ func (p PackageMediaProbe) Validate(ctx context.Context, inv assets.RecordingPac
 	if err != nil {
 		return err
 	}
-	if err := assets.ValidateRecordingMasterCodecs(inv, master, codecs); err != nil {
-		return fmt.Errorf("master codecs: %w", err)
+	read := func(ctx context.Context, name string, w io.Writer) error {
+		size := sizes[name]
+		if size <= 0 || size > assets.RecordingObjectMaxBytes {
+			return assets.ErrInvalidUpload
+		}
+		body, err := p.Objects.Open(ctx, prefix+name)
+		if err != nil {
+			return err
+		}
+		n, readErr := io.Copy(w, io.LimitReader(body, size+1))
+		if err := errors.Join(readErr, body.Close()); err != nil {
+			return err
+		}
+		if n != size {
+			return assets.ErrInvalidUpload
+		}
+		return nil
 	}
-	return nil
+	return p.validateMedia(ctx, inv, master, read, read)
+}
+
+func (p PackageMediaProbe) probeFragment(ctx context.Context, path string, r assets.RecordingRendition) (segmentProbe, error) {
+	data, err := ProbeCommand(ctx, p.FFprobe, "-v", "error", "-protocol_whitelist", "file", "-enable_drefs", "0", "-use_absolute_path", "0", "-show_data", "-show_streams", "-show_packets", "-show_entries", "stream=index,codec_type,codec_name,width,height,pix_fmt,sample_rate,channels,profile,r_frame_rate,sample_aspect_ratio,extradata:packet=stream_index,pts_time,duration_time,flags", "-of", "json", path)
+	if err != nil {
+		return segmentProbe{}, err
+	}
+	actual, err := validatePackageSegmentProbe(data, r)
+	if err != nil {
+		return segmentProbe{}, fmt.Errorf("segment stream or timeline: %w", err)
+	}
+	first, err := ProbeCommand(ctx, p.FFprobe, "-v", "error", "-protocol_whitelist", "file", "-enable_drefs", "0", "-use_absolute_path", "0", "-select_streams", "v:0", "-read_intervals", "%+#1", "-show_packets", "-show_data", "-show_entries", "packet=flags,data", "-of", "json", path)
+	if err != nil {
+		return segmentProbe{}, err
+	}
+	if err := validateFirstIDRPacket(first); err != nil {
+		return segmentProbe{}, fmt.Errorf("segment IDR: %w", err)
+	}
+	decodeCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	err = exec.CommandContext(decodeCtx, p.FFmpeg, "-nostdin", "-v", "error", "-xerror", "-protocol_whitelist", "file", "-enable_drefs", "0", "-use_absolute_path", "0", "-threads", "2", "-i", path, "-map", "0:v:0", "-map", "0:a:0", "-f", "null", "-").Run()
+	deadlineErr := decodeCtx.Err()
+	cancel()
+	if err != nil {
+		if deadlineErr != nil {
+			return segmentProbe{}, deadlineErr
+		}
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() < 0 {
+			return segmentProbe{}, errors.New("media decoder unavailable or terminated")
+		}
+		return segmentProbe{}, assets.ErrInvalidUpload
+	}
+	return actual, nil
 }
 
 // ProbeCommand shares the existing bounded, deadline-limited metadata runner

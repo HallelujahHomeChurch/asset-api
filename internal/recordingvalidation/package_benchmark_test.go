@@ -114,7 +114,7 @@ func BenchmarkPackageValidation(b *testing.B) {
 	b.SetBytes(p.SizeBytes)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := FreezeRecordingPackage(context.Background(), p, fmt.Sprintf("bench-%d", i), objects, probe.Validate); err != nil {
+		if _, err := FreezeRecordingPackage(context.Background(), p, fmt.Sprintf("bench-%d", i), objects, probe); err != nil {
 			b.Fatal(err)
 		}
 	}

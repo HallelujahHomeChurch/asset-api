@@ -100,7 +100,7 @@ func (s *RecordingSourceStore) HeartbeatSourceProcessing(ctx context.Context, id
 		if _, err := tx.ExecContext(ctx, `UPDATE recording_processing_slots SET leased_until=clock_timestamp()+interval '2 minutes' WHERE claim_id=$1`, claim); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, `UPDATE recording_sources SET claimed_until=clock_timestamp()+interval '2 minutes',processing_progress=CASE WHEN processing_progress IS NULL THEN NULL ELSE jsonb_set(processing_progress,'{heartbeatAt}',to_jsonb(clock_timestamp())) END WHERE id=$1`, id)
+		_, err := tx.ExecContext(ctx, `UPDATE recording_sources SET claimed_until=clock_timestamp()+interval '2 minutes',processing_progress=CASE WHEN processing_progress IS NULL THEN NULL ELSE jsonb_set(processing_progress,'{heartbeatAt}',to_jsonb(GREATEST(clock_timestamp(),(processing_progress->>'heartbeatAt')::timestamptz))) END WHERE id=$1`, id)
 		return err
 	})
 }

@@ -10,7 +10,7 @@ import (
 )
 
 type RecordingRetentionStore interface {
-	RecordingLifecycle(context.Context, []assets.RecordingLifecycleBinding) (assets.RecordingLifecycleSnapshot, error)
+	RecordingLifecycle(context.Context, []assets.RecordingLifecycleBinding, []assets.RecordingSourceLifecycleBinding) (assets.RecordingLifecycleSnapshot, error)
 	GetRetentionPolicy(context.Context) (assets.RecordingRetentionPolicy, error)
 	PreviewRetentionPolicy(context.Context, int) (assets.RecordingRetentionPreview, error)
 	UpdateRetentionPolicy(context.Context, assets.UpdateRecordingRetentionInput) (assets.RecordingRetentionPolicy, error)
@@ -21,12 +21,13 @@ func (h *Handler) recordingLifecycle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Items []assets.RecordingLifecycleBinding `json:"items"`
+		Items       []assets.RecordingLifecycleBinding       `json:"items"`
+		SourceItems []assets.RecordingSourceLifecycleBinding `json:"sourceItems"`
 	}
 	if !decodeJSON(w, r, &in) {
 		return
 	}
-	v, err := h.recordingRetention.RecordingLifecycle(r.Context(), in.Items)
+	v, err := h.recordingRetention.RecordingLifecycle(r.Context(), in.Items, in.SourceItems)
 	if err != nil {
 		handleError(w, err)
 		return
