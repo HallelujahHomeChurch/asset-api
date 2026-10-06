@@ -29,7 +29,9 @@ func TestBrowserEncodeReadsRangesAndSpoolsThirtySecondHLS(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	path := filepath.Join(t.TempDir(), "source.mp4")
-	if out, err := exec.CommandContext(ctx, ffmpeg, "-v", "error", "-nostdin", "-f", "lavfi", "-i", "color=s=1920x1080:r=30", "-f", "lavfi", "-i", "sine=sample_rate=48000", "-t", "35", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", path).CombinedOutput(); err != nil {
+	// Preserve the final video frame when a source stops audio 150 ms early;
+	// the resulting package must still pass the independent fragment validator.
+	if out, err := exec.CommandContext(ctx, ffmpeg, "-v", "error", "-nostdin", "-f", "lavfi", "-i", "color=s=1920x1080:r=30", "-f", "lavfi", "-i", "sine=sample_rate=48000:duration=34.85", "-t", "35", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", path).CombinedOutput(); err != nil {
 		t.Fatalf("source fixture %v %s", err, out)
 	}
 	data, err := os.ReadFile(path)
