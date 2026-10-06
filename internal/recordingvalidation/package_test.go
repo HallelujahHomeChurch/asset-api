@@ -8,17 +8,23 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 
 	"hhc/asset-api/internal/assets"
 )
 
 type packageMemoryObjects struct {
-	bytes     map[string][]byte
-	inventory []byte
+	mu                                      sync.Mutex
+	bytes                                   map[string][]byte
+	inventory                               []byte
+	heads, copies, opens, puts, openedBytes int64
 }
 
 func (s *packageMemoryObjects) Head(_ context.Context, key string) (int64, string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.heads++
 	b, ok := s.bytes[key]
 	if !ok {
 		return 0, "", assets.ErrNotFound
@@ -26,13 +32,23 @@ func (s *packageMemoryObjects) Head(_ context.Context, key string) (int64, strin
 	return int64(len(b)), "etag", nil
 }
 func (s *packageMemoryObjects) CopyPackageObject(_ context.Context, from, to, _ string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.copies++
 	s.bytes[to] = bytes.Clone(s.bytes[from])
 	return nil
 }
 func (s *packageMemoryObjects) Open(_ context.Context, key string) (io.ReadCloser, error) {
-	return io.NopCloser(bytes.NewReader(s.bytes[key])), nil
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.opens++
+	s.openedBytes += int64(len(s.bytes[key]))
+	return io.NopCloser(bytes.NewReader(bytes.Clone(s.bytes[key]))), nil
 }
 func (s *packageMemoryObjects) PutPackageInventory(_ context.Context, key string, data []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.puts++
 	s.inventory = bytes.Clone(data)
 	s.bytes[key] = bytes.Clone(data)
 	return nil
