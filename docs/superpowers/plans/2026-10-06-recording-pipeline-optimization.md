@@ -40,6 +40,7 @@
 | frontend-platform | `packages/hhc-web-client/{openapi/hhc-web-api.yaml,src/generated.ts,src/index.ts,src/client.test.ts,package.json}`：schema／SDK／版本 |
 | hhc-cli | `internal/{api/packages.go,recordings/upload.go,recordings/prepare.go,media/prepare.go,cli/progress.go}`、既有 test 與 bundled skill：進度及操作指引 |
 | admin-fe | `src/lib/cms-api.ts`、`src/pages/recordings/{RecordingDetailPage.tsx,editor-labels.ts,RecordingPages.test.tsx}`：既有資訊區與五秒輪詢 |
+| hhc-web | 追加的獨立字體修正：`scripts/subset-display-font.sh`、`src/components/display-font.test.tsx`、banner font assets；不改版型／影音文案 |
 | api-gateway | 核對 routes／管理權限／service actor 與 contract bundling；若 routing contract 未變不做無關修改 |
 
 新增 migration 編號以執行前 latest main 為準：若 035 已被其他變更使用，改用下一個空號，不能覆寫既有 migration。
@@ -157,13 +158,27 @@ if result.RequestedActionSatisfied { t.Fatal("failed requested cover was reporte
 - [ ] 記container runtime與allocated-resource seconds，Execution start/end不能直接当bill；R2操作數／bytes需counter或provider evidence；正式帳單未知獨立列未驗收。cron成本量測但不改排程／身份。
 - [ ] report self-review：超105%、端到端未改善或可靠性回歸時停止效能發布；候選throughput不等於productionSLA。提交 `docs: record recording pipeline performance and cost evidence`。
 
+## Task 7A：首頁／影音專區副標字體修正（獨立前台 bugfix）
+
+使用者追加：影音專區副標「近期聚會錄影」的「期」字體不一致。文字保持不變，整句與原先 banner 字體對齊；不重設計 layout、不逐字用 span／特殊 CSS 掩蓋缺字。此工作與效能 pipeline 無資料依賴，可獨立驗證與 PR。
+
+**Files:** `hhc-web/scripts/subset-display-font.sh`、`src/components/display-font.test.tsx`、`src/assets/fonts/{chenyuluoyan,ma-shan-zheng,klee-one,hhc-pen-hangul}/*HHC-Banners.woff2`（只有實際需要更新的字集）、`src/app/fonts.ts`與`src/app/[locale]/member-videos/page.tsx`（只有根因需要時修改）。
+
+**Interfaces:** 復用現有 banner font／locale 與 subset script。唯讀初查發現字集來源列出 home／news／about／literatureMinistry，尚需確認 latest main 是否包含 memberVideos；字集缺字是待驗證假說，不當成已確認根因。
+
+- [ ] 實作前讀 hhc-web AGENTS／README 與此版本 Next.js 本機指南；沿頁面→共享 Hero→font class→實際 woff2 cmap 確認「期」U+671F 及整句文字實際使用的 glyph，先重現桌面／手機差異並記錄 rendered font。不能只用 font-family computed style 證明無 fallback。
+- [ ] 加回歸測試 `includes every member-video banner character in its locale subset`：以各語系 `memberVideos.heroTitle`／`heroSubtitle` 列出的非空白字元檢查 subset cmap；另斷言副標沿用該 locale 的 banner class。先確認現有資產是否使字集測試失敗。
+- [ ] 若根因為 subset，將 memberVideos banner 文案納入既有 script 並重產必要字體；不得只硬塞「期」或載入整套大字體。若 cmap 已含字，改修實際字體載入／locale／class 根因，不做无關重產。保留 font source／license pinned hash、static budget 與其他 banner。
+- [ ] 跑 `corepack pnpm test:run`、`corepack pnpm lint`、`corepack pnpm build`；沿既有字集工具驗證生成產物與 static budgets。桌面／手機畫面確認「近期聚會錄影」整句字型、字重一致，不改文字與尺寸；其他語系／既有banner無回歸。
+- [ ] 以獨立 hhc-web 分支／PR 提交 `fix: keep member video banner glyphs consistent`；沿既有 merged-main release／public route smoke，與 Task 8 分開記錄此 UI 修正的測試、發布與實機驗收。
+
 ## Task 8：PR／CI／相容發布／正式驗收
 
 **Files:** 各repo既有`.github/workflows/{ci,release}.yml`、Asset`docs/member-video-operations.md`與Task7報告；只在必要時修改精確contract artifact／manifest，不改部署資源。
 
 - [ ] Native執行建議：此session主代理依task sequential實作，每個owner完成先完整CI，所有diff最後請獨立顧問唯讀review；不自行使用更高model或再spawn實作agent，除非使用者選定／授權。
 - [ ] 用repo精確檔案清单commit／push task branch，`gh pr create`後逐一attach artifact；required checks green，不bypass security掃描或已有新CVE。先owner contract/progress PR，再consumer PR，Benchmark report列本機／雲端未知範圍。
-- [ ] 取得本輪merge／release授權後，Asset→CMS→shared→CLI／Admin順序merge，deployable owner用既有merged-main CI/CD；source storage provision workflow不執行。
+- [ ] 取得本輪merge／release授權後，Asset→CMS→shared→CLI／Admin順序merge；獨立 hhc-web 字體 PR 不依賴這些契約，可在自己的 CI green 後另行發布。deployable owner用既有merged-main CI/CD；source storage provision workflow不執行。
 - [ ] Asset `Production Release`：merge程式會觸發；manual只可 `gh workflow run release.yml --ref main -f confirmation=deploy-asset-api-production`且已批准，其他approval／failureinputs保留false。CMS confirmation `deploy-hhc-web-api-production`；Admin `deploy-admin-fe-production`，同樣只能merged main。
 - [ ] shared先核對root/package版本與已發行tags，再只在已merged commit打符合root版本的v tag，執行既有publish。CLI核對最新version／release後選下一個patch（目前1.1.1，不預先保證tag），merged commit打穩定v tag，既有signed Release出Windows/macOS native bundles；不覆寫release asset。
 - [ ] live smoke確認latestReady revision／immutable API與recording image digest、4CPU8GiB／cron／slots未變、health／ready、管理schema與未授權媒體仍拒絕。authorized真實影片由使用者測CLI／播放，不自行publishproductiontest。
