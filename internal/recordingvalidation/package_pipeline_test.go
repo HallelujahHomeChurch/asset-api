@@ -3,6 +3,7 @@ package recordingvalidation
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -13,6 +14,20 @@ import (
 
 	"hhc/asset-api/internal/assets"
 )
+
+func TestPackagePipelineActualFrameRates(t *testing.T) {
+	for _, frameRate := range []int{2, 24} {
+		t.Run(fmt.Sprint(frameRate), func(t *testing.T) {
+			p, objects, probe := realPackageFixtureAtFrameRate(t, frameRate)
+			if _, err := FreezeRecordingPackage(context.Background(), p, "frame-rate", objects, probe); err != nil {
+				t.Fatal(err)
+			}
+			if objects.opens != int64(len(p.Inventory.Objects)) || objects.puts != 1 {
+				t.Fatalf("frame rate %d: GET=%d inventory PUT=%d", frameRate, objects.opens, objects.puts)
+			}
+		})
+	}
+}
 
 func TestPackagePipelineSingleReadAndBound(t *testing.T) {
 	p, objects, probe := realPackageFixture(t)

@@ -51,6 +51,10 @@ func TestPackageObjectsConcurrentFixture(t *testing.T) {
 }
 
 func realPackageFixture(t testing.TB) (assets.RecordingPackage, *packageMemoryObjects, PackageMediaProbe) {
+	return realPackageFixtureAtFrameRate(t, 30)
+}
+
+func realPackageFixtureAtFrameRate(t testing.TB, frameRate int) (assets.RecordingPackage, *packageMemoryObjects, PackageMediaProbe) {
 	t.Helper()
 	ffmpeg, err := exec.LookPath("ffmpeg")
 	if err != nil {
@@ -61,13 +65,14 @@ func realPackageFixture(t testing.TB) (assets.RecordingPackage, *packageMemoryOb
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	args := []string{"-nostdin", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=30", "-f", "lavfi", "-i", "sine=sample_rate=48000", "-t", "35", "-c:v", "libx264", "-threads", "2", "-preset", "ultrafast", "-profile:v", "baseline", "-level:v", "3.1", "-pix_fmt", "yuv420p", "-g", "900", "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-f", "hls", "-hls_time", "30", "-hls_playlist_type", "vod", "-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", "init.mp4", "-hls_segment_filename", filepath.Join(dir, "seg-%06d.m4s"), filepath.Join(dir, "index.m3u8")}
+	args := []string{"-nostdin", "-v", "error", "-f", "lavfi", "-i", fmt.Sprintf("testsrc2=size=1280x720:rate=%d", frameRate), "-f", "lavfi", "-i", "sine=sample_rate=48000", "-t", "35", "-c:v", "libx264", "-threads", "2", "-preset", "ultrafast", "-profile:v", "baseline", "-level:v", "3.1", "-pix_fmt", "yuv420p", "-g", fmt.Sprint(30 * frameRate), "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-f", "hls", "-hls_time", "30", "-hls_playlist_type", "vod", "-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", "init.mp4", "-hls_segment_filename", filepath.Join(dir, "seg-%06d.m4s"), filepath.Join(dir, "index.m3u8")}
 	if out, err := exec.Command(ffmpeg, args...).CombinedOutput(); err != nil {
 		t.Fatalf("generate media: %v %s", err, out)
 	}
 	p, objects := packageTransferFixture()
 	p.Inventory.Renditions[0].DurationSeconds = 35
 	p.Inventory.Renditions[0].SegmentCount = 2
+	p.Inventory.Renditions[0].FrameRate = float64(frameRate)
 	p.Inventory.Objects = append(p.Inventory.Objects, assets.RecordingPackageObject{Path: "720p/seg-000001.m4s"})
 	objects.bytes[p.StagingKey("master.m3u8")] = []byte("#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-INDEPENDENT-SEGMENTS\n#EXT-X-STREAM-INF:BANDWIDTH=12,AVERAGE-BANDWIDTH=12,RESOLUTION=1280x720,CODECS=\"avc1.42c01f,mp4a.40.2\"\n720p/index.m3u8\n")
 	for i, o := range p.Inventory.Objects {
