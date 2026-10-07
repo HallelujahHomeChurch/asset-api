@@ -10,11 +10,50 @@ import (
 // Failed remote captures retain seven days; normal VOD final objects are owned
 // by the package retention policy and never enumerated by this cleanup.
 const captureCleanupSafe = `GREATEST(c.expires_at+interval '6 hours',
- CASE WHEN c.state IN ('failed','expired','aborted') OR c.package_id IS NULL THEN COALESCE(c.terminal_at,c.expires_at)+interval '7 days' ELSE c.expires_at END,
+ CASE WHEN ` + capturePackageTerminal + ` THEN COALESCE(c.terminal_at,clock_timestamp())+interval '7 days'
+ WHEN c.state IN ('failed','expired','aborted') OR c.package_id IS NULL THEN COALESCE(c.terminal_at,c.expires_at)+interval '7 days' ELSE c.expires_at END,
  l.read_grant_until,l.claimed_until)<=clock_timestamp()
  AND NOT EXISTS(SELECT 1 FROM recording_processing_slots s WHERE s.job_id IN (c.id,'live:'||c.id) AND s.leased_until>clock_timestamp())`
 
+// The package is authoritative even when no client has polled capture status.
+const capturePackageTerminal = `EXISTS(SELECT 1 FROM recording_packages cp WHERE cp.id=c.package_id AND cp.state IN ('failed','expired'))`
+
+// Reuse the owner/capture/live/slot/package lock order and terminal fencing in
+// UpdateCapture. The first observed failure starts a conservative seven-day
+// recovery hold; a persisted terminal timestamp is never extended on replay.
+// Bound reconciliation independently of candidate selection: any backlog stays
+// protected by authoritative predicates and cannot block runnable live work.
+func (s *RecordingCaptureStore) reconcileTerminalPackages(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `SELECT c.id FROM recording_captures c WHERE c.state IN ('uploading','freezing','validating','ready') AND `+capturePackageTerminal+` ORDER BY c.created_at LIMIT 100`)
+	if err != nil {
+		return err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		ids = append(ids, id)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if _, err = s.GetCapture(ctx, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *RecordingCaptureStore) ReconcileLive(ctx context.Context, deleteObjects func(context.Context, []string) error) error {
+	if err := s.reconcileTerminalPackages(ctx); err != nil {
+		return err
+	}
 	rows, err := s.db.QueryContext(ctx, `SELECT c.id FROM recording_captures c JOIN recording_live l ON l.capture_id=c.id WHERE l.cleanup_after<=clock_timestamp() AND `+captureCleanupSafe+` ORDER BY l.cleanup_after LIMIT 10`)
 	if err != nil {
 		return err

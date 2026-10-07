@@ -219,7 +219,11 @@ replay/retention deadline; exchange credentials expire within 60 seconds. The
 Worker authorizes each request before cache and restricts segments to the current
 waterline. CMS owns membership, registration and post-stop scope renewal.
 
-Remote failed captures retain at least seven days. Capture media cleanup waits
+Remote failed captures retain at least seven days. Background claim/cleanup work
+persists authoritative failed/expired package state without a status poll; a
+previously unobserved failure starts its recovery hold at first observation.
+Protected capture packages are excluded before cleanup batching, so eligible
+ordinary packages continue to be swept. Capture media cleanup waits
 for capture expiry plus the existing worker's six-hour writer grace, grants and
 leases; it never enumerates ready VOD final objects. Candidate copies and old
 playlist revisions are discovered from durable metadata and removed in bounded

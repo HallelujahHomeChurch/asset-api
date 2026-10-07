@@ -11,7 +11,13 @@ const packageCleanupEligible = `(state IN ('ready','failed','expired') OR (state
  EXISTS (SELECT 1 FROM recording_package_attempts a WHERE a.package_id=p.id AND a.state IN ('failed','abandoned','purged')))`
 
 func (s *RecordingPackageStore) PackageCleanupCandidates(ctx context.Context) ([]string, error) {
+	if err := NewRecordingCaptureStore(s.db).reconcileTerminalPackages(ctx); err != nil {
+		return nil, err
+	}
+	// Filter protected captures before LIMIT so they cannot occupy every batch.
+	// The deadline/grant/lease predicate makes them eligible when the hold ends.
 	rows, err := s.db.QueryContext(ctx, `SELECT id FROM recording_packages p WHERE cleanup_after<=clock_timestamp() AND `+packageCleanupEligible+`
+ AND NOT EXISTS(SELECT 1 FROM recording_captures c JOIN recording_live l ON l.capture_id=c.id WHERE c.package_id=p.id AND NOT (`+captureCleanupSafe+`))
  ORDER BY cleanup_after LIMIT 10`)
 	if err != nil {
 		return nil, err

@@ -213,3 +213,141 @@ func TestLiveNormalSealAfterPublishedFullSegmentAppendsEndOnly(t *testing.T) {
 		t.Fatalf("ended capture claimed: %v", err)
 	}
 }
+
+// Seal through the producer service, then let tests exercise worker transitions
+// without GetCapture/status synchronizing the cached capture state.
+func sealedLiveCapture(t *testing.T, store *RecordingCaptureStore, number int) string {
+	t.Helper()
+	ctx := context.Background()
+	actor := fmt.Sprintf("22222222-2222-4222-8222-%012d", number)
+	recording := fmt.Sprintf("11111111-1111-4111-8111-%012d", number)
+	now := time.Now().UTC().Add(-time.Hour + time.Duration(number)*time.Minute)
+	objects := captureObjectStore{sizes: map[string]int64{}}
+	svc := assets.NewRecordingCaptureService(store, objects, func() time.Time { return now })
+	result, err := svc.Create(ctx, recording, actor, fmt.Sprintf("sealed-live-%d", number))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv := assets.RecordingPackageInventory{SchemaVersion: 1, PresetVersion: "hls-v1"}
+	paths := []string{"master.m3u8"}
+	for _, r := range assets.LiveRenditions() {
+		r.DurationSeconds, r.SegmentCount = 30, 1
+		inv.Renditions = append(inv.Renditions, r)
+		for _, name := range []string{"index.m3u8", "init.mp4", "seg-000000.m4s"} {
+			paths = append(paths, r.Name+"/"+name)
+		}
+	}
+	for _, path := range paths {
+		inv.Objects = append(inv.Objects, assets.RecordingPackageObject{Path: path, SizeBytes: 10, SHA256: strings.Repeat("a", 64)})
+		objects.sizes[path] = 10
+	}
+	inv.InventoryDigest, _ = assets.RecordingInventoryDigest(inv)
+	id := result.Capture.ID
+	if _, err = svc.Declare(ctx, id, actor, "declare", inv.Objects); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.Confirm(ctx, id, actor, "confirm", paths); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.Seal(ctx, id, actor, "seal", true, inv); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func TestLiveClaimSkipsAndTerminalizesFailedPackageWithoutStatus(t *testing.T) {
+	ctx := context.Background()
+	db := isolatedIntegrationDB(t)
+	if err := migrations.Run(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	store := NewRecordingCaptureStore(db)
+	failed, healthy := sealedLiveCapture(t, store, 1), sealedLiveCapture(t, store, 2)
+	packages := NewRecordingPackageStore(db)
+	claim, err := packages.ClaimPackageValidation(ctx)
+	if err != nil || claim.Package.ID != failed {
+		t.Fatalf("oldest package claim: %+v %v", claim, err)
+	}
+	if err = packages.FinishPackageValidation(ctx, failed, claim.ClaimID, false, "invalid"); err != nil {
+		t.Fatal(err)
+	}
+	live, err := store.ClaimLiveValidation(ctx)
+	if err != nil || live.Capture.ID != healthy {
+		t.Fatalf("failed package blocked live work: %+v %v", live, err)
+	}
+	var state, reason string
+	var at time.Time
+	if err = db.QueryRowContext(ctx, `SELECT state,terminal_reason,terminal_at FROM recording_captures WHERE id=$1`, failed).Scan(&state, &reason, &at); err != nil {
+		t.Fatal(err)
+	}
+	if state != "failed" || reason != "package_failed" || at.IsZero() {
+		t.Fatalf("terminal projection missing: %s %s %v", state, reason, at)
+	}
+	if _, err = store.ClaimLiveValidation(ctx); !errors.Is(err, assets.ErrNotFound) {
+		t.Fatalf("failed package remained claimable: %v", err)
+	}
+}
+
+func TestLiveCleanupRetainsAuthoritativeTerminalPackageWithoutStatus(t *testing.T) {
+	for _, state := range []string{"failed", "expired"} {
+		t.Run(state, func(t *testing.T) {
+			ctx := context.Background()
+			db := isolatedIntegrationDB(t)
+			if err := migrations.Run(ctx, db); err != nil {
+				t.Fatal(err)
+			}
+			store := NewRecordingCaptureStore(db)
+			id := sealedLiveCapture(t, store, 1)
+			if _, err := db.ExecContext(ctx, `UPDATE recording_packages SET state=$2 WHERE id=$1`, id, state); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.ExecContext(ctx, `UPDATE recording_captures SET created_at=now()-interval '10 days',expires_at=now()-interval '9 days' WHERE id=$1`, id); err != nil {
+				t.Fatal(err)
+			}
+			var deleted []string
+			remove := func(_ context.Context, keys []string) error { deleted = append(deleted, keys...); return nil }
+			// The independent package sweeper must protect stale capture projections too.
+			if err := NewRecordingPackageStore(db).CleanupPackage(ctx, id, remove); err != nil {
+				t.Fatal(err)
+			}
+			if len(deleted) > 0 {
+				t.Fatalf("package swept unsynchronized terminal capture: %v", deleted)
+			}
+			observed := time.Now().UTC().Add(-time.Second)
+			if err := store.ReconcileLive(ctx, remove); err != nil {
+				t.Fatal(err)
+			}
+			if len(deleted) > 0 {
+				t.Fatalf("terminal live media removed before seven days: %v", deleted)
+			}
+			var got string
+			var at time.Time
+			if err := db.QueryRowContext(ctx, `SELECT state,terminal_at FROM recording_captures WHERE id=$1`, id).Scan(&got, &at); err != nil {
+				t.Fatal(err)
+			}
+			if got != state || at.Before(observed) {
+				t.Fatalf("background terminal projection: %s %v", got, at)
+			}
+			if _, err := db.ExecContext(ctx, `UPDATE recording_captures SET terminal_at=now()-interval '6 days' WHERE id=$1`, id); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.ReconcileLive(ctx, remove); err != nil {
+				t.Fatal(err)
+			}
+			if len(deleted) > 0 {
+				t.Fatalf("six day failure retention violated: %v", deleted)
+			}
+			// Reintroduce the stale state to verify authoritative cleanup predicates;
+			// the persisted terminal anchor must never be reset during reconciliation.
+			if _, err := db.ExecContext(ctx, `UPDATE recording_captures SET state='freezing',terminal_at=now()-interval '8 days' WHERE id=$1`, id); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.ReconcileLive(ctx, remove); err != nil {
+				t.Fatal(err)
+			}
+			if len(deleted) == 0 {
+				t.Fatal("expired seven-day hold did not release live objects")
+			}
+		})
+	}
+}
