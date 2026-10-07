@@ -73,6 +73,7 @@ func run(ctx context.Context) error {
 		packages := postgres.NewRecordingPackageStore(db)
 		probe := recordingvalidation.PackageMediaProbe{Objects: objects, FFmpeg: "/usr/bin/ffmpeg", FFprobe: "/usr/bin/ffprobe"}
 		cleanupErr := packages.ReconcilePackages(ctx, objects.DeletePackageObjects)
+		cleanupErr = errors.Join(cleanupErr, postgres.NewRecordingCaptureStore(db).ReconcileCaptures(ctx, objects.DeletePackageObjects))
 		covers := postgres.NewRecordingCoverStore(db)
 		cleanupErr = errors.Join(cleanupErr, covers.Reconcile(ctx, objects.DeleteCoverObjects))
 		if sourceAccount != "" {

@@ -33,6 +33,7 @@ type Handler struct {
 	localUpload          http.HandlerFunc
 	audit                *auditoutbox.Store
 	recordingPackages    *assets.RecordingPackageService
+	recordingCaptures    *assets.RecordingCaptureService
 	recordingRetention   RecordingRetentionStore
 	recordingSources     *assets.RecordingSourceService
 	recordingSigner      *assets.RecordingSigner
@@ -126,6 +127,15 @@ func (h *Handler) Routes() http.Handler {
 	mux.Handle("GET /api/assets/collections/{collectionID}/items/{itemID}/content", h.collectionReader(http.HandlerFunc(h.collectionContent)))
 	mux.Handle("GET /api/assets/content", h.collectionTicket(http.HandlerFunc(h.ticketContent)))
 	mux.Handle("POST /priv/assets/upload-sessions", h.internal(http.HandlerFunc(h.createUpload)))
+	mux.Handle("POST /priv/recording-captures", h.captureInternal(h.createRecordingCapture))
+	mux.Handle("GET /priv/recording-captures/{captureID}", h.captureInternal(h.getRecordingCapture))
+	mux.Handle("POST /priv/recording-captures/{captureID}/objects", h.captureInternal(h.declareRecordingCapture))
+	mux.Handle("POST /priv/recording-captures/{captureID}/sign", h.captureInternal(h.signRecordingCapture))
+	mux.Handle("POST /priv/recording-captures/{captureID}/confirm", h.captureInternal(h.confirmRecordingCapture))
+	mux.Handle("POST /priv/recording-captures/{captureID}/seal", h.captureInternal(h.sealRecordingCapture))
+	mux.Handle("POST /priv/recording-captures/{captureID}/abort", h.captureInternal(h.abortRecordingCapture))
+	mux.Handle("GET /priv/recording-captures/{captureID}/progress", h.captureInternal(h.unavailableLiveCapture))
+	mux.Handle("POST /priv/recording-captures/{captureID}/grant", h.captureInternal(h.unavailableLiveCapture))
 	mux.Handle("POST /priv/recording-packages", h.internal(http.HandlerFunc(h.createRecordingPackage)))
 	mux.Handle("GET /priv/recordings/retention-policy", h.internal(http.HandlerFunc(h.getRecordingRetention)))
 	mux.Handle("POST /priv/recordings/lifecycle", h.internal(http.HandlerFunc(h.recordingLifecycle)))

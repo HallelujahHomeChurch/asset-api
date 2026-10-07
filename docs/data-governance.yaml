@@ -112,6 +112,50 @@ datasets:
     legal_basis: {status: pending_legal, reference: null}
     retention: {status: pending_legal, rule: null, action: none}
     cleanup: {mode: none, implementation: [], evidence: []}
+  - id: asset.recording-captures
+    owner: asset-api
+    purpose: Preserve progressive recording intake and retry evidence under CMS ownership.
+    necessity: required
+    storage: {kind: postgres, resource: recording_captures, sources: [{path: internal/postgres/recording_capture.go, symbol: RecordingCaptureStore.UpdateCapture}]}
+    subject_keys: []
+    data_classes: [identity, content, security, activity]
+    fields:
+      - {"name": "recording_captures.id", "purpose": "Identify capture and staging scope", "necessity": "required", "data_classes": ["identity"]}
+      - {"name": "recording_captures.actor_id", "purpose": "Bind capture to the CMS authorized human uploader", "necessity": "required", "data_classes": ["identity", "security"]}
+      - {"name": "recording_captures.recording_id", "purpose": "Link intake to the CMS recording", "necessity": "required", "data_classes": ["identity"]}
+      - {"name": "recording_captures.create_key", "purpose": "Replay capture creation without duplicate storage", "necessity": "required", "data_classes": ["security"]}
+      - {"name": "recording_captures.state", "purpose": "Track intake and validation lifecycle", "necessity": "required", "data_classes": ["activity"]}
+      - {"name": "recording_captures.created_at", "purpose": "Anchor original capture lifetime", "necessity": "required", "data_classes": ["activity"]}
+      - {"name": "recording_captures.expires_at", "purpose": "Bound writes and unfinished capture processing", "necessity": "required", "data_classes": ["activity"]}
+      - {"name": "recording_captures.declared_bytes", "purpose": "Enforce the cumulative byte quota", "necessity": "required", "data_classes": ["content"]}
+      - {"name": "recording_captures.declared_objects", "purpose": "Enforce the object count quota", "necessity": "required", "data_classes": ["content"]}
+      - {"name": "recording_captures.receipts", "purpose": "Persist immutable operation acceptance and request digests", "necessity": "required", "data_classes": ["security", "activity"]}
+      - {"name": "recording_captures.package_id", "purpose": "Link the sealed immutable validation package", "necessity": "required", "data_classes": ["identity"]}
+      - {"name": "recording_captures.inventory", "purpose": "Retain normal closure metadata and full hash graph", "necessity": "required", "data_classes": ["content", "security"]}
+      - {"name": "recording_captures.terminal_at", "purpose": "Preserve first terminal transition time", "necessity": "required", "data_classes": ["activity"]}
+      - {"name": "recording_captures.terminal_reason", "purpose": "Expose a bounded terminal reason without provider secrets", "necessity": "required", "data_classes": ["activity"]}
+      - {"name": "recording_captures.cleanup_after", "purpose": "Retry and repeat declared staging key sweeps", "necessity": "required", "data_classes": ["activity"]}
+    attribution: {mode: manual, explanation: CMS verifies the human uploader UUID; declarations do not identify video participants or viewers.}
+    legal_basis: {status: pending_legal, reference: null}
+    retention: {status: pending_legal, rule: null, action: none}
+    cleanup: {mode: none, implementation: [], evidence: []}
+  - id: asset.recording-capture-objects
+    owner: asset-api
+    purpose: Preserve progressive recording intake and retry evidence under CMS ownership.
+    necessity: required
+    storage: {kind: postgres, resource: recording_capture_objects, sources: [{path: internal/postgres/recording_capture.go, symbol: RecordingCaptureStore.UpdateCapture}]}
+    subject_keys: []
+    data_classes: [identity, content, security, activity]
+    fields:
+      - {"name": "recording_capture_objects.capture_id", "purpose": "Bind each declaration to the owning capture", "necessity": "required", "data_classes": ["identity", "security"]}
+      - {"name": "recording_capture_objects.path", "purpose": "Identify the declared relative HLS object", "necessity": "required", "data_classes": ["content"]}
+      - {"name": "recording_capture_objects.size_bytes", "purpose": "Enforce object and package byte budgets", "necessity": "required", "data_classes": ["content"]}
+      - {"name": "recording_capture_objects.sha256", "purpose": "Verify immutable content integrity before readiness", "necessity": "required", "data_classes": ["security"]}
+      - {"name": "recording_capture_objects.state", "purpose": "Durably queue validation without claiming media readiness", "necessity": "required", "data_classes": ["activity"]}
+    attribution: {mode: manual, explanation: CMS verifies the human uploader UUID; declarations do not identify video participants or viewers.}
+    legal_basis: {status: pending_legal, reference: null}
+    retention: {status: pending_legal, rule: null, action: none}
+    cleanup: {mode: none, implementation: [], evidence: []}
   - id: asset.recording-sources
     owner: asset-api
     purpose: Bind temporary browser recording inputs to authorized CMS actors and retain fenced processing and retry receipts without entering the ordinary asset scan pipeline.

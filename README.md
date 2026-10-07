@@ -181,3 +181,29 @@ first.
 `LOG_LEVEL=debug|info|warn|error` defaults to `info`; invalid values stop
 startup. This controls application slog and default standard-log output.
 Persisted audit records remain independent of this setting.
+
+## Progressive capture intake
+
+Private `/priv/recording-captures` routes share the existing HLS runtime gate and
+accept only the owning `hhc-web-api` caller with a human uploader UUID. Create,
+declare, confirm, seal and abort use body `operationKey` receipts. GET pages
+persisted per-object states; a lost PUT/confirm response can be recovered by
+replaying confirm or querying status. Only declared paths can be signed, for at
+most fifteen minutes and never beyond the original 24-hour capture deadline.
+
+Confirm checks bounded R2 listing size evidence and durably queues declarations;
+`queued` never authorizes playback or claims hash/media validity. Signing queued
+objects is fenced. Existing signed PUTs can still overwrite staging, so only the
+existing immutable-copy/hash/media validator can produce a ready package. CMS
+must accept stop before forwarding seal; stop itself has no Asset mutation.
+Seal requires normal end, the exact complete three-rendition inventory and every
+object queued/verified. Missing objects leave intake open. Seal atomically creates
+one `freezing` package using the capture ID and original expiry, and replays its
+receipt. Abort fences processing claims. Recording deletion closes captures.
+The recording Job repeatedly cleans unsealed terminal/expired staging keys and
+expires unfinished sealed captures; ready VOD remains under normal retention.
+Capture receipts are bounded to 20,002 and retained with recovery metadata.
+
+Progress and live grant endpoints return 503 until progressive immutable media
+validation is implemented. This intake change does not activate production
+configuration or establish live playback readiness.
