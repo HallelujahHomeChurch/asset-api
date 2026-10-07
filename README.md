@@ -202,7 +202,8 @@ one `freezing` package using the capture ID and original expiry, and replays its
 receipt. Abort fences processing claims. Recording deletion closes captures.
 The recording Job repeatedly cleans unsealed terminal/expired staging keys and
 expires unfinished sealed captures; ready VOD remains under normal retention.
-Capture receipts are bounded to 20,002 and retained with recovery metadata.
+Capture receipts allow 20,002 producer operations plus one reserved emergency
+abort receipt (20,003 total), and are retained with recovery metadata.
 
 The existing recording Job validates each closed 30-second three-rendition batch
 from immutable hash-checked copies, then publishes revisioned EVENT playlists

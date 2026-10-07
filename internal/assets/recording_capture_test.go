@@ -3,6 +3,7 @@ package assets
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -118,15 +119,7 @@ func TestCaptureStopDoesNotFreezeUploads(t *testing.T) {
 }
 func TestSealMissingObjectsRemainsUploadable(t *testing.T) {
 	s, _, objects, _, c := captureTest(t)
-	inv := packageFixture()
-	inv.Renditions = []RecordingRendition{{Name: "1080p", Width: 1920, Height: 1080, FrameRate: 30, VideoBitrate: 3000000, AudioBitrate: 128000, DurationSeconds: 5, SegmentCount: 1}, {Name: "720p", Width: 1280, Height: 720, FrameRate: 30, VideoBitrate: 1500000, AudioBitrate: 128000, DurationSeconds: 5, SegmentCount: 1}, {Name: "480p", Width: 854, Height: 480, FrameRate: 30, VideoBitrate: 800000, AudioBitrate: 128000, DurationSeconds: 5, SegmentCount: 1}}
-	inv.Objects = []RecordingPackageObject{{Path: "master.m3u8", SizeBytes: 10, SHA256: strings.Repeat("a", 64)}}
-	for _, r := range inv.Renditions {
-		for _, path := range []string{"index.m3u8", "init.mp4", "seg-000000.m4s"} {
-			inv.Objects = append(inv.Objects, RecordingPackageObject{Path: r.Name + "/" + path, SizeBytes: 10, SHA256: strings.Repeat("b", 64)})
-		}
-	}
-	inv.InventoryDigest, _ = RecordingInventoryDigest(inv)
+	inv := captureInventoryFixture()
 	declareCapture(t, s, c, inv.Objects)
 	if _, err := s.Seal(context.Background(), c.ID, c.ActorID, "seal-a", true, inv); !errors.Is(err, ErrCaptureMissingObjects) {
 		t.Fatalf("missing: %v", err)
@@ -187,5 +180,62 @@ func TestCaptureCreateRequiresHumanAndRecordingUUID(t *testing.T) {
 		if _, err := s.Create(context.Background(), ids[0], ids[1], "invalid-ids"); !errors.Is(err, ErrInvalidInput) {
 			t.Fatalf("UUID boundary accepted: %v", err)
 		}
+	}
+}
+
+func captureInventoryFixture() RecordingPackageInventory {
+	inv := packageFixture()
+	inv.Renditions = []RecordingRendition{{Name: "1080p", Width: 1920, Height: 1080, FrameRate: 30, VideoBitrate: 3000000, AudioBitrate: 128000, DurationSeconds: 5, SegmentCount: 1}, {Name: "720p", Width: 1280, Height: 720, FrameRate: 30, VideoBitrate: 1500000, AudioBitrate: 128000, DurationSeconds: 5, SegmentCount: 1}, {Name: "480p", Width: 854, Height: 480, FrameRate: 30, VideoBitrate: 800000, AudioBitrate: 128000, DurationSeconds: 5, SegmentCount: 1}}
+	inv.Objects = []RecordingPackageObject{{Path: "master.m3u8", SizeBytes: 10, SHA256: strings.Repeat("a", 64)}}
+	for _, r := range inv.Renditions {
+		for _, path := range []string{"index.m3u8", "init.mp4", "seg-000000.m4s"} {
+			inv.Objects = append(inv.Objects, RecordingPackageObject{Path: r.Name + "/" + path, SizeBytes: 10, SHA256: strings.Repeat("b", 64)})
+		}
+	}
+	inv.InventoryDigest, _ = RecordingInventoryDigest(inv)
+	return inv
+}
+
+func TestCaptureReceiptLimitReservesAbortAfterSeal(t *testing.T) {
+	ctx := context.Background()
+	s, repo, objects, _, c := captureTest(t)
+	inv := captureInventoryFixture()
+	declareCapture(t, s, c, inv.Objects)
+	paths := []string{}
+	for _, o := range inv.Objects {
+		paths = append(paths, o.Path)
+		objects.sizes[(RecordingPackage{ID: c.ID}).StagingKey(o.Path)] = o.SizeBytes
+	}
+	if _, err := s.Confirm(ctx, c.ID, c.ActorID, "confirm-all", paths); err != nil {
+		t.Fatal(err)
+	}
+	stored := repo.captures[c.ID]
+	// Model create plus all 10,000 individual declare/confirm receipts before seal.
+	for i := len(stored.Receipts); i < 20001; i++ {
+		stored.Receipts[fmt.Sprintf("used-%d", i)] = RecordingCaptureStoredReceipt{Receipt: RecordingCaptureReceipt{Operation: "declare"}}
+	}
+	repo.captures[c.ID] = stored
+	if _, err := s.Seal(ctx, c.ID, c.ActorID, "seal-max", true, inv); err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.captures[c.ID].Receipts) != 20002 {
+		t.Fatal("seal did not fill normal receipt budget")
+	}
+	aborted, err := s.Abort(ctx, c.ID, c.ActorID, "emergency-abort", "user_abort")
+	if err != nil || aborted.Capture.State != "aborted" {
+		t.Fatalf("full sealed capture cannot abort: %v", err)
+	}
+	replay, err := s.Abort(ctx, c.ID, c.ActorID, "emergency-abort", "user_abort")
+	if err != nil || !replay.Receipt.AcceptedAt.Equal(aborted.Receipt.AcceptedAt) || len(repo.captures[c.ID].Receipts) != 20003 {
+		t.Fatalf("abort reserve/replay: %v", err)
+	}
+	if _, err = s.Abort(ctx, c.ID, c.ActorID, "emergency-abort", "encoder_failure"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("changed abort receipt accepted: %v", err)
+	}
+	if _, err = s.Abort(ctx, c.ID, c.ActorID, "second-abort", "user_abort"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("second control receipt accepted: %v", err)
+	}
+	if len(repo.captures[c.ID].Receipts) != 20003 {
+		t.Fatal("abort reserve exceeded total receipt cap")
 	}
 }

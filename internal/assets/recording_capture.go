@@ -122,7 +122,7 @@ func (s *RecordingCaptureService) Create(ctx context.Context, recording, actor, 
 	if !captureUUID.MatchString(recording) || !captureUUID.MatchString(actor) || !captureOperationKey.MatchString(key) {
 		return RecordingCaptureResult{}, ErrInvalidInput
 	}
-	now := s.now().UTC()
+	now := s.now().UTC().Truncate(time.Microsecond)
 	c := RecordingCapture{ID: newID(), RecordingID: recording, ActorID: actor, CreateKey: key, State: "uploading", Progress: RecordingLiveProgress{LastSequence: -1}, CreatedAt: now, ExpiresAt: now.Add(RecordingUploadTTL), Receipts: map[string]RecordingCaptureStoredReceipt{}}
 	digest := captureDigest([]string{recording, actor})
 	c.Receipts[key] = RecordingCaptureStoredReceipt{digest, RecordingCaptureReceipt{key, "create", now, c.ID}}
@@ -185,13 +185,17 @@ func (s *RecordingCaptureService) mutate(ctx context.Context, id, actor, key, op
 		if !s.now().Before(c.ExpiresAt) {
 			return ErrCaptureExpired
 		}
-		if len(c.Receipts) >= 20002 {
+		receiptLimit := 2*RecordingPackageMaxObjects + 2 // create, per-object declare/confirm, seal
+		if operation == "abort" {
+			receiptLimit++ // Keep one bounded emergency control receipt after a full seal.
+		}
+		if len(c.Receipts) >= receiptLimit {
 			return ErrConflict
 		}
 		if err := fn(c); err != nil {
 			return err
 		}
-		c.Receipts[key] = RecordingCaptureStoredReceipt{digest, RecordingCaptureReceipt{key, operation, s.now().UTC(), c.ID}}
+		c.Receipts[key] = RecordingCaptureStoredReceipt{digest, RecordingCaptureReceipt{key, operation, s.now().UTC().Truncate(time.Microsecond), c.ID}}
 		return nil
 	})
 	if err != nil {
@@ -365,7 +369,7 @@ func (s *RecordingCaptureService) Abort(ctx context.Context, id, actor, key, rea
 		return RecordingCaptureResult{}, ErrInvalidInput
 	}
 	return s.mutate(ctx, id, actor, key, "abort", reason, func(c *RecordingCapture) error {
-		at := s.now().UTC()
+		at := s.now().UTC().Truncate(time.Microsecond)
 		c.State = "aborted"
 		c.TerminalAt = &at
 		c.TerminalReason = &reason

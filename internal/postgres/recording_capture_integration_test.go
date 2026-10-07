@@ -89,11 +89,21 @@ func TestCaptureSealAtomicPackageAndAbortFence(t *testing.T) {
 	}
 	store := NewRecordingCaptureStore(db)
 	objects := captureObjectStore{sizes: map[string]int64{}}
-	s := assets.NewRecordingCaptureService(store, objects, time.Now)
+	fixedNow := time.Now().UTC().Truncate(time.Second).Add(123456789 * time.Nanosecond)
+	normalizedNow := fixedNow.Truncate(time.Microsecond)
+	s := assets.NewRecordingCaptureService(store, objects, func() time.Time { return fixedNow })
 	r, err := s.Create(ctx, "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222", "create-a")
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !r.Capture.CreatedAt.Equal(normalizedNow) || !r.Capture.ExpiresAt.Equal(normalizedNow.Add(assets.RecordingUploadTTL)) || !r.Receipt.AcceptedAt.Equal(normalizedNow) {
+		t.Fatalf("create timestamp not normalized at source: created=%s expiry=%s receipt=%s", r.Capture.CreatedAt, r.Capture.ExpiresAt, r.Receipt.AcceptedAt)
+	}
+	replayCreate, err := s.Create(ctx, r.Capture.RecordingID, "22222222-2222-4222-8222-222222222222", "create-a")
+	if err != nil || !replayCreate.Capture.CreatedAt.Equal(r.Capture.CreatedAt) || !replayCreate.Capture.ExpiresAt.Equal(r.Capture.ExpiresAt) || !replayCreate.Receipt.AcceptedAt.Equal(r.Receipt.AcceptedAt) {
+		t.Fatalf("create/replay timestamp mismatch: %v", err)
+	}
+	fixedNow = fixedNow.Add(5 * time.Minute)
 	id := r.Capture.ID
 	inv := testRecordingPackage(t, "unused", "22222222-2222-4222-8222-222222222222", "11111111-1111-4111-8111-111111111111").Inventory
 	inv.Renditions = []assets.RecordingRendition{{Name: "1080p", Width: 1920, Height: 1080, FrameRate: 30, VideoBitrate: 3000000, AudioBitrate: 128000, DurationSeconds: 5, SegmentCount: 1}, {Name: "720p", Width: 1280, Height: 720, FrameRate: 30, VideoBitrate: 1500000, AudioBitrate: 128000, DurationSeconds: 5, SegmentCount: 1}, {Name: "480p", Width: 854, Height: 480, FrameRate: 30, VideoBitrate: 800000, AudioBitrate: 128000, DurationSeconds: 5, SegmentCount: 1}}
@@ -118,6 +128,9 @@ func TestCaptureSealAtomicPackageAndAbortFence(t *testing.T) {
 	first, err := s.Seal(ctx, id, "22222222-2222-4222-8222-222222222222", "seal-a", true, inv)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !first.Receipt.AcceptedAt.Equal(fixedNow.Truncate(time.Microsecond)) {
+		t.Fatal("seal receipt not normalized")
 	}
 	second, err := s.Seal(ctx, id, "22222222-2222-4222-8222-222222222222", "seal-a", true, inv)
 	if err != nil || !second.Receipt.AcceptedAt.Equal(first.Receipt.AcceptedAt) {
