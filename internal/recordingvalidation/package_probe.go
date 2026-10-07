@@ -134,11 +134,15 @@ func ProbeCommand(ctx context.Context, binary string, args ...string) ([]byte, e
 type segmentProbe struct {
 	AudioChannels int
 	Start, End    float64
+	FrameRate     float64
 	Codecs        string
 }
 
 // Only bounded ffprobe output from a local init+fragment is accepted here.
 func validatePackageSegmentProbe(data []byte, r assets.RecordingRendition) (segmentProbe, error) {
+	// A zero expected rate is private live intake: detect only the approved
+	// rates, then prove CFR from packet durations and presentation timestamps.
+	live := r.FrameRate == 0
 	stage := "streams"
 	invalid := func() (segmentProbe, error) {
 		return segmentProbe{}, fmt.Errorf("%w: %s", assets.ErrInvalidUpload, stage)
@@ -165,7 +169,7 @@ func validatePackageSegmentProbe(data []byte, r assets.RecordingRendition) (segm
 			Flags    string `json:"flags"`
 		} `json:"packets"`
 	}
-	if len(data) > 8<<20 || json.Unmarshal(data, &output) != nil || len(output.Streams) != 2 || len(output.Packets) == 0 || len(output.Packets) > 4096 || r.FrameRate <= 0 || r.FrameRate > 30 {
+	if len(data) > 8<<20 || json.Unmarshal(data, &output) != nil || len(output.Streams) != 2 || len(output.Packets) == 0 || len(output.Packets) > 4096 || !finite(r.FrameRate) || r.FrameRate < 0 || r.FrameRate > 30 {
 		return invalid()
 	}
 	video, audio := -1, -1
@@ -180,7 +184,20 @@ func validatePackageSegmentProbe(data []byte, r assets.RecordingRendition) (segm
 			}
 			n, e1 := strconv.ParseFloat(parts[0], 64)
 			d, e2 := strconv.ParseFloat(parts[1], 64)
-			if video != -1 || s.Index < 0 || s.Codec != "h264" || s.Width != r.Width || s.Height != r.Height || s.PixelFormat != "yuv420p" || s.Aspect != "1:1" || e1 != nil || e2 != nil || !finite(n) || !finite(d) || d <= 0 || math.Abs(n/d-r.FrameRate) > 0.001 {
+			if video != -1 || s.Index < 0 || s.Codec != "h264" || s.Width != r.Width || s.Height != r.Height || s.PixelFormat != "yuv420p" || s.Aspect != "1:1" || e1 != nil || e2 != nil || !finite(n) || !finite(d) || d <= 0 {
+				return invalid()
+			}
+			rate := n / d
+			if live {
+				switch {
+				case math.Abs(rate-30) < 0.000001:
+					r.FrameRate = 30
+				case math.Abs(rate-30000.0/1001) < 0.000001:
+					r.FrameRate = 30000.0 / 1001
+				default:
+					return invalid()
+				}
+			} else if math.Abs(rate-r.FrameRate) > 0.001 {
 				return invalid()
 			}
 			var err error
@@ -230,7 +247,7 @@ func validatePackageSegmentProbe(data []byte, r assets.RecordingRendition) (segm
 	}
 	for stream, packets := range tracks {
 		stage = "packet continuity"
-		if len(packets) == 0 || stream == video && (len(packets) > 1000 || !packets[0].key) || stream == audio && len(packets) > 2000 {
+		if len(packets) == 0 || stream == video && (len(packets) > 1000 || !packets[0].key || live && len(packets) < 2) || stream == audio && len(packets) > 2000 {
 			return invalid()
 		}
 		slices.SortFunc(packets, func(a, b packet) int {
@@ -256,7 +273,11 @@ func validatePackageSegmentProbe(data []byte, r assets.RecordingRendition) (segm
 				}
 				packets[i].duration = p.duration
 			}
-			if stream == video && math.Abs(p.duration-1/r.FrameRate) > 0.0002 {
+			tolerance := 0.0002
+			if live {
+				tolerance = 0.000002
+			}
+			if stream == video && (math.Abs(p.duration-1/r.FrameRate) > tolerance || live && math.Abs(p.pts-packets[0].pts-float64(i)/r.FrameRate) > tolerance) {
 				return invalid()
 			}
 			if i > 0 && (p.pts <= packets[i-1].pts || math.Abs(p.pts-packets[i-1].pts-packets[i-1].duration) > 0.0002) {
@@ -269,7 +290,7 @@ func validatePackageSegmentProbe(data []byte, r assets.RecordingRendition) (segm
 	if math.Abs(v[0].pts-a[0].pts) > 0.1 || math.Abs(end-a[len(a)-1].pts-a[len(a)-1].duration) > 0.1 || end-v[0].pts > 30+1/r.FrameRate+0.001 {
 		return invalid()
 	}
-	return segmentProbe{Start: v[0].pts, End: end, Codecs: codecs, AudioChannels: audioChannels}, nil
+	return segmentProbe{Start: v[0].pts, End: end, Codecs: codecs, AudioChannels: audioChannels, FrameRate: r.FrameRate}, nil
 }
 
 func avccCodecs(extra string) (string, error) {

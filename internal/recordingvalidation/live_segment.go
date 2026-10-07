@@ -57,14 +57,15 @@ func (p PackageMediaProbe) ValidateLiveSegment(ctx context.Context, captureID, a
 		}); err != nil {
 			return nil, err
 		}
+		r.FrameRate = 0 // Infer the approved rate from this immutable fragment.
 		actual, err := p.probeFragment(ctx, path, r)
 		if err != nil {
 			return nil, err
 		}
-		if actual.AudioChannels != 2 {
+		if actual.AudioChannels != 2 || len(result) > 0 && result["1080p"].FrameRate != actual.FrameRate {
 			return nil, assets.ErrInvalidUpload
 		}
-		result[r.Name] = assets.RecordingLiveFragment{Start: actual.Start, End: actual.End, Codecs: actual.Codecs}
+		result[r.Name] = assets.RecordingLiveFragment{Start: actual.Start, End: actual.End, Codecs: actual.Codecs, FrameRate: actual.FrameRate}
 		if err := os.Remove(path); err != nil {
 			return nil, err
 		}

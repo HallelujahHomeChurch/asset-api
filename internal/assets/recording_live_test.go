@@ -1,7 +1,9 @@
 package assets
 
 import (
+	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 )
@@ -9,7 +11,7 @@ import (
 func liveBatch(start, end float64) map[string]RecordingLiveFragment {
 	out := map[string]RecordingLiveFragment{}
 	for _, name := range []string{"480p", "720p", "1080p"} {
-		out[name] = RecordingLiveFragment{Start: start, End: end, Codecs: "avc1.64001f,mp4a.40.2"}
+		out[name] = RecordingLiveFragment{Start: start, End: end, FrameRate: 30, Codecs: "avc1.64001f,mp4a.40.2"}
 	}
 	return out
 }
@@ -64,5 +66,82 @@ func TestLiveEventPlaylistAppendOnly(t *testing.T) {
 	}
 	if string(final["720p/index.m3u8"]) != previous+"#EXT-X-ENDLIST\n" {
 		t.Fatal("normal end changed historical playlist")
+	}
+}
+
+func TestLiveFrameRateStableAndMasterMeasured(t *testing.T) {
+	for _, rate := range []float64{30, 30000.0 / 1001} {
+		batch := liveBatch(0, 30)
+		for name, fragment := range batch {
+			fragment.FrameRate = rate
+			batch[name] = fragment
+		}
+		history, err := AppendLiveSegment(nil, batch, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		playlists, err := RecordingLivePlaylists(history, false)
+		expected := "FRAME-RATE=30.000"
+		if rate != 30 {
+			expected = "FRAME-RATE=29.970"
+		}
+		if err != nil || strings.Count(string(playlists["master.m3u8"]), expected) != 3 {
+			t.Fatalf("measured master: %v %s", err, playlists["master.m3u8"])
+		}
+		mixed := liveBatch(30, 60)
+		for name, fragment := range mixed {
+			fragment.FrameRate = rate
+			mixed[name] = fragment
+		}
+		fragment := mixed["480p"]
+		if rate == 30 {
+			fragment.FrameRate = 30000.0 / 1001
+		} else {
+			fragment.FrameRate = 30
+		}
+		mixed["480p"] = fragment
+		if _, err := AppendLiveSegment(nil, mixed, false); !errors.Is(err, ErrInvalidUpload) {
+			t.Fatalf("mixed fps: %v", err)
+		}
+		changed := liveBatch(30, 60)
+		for name, f := range changed {
+			f.FrameRate = fragment.FrameRate
+			changed[name] = f
+		}
+		if _, err := AppendLiveSegment(history, changed, false); !errors.Is(err, ErrInvalidUpload) {
+			t.Fatalf("changed fps: %v", err)
+		}
+	}
+	for _, rate := range []float64{0, 29.97, 25, 60, math.NaN(), math.Inf(1)} {
+		batch := liveBatch(0, 30)
+		for name, f := range batch {
+			f.FrameRate = rate
+			batch[name] = f
+		}
+		if _, err := AppendLiveSegment(nil, batch, false); !errors.Is(err, ErrInvalidUpload) {
+			t.Fatalf("unknown rate %v: %v", rate, err)
+		}
+	}
+}
+
+func TestLiveLegacyHistoryIsPreviouslyVerified30FPS(t *testing.T) {
+	var history []RecordingLiveSegment
+	if err := json.Unmarshal([]byte(`[{"sequence":0,"renditions":{"1080p":{"start":0,"end":30,"codecs":"avc1.64001f,mp4a.40.2"},"720p":{"start":0,"end":30,"codecs":"avc1.64001f,mp4a.40.2"},"480p":{"start":0,"end":30,"codecs":"avc1.64001f,mp4a.40.2"}}}]`), &history); err != nil {
+		t.Fatal(err)
+	}
+	playlists, err := RecordingLivePlaylists(history, false)
+	if err != nil || strings.Count(string(playlists["master.m3u8"]), "FRAME-RATE=30.000") != 3 {
+		t.Fatalf("legacy master: %v", err)
+	}
+	if _, err := AppendLiveSegment(history, liveBatch(30, 60), false); err != nil {
+		t.Fatal(err)
+	}
+	batch := liveBatch(30, 60)
+	for name, f := range batch {
+		f.FrameRate = 30000.0 / 1001
+		batch[name] = f
+	}
+	if _, err := AppendLiveSegment(history, batch, false); !errors.Is(err, ErrInvalidUpload) {
+		t.Fatalf("legacy rate change: %v", err)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -36,6 +37,11 @@ func TestLiveSegmentRejectsMissingOrChangedObject(t *testing.T) {
 }
 
 func TestLiveSegmentDecodesThreeProfilesAndNormalTail(t *testing.T) {
+	for _, rate := range []string{"30", "30000/1001", "mixed"} {
+		t.Run(rate, func(t *testing.T) { testLiveSegmentFrameRate(t, rate) })
+	}
+}
+func testLiveSegmentFrameRate(t *testing.T, rate string) {
 	ffmpeg, e := exec.LookPath("ffmpeg")
 	if e != nil {
 		if os.Getenv("HHC_REQUIRE_MEDIA_TESTS") == "1" {
@@ -51,7 +57,14 @@ func TestLiveSegmentDecodesThreeProfilesAndNormalTail(t *testing.T) {
 	declarations := map[int][]assets.RecordingPackageObject{0: {}, 1: {}}
 	for _, r := range assets.LiveRenditions() {
 		dir := t.TempDir()
-		cmd := exec.Command(ffmpeg, "-nostdin", "-v", "error", "-f", "lavfi", "-i", fmt.Sprintf("color=size=%dx%d:rate=30", r.Width, r.Height), "-f", "lavfi", "-i", "sine=sample_rate=48000", "-t", "35", "-c:v", "libx264", "-threads", "2", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-g", "900", "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-f", "hls", "-hls_time", "30", "-hls_playlist_type", "vod", "-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", "init.mp4", "-hls_segment_filename", filepath.Join(dir, "seg-%06d.m4s"), filepath.Join(dir, "index.m3u8"))
+		profileRate := rate
+		if rate == "mixed" {
+			profileRate = "30"
+			if r.Name == "480p" {
+				profileRate = "30000/1001"
+			}
+		}
+		cmd := exec.Command(ffmpeg, "-nostdin", "-v", "error", "-f", "lavfi", "-i", fmt.Sprintf("color=size=%dx%d:rate=%s", r.Width, r.Height, profileRate), "-f", "lavfi", "-i", "sine=sample_rate=48000", "-t", "35", "-c:v", "libx264", "-threads", "2", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-g", "900", "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-f", "hls", "-hls_time", "30", "-hls_playlist_type", "vod", "-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", "init.mp4", "-hls_segment_filename", filepath.Join(dir, "seg-%06d.m4s"), filepath.Join(dir, "index.m3u8"))
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("fixture: %v %s", err, out)
 		}
@@ -70,6 +83,12 @@ func TestLiveSegmentDecodesThreeProfilesAndNormalTail(t *testing.T) {
 	}
 	probe := PackageMediaProbe{Objects: objects, FFmpeg: ffmpeg, FFprobe: ffprobe, ScratchRoot: t.TempDir()}
 	batch, err := probe.ValidateLiveSegment(context.Background(), p.ID, "claim-first", 0, declarations[0])
+	if rate == "mixed" {
+		if !errors.Is(err, assets.ErrInvalidUpload) {
+			t.Fatalf("mixed real-media fps: %v", err)
+		}
+		return
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +107,12 @@ func TestLiveSegmentDecodesThreeProfilesAndNormalTail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = assets.RecordingLivePlaylists(history, true); err != nil {
-		t.Fatal(err)
+	playlists, err := assets.RecordingLivePlaylists(history, true)
+	expected := "FRAME-RATE=30.000"
+	if rate != "30" {
+		expected = "FRAME-RATE=29.970"
+	}
+	if err != nil || strings.Count(string(playlists["master.m3u8"]), expected) != 3 {
+		t.Fatalf("master: %v %s", err, playlists["master.m3u8"])
 	}
 }

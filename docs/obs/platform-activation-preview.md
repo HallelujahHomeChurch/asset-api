@@ -33,8 +33,11 @@ substitute for measuring the contention and memory bound.
 5. Provision the reviewed native `hhc-obs` public OAuth client using Account's
    preview. Verify scopes/PKCE/loopback binding without collecting credentials.
 6. Deliver the immutable C1 schema/fixture hash manifest to Windows and receive
-   its implementation acknowledgement. Run real F1/F1-L fixtures and the G2 live
-   acceptance before enabling member live viewing for operational use.
+   its implementation acknowledgement. After the platform is deployed and verified,
+   run the Windows OBS plugin directly against the deployed capture/upload routes
+   for short and 2.5-hour live acceptance before enabling member live viewing for
+   operational use. Manual F1/F1-L file transfer (including the approximately 6 GB
+   long capture) is optional diagnostic evidence, not an integration prerequisite.
 
 Retain current YouTube and local recording outputs during device acceptance.
 Stopping YouTube remains an operator decision after consecutive successful events.
@@ -53,8 +56,12 @@ in place. Do not delete staging or completed VOD as a rollback shortcut.
 
 - Exact deployed revisions, private caller enforcement, public route denial and
   authenticated own-scope viewing/renewal; do not put credentials in evidence.
-- Real Windows H.264/AAC fMP4 fixtures: all three profiles, full 30-second segments,
-  short normal tail, missing/discontinuous/changed-codec rejection.
+- Direct Windows OBS upload of H.264/AAC fMP4: all three profiles, full 30-second
+  segments, short normal tail, missing/discontinuous/changed-codec rejection. Live
+  intake accepts measured CFR at 30 or 30000/1001 fps, requires the same rate across
+  profiles and segments, and writes that verified rate to the master playlist.
+  Local FFmpeg fixtures verify compatibility; real Windows NVENC media remains a
+  deployed integration check. Transfer source files only when diagnosis needs them.
 - Real R2 conditional create/update and publication retry races, no future sequence
   visibility, private authorization before cached objects.
 - A 2.5-hour run with and without YouTube, end-to-end timecode p50/p95/max latency,

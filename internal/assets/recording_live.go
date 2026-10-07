@@ -8,9 +8,10 @@ import (
 )
 
 type RecordingLiveFragment struct {
-	Start  float64 `json:"start"`
-	End    float64 `json:"end"`
-	Codecs string  `json:"codecs"`
+	FrameRate float64 `json:"frameRate,omitempty"`
+	Start     float64 `json:"start"`
+	End       float64 `json:"end"`
+	Codecs    string  `json:"codecs"`
 }
 type RecordingLiveSegment struct {
 	Sequence   int                              `json:"sequence"`
@@ -28,6 +29,14 @@ func LiveRenditions() [3]RecordingRendition {
 
 }
 
+// Missing frame rate belongs only to history produced by the former 30fps validator.
+func historicalLiveFrameRate(fragment RecordingLiveFragment) float64 {
+	if fragment.FrameRate == 0 {
+		return 30
+	}
+	return fragment.FrameRate
+}
+
 // Only a complete, decoded three-rendition batch advances the common waterline.
 // Short segments wait for normal seal so a crash cannot manufacture an ENDLIST.
 func AppendLiveSegment(history []RecordingLiveSegment, batch map[string]RecordingLiveFragment, normalTail bool) ([]RecordingLiveSegment, error) {
@@ -39,12 +48,15 @@ func AppendLiveSegment(history []RecordingLiveSegment, batch map[string]Recordin
 	}
 	var reference *RecordingLiveFragment
 	cloned := make(map[string]RecordingLiveFragment, 3)
-	const tolerance = 1.0/30 + 0.001
 	for _, r := range LiveRenditions() {
 		value, ok := batch[r.Name]
 		if !ok {
 			return nil, ErrCaptureMissingObjects
 		}
+		if value.FrameRate != 30 && value.FrameRate != 30000.0/1001 {
+			return nil, ErrInvalidUpload
+		}
+		tolerance := 1/value.FrameRate + 0.001
 		duration := value.End - value.Start
 		if math.IsNaN(duration) || math.IsInf(duration, 0) || math.IsNaN(value.Start) || math.IsInf(value.Start, 0) || duration <= 0 || duration > 30+tolerance || !liveCodecs.MatchString(value.Codecs) {
 			return nil, ErrInvalidUpload
@@ -55,7 +67,7 @@ func AppendLiveSegment(history []RecordingLiveSegment, batch map[string]Recordin
 			}
 		} else {
 			last, ok := history[len(history)-1].Renditions[r.Name]
-			if !ok || history[len(history)-1].Sequence != len(history)-1 || math.Abs(last.End-value.Start) > tolerance || last.Codecs != value.Codecs || math.Abs(last.End-last.Start-30) > tolerance {
+			if !ok || history[len(history)-1].Sequence != len(history)-1 || math.Abs(last.End-value.Start) > tolerance || last.Codecs != value.Codecs || historicalLiveFrameRate(last) != value.FrameRate || math.Abs(last.End-last.Start-30) > tolerance {
 				return nil, ErrInvalidUpload
 			}
 		}
@@ -66,7 +78,7 @@ func AppendLiveSegment(history []RecordingLiveSegment, batch map[string]Recordin
 		if value.End-firstStart > RecordingMaxDurationSeconds+0.000001 {
 			return nil, ErrInvalidUpload
 		}
-		if reference != nil && (math.Abs(value.Start-reference.Start) > tolerance || math.Abs(value.End-reference.End) > tolerance) {
+		if reference != nil && (value.FrameRate != reference.FrameRate || math.Abs(value.Start-reference.Start) > tolerance || math.Abs(value.End-reference.End) > tolerance) {
 			return nil, ErrInvalidUpload
 		}
 		if reference == nil {
@@ -91,7 +103,12 @@ func RecordingLivePlaylists(history []RecordingLiveSegment, ended bool) (map[str
 			return nil, ErrInvalidInput
 		}
 		var err error
-		verified, err = AppendLiveSegment(verified, segment.Renditions, ended && i == len(history)-1)
+		batch := make(map[string]RecordingLiveFragment, 3)
+		for name, fragment := range segment.Renditions {
+			fragment.FrameRate = historicalLiveFrameRate(fragment)
+			batch[name] = fragment
+		}
+		verified, err = AppendLiveSegment(verified, batch, ended && i == len(history)-1)
 		if err != nil {
 			return nil, err
 		}
@@ -100,7 +117,7 @@ func RecordingLivePlaylists(history []RecordingLiveSegment, ended bool) (map[str
 	var master strings.Builder
 	master.WriteString("#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-INDEPENDENT-SEGMENTS\n")
 	for _, r := range LiveRenditions() {
-		fmt.Fprintf(&master, "#EXT-X-STREAM-INF:BANDWIDTH=%d,RESOLUTION=%dx%d,FRAME-RATE=30.000,CODECS=\"%s\"\n%s/index.m3u8\n", r.VideoBitrate+r.AudioBitrate, r.Width, r.Height, history[0].Renditions[r.Name].Codecs, r.Name)
+		fmt.Fprintf(&master, "#EXT-X-STREAM-INF:BANDWIDTH=%d,RESOLUTION=%dx%d,FRAME-RATE=%.3f,CODECS=\"%s\"\n%s/index.m3u8\n", r.VideoBitrate+r.AudioBitrate, r.Width, r.Height, historicalLiveFrameRate(history[0].Renditions[r.Name]), history[0].Renditions[r.Name].Codecs, r.Name)
 		var playlist strings.Builder
 		playlist.WriteString("#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:31\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:EVENT\n#EXT-X-MAP:URI=\"init.mp4\"\n")
 		for _, segment := range history {

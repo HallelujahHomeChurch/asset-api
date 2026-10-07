@@ -48,7 +48,7 @@ func TestLiveProgressFencesUnpublishedAndStaleClaims(t *testing.T) {
 	}
 	batch := map[string]assets.RecordingLiveFragment{}
 	for _, r := range assets.LiveRenditions() {
-		batch[r.Name] = assets.RecordingLiveFragment{Start: 0, End: 30, Codecs: "avc1.64001f,mp4a.40.2"}
+		batch[r.Name] = assets.RecordingLiveFragment{Start: 0, End: 30, FrameRate: 30000.0 / 1001, Codecs: "avc1.64001f,mp4a.40.2"}
 	}
 	snapshot, err := store.CommitLiveBatch(ctx, claim, batch)
 	if err != nil {
@@ -68,6 +68,19 @@ func TestLiveProgressFencesUnpublishedAndStaleClaims(t *testing.T) {
 	next, err := store.ClaimLiveValidation(ctx)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if got := next.Snapshot.Segments[0].Renditions["1080p"].FrameRate; got != 30000.0/1001 {
+		t.Fatalf("persisted measured frame rate: %v", got)
+	}
+	changed := map[string]assets.RecordingLiveFragment{}
+	for name, v := range batch {
+		v.Start = 30
+		v.End = 60
+		v.FrameRate = 30
+		changed[name] = v
+	}
+	if _, err := store.CommitLiveBatch(ctx, next, changed); !errors.Is(err, assets.ErrInvalidUpload) {
+		t.Fatalf("changed stored fps: %v", err)
 	}
 	if err := store.FinishLivePublication(ctx, claim, snapshot.Revision); !errors.Is(err, assets.ErrConflict) {
 		t.Fatalf("stale lease: %v", err)
@@ -167,7 +180,7 @@ func TestLiveNormalSealAfterPublishedFullSegmentAppendsEndOnly(t *testing.T) {
 		for _, n := range []string{"index.m3u8", "init.mp4", "seg-000000.m4s"} {
 			names = append(names, r.Name+"/"+n)
 		}
-		batch[r.Name] = assets.RecordingLiveFragment{Start: 0, End: 30, Codecs: "avc1.64001f,mp4a.40.2"}
+		batch[r.Name] = assets.RecordingLiveFragment{Start: 0, End: 30, FrameRate: 30, Codecs: "avc1.64001f,mp4a.40.2"}
 	}
 	for _, name := range names {
 		inv.Objects = append(inv.Objects, assets.RecordingPackageObject{Path: name, SizeBytes: 10, SHA256: strings.Repeat("a", 64)})
