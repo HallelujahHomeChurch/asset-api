@@ -124,3 +124,27 @@ func TestCaptureDependencyFailuresReturnUnavailable503(t *testing.T) {
 		})
 	}
 }
+
+func TestCaptureLiveProgressRequiresUploaderAndReportsPublishedWaterline(t *testing.T) {
+	actor := "22222222-2222-4222-8222-222222222222"
+	repo := &httpCaptureRepo{c: assets.RecordingCapture{ID: strings.Repeat("a", 32), ActorID: actor, Progress: assets.RecordingLiveProgress{Revision: 3, LastSequence: 2, MediaEndSeconds: 90}}}
+	svc := assets.NewRecordingCaptureService(repo, httpPackageObjects{}, time.Now)
+	h := New(nil, nil, map[string]bool{"hhc-web-api": true}, true, "", WorkloadAuthConfig{}, nil).WithRecordingCaptures(svc).Routes()
+	for _, owner := range []string{"", "other", actor} {
+		r := httptest.NewRequest("GET", "/priv/recording-captures/"+repo.c.ID+"/progress", nil)
+		r.Header.Set("X-Internal-Caller-App-Id", "hhc-web-api")
+		r.Header.Set("X-HHC-Actor-ID", owner)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		want := 403
+		if owner == actor {
+			want = 200
+		}
+		if w.Code != want {
+			t.Fatalf("progress auth: %d %s", w.Code, w.Body.String())
+		}
+		if want == 200 && (!strings.Contains(w.Body.String(), `"lastSequence":2`) || w.Header().Get("Cache-Control") != "private, no-store") {
+			t.Fatal(w.Body.String())
+		}
+	}
+}

@@ -47,6 +47,8 @@ type RecordingCapture struct {
 	PackageID                                  *string
 	TerminalAt                                 *time.Time
 	TerminalReason                             *string
+	Progress                                   RecordingLiveProgress
+	ReadGrantUntil                             *time.Time
 	Inventory                                  *RecordingPackageInventory
 }
 type RecordingLiveProgress struct {
@@ -104,7 +106,7 @@ func captureStatus(c RecordingCapture, cursor string, limit int) (RecordingCaptu
 		start = i + 1
 	}
 	end := min(start+limit, len(objects))
-	page := RecordingCaptureStatus{ID: c.ID, RecordingID: c.RecordingID, State: c.State, CreatedAt: c.CreatedAt, ExpiresAt: c.ExpiresAt, DeclaredBytes: c.DeclaredBytes, DeclaredObjects: c.DeclaredObjects, Objects: append([]RecordingCaptureObject{}, objects[start:end]...), PackageID: c.PackageID, TerminalAt: c.TerminalAt, TerminalReason: c.TerminalReason, Progress: RecordingLiveProgress{LastSequence: -1}}
+	page := RecordingCaptureStatus{ID: c.ID, RecordingID: c.RecordingID, State: c.State, CreatedAt: c.CreatedAt, ExpiresAt: c.ExpiresAt, DeclaredBytes: c.DeclaredBytes, DeclaredObjects: c.DeclaredObjects, Objects: append([]RecordingCaptureObject{}, objects[start:end]...), PackageID: c.PackageID, TerminalAt: c.TerminalAt, TerminalReason: c.TerminalReason, Progress: c.Progress}
 	if end < len(objects) {
 		page.NextCursor = objects[end-1].Path
 	}
@@ -121,7 +123,7 @@ func (s *RecordingCaptureService) Create(ctx context.Context, recording, actor, 
 		return RecordingCaptureResult{}, ErrInvalidInput
 	}
 	now := s.now().UTC()
-	c := RecordingCapture{ID: newID(), RecordingID: recording, ActorID: actor, CreateKey: key, State: "uploading", CreatedAt: now, ExpiresAt: now.Add(RecordingUploadTTL), Receipts: map[string]RecordingCaptureStoredReceipt{}}
+	c := RecordingCapture{ID: newID(), RecordingID: recording, ActorID: actor, CreateKey: key, State: "uploading", Progress: RecordingLiveProgress{LastSequence: -1}, CreatedAt: now, ExpiresAt: now.Add(RecordingUploadTTL), Receipts: map[string]RecordingCaptureStoredReceipt{}}
 	digest := captureDigest([]string{recording, actor})
 	c.Receipts[key] = RecordingCaptureStoredReceipt{digest, RecordingCaptureReceipt{key, "create", now, c.ID}}
 	got, err := s.repository.CreateCapture(ctx, c)

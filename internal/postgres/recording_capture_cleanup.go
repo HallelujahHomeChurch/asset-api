@@ -34,7 +34,7 @@ func (s *RecordingCaptureStore) ReconcileCaptures(ctx context.Context, deleteObj
 			return err
 		}
 	}
-	rows, err := s.db.QueryContext(ctx, `UPDATE recording_captures SET cleanup_after=clock_timestamp()+interval '5 minutes' WHERE id IN (SELECT id FROM recording_captures WHERE package_id IS NULL AND cleanup_after<=clock_timestamp() AND (state IN ('failed','expired','aborted') OR expires_at<=clock_timestamp()) ORDER BY cleanup_after LIMIT 10 FOR UPDATE SKIP LOCKED) RETURNING id`)
+	rows, err := s.db.QueryContext(ctx, `UPDATE recording_captures SET cleanup_after=clock_timestamp()+interval '5 minutes' WHERE id IN (SELECT id FROM recording_captures WHERE package_id IS NULL AND cleanup_after<=clock_timestamp() AND GREATEST(expires_at+interval '6 hours',COALESCE(terminal_at,expires_at)+interval '7 days')<=clock_timestamp() AND (state IN ('failed','expired','aborted') OR expires_at<=clock_timestamp()) ORDER BY cleanup_after LIMIT 10 FOR UPDATE SKIP LOCKED) RETURNING id`)
 	if err != nil {
 		return err
 	}

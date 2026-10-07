@@ -1,6 +1,7 @@
 package assets
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -9,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"strings"
 	"testing"
@@ -74,5 +76,40 @@ func TestPackageGrantScopesImmutablePrefixAndClampsRetention(t *testing.T) {
 	p.FinalPrefix = "recordings/packages/package-a/staging/"
 	if _, err := signer.IssuePackage(p, "scope-a", expiry, now); err == nil {
 		t.Fatal("mutable prefix accepted")
+	}
+}
+
+func TestLiveGrantCapsDeadlineAndProtectsReadLease(t *testing.T) {
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	encoded, _ := x509.MarshalPKCS8PrivateKey(key)
+	signer, _ := NewRecordingSigner(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: encoded}), "key-1", "hhc-media-test")
+	service, repo, _, now, c := captureTest(t)
+	c.Progress = RecordingLiveProgress{Revision: 3, LastSequence: 2, MediaEndSeconds: 90}
+	repo.captures[c.ID] = c
+	user, scope := c.ActorID, c.RecordingID
+	grant, err := service.GrantLive(context.Background(), signer, c.ID, c.RecordingID, user, scope, now.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var exchange, playback map[string]any
+	verifyJWT(t, grant.ExchangeCredential, &key.PublicKey, &exchange)
+	verifyJWT(t, exchange["playback"].(string), &key.PublicKey, &playback)
+	if playback["captureId"] != c.ID || playback["packageId"] != nil || playback["prefix"] != "recordings/captures/"+c.ID+"/final/" || playback["exp"] != float64(now.Add(5*time.Minute).Unix()) || exchange["exp"] != float64(now.Add(time.Minute).Unix()) {
+		t.Fatalf("bad live claims: %v", playback)
+	}
+	if repo.captures[c.ID].ReadGrantUntil == nil || !repo.captures[c.ID].ReadGrantUntil.Equal(grant.ExpiresAt) {
+		t.Fatal("grant cleanup fence missing")
+	}
+	if _, err := service.GrantLive(context.Background(), signer, c.ID, user, user, scope, now.Add(time.Hour)); err == nil {
+		t.Fatal("cross recording grant")
+	}
+	c = repo.captures[c.ID]
+	ended := now.Add(-31 * time.Minute)
+	c.Progress.Ended = true
+	c.Progress.EndedAt = &ended
+	c.Progress.MediaEndSeconds = 30
+	repo.captures[c.ID] = c
+	if _, err := service.GrantLive(context.Background(), signer, c.ID, c.RecordingID, user, scope, now.Add(time.Hour)); !errors.Is(err, ErrCaptureExpired) {
+		t.Fatalf("expired replay: %v", err)
 	}
 }

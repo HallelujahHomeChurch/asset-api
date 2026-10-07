@@ -45,6 +45,13 @@ func (s *RecordingPackageStore) CleanupPackage(ctx context.Context, id string, d
 		if !due {
 			return nil
 		}
+		var captureProtected bool
+		if err := s.locks.statements(ctx).QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM recording_captures c JOIN recording_live l ON l.capture_id=c.id WHERE c.package_id=$1 AND NOT (`+captureCleanupSafe+`))`, id).Scan(&captureProtected); err != nil {
+			return err
+		}
+		if captureProtected {
+			return nil
+		}
 		// Persist before provider calls so even a timeout cannot starve later items.
 		if _, err := s.locks.statements(ctx).ExecContext(ctx, `UPDATE recording_packages SET cleanup_after=clock_timestamp()+interval '5 minutes' WHERE id=$1`, id); err != nil {
 			return err

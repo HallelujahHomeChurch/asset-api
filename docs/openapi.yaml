@@ -1443,8 +1443,8 @@ paths:
       operationId: createRecordingCapture
       summary: createRecordingCapture
       description: Private progressive intake. CMS enforces a stop receipt before seal. Confirm queues durable validation; PUT/listing
-        evidence is not immutable hash/media verification. Progress and live grants fail closed until progressive validation
-        is implemented.
+        evidence is not immutable hash/media verification. Progress exposes only the published three-rendition common waterline.
+        Live grants require three verified segments and are bounded by five minutes and capture/replay expiry.
       tags:
       - Private
       x-hhc-visibility: private
@@ -1540,8 +1540,8 @@ paths:
       operationId: getRecordingCapture
       summary: getRecordingCapture
       description: Private progressive intake. CMS enforces a stop receipt before seal. Confirm queues durable validation; PUT/listing
-        evidence is not immutable hash/media verification. Progress and live grants fail closed until progressive validation
-        is implemented.
+        evidence is not immutable hash/media verification. Progress exposes only the published three-rendition common waterline.
+        Live grants require three verified segments and are bounded by five minutes and capture/replay expiry.
       tags:
       - Private
       x-hhc-visibility: private
@@ -1651,8 +1651,8 @@ paths:
       operationId: declareRecordingCapture
       summary: declareRecordingCapture
       description: Private progressive intake. CMS enforces a stop receipt before seal. Confirm queues durable validation; PUT/listing
-        evidence is not immutable hash/media verification. Progress and live grants fail closed until progressive validation
-        is implemented.
+        evidence is not immutable hash/media verification. Progress exposes only the published three-rendition common waterline.
+        Live grants require three verified segments and are bounded by five minutes and capture/replay expiry.
       tags:
       - Private
       x-hhc-visibility: private
@@ -1754,8 +1754,8 @@ paths:
       operationId: signRecordingCapture
       summary: signRecordingCapture
       description: Private progressive intake. CMS enforces a stop receipt before seal. Confirm queues durable validation; PUT/listing
-        evidence is not immutable hash/media verification. Progress and live grants fail closed until progressive validation
-        is implemented.
+        evidence is not immutable hash/media verification. Progress exposes only the published three-rendition common waterline.
+        Live grants require three verified segments and are bounded by five minutes and capture/replay expiry.
       tags:
       - Private
       x-hhc-visibility: private
@@ -1857,8 +1857,8 @@ paths:
       operationId: confirmRecordingCapture
       summary: confirmRecordingCapture
       description: Private progressive intake. CMS enforces a stop receipt before seal. Confirm queues durable validation; PUT/listing
-        evidence is not immutable hash/media verification. Progress and live grants fail closed until progressive validation
-        is implemented.
+        evidence is not immutable hash/media verification. Progress exposes only the published three-rendition common waterline.
+        Live grants require three verified segments and are bounded by five minutes and capture/replay expiry.
       tags:
       - Private
       x-hhc-visibility: private
@@ -1960,8 +1960,8 @@ paths:
       operationId: sealRecordingCapture
       summary: sealRecordingCapture
       description: Private progressive intake. CMS enforces a stop receipt before seal. Confirm queues durable validation; PUT/listing
-        evidence is not immutable hash/media verification. Progress and live grants fail closed until progressive validation
-        is implemented.
+        evidence is not immutable hash/media verification. Progress exposes only the published three-rendition common waterline.
+        Live grants require three verified segments and are bounded by five minutes and capture/replay expiry.
       tags:
       - Private
       x-hhc-visibility: private
@@ -2063,8 +2063,8 @@ paths:
       operationId: abortRecordingCapture
       summary: abortRecordingCapture
       description: Private progressive intake. CMS enforces a stop receipt before seal. Confirm queues durable validation; PUT/listing
-        evidence is not immutable hash/media verification. Progress and live grants fail closed until progressive validation
-        is implemented.
+        evidence is not immutable hash/media verification. Progress exposes only the published three-rendition common waterline.
+        Live grants require three verified segments and are bounded by five minutes and capture/replay expiry.
       tags:
       - Private
       x-hhc-visibility: private
@@ -2166,8 +2166,8 @@ paths:
       operationId: getRecordingLiveProgress
       summary: getRecordingLiveProgress
       description: Private progressive intake. CMS enforces a stop receipt before seal. Confirm queues durable validation; PUT/listing
-        evidence is not immutable hash/media verification. Progress and live grants fail closed until progressive validation
-        is implemented.
+        evidence is not immutable hash/media verification. Progress exposes only the published three-rendition common waterline.
+        Live grants require three verified segments and are bounded by five minutes and capture/replay expiry.
       tags:
       - Private
       x-hhc-visibility: private
@@ -2263,8 +2263,8 @@ paths:
       operationId: grantRecordingLivePlayback
       summary: grantRecordingLivePlayback
       description: Private progressive intake. CMS enforces a stop receipt before seal. Confirm queues durable validation; PUT/listing
-        evidence is not immutable hash/media verification. Progress and live grants fail closed until progressive validation
-        is implemented.
+        evidence is not immutable hash/media verification. Progress exposes only the published three-rendition common waterline.
+        Live grants require three verified segments and are bounded by five minutes and capture/replay expiry.
       tags:
       - Private
       x-hhc-visibility: private

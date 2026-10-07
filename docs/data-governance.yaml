@@ -156,6 +156,51 @@ datasets:
     legal_basis: {status: pending_legal, reference: null}
     retention: {status: pending_legal, rule: null, action: none}
     cleanup: {mode: none, implementation: [], evidence: []}
+  - id: asset.recording-live
+    owner: asset-api
+    purpose: Validate and retain private live media without storing playback credentials.
+    necessity: required
+    storage: {kind: postgres, resource: recording_live, sources: [{path: internal/postgres/recording_live.go, symbol: RecordingCaptureStore.ClaimLiveValidation}]}
+    subject_keys: []
+    data_classes: [identity, content, security, activity]
+    fields:
+      - {name: recording_live.capture_id, purpose: Bind validation to capture, necessity: required, data_classes: [activity, security]}
+      - {name: recording_live.segments, purpose: Preserve verified fragment timelines and codecs, necessity: required, data_classes: [activity, security]}
+      - {name: recording_live.revision, purpose: Fence immutable playlist revisions, necessity: required, data_classes: [activity, security]}
+      - {name: recording_live.published_revision, purpose: Expose only durable published waterline, necessity: required, data_classes: [activity, security]}
+      - {name: recording_live.published_sequence, purpose: Bound playback to verified contiguous media, necessity: required, data_classes: [activity, security]}
+      - {name: recording_live.published_media_end, purpose: Measure verified playback duration, necessity: required, data_classes: [activity, security]}
+      - {name: recording_live.last_advanced_at, purpose: Distinguish real progress from heartbeat, necessity: required, data_classes: [activity, security]}
+      - {name: recording_live.ended, purpose: Require normal full inventory closure, necessity: required, data_classes: [activity, security]}
+      - {name: recording_live.ended_at, purpose: Anchor replay deadline, necessity: required, data_classes: [activity, security]}
+      - {name: recording_live.claim_id, purpose: Fence processing attempts, necessity: required, data_classes: [activity, security]}
+      - {name: recording_live.claimed_until, purpose: Expire stale workers, necessity: required, data_classes: [activity, security]}
+      - {name: recording_live.next_attempt_at, purpose: Bound retry scheduling, necessity: required, data_classes: [activity, security]}
+      - {name: recording_live.attempts, purpose: Back off retry failures, necessity: required, data_classes: [activity, security]}
+      - {name: recording_live.read_grant_until, purpose: Protect active playback during cleanup, necessity: required, data_classes: [activity, security]}
+      - {name: recording_live.cleanup_after, purpose: Schedule bounded remote cleanup, necessity: required, data_classes: [activity, security]}
+    attribution: {mode: manual, explanation: CMS owns uploader identity and viewer scope authorization.}
+    legal_basis: {status: pending_legal, reference: null}
+    retention: {status: pending_legal, rule: null, action: none}
+    cleanup: {mode: none, implementation: [], evidence: []}
+  - id: asset.recording-live-attempts
+    owner: asset-api
+    purpose: Validate and retain private live media without storing playback credentials.
+    necessity: required
+    storage: {kind: postgres, resource: recording_live_attempts, sources: [{path: internal/postgres/recording_live.go, symbol: RecordingCaptureStore.ClaimLiveValidation}]}
+    subject_keys: []
+    data_classes: [identity, content, security, activity]
+    fields:
+      - {name: recording_live_attempts.claim_id, purpose: Identify immutable validation copy namespace, necessity: required, data_classes: [activity, security]}
+      - {name: recording_live_attempts.capture_id, purpose: Bind copy namespace to capture, necessity: required, data_classes: [activity, security]}
+      - {name: recording_live_attempts.sequence, purpose: Enumerate declared attempt media, necessity: required, data_classes: [activity, security]}
+      - {name: recording_live_attempts.created_at, purpose: Anchor writer grace, necessity: required, data_classes: [activity, security]}
+      - {name: recording_live_attempts.finished_at, purpose: Track completed processing lease, necessity: required, data_classes: [activity, security]}
+      - {name: recording_live_attempts.purged, purpose: Drain cleanup in bounded batches, necessity: required, data_classes: [activity, security]}
+    attribution: {mode: manual, explanation: CMS owns uploader identity and viewer scope authorization.}
+    legal_basis: {status: pending_legal, reference: null}
+    retention: {status: pending_legal, rule: null, action: none}
+    cleanup: {mode: none, implementation: [], evidence: []}
   - id: asset.recording-sources
     owner: asset-api
     purpose: Bind temporary browser recording inputs to authorized CMS actors and retain fenced processing and retry receipts without entering the ordinary asset scan pipeline.

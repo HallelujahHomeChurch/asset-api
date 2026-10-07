@@ -132,8 +132,9 @@ func ProbeCommand(ctx context.Context, binary string, args ...string) ([]byte, e
 }
 
 type segmentProbe struct {
-	Start, End float64
-	Codecs     string
+	AudioChannels int
+	Start, End    float64
+	Codecs        string
 }
 
 // Only bounded ffprobe output from a local init+fragment is accepted here.
@@ -168,6 +169,7 @@ func validatePackageSegmentProbe(data []byte, r assets.RecordingRendition) (segm
 		return invalid()
 	}
 	video, audio := -1, -1
+	audioChannels := 0
 	codecs := ""
 	for _, s := range output.Streams {
 		switch s.Type {
@@ -192,6 +194,7 @@ func validatePackageSegmentProbe(data []byte, r assets.RecordingRendition) (segm
 				return invalid()
 			}
 			audio = s.Index
+			audioChannels = s.Channels
 		default:
 			return invalid()
 		}
@@ -266,7 +269,7 @@ func validatePackageSegmentProbe(data []byte, r assets.RecordingRendition) (segm
 	if math.Abs(v[0].pts-a[0].pts) > 0.1 || math.Abs(end-a[len(a)-1].pts-a[len(a)-1].duration) > 0.1 || end-v[0].pts > 30+1/r.FrameRate+0.001 {
 		return invalid()
 	}
-	return segmentProbe{Start: v[0].pts, End: end, Codecs: codecs}, nil
+	return segmentProbe{Start: v[0].pts, End: end, Codecs: codecs, AudioChannels: audioChannels}, nil
 }
 
 func avccCodecs(extra string) (string, error) {

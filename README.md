@@ -204,6 +204,26 @@ The recording Job repeatedly cleans unsealed terminal/expired staging keys and
 expires unfinished sealed captures; ready VOD remains under normal retention.
 Capture receipts are bounded to 20,002 and retained with recovery metadata.
 
-Progress and live grant endpoints return 503 until progressive immutable media
-validation is implemented. This intake change does not activate production
-configuration or establish live playback readiness.
+The existing recording Job validates each closed 30-second three-rendition batch
+from immutable hash-checked copies, then publishes revisioned EVENT playlists
+and conditionally advances an R2 common waterline. Sequence zero remains in every
+playlist; only a complete normal seal appends ENDLIST. Queued objects are never
+playable. Retries resume durable publication without decoding historical media.
+The existing two processing slots bound concurrency; live batches receive the
+first bounded 50-second scheduling window of each Job execution.
+
+Private progress reports the published revision. Live grants require three common
+segments and expire within five minutes, capture expiry and the requested CMS
+replay/retention deadline; exchange credentials expire within 60 seconds. The
+Worker authorizes each request before cache and restricts segments to the current
+waterline. CMS owns membership, registration and post-stop scope renewal.
+
+Remote failed captures retain at least seven days. Capture media cleanup waits
+for capture expiry plus the existing worker's six-hour writer grace, grants and
+leases; it never enumerates ready VOD final objects. Candidate copies and old
+playlist revisions are discovered from durable metadata and removed in bounded
+batches. This conservative grace temporarily retains duplicate bytes; production
+cost and cadence measurements remain an integration gate.
+
+Local synthetic HLS/DB/Worker tests are not provider or Windows OBS acceptance.
+No production configuration is activated by this change.

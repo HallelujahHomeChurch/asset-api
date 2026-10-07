@@ -54,6 +54,9 @@ func TestCaptureAbortRejectsReadyCommittedAfterStaleRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO recording_live(capture_id) SELECT id FROM recording_captures ON CONFLICT DO NOTHING`); err != nil {
+		t.Fatal(err)
+	}
 	barrier := abortReadyBarrierRepository{NewRecordingCaptureStore(db), make(chan struct{}), make(chan struct{})}
 	workerLocked := make(chan struct{})
 	workerResult := make(chan error, 1)

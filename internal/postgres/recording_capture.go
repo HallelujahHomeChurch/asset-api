@@ -69,6 +69,9 @@ func (s *RecordingCaptureStore) CreateCapture(ctx context.Context, c assets.Reco
 		if err = readCaptureObjects(ctx, tx, &old); err != nil {
 			return c, err
 		}
+		if err = tx.QueryRowContext(ctx, `SELECT published_revision,published_sequence,published_media_end,last_advanced_at,ended_at,ended AND published_revision=revision FROM recording_live WHERE capture_id=$1`, old.ID).Scan(&old.Progress.Revision, &old.Progress.LastSequence, &old.Progress.MediaEndSeconds, &old.Progress.LastAdvancedAt, &old.Progress.EndedAt, &old.Progress.Ended); err != nil {
+			return c, err
+		}
 		return old, tx.Commit()
 	}
 	if !errors.Is(err, assets.ErrNotFound) {
@@ -97,6 +100,9 @@ func (s *RecordingCaptureStore) CreateCapture(ctx context.Context, c assets.Reco
 	_, err = tx.ExecContext(ctx, `INSERT INTO recording_captures(id,actor_id,recording_id,create_key,state,created_at,expires_at,receipts) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, c.ID, c.ActorID, c.RecordingID, c.CreateKey, c.State, c.CreatedAt, c.ExpiresAt, receipts)
 	if err != nil {
 		return c, mapCollectionError(err)
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO recording_live(capture_id) VALUES($1)`, c.ID); err != nil {
+		return c, err
 	}
 	return c, tx.Commit()
 }
@@ -130,7 +136,7 @@ func (s *RecordingCaptureStore) UpdateCapture(ctx context.Context, id string, fn
 	if err = readCaptureObjects(ctx, tx, &c); err != nil {
 		return c, err
 	}
-	if c.PackageID != nil && c.State != "aborted" {
+	if c.PackageID != nil && c.State != "aborted" && c.State != "failed" && c.State != "expired" {
 		var state string
 		err = tx.QueryRowContext(ctx, `SELECT state FROM recording_packages WHERE id=$1`, *c.PackageID).Scan(&state)
 		if err != nil {
@@ -177,6 +183,10 @@ func (s *RecordingCaptureStore) UpdateCapture(ctx context.Context, id string, fn
 		c.TerminalAt = &at
 		c.TerminalReason = &reason
 	}
+	err = tx.QueryRowContext(ctx, `SELECT published_revision,published_sequence,published_media_end,last_advanced_at,ended_at,ended AND published_revision=revision,read_grant_until FROM recording_live WHERE capture_id=$1 FOR UPDATE`, c.ID).Scan(&c.Progress.Revision, &c.Progress.LastSequence, &c.Progress.MediaEndSeconds, &c.Progress.LastAdvancedAt, &c.Progress.EndedAt, &c.Progress.Ended, &c.ReadGrantUntil)
+	if err != nil {
+		return c, err
+	}
 	previousObjects := make(map[string]assets.RecordingCaptureObject, len(c.Objects))
 	for _, o := range c.Objects {
 		previousObjects[o.Path] = o
@@ -222,7 +232,7 @@ func (s *RecordingCaptureStore) UpdateCapture(ctx context.Context, id string, fn
 		if err = tx.QueryRowContext(ctx, `SELECT state FROM recording_packages WHERE id=$1 FOR UPDATE`, c.ID).Scan(&authoritativeState); err != nil {
 			return c, err
 		}
-		if authoritativeState == "ready" {
+		if authoritativeState == "ready" && c.State == "aborted" {
 			return c, assets.ErrConflict
 		}
 		state := "failed"
@@ -238,6 +248,9 @@ func (s *RecordingCaptureStore) UpdateCapture(ctx context.Context, id string, fn
 		if _, err = tx.ExecContext(ctx, `UPDATE recording_processing_slots SET job_id=NULL,claim_id=NULL,leased_until=NULL WHERE job_id=$1`, c.ID); err != nil {
 			return c, err
 		}
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE recording_live SET read_grant_until=$2 WHERE capture_id=$1`, c.ID, c.ReadGrantUntil); err != nil {
+		return c, err
 	}
 	receipts, err := json.Marshal(c.Receipts)
 	if err != nil {

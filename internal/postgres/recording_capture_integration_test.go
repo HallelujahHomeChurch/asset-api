@@ -59,6 +59,15 @@ func TestCaptureDurableQueueReceiptAndCleanup(t *testing.T) {
 	if err := store.ReconcileCaptures(ctx, func(_ context.Context, keys []string) error { deleted = append(deleted, keys...); return nil }); err != nil {
 		t.Fatal(err)
 	}
+	if len(deleted) != 0 {
+		t.Fatal("failed media deleted before seven days")
+	}
+	if _, err = db.Exec(`UPDATE recording_captures SET created_at=now()-interval '10 days',expires_at=now()-interval '9 days',terminal_at=now()-interval '8 days' WHERE id=$1`, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ReconcileCaptures(ctx, func(_ context.Context, keys []string) error { deleted = append(deleted, keys...); return nil }); err != nil {
+		t.Fatal(err)
+	}
 	if len(deleted) != 1 || deleted[0] != "recordings/packages/capture-a/staging/720p/init.mp4" {
 		t.Fatalf("cleanup: %v", deleted)
 	}
@@ -210,6 +219,9 @@ func TestCaptureExpiryFencesPackageReadyCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO recording_live(capture_id) SELECT id FROM recording_captures ON CONFLICT DO NOTHING`); err != nil {
+		t.Fatal(err)
+	}
 	if err = packages.FinishPackageValidation(ctx, p.ID, claim.ClaimID, true, ""); !errors.Is(err, assets.ErrConflict) {
 		t.Fatalf("late ready commit: %v", err)
 	}
@@ -231,6 +243,9 @@ func TestCaptureFullPackageValidationProjectsVerifiedObjects(t *testing.T) {
 	}
 	_, err := db.Exec(`INSERT INTO recording_captures(id,actor_id,recording_id,create_key,state,created_at,expires_at,package_id,declared_objects,declared_bytes) VALUES('package-a','actor-a','recording-a','create-a','freezing',clock_timestamp(),clock_timestamp()+interval '1 hour','package-a',4,400)`)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO recording_live(capture_id) SELECT id FROM recording_captures ON CONFLICT DO NOTHING`); err != nil {
 		t.Fatal(err)
 	}
 	for _, o := range p.Inventory.Objects {

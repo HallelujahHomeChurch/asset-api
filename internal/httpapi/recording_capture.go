@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func (h *Handler) WithRecordingCaptures(service *assets.RecordingCaptureService) *Handler {
@@ -209,9 +210,35 @@ func (h *Handler) abortRecordingCapture(w http.ResponseWriter, r *http.Request) 
 	}
 	writeJSON(w, 200, result)
 }
-func (h *Handler) unavailableLiveCapture(w http.ResponseWriter, r *http.Request) {
+
+func (h *Handler) recordingLiveProgress(w http.ResponseWriter, r *http.Request) {
 	if !h.captureAllowed(w, r) {
 		return
 	}
-	writeError(w, 503, "capture_unavailable", "immutable progressive media validation is not enabled")
+	result, err := h.recordingCaptures.LiveProgress(r.Context(), r.PathValue("captureID"), captureActor(r))
+	if err != nil {
+		captureError(w, err)
+		return
+	}
+	writeJSON(w, 200, result)
+}
+func (h *Handler) grantRecordingLive(w http.ResponseWriter, r *http.Request) {
+	if !h.captureAllowed(w, r) {
+		return
+	}
+	var input struct {
+		RecordingID     string    `json:"recordingId"`
+		UserID          string    `json:"userId"`
+		PlaybackScopeID string    `json:"playbackScopeId"`
+		ExpiresAt       time.Time `json:"expiresAt"`
+	}
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	result, err := h.recordingCaptures.GrantLive(r.Context(), h.recordingSigner, r.PathValue("captureID"), input.RecordingID, input.UserID, input.PlaybackScopeID, input.ExpiresAt)
+	if err != nil {
+		captureError(w, err)
+		return
+	}
+	writeJSON(w, 200, result)
 }
