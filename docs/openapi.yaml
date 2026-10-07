@@ -1438,6 +1438,928 @@ paths:
         '403': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
+  /priv/recording-captures:
+    post:
+      operationId: createRecordingCapture
+      summary: createRecordingCapture
+      description: Private progressive intake. CMS enforces a stop receipt before seal. Confirm queues durable validation; PUT/listing
+        evidence is not immutable hash/media verification. Progress exposes only the published three-rendition common waterline.
+        Live grants require three verified segments and are bounded by five minutes and capture/replay expiry.
+      tags:
+      - Private
+      x-hhc-visibility: private
+      x-hhc-callers:
+      - hhc-web-api
+      x-hhc-cache: private, no-store
+      security:
+      - daprCaller: []
+      - workloadPrincipal: []
+      parameters:
+      - $ref: '#/components/parameters/RecordingActorID'
+      responses:
+        '201':
+          description: Accepted operation result; acceptance is not verified media readiness.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureResult'
+        '400':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '401':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '403':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '404':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '409':
+          description: State/key conflict or missing objects; poll and reconcile before retry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '410':
+          description: Fixed capture deadline passed; preserve local media.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '413':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '429':
+          description: Retry after the Retry-After delay.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds until retry.
+        '503':
+          description: Temporary dependency failure; capped backoff with jitter.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds until retry.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecordingCaptureCreateInput'
+  /priv/recording-captures/{captureId}:
+    get:
+      operationId: getRecordingCapture
+      summary: getRecordingCapture
+      description: Private progressive intake. CMS enforces a stop receipt before seal. Confirm queues durable validation; PUT/listing
+        evidence is not immutable hash/media verification. Progress exposes only the published three-rendition common waterline.
+        Live grants require three verified segments and are bounded by five minutes and capture/replay expiry.
+      tags:
+      - Private
+      x-hhc-visibility: private
+      x-hhc-callers:
+      - hhc-web-api
+      x-hhc-cache: private, no-store
+      security:
+      - daprCaller: []
+      - workloadPrincipal: []
+      parameters:
+      - $ref: '#/components/parameters/RecordingActorID'
+      - name: captureId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 128
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          default: 1000
+      responses:
+        '200':
+          description: Accepted operation result; acceptance is not verified media readiness.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureStatus'
+        '400':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '401':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '403':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '404':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '409':
+          description: State/key conflict or missing objects; poll and reconcile before retry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '410':
+          description: Fixed capture deadline passed; preserve local media.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '413':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '429':
+          description: Retry after the Retry-After delay.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds until retry.
+        '503':
+          description: Temporary dependency failure; capped backoff with jitter.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds until retry.
+  /priv/recording-captures/{captureId}/objects:
+    post:
+      operationId: declareRecordingCapture
+      summary: declareRecordingCapture
+      description: Private progressive intake. CMS enforces a stop receipt before seal. Confirm queues durable validation; PUT/listing
+        evidence is not immutable hash/media verification. Progress exposes only the published three-rendition common waterline.
+        Live grants require three verified segments and are bounded by five minutes and capture/replay expiry.
+      tags:
+      - Private
+      x-hhc-visibility: private
+      x-hhc-callers:
+      - hhc-web-api
+      x-hhc-cache: private, no-store
+      security:
+      - daprCaller: []
+      - workloadPrincipal: []
+      parameters:
+      - $ref: '#/components/parameters/RecordingActorID'
+      - name: captureId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+      responses:
+        '200':
+          description: Accepted operation result; acceptance is not verified media readiness.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureResult'
+        '400':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '401':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '403':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '404':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '409':
+          description: State/key conflict or missing objects; poll and reconcile before retry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '410':
+          description: Fixed capture deadline passed; preserve local media.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '413':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '429':
+          description: Retry after the Retry-After delay.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds until retry.
+        '503':
+          description: Temporary dependency failure; capped backoff with jitter.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds until retry.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecordingCaptureDeclareInput'
+  /priv/recording-captures/{captureId}/sign:
+    post:
+      operationId: signRecordingCapture
+      summary: signRecordingCapture
+      description: Private progressive intake. CMS enforces a stop receipt before seal. Confirm queues durable validation; PUT/listing
+        evidence is not immutable hash/media verification. Progress exposes only the published three-rendition common waterline.
+        Live grants require three verified segments and are bounded by five minutes and capture/replay expiry.
+      tags:
+      - Private
+      x-hhc-visibility: private
+      x-hhc-callers:
+      - hhc-web-api
+      x-hhc-cache: private, no-store
+      security:
+      - daprCaller: []
+      - workloadPrincipal: []
+      parameters:
+      - $ref: '#/components/parameters/RecordingActorID'
+      - name: captureId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+      responses:
+        '200':
+          description: Accepted operation result; acceptance is not verified media readiness.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureSignedObjects'
+        '400':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '401':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '403':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '404':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '409':
+          description: State/key conflict or missing objects; poll and reconcile before retry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '410':
+          description: Fixed capture deadline passed; preserve local media.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '413':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '429':
+          description: Retry after the Retry-After delay.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds until retry.
+        '503':
+          description: Temporary dependency failure; capped backoff with jitter.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds until retry.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecordingCaptureSignInput'
+  /priv/recording-captures/{captureId}/confirm:
+    post:
+      operationId: confirmRecordingCapture
+      summary: confirmRecordingCapture
+      description: Private progressive intake. CMS enforces a stop receipt before seal. Confirm queues durable validation; PUT/listing
+        evidence is not immutable hash/media verification. Progress exposes only the published three-rendition common waterline.
+        Live grants require three verified segments and are bounded by five minutes and capture/replay expiry.
+      tags:
+      - Private
+      x-hhc-visibility: private
+      x-hhc-callers:
+      - hhc-web-api
+      x-hhc-cache: private, no-store
+      security:
+      - daprCaller: []
+      - workloadPrincipal: []
+      parameters:
+      - $ref: '#/components/parameters/RecordingActorID'
+      - name: captureId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+      responses:
+        '202':
+          description: Accepted operation result; acceptance is not verified media readiness.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureResult'
+        '400':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '401':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '403':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '404':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '409':
+          description: State/key conflict or missing objects; poll and reconcile before retry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '410':
+          description: Fixed capture deadline passed; preserve local media.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '413':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '429':
+          description: Retry after the Retry-After delay.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds until retry.
+        '503':
+          description: Temporary dependency failure; capped backoff with jitter.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds until retry.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecordingCaptureConfirmInput'
+  /priv/recording-captures/{captureId}/seal:
+    post:
+      operationId: sealRecordingCapture
+      summary: sealRecordingCapture
+      description: Private progressive intake. CMS enforces a stop receipt before seal. Confirm queues durable validation; PUT/listing
+        evidence is not immutable hash/media verification. Progress exposes only the published three-rendition common waterline.
+        Live grants require three verified segments and are bounded by five minutes and capture/replay expiry.
+      tags:
+      - Private
+      x-hhc-visibility: private
+      x-hhc-callers:
+      - hhc-web-api
+      x-hhc-cache: private, no-store
+      security:
+      - daprCaller: []
+      - workloadPrincipal: []
+      parameters:
+      - $ref: '#/components/parameters/RecordingActorID'
+      - name: captureId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+      responses:
+        '202':
+          description: Accepted operation result; acceptance is not verified media readiness.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureResult'
+        '400':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '401':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '403':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '404':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '409':
+          description: State/key conflict or missing objects; poll and reconcile before retry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '410':
+          description: Fixed capture deadline passed; preserve local media.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '413':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '429':
+          description: Retry after the Retry-After delay.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds until retry.
+        '503':
+          description: Temporary dependency failure; capped backoff with jitter.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds until retry.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecordingCaptureSealInput'
+  /priv/recording-captures/{captureId}/abort:
+    post:
+      operationId: abortRecordingCapture
+      summary: abortRecordingCapture
+      description: Private progressive intake. CMS enforces a stop receipt before seal. Confirm queues durable validation; PUT/listing
+        evidence is not immutable hash/media verification. Progress exposes only the published three-rendition common waterline.
+        Live grants require three verified segments and are bounded by five minutes and capture/replay expiry.
+      tags:
+      - Private
+      x-hhc-visibility: private
+      x-hhc-callers:
+      - hhc-web-api
+      x-hhc-cache: private, no-store
+      security:
+      - daprCaller: []
+      - workloadPrincipal: []
+      parameters:
+      - $ref: '#/components/parameters/RecordingActorID'
+      - name: captureId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+      responses:
+        '200':
+          description: Accepted operation result; acceptance is not verified media readiness.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureResult'
+        '400':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '401':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '403':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '404':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '409':
+          description: State/key conflict or missing objects; poll and reconcile before retry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '410':
+          description: Fixed capture deadline passed; preserve local media.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '413':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '429':
+          description: Retry after the Retry-After delay.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds until retry.
+        '503':
+          description: Temporary dependency failure; capped backoff with jitter.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds until retry.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecordingCaptureAbortInput'
+  /priv/recording-captures/{captureId}/progress:
+    get:
+      operationId: getRecordingLiveProgress
+      summary: getRecordingLiveProgress
+      description: Private progressive intake. CMS enforces a stop receipt before seal. Confirm queues durable validation; PUT/listing
+        evidence is not immutable hash/media verification. Progress exposes only the published three-rendition common waterline.
+        Live grants require three verified segments and are bounded by five minutes and capture/replay expiry.
+      tags:
+      - Private
+      x-hhc-visibility: private
+      x-hhc-callers:
+      - hhc-web-api
+      x-hhc-cache: private, no-store
+      security:
+      - daprCaller: []
+      - workloadPrincipal: []
+      parameters:
+      - $ref: '#/components/parameters/RecordingActorID'
+      - name: captureId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+      responses:
+        '200':
+          description: Accepted operation result; acceptance is not verified media readiness.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingLiveProgress'
+        '400':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '401':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '403':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '404':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '409':
+          description: State/key conflict or missing objects; poll and reconcile before retry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '410':
+          description: Fixed capture deadline passed; preserve local media.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '413':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '429':
+          description: Retry after the Retry-After delay.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds until retry.
+        '503':
+          description: Temporary dependency failure; capped backoff with jitter.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds until retry.
+  /priv/recording-captures/{captureId}/grant:
+    post:
+      operationId: grantRecordingLivePlayback
+      summary: grantRecordingLivePlayback
+      description: Private progressive intake. CMS enforces a stop receipt before seal. Confirm queues durable validation; PUT/listing
+        evidence is not immutable hash/media verification. Progress exposes only the published three-rendition common waterline.
+        Live grants require three verified segments and are bounded by five minutes and capture/replay expiry.
+      tags:
+      - Private
+      x-hhc-visibility: private
+      x-hhc-callers:
+      - hhc-web-api
+      x-hhc-cache: private, no-store
+      security:
+      - daprCaller: []
+      - workloadPrincipal: []
+      parameters:
+      - name: captureId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+      responses:
+        '200':
+          description: Accepted operation result; acceptance is not verified media readiness.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingMediaGrant'
+        '400':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '401':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '403':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '404':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '409':
+          description: State/key conflict or missing objects; poll and reconcile before retry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '410':
+          description: Fixed capture deadline passed; preserve local media.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '413':
+          description: Rejected request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+        '429':
+          description: Retry after the Retry-After delay.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds until retry.
+        '503':
+          description: Temporary dependency failure; capped backoff with jitter.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingCaptureErrorResponse'
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds until retry.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecordingLiveGrantInput'
 components:
   securitySchemes:
     daprCaller:
@@ -1523,6 +2445,361 @@ components:
     CollectionACLMutation: { description: Collection ACL mutation., content: { application/json: { schema: { $ref: '#/components/schemas/CollectionACLMutation' } } } }
     DeleteCollectionItems: { description: Collection deletion result., content: { application/json: { schema: { $ref: '#/components/schemas/DeleteCollectionItemsResult' } } } }
   schemas:
+    RecordingCaptureOperationInput:
+      type: object
+      additionalProperties: false
+      required:
+      - operationKey
+      properties:
+        operationKey:
+          type: string
+          pattern: ^[a-zA-Z0-9._:-]{1,128}$
+    RecordingCaptureDeclareInput:
+      type: object
+      additionalProperties: false
+      required:
+      - operationKey
+      - objects
+      properties:
+        operationKey:
+          type: string
+          pattern: ^[a-zA-Z0-9._:-]{1,128}$
+        objects:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/RecordingPackageObject'
+    RecordingCaptureSignInput:
+      type: object
+      additionalProperties: false
+      required:
+      - paths
+      properties:
+        paths:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: string
+            pattern: ^(master\.m3u8|(480p|720p|1080p)/(index\.m3u8|init\.mp4|seg-[0-9]{6}\.m4s))$
+          uniqueItems: true
+    RecordingCaptureConfirmInput:
+      type: object
+      additionalProperties: false
+      required:
+      - operationKey
+      - paths
+      properties:
+        operationKey:
+          type: string
+          pattern: ^[a-zA-Z0-9._:-]{1,128}$
+        paths:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: string
+            pattern: ^(master\.m3u8|(480p|720p|1080p)/(index\.m3u8|init\.mp4|seg-[0-9]{6}\.m4s))$
+          uniqueItems: true
+    RecordingCaptureAbortInput:
+      type: object
+      additionalProperties: false
+      required:
+      - operationKey
+      - reasonCode
+      properties:
+        operationKey:
+          type: string
+          pattern: ^[a-zA-Z0-9._:-]{1,128}$
+        reasonCode:
+          type: string
+          enum:
+          - user_abort
+          - disk_limit
+          - encoder_failure
+          - capture_incomplete
+    RecordingCaptureSealInput:
+      type: object
+      additionalProperties: false
+      required:
+      - operationKey
+      - normalEnd
+      - inventory
+      properties:
+        operationKey:
+          type: string
+          pattern: ^[a-zA-Z0-9._:-]{1,128}$
+        normalEnd:
+          type: boolean
+          const: true
+        inventory:
+          allOf:
+          - $ref: '#/components/schemas/RecordingPackageInventory'
+          - type: object
+            properties:
+              renditions:
+                type: array
+                minItems: 3
+                maxItems: 3
+    RecordingCaptureReceipt:
+      type: object
+      additionalProperties: false
+      required:
+      - operationKey
+      - operation
+      - acceptedAt
+      - captureId
+      properties:
+        operationKey:
+          type: string
+          pattern: ^[a-zA-Z0-9._:-]{1,128}$
+        operation:
+          type: string
+          enum:
+          - create
+          - declare
+          - confirm
+          - stop
+          - seal
+          - abort
+          - cancel_auto_publish
+          - close_live
+        acceptedAt:
+          type: string
+          format: date-time
+          description: UTC RFC3339 timestamp emitted with Z suffix.
+        captureId:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+    RecordingCaptureObjectStatus:
+      type: object
+      additionalProperties: false
+      required:
+      - path
+      - sizeBytes
+      - sha256
+      - state
+      properties:
+        path:
+          type: string
+          pattern: ^(master\.m3u8|(480p|720p|1080p)/(index\.m3u8|init\.mp4|seg-[0-9]{6}\.m4s))$
+        sizeBytes:
+          type: integer
+          minimum: 1
+          maximum: 134217728
+        sha256:
+          type: string
+          pattern: ^[a-f0-9]{64}$
+        state:
+          type: string
+          enum:
+          - declared
+          - queued
+          - verified
+          - failed
+    RecordingLiveProgress:
+      type: object
+      additionalProperties: false
+      required:
+      - revision
+      - firstSequence
+      - lastSequence
+      - mediaEndSeconds
+      - lastAdvancedAt
+      - endedAt
+      - ended
+      properties:
+        revision:
+          type: integer
+          format: int64
+          minimum: 0
+        firstSequence:
+          type: integer
+          const: 0
+        lastSequence:
+          type: integer
+          minimum: -1
+          maximum: 1439
+        mediaEndSeconds:
+          type: number
+          minimum: 0
+          maximum: 43200
+        lastAdvancedAt:
+          type:
+          - string
+          - 'null'
+          format: date-time
+          description: UTC RFC3339 timestamp emitted with Z suffix.
+        endedAt:
+          type:
+          - string
+          - 'null'
+          format: date-time
+          description: UTC RFC3339 timestamp emitted with Z suffix.
+        ended:
+          type: boolean
+    RecordingCaptureError:
+      type: object
+      additionalProperties: false
+      required:
+      - code
+      - message
+      properties:
+        code:
+          type: string
+          enum:
+          - capture_invalid
+          - capture_unauthorized
+          - capture_forbidden
+          - capture_not_found
+          - capture_conflict
+          - capture_missing_objects
+          - capture_expired
+          - capture_too_large
+          - capture_rate_limited
+          - capture_unavailable
+        message:
+          type: string
+    RecordingCaptureCreateInput:
+      type: object
+      additionalProperties: false
+      required:
+      - recordingId
+      - operationKey
+      properties:
+        recordingId:
+          type: string
+          format: uuid
+        operationKey:
+          type: string
+          pattern: ^[a-zA-Z0-9._:-]{1,128}$
+    RecordingCaptureStatus:
+      type: object
+      additionalProperties: false
+      required:
+      - captureId
+      - recordingId
+      - state
+      - createdAt
+      - expiresAt
+      - declaredBytes
+      - declaredObjects
+      - objects
+      - nextCursor
+      - packageId
+      - terminalAt
+      - terminalReason
+      - progress
+      properties:
+        captureId:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+        recordingId:
+          type: string
+          format: uuid
+        state:
+          type: string
+          enum:
+          - uploading
+          - freezing
+          - validating
+          - ready
+          - failed
+          - expired
+          - aborted
+        createdAt:
+          type: string
+          format: date-time
+          description: UTC RFC3339 timestamp emitted with Z suffix.
+        expiresAt:
+          type: string
+          format: date-time
+          description: UTC RFC3339 timestamp emitted with Z suffix.
+        declaredBytes:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 10000000000
+        declaredObjects:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 10000
+        objects:
+          type: array
+          minItems: 0
+          maxItems: 1000
+          items:
+            $ref: '#/components/schemas/RecordingCaptureObjectStatus'
+        nextCursor:
+          type: string
+          maxLength: 128
+        packageId:
+          type:
+          - string
+          - 'null'
+          pattern: ^[a-f0-9]{32}$
+        terminalAt:
+          type:
+          - string
+          - 'null'
+          format: date-time
+          description: UTC RFC3339 timestamp emitted with Z suffix.
+        terminalReason:
+          type:
+          - string
+          - 'null'
+          maxLength: 128
+        progress:
+          $ref: '#/components/schemas/RecordingLiveProgress'
+    RecordingCaptureResult:
+      type: object
+      additionalProperties: false
+      required:
+      - capture
+      - receipt
+      properties:
+        capture:
+          $ref: '#/components/schemas/RecordingCaptureStatus'
+        receipt:
+          $ref: '#/components/schemas/RecordingCaptureReceipt'
+    RecordingLiveGrantInput:
+      type: object
+      additionalProperties: false
+      required:
+      - recordingId
+      - userId
+      - playbackScopeId
+      - expiresAt
+      properties:
+        recordingId:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        playbackScopeId:
+          type: string
+          format: uuid
+        expiresAt:
+          type: string
+          format: date-time
+          description: UTC RFC3339 timestamp emitted with Z suffix.
+    RecordingCaptureErrorResponse:
+      type: object
+      additionalProperties: false
+      required:
+      - error
+      properties:
+        error:
+          $ref: '#/components/schemas/RecordingCaptureError'
+    RecordingCaptureSignedObjects:
+      type: array
+      minItems: 1
+      maxItems: 100
+      items:
+        $ref: '#/components/schemas/SignedRecordingObject'
     RecordingProcessingProgress:
       type: object
       additionalProperties: false

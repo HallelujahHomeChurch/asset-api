@@ -75,9 +75,16 @@ func (s *RecordingPackageStore) Create(ctx context.Context, p assets.RecordingPa
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('recording-package-actor:' || $1,0))`, p.ActorID); err != nil {
 		return err
 	}
+	var captureExists bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM recording_captures WHERE recording_id=$1)`, p.RecordingID).Scan(&captureExists); err != nil {
+		return err
+	}
+	if captureExists {
+		return assets.ErrConflict
+	}
 	var active int
 	// An accepted freeze/validation remains active after the upload URL expires.
-	err = tx.QueryRowContext(ctx, `SELECT count(*) FROM recording_packages WHERE actor_id=$1 AND (state IN ('freezing','validating') OR (state='uploading' AND expires_at > now()))`, p.ActorID).Scan(&active)
+	err = tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM recording_packages WHERE actor_id=$1 AND (state IN ('freezing','validating') OR (state='uploading' AND expires_at > now())))+(SELECT count(*) FROM recording_captures WHERE actor_id=$1 AND package_id IS NULL AND state='uploading' AND expires_at>clock_timestamp())`, p.ActorID).Scan(&active)
 	if err != nil {
 		return err
 	}
@@ -179,7 +186,7 @@ func (s *RecordingPackageStore) packageClaimTransaction(ctx context.Context, id,
 		return err
 	}
 	var locked string
-	err = tx.QueryRowContext(ctx, `SELECT id FROM recording_packages WHERE id=$1 AND claim_id=$2 AND state='validating' AND claimed_until>clock_timestamp() FOR UPDATE`, id, claimID).Scan(&locked)
+	err = tx.QueryRowContext(ctx, `SELECT id FROM recording_packages WHERE id=$1 AND claim_id=$2 AND state='validating' AND claimed_until>clock_timestamp() AND NOT EXISTS(SELECT 1 FROM recording_captures c WHERE c.package_id=recording_packages.id AND c.expires_at<=clock_timestamp()) FOR UPDATE`, id, claimID).Scan(&locked)
 	if errors.Is(err, sql.ErrNoRows) {
 		return assets.ErrConflict
 	}

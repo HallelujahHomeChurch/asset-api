@@ -28,6 +28,10 @@ var operationalColumnExclusions = map[string]string{
 }
 
 var governedTables = map[string]bool{
+	"recording_live":                   true,
+	"recording_live_attempts":          true,
+	"recording_captures":               true,
+	"recording_capture_objects":        true,
 	"recording_retention_policy":       true,
 	"recording_retention_previews":     true,
 	"recording_covers":                 true,
@@ -63,6 +67,7 @@ func TestDataGovernanceManifest(t *testing.T) {
 		"asset.recording-retention-policy", "asset.recording-retention-previews",
 		"asset.recording-covers", "asset.recording-cover-attempts", "asset.recording-cover-references",
 		"asset.recording-deletions",
+		"asset.recording-captures", "asset.recording-capture-objects", "asset.recording-live", "asset.recording-live-attempts",
 		"asset.recording-sources", "asset.recording-source-attempts",
 		"asset.recording-packages",
 		"asset.recording-processing-slots", "asset.recording-package-attempts", "asset.recording-preview-attempts",
@@ -261,6 +266,7 @@ func migratedColumns(t *testing.T) (map[string]struct{}, map[string]bool) {
 		"recording_retention_policy", "recording_retention_previews",
 		"recording_covers", "recording_cover_attempts", "recording_cover_references",
 		"recording_deletions",
+		"recording_captures", "recording_capture_objects", "recording_live", "recording_live_attempts",
 		"recording_sources", "recording_source_attempts",
 		"recording_packages",
 		"recording_processing_slots", "recording_package_attempts", "recording_preview_attempts",

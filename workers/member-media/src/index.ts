@@ -25,6 +25,7 @@ type Claims = {
   recordingId: string;
   assetVersionId?: never;
   packageId?: string;
+  captureId?: string;
   prefix?: string;
   scopeId: string;
   objectKey?: never;
@@ -34,6 +35,8 @@ type Claims = {
 const cookieName = 'hhc_media';
 const packageRoute = /^\/videos\/([a-zA-Z0-9-]{1,80})\/packages\/([a-f0-9]{32})\/sessions\/([a-zA-Z0-9-]{1,80})\/(cookie|master\.m3u8|previews\/(?:index\.vtt|seg-\d{6}\.jpg)|(?:480p|720p|1080p)\/(?:index\.m3u8|init\.mp4|seg-\d{6}\.m4s))$/;
 const finalPrefix = /^recordings\/packages\/([a-f0-9]{32})\/final\/[a-zA-Z0-9-]{1,80}\/$/;
+const liveRoute = /^\/videos\/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\/captures\/([a-f0-9]{32})\/sessions\/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\/(cookie|master\.m3u8|(?:480p|720p|1080p)\/(?:index\.m3u8|init\.mp4|seg-\d{6}\.m4s))$/;
+const livePrefix = /^recordings\/captures\/([a-f0-9]{32})\/final\/$/;
 const encoder = new TextEncoder();
 
 function failure(status: number): Response {
@@ -59,7 +62,7 @@ async function verify(token: string, type: Claims['typ'], env: Env, now: number)
     const valid = await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, key, decode64(parts[2]), encoder.encode(`${parts[0]}.${parts[1]}`));
     if (!valid) return null;
     const claims = JSON.parse(new TextDecoder().decode(decode64(parts[1]))) as Claims;
-    if (claims.iss !== env.MEDIA_ISSUER || claims.aud !== 'hhc-media' || claims.typ !== type || !Number.isInteger(claims.exp) || claims.exp <= now || claims.exp > now + (type === 'exchange' ? 60 : 3600)) return null;
+    if (claims.iss !== env.MEDIA_ISSUER || claims.aud !== 'hhc-media' || claims.typ !== type || !Number.isInteger(claims.exp) || claims.exp <= now || claims.exp > now + (type === 'exchange' ? 60 : claims.captureId !== undefined ? 300 : 3600)) return null;
     if (claims.nbf !== undefined && (!Number.isInteger(claims.nbf) || claims.nbf > now)) return null;
     return claims;
   } catch {
@@ -67,12 +70,32 @@ async function verify(token: string, type: Claims['typ'], env: Env, now: number)
   }
 }
 
-function scoped(claims: Claims, ids: string[]): boolean {
-  return claims.recordingId === ids[0] && claims.scopeId === ids[2] && claims.packageId === ids[1] && claims.assetVersionId === undefined;
+function scoped(claims: Claims, ids: string[], live: boolean): boolean {
+  return claims.recordingId === ids[0] && claims.scopeId === ids[2] && claims.assetVersionId === undefined &&
+    (live ? claims.captureId === ids[1] && claims.packageId === undefined : claims.packageId === ids[1] && claims.captureId === undefined);
 }
 
-function validResource(claims: Claims): boolean {
-  return typeof claims.prefix === 'string' && finalPrefix.exec(claims.prefix)?.[1] === claims.packageId && claims.objectKey === undefined;
+function validResource(claims: Claims, live: boolean): boolean {
+  return typeof claims.prefix === 'string' && claims.objectKey === undefined &&
+    (live ? livePrefix.exec(claims.prefix)?.[1] === claims.captureId : finalPrefix.exec(claims.prefix)?.[1] === claims.packageId);
+}
+
+async function livePointer(env: Env, prefix: string): Promise<{revision: number; lastSequence: number} | null> {
+  const object = await env.MEDIA_BUCKET.get(prefix + 'current.json');
+  if (!object) return null;
+  if (!object.body || !Number.isSafeInteger(object.size) || object.size < 1 || object.size > 128) throw new Error('Invalid live pointer');
+  const reader = object.body.getReader();
+  const bytes = new Uint8Array(128);
+  let size = 0;
+  for (;;) {
+    const {done, value} = await reader.read();
+    if (done) break;
+    if (size + value.length > 128) {await reader.cancel(); throw new Error('Invalid live pointer');}
+    bytes.set(value, size); size += value.length;
+  }
+  const value = JSON.parse(new TextDecoder().decode(bytes.subarray(0, size)));
+  if (!value || Object.keys(value).sort().join(',') !== 'lastSequence,revision' || !Number.isSafeInteger(value.revision) || value.revision < 1 || value.revision > 1441 || !Number.isSafeInteger(value.lastSequence) || value.lastSequence < 0 || value.lastSequence > 1439) throw new Error('Invalid live pointer');
+  return value;
 }
 
 function withCors(response: Response, origin: string): Response {
@@ -118,7 +141,8 @@ type ExecutionContext = { waitUntil(promise: Promise<unknown>): void };
 async function handle(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
   if (env.DENY_ALL === 'true') return failure(503);
   const url = new URL(request.url);
-  const match = packageRoute.exec(url.pathname);
+  const live = liveRoute.test(url.pathname);
+  const match = live ? liveRoute.exec(url.pathname) : packageRoute.exec(url.pathname);
   if (!match) return failure(404);
   if (url.search) return failure(404);
   const ids = match.slice(1, 4);
@@ -149,9 +173,9 @@ async function handle(request: Request, env: Env, ctx?: ExecutionContext): Promi
     if (typeof credential !== 'string') return failure(400);
     const now = Math.floor(Date.now() / 1000);
     const exchange = await verify(credential, 'exchange', env, now);
-    if (!exchange || !scoped(exchange, ids) || typeof exchange.playback !== 'string') return failure(401);
+    if (!exchange || !scoped(exchange, ids, live) || typeof exchange.playback !== 'string') return failure(401);
     const playback = await verify(exchange.playback, 'playback', env, now);
-    if (!playback || !scoped(playback, ids) || !validResource(playback) || playback.exp < exchange.exp || exchange.playback.length > 3072) return failure(401);
+    if (!playback || !scoped(playback, ids, live) || !validResource(playback, live) || playback.exp < exchange.exp || exchange.playback.length > 3072) return failure(401);
     const response = withCors(failure(204), origin!);
     response.headers.set('Set-Cookie', `${cookieName}=${exchange.playback}; Path=${path}; Max-Age=${playback.exp - now}; Secure; HttpOnly; SameSite=Strict`);
     return response;
@@ -159,8 +183,15 @@ async function handle(request: Request, env: Env, ctx?: ExecutionContext): Promi
   if (request.method !== 'GET' && request.method !== 'HEAD') return failure(405);
   const cookie = request.headers.get('Cookie')?.split(';').map(value => value.trim()).find(value => value.startsWith(`${cookieName}=`))?.slice(cookieName.length + 1);
   const playback = cookie && await verify(cookie, 'playback', env, Math.floor(Date.now() / 1000));
-  if (!playback || !scoped(playback, ids) || !validResource(playback)) return failure(401);
+  if (!playback || !scoped(playback, ids, live) || !validResource(playback, live)) return failure(401);
   let objectKey = playback.prefix! + match[4];
+  if (live) {
+    const pointer = await livePointer(env, playback.prefix!);
+    if (!pointer) return failure(404);
+    const sequence = /seg-(\d{6})\.m4s$/.exec(match[4]);
+    if (sequence && Number(sequence[1]) > pointer.lastSequence) return failure(404);
+    if (match[4].endsWith('.m3u8')) objectKey = playback.prefix! + `playlists/${pointer.revision}/` + match[4];
+  }
   if (match[4].startsWith('previews/')) {
     const pointer = await env.MEDIA_BUCKET.get(playback.prefix! + 'previews/current.json');
     if (!pointer) return failure(404);

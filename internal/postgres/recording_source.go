@@ -60,6 +60,13 @@ func (s *RecordingSourceStore) Create(ctx context.Context, p assets.RecordingSou
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('recording-source-actor:' || $1,0))`, p.ActorID); err != nil {
 		return err
 	}
+	var captureExists bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM recording_captures WHERE recording_id=$1)`, p.RecordingID).Scan(&captureExists); err != nil {
+		return err
+	}
+	if captureExists {
+		return assets.ErrConflict
+	}
 	var active bool
 	err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM recording_sources WHERE actor_id=$1 AND (state IN ('finalizing','queued','processing') OR (state='uploading' AND expires_at > clock_timestamp())))`, p.ActorID).Scan(&active)
 	if err != nil {

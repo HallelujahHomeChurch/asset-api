@@ -1,6 +1,7 @@
 package assets
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -120,4 +121,63 @@ func (s *RecordingSigner) sign(claims map[string]any) (string, error) {
 	r.FillBytes(signature[:32])
 	ss.FillBytes(signature[32:])
 	return input + "." + base64.RawURLEncoding.EncodeToString(signature), nil
+}
+
+// GrantLive runs signing and the cleanup fence in the same owner transaction.
+// CMS owns membership and stopped-scope policy; Asset independently bounds bytes and time.
+func (s *RecordingCaptureService) GrantLive(ctx context.Context, signer *RecordingSigner, id, recording, user, scope string, requested time.Time) (RecordingGrant, error) {
+	var grant RecordingGrant
+	if signer == nil {
+		return grant, errors.New("live signer unavailable")
+	}
+	if !captureUUID.MatchString(recording) || !captureUUID.MatchString(user) || !captureUUID.MatchString(scope) || requested.IsZero() {
+		return grant, ErrInvalidInput
+	}
+	_, err := s.repository.UpdateCapture(ctx, id, func(c *RecordingCapture) error {
+		now := s.now().UTC()
+		if c.RecordingID != recording {
+			return ErrForbidden
+		}
+		if !now.Before(c.ExpiresAt) {
+			return ErrCaptureExpired
+		}
+		if c.TerminalAt != nil || (c.State != "uploading" && c.State != "freezing" && c.State != "validating" && c.State != "ready") || c.Progress.LastSequence < 2 {
+			return ErrConflict
+		}
+		expiry := now.Add(5 * time.Minute)
+		for _, deadline := range []time.Time{requested, c.ExpiresAt} {
+			if deadline.Before(expiry) {
+				expiry = deadline
+			}
+		}
+		if c.Progress.Ended {
+			if c.Progress.EndedAt == nil {
+				return ErrConflict
+			}
+			replay := c.Progress.EndedAt.Add(time.Duration(c.Progress.MediaEndSeconds*float64(time.Second)) + 30*time.Minute)
+			if replay.Before(expiry) {
+				expiry = replay
+			}
+		}
+		if expiry.Unix() <= now.Unix() {
+			return ErrCaptureExpired
+		}
+		var err error
+		grant, err = signer.issue(map[string]any{"recordingId": recording, "captureId": c.ID, "scopeId": scope, "userId": user}, map[string]any{"prefix": "recordings/captures/" + c.ID + "/final/"}, expiry, now)
+		if err != nil {
+			return err
+		}
+		if c.ReadGrantUntil == nil || c.ReadGrantUntil.Before(grant.ExpiresAt) {
+			c.ReadGrantUntil = &grant.ExpiresAt
+		}
+		return nil
+	})
+	return grant, err
+}
+func (s *RecordingCaptureService) LiveProgress(ctx context.Context, id, actor string) (RecordingLiveProgress, error) {
+	c, err := s.repository.GetCapture(ctx, id)
+	if err == nil {
+		err = captureOwner(c, actor)
+	}
+	return c.Progress, err
 }

@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"hhc/asset-api/internal/config"
 	"hhc/asset-api/internal/logging"
@@ -72,7 +73,21 @@ func run(ctx context.Context) error {
 	if hlsEnabled {
 		packages := postgres.NewRecordingPackageStore(db)
 		probe := recordingvalidation.PackageMediaProbe{Objects: objects, FFmpeg: "/usr/bin/ffmpeg", FFprobe: "/usr/bin/ffprobe"}
-		cleanupErr := packages.ReconcilePackages(ctx, objects.DeletePackageObjects)
+		var cleanupErr error
+		// A bounded batch loop drains live backlog within the existing Job and
+		// shared two-slot budget. Scheduled executions continue normal work.
+		liveStore := postgres.NewRecordingCaptureStore(db)
+		liveDeadline := time.Now().Add(50 * time.Second)
+		for time.Now().Before(liveDeadline) {
+			processed, liveErr := recordingvalidation.RunLiveValidation(ctx, liveStore, objects, probe)
+			if liveErr != nil {
+				return errors.Join(cleanupErr, liveErr)
+			}
+			if !processed {
+				break
+			}
+		}
+		cleanupErr = errors.Join(packages.ReconcilePackages(ctx, objects.DeletePackageObjects), liveStore.ReconcileCaptures(ctx, objects.DeletePackageObjects), liveStore.ReconcileLive(ctx, objects.DeletePackageObjects))
 		covers := postgres.NewRecordingCoverStore(db)
 		cleanupErr = errors.Join(cleanupErr, covers.Reconcile(ctx, objects.DeleteCoverObjects))
 		if sourceAccount != "" {

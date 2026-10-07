@@ -27,6 +27,9 @@ func (s *RecordingDeletionStore) DeleteRecording(ctx context.Context, id string)
 	if _, err = tx.ExecContext(ctx, `INSERT INTO recording_deletions(recording_id) VALUES($1) ON CONFLICT DO NOTHING`, id); err != nil {
 		return err
 	}
+	if _, err = tx.ExecContext(ctx, `UPDATE recording_captures SET state='expired',terminal_at=COALESCE(terminal_at,clock_timestamp()),terminal_reason=COALESCE(terminal_reason,'recording_deleted'),cleanup_after=clock_timestamp() WHERE recording_id=$1`, id); err != nil {
+		return err
+	}
 	// Workers acquire slots before source/package rows. Keep this lock order;
 	// state changes make every subsequent heartbeat/checkpoint fail closed.
 	if _, err = tx.ExecContext(ctx, `SELECT slot FROM recording_processing_slots ORDER BY slot FOR UPDATE`); err != nil {

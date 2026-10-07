@@ -26,6 +26,13 @@ func TestPackagePipelineToolDeadlineJoinsChildren(t *testing.T) {
 	if err := os.WriteFile(probe.FFmpeg, []byte(fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$$\" >> %q\nexec sleep 30\n", pids)), 0700); err != nil {
 		t.Fatal(err)
 	}
+	// This test measures decoder cancellation, not ffprobe throughput. Probe
+	// fixtures keep the five-second deadline available to both blocked decoders.
+	probe.FFprobe = filepath.Join(tools, "probe")
+	script := "#!/bin/sh\ncase \" $* \" in *-read_intervals*) cat <<'JSON'\n" + `{"packets":[{"flags":"K_","data":"\n00000000: 0000 0002 6500                         ......\n"}]}` + "\nJSON\n;; *) cat <<'JSON'\n" + segmentProbeFixture + "\nJSON\n;; esac\n"
+	if err := os.WriteFile(probe.FFprobe, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	result := make(chan error, 1)
 	go func() {

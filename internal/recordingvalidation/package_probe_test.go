@@ -127,3 +127,39 @@ func TestFragmentProbeHandlesMissingCFRVideoDurations(t *testing.T) {
 		t.Fatalf("non-CFR timestamps accepted: %v", err)
 	}
 }
+
+func TestLiveProbeRequiresMeasuredApprovedCFR(t *testing.T) {
+	r := assets.RecordingRendition{Width: 1280, Height: 720}
+	for _, rate := range []string{"30/1", "30000/1001"} {
+		data := strings.Replace(segmentProbeFixture, "30/1", rate, 1)
+		if rate != "30/1" {
+			data = strings.ReplaceAll(data, "0.033333", "0.033367")
+		}
+		got, err := validatePackageSegmentProbe([]byte(data), r)
+		expected := 30.0
+		if rate != "30/1" {
+			expected = 30000.0 / 1001
+		}
+		if err != nil || got.FrameRate != expected {
+			t.Fatalf("measured %s: %+v %v", rate, got, err)
+		}
+		withoutDurations := strings.ReplaceAll(strings.ReplaceAll(data, `,"duration_time":"0.033333"`, ""), `,"duration_time":"0.033367"`, "")
+		if got, err := validatePackageSegmentProbe([]byte(withoutDurations), r); err != nil || got.FrameRate != expected {
+			t.Fatalf("measured CFR without packet duration: %+v %v", got, err)
+		}
+		bad := strings.Replace(data, `"pts_time":"0.033`, `"pts_time":"0.034`, 1)
+		if _, err := validatePackageSegmentProbe([]byte(bad), r); !errors.Is(err, assets.ErrInvalidUpload) {
+			t.Fatalf("non-CFR accepted: %v", err)
+		}
+	}
+	for _, data := range []string{
+		strings.Replace(segmentProbeFixture, "30/1", "2997/100", 1),
+		strings.Replace(segmentProbeFixture, "30/1", "25/1", 1),
+		strings.Replace(segmentProbeFixture, "30/1", "30000/1001", 1),
+		strings.ReplaceAll(segmentProbeFixture, "0.033333", "0.033367"),
+	} {
+		if _, err := validatePackageSegmentProbe([]byte(data), r); !errors.Is(err, assets.ErrInvalidUpload) {
+			t.Fatalf("unknown/mismatched fps accepted: %v", err)
+		}
+	}
+}

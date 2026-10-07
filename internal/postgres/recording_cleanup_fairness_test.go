@@ -99,3 +99,59 @@ func TestRecordingCleanupDoesNotStarveLaterItems(t *testing.T) {
 		}
 	}
 }
+
+func TestPackageCleanupSkipsTenProtectedCaptures(t *testing.T) {
+	ctx := context.Background()
+	db := isolatedIntegrationDB(t)
+	if err := migrations.Run(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	store := NewRecordingCaptureStore(db)
+	packages := NewRecordingPackageStore(db)
+	var protected []string
+	for i := 1; i <= 10; i++ {
+		id := sealedLiveCapture(t, store, i)
+		protected = append(protected, id)
+		if _, err := db.ExecContext(ctx, `UPDATE recording_packages SET state='ready',final_prefix='recordings/packages/'||id||'/final/test/',ready_at=now(),media_expires_at=now()+interval '30 days',cleanup_after=now()-($2*interval '1 minute') WHERE id=$1`, id, 12-i); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p := testRecordingPackage(t, "unprotected", "other-actor", "other-recording")
+	if err := packages.Create(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE recording_packages SET state='failed',cleanup_after=now()-interval '1 minute' WHERE id=$1`, p.ID); err != nil {
+		t.Fatal(err)
+	}
+	for run := 0; run < 2; run++ {
+		var deleted []string
+		if err := packages.ReconcilePackages(ctx, func(_ context.Context, keys []string) error { deleted = append(deleted, keys...); return nil }); err != nil {
+			t.Fatal(err)
+		}
+		if len(deleted) != len(p.Inventory.Objects) {
+			t.Fatalf("11th due package starved on run %d: %v", run, deleted)
+		}
+		for _, key := range deleted {
+			if !strings.Contains(key, "/unprotected/") {
+				t.Fatalf("protected capture removed: %s", key)
+			}
+		}
+		if _, err := db.ExecContext(ctx, `UPDATE recording_packages SET cleanup_after=now()-interval '1 second' WHERE id=$1`, p.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Eligibility, rather than a blanket reschedule, releases every previously
+	// protected candidate after its original capture deadline plus writer grace.
+	for _, id := range protected {
+		if _, err := db.ExecContext(ctx, `UPDATE recording_captures SET created_at=now()-interval '2 days',expires_at=now()-interval '1 day' WHERE id=$1`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var released []string
+	if err := packages.ReconcilePackages(ctx, func(_ context.Context, keys []string) error { released = append(released, keys...); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if len(released) != 100 {
+		t.Fatalf("eligible capture packages stayed protected: %v", released)
+	}
+}

@@ -181,3 +181,54 @@ first.
 `LOG_LEVEL=debug|info|warn|error` defaults to `info`; invalid values stop
 startup. This controls application slog and default standard-log output.
 Persisted audit records remain independent of this setting.
+
+## Progressive capture intake
+
+Private `/priv/recording-captures` routes share the existing HLS runtime gate and
+accept only the owning `hhc-web-api` caller with a human uploader UUID. Create,
+declare, confirm, seal and abort use body `operationKey` receipts. GET pages
+persisted per-object states; a lost PUT/confirm response can be recovered by
+replaying confirm or querying status. Only declared paths can be signed, for at
+most fifteen minutes and never beyond the original 24-hour capture deadline.
+
+Confirm checks bounded R2 listing size evidence and durably queues declarations;
+`queued` never authorizes playback or claims hash/media validity. Signing queued
+objects is fenced. Existing signed PUTs can still overwrite staging, so only the
+existing immutable-copy/hash/media validator can produce a ready package. CMS
+must accept stop before forwarding seal; stop itself has no Asset mutation.
+Seal requires normal end, the exact complete three-rendition inventory and every
+object queued/verified. Missing objects leave intake open. Seal atomically creates
+one `freezing` package using the capture ID and original expiry, and replays its
+receipt. Abort fences processing claims. Recording deletion closes captures.
+The recording Job repeatedly cleans unsealed terminal/expired staging keys and
+expires unfinished sealed captures; ready VOD remains under normal retention.
+Capture receipts allow 20,002 producer operations plus one reserved emergency
+abort receipt (20,003 total), and are retained with recovery metadata.
+
+The existing recording Job validates each closed 30-second three-rendition batch
+from immutable hash-checked copies, then publishes revisioned EVENT playlists
+and conditionally advances an R2 common waterline. Sequence zero remains in every
+playlist; only a complete normal seal appends ENDLIST. Queued objects are never
+playable. Retries resume durable publication without decoding historical media.
+The existing two processing slots bound concurrency; live batches receive the
+first bounded 50-second scheduling window of each Job execution.
+
+Private progress reports the published revision. Live grants require three common
+segments and expire within five minutes, capture expiry and the requested CMS
+replay/retention deadline; exchange credentials expire within 60 seconds. The
+Worker authorizes each request before cache and restricts segments to the current
+waterline. CMS owns membership, registration and post-stop scope renewal.
+
+Remote failed captures retain at least seven days. Background claim/cleanup work
+persists authoritative failed/expired package state without a status poll; a
+previously unobserved failure starts its recovery hold at first observation.
+Protected capture packages are excluded before cleanup batching, so eligible
+ordinary packages continue to be swept. Capture media cleanup waits
+for capture expiry plus the existing worker's six-hour writer grace, grants and
+leases; it never enumerates ready VOD final objects. Candidate copies and old
+playlist revisions are discovered from durable metadata and removed in bounded
+batches. This conservative grace temporarily retains duplicate bytes; production
+cost and cadence measurements remain an integration gate.
+
+Local synthetic HLS/DB/Worker tests are not provider or Windows OBS acceptance.
+No production configuration is activated by this change.
