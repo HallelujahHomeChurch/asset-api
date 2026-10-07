@@ -215,6 +215,16 @@ func (s *RecordingCaptureStore) UpdateCapture(ctx context.Context, id string, fn
 		if _, err = tx.ExecContext(ctx, `SELECT slot FROM recording_processing_slots WHERE job_id=$1 FOR UPDATE`, c.ID); err != nil {
 			return c, err
 		}
+		// Validation may have committed while this transaction waited for the
+		// slot. Lock the package second and recheck before committing a terminal
+		// receipt; an earlier ready commit must never coexist with abort.
+		var authoritativeState string
+		if err = tx.QueryRowContext(ctx, `SELECT state FROM recording_packages WHERE id=$1 FOR UPDATE`, c.ID).Scan(&authoritativeState); err != nil {
+			return c, err
+		}
+		if authoritativeState == "ready" {
+			return c, assets.ErrConflict
+		}
 		state := "failed"
 		if c.State == "expired" {
 			state = "expired"

@@ -56,7 +56,7 @@ func (h *Handler) captureAllowed(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 func captureError(w http.ResponseWriter, err error) {
-	status, code := 500, "capture_unavailable"
+	status, code := http.StatusServiceUnavailable, "capture_unavailable"
 	switch {
 	case errors.Is(err, assets.ErrInvalidInput):
 		status, code = 400, "capture_invalid"

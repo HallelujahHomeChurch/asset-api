@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"hhc/asset-api/internal/assets"
 	"net/http/httptest"
 	"strings"
@@ -84,5 +85,42 @@ func TestCaptureHTTPReceiptsAndInvalidBodyContract(t *testing.T) {
 	w = request("GET", "/priv/recording-captures/"+result.Capture.ID+"?limit=1001", "")
 	if w.Code != 400 {
 		t.Fatal(w.Code)
+	}
+}
+
+type failingCaptureObjects struct{ httpPackageObjects }
+
+func (failingCaptureObjects) ListPackageObjects(context.Context, string, int) (map[string]int64, error) {
+	return nil, errors.New("provider unavailable")
+}
+
+type failingCaptureRepository struct {
+	assets.RecordingCaptureRepository
+}
+
+func (failingCaptureRepository) GetCapture(context.Context, string) (assets.RecordingCapture, error) {
+	return assets.RecordingCapture{}, errors.New("database unavailable")
+}
+func TestCaptureDependencyFailuresReturnUnavailable503(t *testing.T) {
+	actor := "22222222-2222-4222-8222-222222222222"
+	repo := &httpCaptureRepo{c: assets.RecordingCapture{ID: "capture-a", ActorID: actor, State: "uploading", ExpiresAt: time.Now().Add(time.Hour), Receipts: map[string]assets.RecordingCaptureStoredReceipt{}, Objects: []assets.RecordingCaptureObject{{RecordingPackageObject: assets.RecordingPackageObject{Path: "720p/init.mp4", SizeBytes: 10, SHA256: strings.Repeat("a", 64)}, State: "declared"}}}}
+	for _, tc := range []struct {
+		name, method, path, body string
+		service                  *assets.RecordingCaptureService
+	}{
+		{"provider", "POST", "/priv/recording-captures/capture-a/confirm", `{"operationKey":"confirm-a","paths":["720p/init.mp4"]}`, assets.NewRecordingCaptureService(repo, failingCaptureObjects{}, time.Now)},
+		{"database", "GET", "/priv/recording-captures/capture-a", "", assets.NewRecordingCaptureService(failingCaptureRepository{}, httpPackageObjects{}, time.Now)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := New(nil, nil, map[string]bool{"hhc-web-api": true}, true, "", WorkloadAuthConfig{}, nil).WithRecordingCaptures(tc.service).Routes()
+			r := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+			r.Header.Set("X-Internal-Caller-App-Id", "hhc-web-api")
+			r.Header.Set("X-HHC-Actor-ID", actor)
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			if w.Code != 503 || !strings.Contains(w.Body.String(), `"code":"capture_unavailable"`) {
+				t.Fatalf("dependency error: %d %s", w.Code, w.Body.String())
+			}
+		})
 	}
 }

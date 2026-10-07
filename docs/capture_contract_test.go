@@ -35,3 +35,30 @@ func TestCaptureContractBounds(t *testing.T) {
 		t.Fatal("declaration batch must be bounded to 100")
 	}
 }
+
+func TestCaptureGrantDoesNotRequireUploaderActor(t *testing.T) {
+	raw, err := os.ReadFile("openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Paths map[string]yaml.Node `yaml:"paths"`
+	}
+	if err = yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	var grant struct {
+		Post struct {
+			Parameters []map[string]any `yaml:"parameters"`
+		} `yaml:"post"`
+	}
+	node := doc.Paths["/priv/recording-captures/{captureId}/grant"]
+	if err = node.Decode(&grant); err != nil {
+		t.Fatal(err)
+	}
+	for _, parameter := range grant.Post.Parameters {
+		if parameter["$ref"] == "#/components/parameters/RecordingActorID" || parameter["name"] == "X-HHC-Actor-ID" {
+			t.Fatal("live grant requires uploader identity instead of owner recording/scope authorization")
+		}
+	}
+}

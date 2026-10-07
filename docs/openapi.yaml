@@ -2275,7 +2275,6 @@ paths:
       - daprCaller: []
       - workloadPrincipal: []
       parameters:
-      - $ref: '#/components/parameters/RecordingActorID'
       - name: captureId
         in: path
         required: true
