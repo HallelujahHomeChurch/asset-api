@@ -29,7 +29,7 @@ grep -Fq "github.event_name == 'push' && 'deploy-asset-api-production' || inputs
 grep -q 'ACTIVATE_QUEUE_SCANNING: "true"' "$workflow"
 grep -q 'EMBEDDED_SCAN_ENABLED: "false"' "$workflow"
 grep -q 'DEPLOY_RETENTION_JOB: "true"' "$workflow"
-grep -q 'RETENTION_SCHEDULE_ENABLED: "false"' "$workflow"
+grep -q 'RETENTION_SCHEDULE_ENABLED: "true"' "$workflow"
 grep -q 'RETENTION_APPLY_ENABLED: "true"' "$workflow"
 grep -q 'deploy-asset-api-production' "$workflow"
 grep -q 'environment: production' "$workflow"
