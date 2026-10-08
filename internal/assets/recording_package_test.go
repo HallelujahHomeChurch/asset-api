@@ -82,6 +82,9 @@ func TestRecordingInventoryRejectsOversizeAndInvalidMetadata(t *testing.T) {
 		func(i *RecordingPackageInventory) { i.Renditions[0].Width = 1279 },
 		func(i *RecordingPackageInventory) { i.Renditions[0].DurationSeconds = 43201 },
 		func(i *RecordingPackageInventory) { i.Renditions[0].SegmentCount = 2 },
+		func(i *RecordingPackageInventory) { i.Renditions[0].SegmentCount = 0 },
+		func(i *RecordingPackageInventory) { i.Renditions[0].SegmentCount = -1 },
+		func(i *RecordingPackageInventory) { i.Renditions[0].SegmentCount = 1441 },
 	} {
 		inv := packageFixture()
 		mutate(&inv)

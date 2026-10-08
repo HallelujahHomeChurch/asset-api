@@ -157,7 +157,7 @@ func ValidateRecordingInventory(inv RecordingPackageInventory) (int64, error) {
 			return invalid("duplicate rendition")
 		}
 		seenRenditions[rendition.Name] = true
-		if rendition.Width <= 0 || rendition.Width > maxWidth || rendition.Width%2 != 0 || rendition.Height <= 0 || rendition.Height > maxHeight || rendition.Height%2 != 0 || math.IsNaN(rendition.FrameRate) || math.IsInf(rendition.FrameRate, 0) || rendition.FrameRate <= 0 || rendition.FrameRate > 30 || math.IsNaN(rendition.DurationSeconds) || math.IsInf(rendition.DurationSeconds, 0) || rendition.DurationSeconds <= 0 || rendition.DurationSeconds > RecordingMaxDurationSeconds || rendition.SegmentCount != int(math.Ceil(rendition.DurationSeconds/30)) || rendition.AudioBitrate != 128_000 || rendition.VideoBitrate < 500_000 || rendition.VideoBitrate > 8_000_000 {
+		if rendition.Width <= 0 || rendition.Width > maxWidth || rendition.Width%2 != 0 || rendition.Height <= 0 || rendition.Height > maxHeight || rendition.Height%2 != 0 || math.IsNaN(rendition.FrameRate) || math.IsInf(rendition.FrameRate, 0) || rendition.FrameRate <= 0 || rendition.FrameRate > 30 || math.IsNaN(rendition.DurationSeconds) || math.IsInf(rendition.DurationSeconds, 0) || rendition.DurationSeconds <= 0 || rendition.DurationSeconds > RecordingMaxDurationSeconds || rendition.SegmentCount < 1 || rendition.SegmentCount > 1440 || rendition.AudioBitrate != 128_000 || rendition.VideoBitrate < 500_000 || rendition.VideoBitrate > 8_000_000 {
 			return invalid("rendition metadata")
 		}
 		if n == 0 {

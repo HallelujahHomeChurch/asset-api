@@ -119,7 +119,7 @@ func TestCaptureStopDoesNotFreezeUploads(t *testing.T) {
 }
 func TestSealMissingObjectsRemainsUploadable(t *testing.T) {
 	s, _, objects, _, c := captureTest(t)
-	inv := captureInventoryFixture()
+	inv, _ := fractionalFrameRatePackageFixture(t, 240.206633)
 	declareCapture(t, s, c, inv.Objects)
 	if _, err := s.Seal(context.Background(), c.ID, c.ActorID, "seal-a", true, inv); !errors.Is(err, ErrCaptureMissingObjects) {
 		t.Fatalf("missing: %v", err)
