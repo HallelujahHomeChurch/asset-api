@@ -56,6 +56,25 @@ printf '%s\n' '{"changes":[{"resourceId":"/subscriptions/test/resourceGroups/ali
 ./scripts/check-what-if.sh "$tmp/scan-worker-schema-migration.json"
 
 printf '%s\n' '{"changes":[
+  {"resourceId":"/subscriptions/test/resourceGroups/alive/providers/Microsoft.App/jobs/asset-retention","changeType":"Modify","delta":[
+    {"path":"properties.configuration.triggerType","propertyChangeType":"Modify","before":"Manual","after":"Schedule"},
+    {"path":"properties.configuration.manualTriggerConfig","propertyChangeType":"Delete"}
+  ]}
+]}' >"$tmp/retention-schedule.json"
+./scripts/check-what-if.sh "$tmp/retention-schedule.json"
+for field in resource trigger; do
+  if [ "$field" = resource ]; then
+    jq '.changes[0].resourceId |= sub("asset-retention$"; "asset-derivative")' "$tmp/retention-schedule.json" >"$tmp/unsafe-trigger.json"
+  else
+    jq '.changes[0].delta[0].after="Manual"' "$tmp/retention-schedule.json" >"$tmp/unsafe-trigger.json"
+  fi
+  if ./scripts/check-what-if.sh "$tmp/unsafe-trigger.json"; then
+    echo 'manual trigger deletion must be limited to retention schedule activation' >&2
+    exit 1
+  fi
+done
+
+printf '%s\n' '{"changes":[
   {"resourceId":"/subscriptions/test/resourceGroups/alive/providers/Microsoft.App/jobs/asset-retention","changeType":"Modify","delta":[{"path":"properties.configuration.triggerType","propertyChangeType":"Modify","before":"Schedule","after":"Manual"}]}
 ]}' >"$tmp/retention-manual.json"
 ./scripts/check-what-if.sh "$tmp/retention-manual.json"

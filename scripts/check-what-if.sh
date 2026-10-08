@@ -7,6 +7,7 @@ jq -e '
   ([.changes[] | select(.changeType == "Delete" or .changeType == "Unsupported")] | length == 0)
   and
   ([.changes[]
+    | . as $change
     | .resourceId as $resourceId
     | ..
     | objects
@@ -19,6 +20,11 @@ jq -e '
             or .path == "properties.configuration.eventTriggerConfig.scale.pollingInterval"
             or .path == "properties.configuration.eventTriggerConfig.scale.rules")
           and ($resourceId | endswith("/Microsoft.App/jobs/asset-scan")))
+        or ((.path == "properties.configuration.manualTriggerConfig")
+          and ($resourceId | endswith("/Microsoft.App/jobs/asset-retention"))
+          and ($change.changeType == "Modify")
+          and any($change.delta[]?; .path == "properties.configuration.triggerType"
+            and .propertyChangeType == "Modify" and .before == "Manual" and .after == "Schedule"))
         or ((.path == "properties.configuration.maxInactiveRevisions" or .path == "azureQueue")
           and ($resourceId | endswith("/Microsoft.App/containerApps/asset-scan-worker")))
         | not

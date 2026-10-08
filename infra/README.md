@@ -101,14 +101,15 @@ Clean supported images are processed only through the queue-triggered
 job configuration; the service release updates the job to the same immutable
 runtime image as the API.
 
-`asset-retention` is deployed as a Manual Job with mutations enabled. The
-release workflow keeps `RETENTION_SCHEDULE_ENABLED=false` and
-`RETENTION_APPLY_ENABLED=true`; deployment cannot schedule cleanup, and an
-operator must explicitly start each mutation run. Verify identity, network
-access, a fresh read-only preflight, and the fixed selection scope before each
-run. Keep the schedule disabled, verify database and Blob purge results, and
-stop on an unexpected scope or any failed item. Enabling the 19:00 UTC (03:00
-Asia/Taipei) schedule remains a separate production decision.
+`asset-retention` runs daily at 19:00 UTC (03:00 Asia/Taipei) with mutations
+enabled. The release workflow sets `RETENTION_SCHEDULE_ENABLED=true` and
+`RETENTION_APPLY_ENABLED=true`; the first scheduled run also clears accumulated
+expired LINE collection items. Review a fresh read-only preflight and verify
+identity, network access and the fixed selection scope before enabling the
+schedule. The worker excludes retention-exempt items and other namespaces.
+Verify job results and database/Blob purge status after runs; investigate any
+failed item. To suspend automatic cleanup, release with
+`RETENTION_SCHEDULE_ENABLED=false` (Manual trigger).
 
 Upload completion and an `asset.scan.requested.v1` outbox row commit in one
 PostgreSQL transaction. The runtime sends that event to the `asset-scan`
