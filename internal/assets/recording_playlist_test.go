@@ -2,10 +2,65 @@ package assets
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
 )
+
+func fractionalFrameRatePackageFixture(t *testing.T, duration float64) (RecordingPackageInventory, map[string][]byte) {
+	t.Helper()
+	inv := captureInventoryFixture()
+	inv.InventoryDigest = ""
+	inv.Objects = inv.Objects[:1]
+	files := map[string][]byte{}
+	master := "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-INDEPENDENT-SEGMENTS\n"
+	for i := range inv.Renditions {
+		r := &inv.Renditions[i]
+		r.FrameRate, r.DurationSeconds, r.SegmentCount = 30000.0/1001, duration, 8
+		media := "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:30\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXT-X-MAP:URI=\"init.mp4\"\n"
+		for _, name := range []string{"index.m3u8", "init.mp4"} {
+			inv.Objects = append(inv.Objects, RecordingPackageObject{Path: r.Name + "/" + name, SizeBytes: 100, SHA256: strings.Repeat("a", 64)})
+		}
+		var sizes []int64
+		var durations []float64
+		for seq := 0; seq < 8; seq++ {
+			seconds := 30.03
+			if seq == 7 {
+				seconds = duration - 7*30.03
+			}
+			name := fmt.Sprintf("seg-%06d.m4s", seq)
+			media += fmt.Sprintf("#EXTINF:%.6f,\n%s\n", seconds, name)
+			inv.Objects = append(inv.Objects, RecordingPackageObject{Path: r.Name + "/" + name, SizeBytes: 100, SHA256: strings.Repeat("a", 64)})
+			sizes, durations = append(sizes, 100), append(durations, seconds)
+		}
+		files[r.Name+"/index.m3u8"] = []byte(media + "#EXT-X-ENDLIST\n")
+		peak, average, err := RecordingPlaylistBitrates(sizes, durations, 30)
+		if err != nil {
+			t.Fatal(err)
+		}
+		master += fmt.Sprintf("#EXT-X-STREAM-INF:BANDWIDTH=%d,AVERAGE-BANDWIDTH=%d,RESOLUTION=%dx%d,CODECS=\"avc1.640028,mp4a.40.2\",FRAME-RATE=29.970\n%s/index.m3u8\n", peak, average, r.Width, r.Height, r.Name)
+	}
+	files["master.m3u8"] = []byte(master)
+	inv.InventoryDigest, _ = RecordingInventoryDigest(inv)
+	return inv, files
+}
+
+func TestRecordingPlaylistFractionalFrameRateUsesActualSegmentCount(t *testing.T) {
+	for _, duration := range []float64{240.206633, 215.21} {
+		inv, files := fractionalFrameRatePackageFixture(t, duration)
+		if err := ValidateRecordingPlaylists(inv, files); err != nil {
+			t.Fatalf("8 real segments, duration %.6f: %v", duration, err)
+		}
+	}
+	for _, replacement := range []string{"#EXTINF:5.000000,", "#EXTINF:30.100000,"} {
+		inv, files := fractionalFrameRatePackageFixture(t, 240.206633)
+		files["720p/index.m3u8"] = []byte(strings.Replace(string(files["720p/index.m3u8"]), "#EXTINF:30.030000,", replacement, 1))
+		if err := ValidateRecordingPlaylists(inv, files); !errors.Is(err, ErrInvalidUpload) {
+			t.Fatalf("invalid interior segment accepted: %v", err)
+		}
+	}
+}
 
 func playlistFixture() (RecordingPackageInventory, map[string][]byte) {
 	inv := packageFixture()
