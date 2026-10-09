@@ -24,6 +24,11 @@ for file in "$@"; do
       # data, and keeps old expiry semantics until separately confirmed activation.
       legacy_hash='51e032de6c3f27962f23f3510e7bb765a97ee360feaf387a3fbb65f58a7d99f0'
       ;;
+    internal/migrations/sql/038_recording_live_covers.sql)
+      # Additive CHECK domain expansion preserves existing rows and writes;
+      # the exact hash permits this reviewed replacement, not future edits.
+      legacy_hash='aca2777f851f7edaca7c4534e1a6d62f0ca79c8274c20769e9579d482b639671'
+      ;;
     internal/migrations/sql/016_drop_legacy_ticket_roles.sql)
       contract_hash='55baa077395f0347fee354efd2998f1f31bd0a6db33ec60508ad72fe22d0bc86'
       ;;
