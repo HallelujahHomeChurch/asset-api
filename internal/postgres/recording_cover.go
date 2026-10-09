@@ -15,13 +15,13 @@ type RecordingCoverStore struct{ db *sql.DB }
 
 func NewRecordingCoverStore(db *sql.DB) *RecordingCoverStore { return &RecordingCoverStore{db: db} }
 
-const coverColumns = `c.id,c.idempotency_key,c.package_id,c.recording_id,c.kind,c.state,c.mime,c.digest,COALESCE(c.claim_id,''),c.output_attempt,c.expires_at`
+const coverColumns = `c.id,c.idempotency_key,c.package_id,c.recording_id,c.kind,c.state,c.mime,c.digest,COALESCE(c.claim_id,''),c.output_attempt,c.expires_at,COALESCE(c.inherited_cover_id,'')`
 
 type coverScanner interface{ Scan(...any) error }
 
 func scanCover(row coverScanner) (RecordingCover, error) {
 	var c RecordingCover
-	err := row.Scan(&c.ID, &c.OperationKey, &c.PackageID, &c.RecordingID, &c.Kind, &c.State, &c.MIME, &c.Digest, &c.ClaimID, &c.OutputAttempt, &c.ExpiresAt)
+	err := row.Scan(&c.ID, &c.OperationKey, &c.PackageID, &c.RecordingID, &c.Kind, &c.State, &c.MIME, &c.Digest, &c.ClaimID, &c.OutputAttempt, &c.ExpiresAt, &c.InheritedCoverID)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = assets.ErrNotFound
 	}
@@ -103,7 +103,7 @@ func (s *RecordingCoverStore) List(ctx context.Context, pkg, recording string) (
 	// Keep metadata receipts for interrupted clients until the recording expires.
 	// Byte reads still reject stale uploads, even before the cleanup worker runs.
 	columns := strings.Replace(coverColumns, "c.state", `CASE WHEN c.expires_at<=now() OR (c.kind='custom' AND c.created_at<=now()-interval '24 hours' AND NOT EXISTS(SELECT 1 FROM recording_cover_references r WHERE r.cover_id=c.id AND r.released_at IS NULL)) THEN 'expired' ELSE c.state END`, 1)
-	rows, err := s.db.QueryContext(ctx, `SELECT `+columns+` FROM recording_covers c WHERE package_id=$1 AND recording_id=$2 ORDER BY created_at DESC`, pkg, recording)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+columns+` FROM recording_covers c WHERE package_id=$1 AND recording_id=$2 AND NOT (kind='auto' AND EXISTS(SELECT 1 FROM recording_covers inherited WHERE inherited.package_id=c.package_id AND inherited.kind='live-auto' AND inherited.state='ready')) ORDER BY created_at DESC`, pkg, recording)
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +119,7 @@ func (s *RecordingCoverStore) List(ctx context.Context, pkg, recording string) (
 	return values, rows.Err()
 }
 func (s *RecordingCoverStore) Get(ctx context.Context, pkg, recording, id string) (RecordingCover, error) {
-	return scanCover(s.db.QueryRowContext(ctx, `SELECT `+coverColumns+` FROM recording_covers c JOIN recording_packages p ON p.id=c.package_id WHERE c.id=$1 AND c.package_id=$2 AND c.recording_id=$3 AND p.owner_service='hhc-web-api' AND p.state='ready' AND p.media_expires_at>now() AND c.state<>'expired' AND c.expires_at>now() AND (c.kind='auto' OR c.created_at>now()-interval '24 hours' OR EXISTS(SELECT 1 FROM recording_cover_references r WHERE r.cover_id=c.id AND r.released_at IS NULL)) AND NOT EXISTS(SELECT 1 FROM recording_deletions WHERE recording_id=$3)`, id, pkg, recording))
+	return scanCover(s.db.QueryRowContext(ctx, `SELECT `+coverColumns+` FROM recording_covers c JOIN recording_packages p ON p.id=c.package_id WHERE c.id=$1 AND c.package_id=$2 AND c.recording_id=$3 AND p.owner_service='hhc-web-api' AND p.state='ready' AND p.media_expires_at>now() AND c.state<>'expired' AND c.expires_at>now() AND (c.kind IN ('auto','live-auto') OR c.created_at>now()-interval '24 hours' OR EXISTS(SELECT 1 FROM recording_cover_references r WHERE r.cover_id=c.id AND r.released_at IS NULL)) AND NOT EXISTS(SELECT 1 FROM recording_deletions WHERE recording_id=$3)`, id, pkg, recording))
 }
 func (s *RecordingCoverStore) Claim(ctx context.Context) (RecordingCover, error) {
 	var empty RecordingCover
@@ -197,7 +197,7 @@ func (s *RecordingCoverStore) Retain(ctx context.Context, pkg, recording, id, re
 		return err
 	}
 	var found string
-	err = tx.QueryRowContext(ctx, `SELECT c.id FROM recording_covers c JOIN recording_packages p ON p.id=c.package_id WHERE c.id=$1 AND c.package_id=$2 AND c.recording_id=$3 AND c.state='ready' AND c.expires_at>now() AND p.state='ready' AND p.media_expires_at>now() AND (c.kind='auto' OR c.created_at>now()-interval '24 hours' OR EXISTS(SELECT 1 FROM recording_cover_references r WHERE r.cover_id=c.id AND r.released_at IS NULL)) FOR UPDATE OF c`, id, pkg, recording).Scan(&found)
+	err = tx.QueryRowContext(ctx, `SELECT c.id FROM recording_covers c JOIN recording_packages p ON p.id=c.package_id WHERE c.id=$1 AND c.package_id=$2 AND c.recording_id=$3 AND c.state='ready' AND c.expires_at>now() AND p.state='ready' AND p.media_expires_at>now() AND (c.kind IN ('auto','live-auto') OR c.created_at>now()-interval '24 hours' OR EXISTS(SELECT 1 FROM recording_cover_references r WHERE r.cover_id=c.id AND r.released_at IS NULL)) FOR UPDATE OF c`, id, pkg, recording).Scan(&found)
 	if errors.Is(err, sql.ErrNoRows) {
 		return assets.ErrNotFound
 	}

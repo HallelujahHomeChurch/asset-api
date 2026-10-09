@@ -2360,6 +2360,156 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/RecordingLiveGrantInput'
+  /priv/recording-live-covers/{scope}/uploads:
+    post:
+      summary: Owner-bound immutable live cover uploads
+      operationId: liveCoverPostuploads
+      x-hhc-callers: [hhc-web-api]
+      security: [{daprCaller: []}]
+      parameters:
+        - {name: scope, in: path, required: true, schema: {type: string, pattern: '^(defaults|[a-f0-9]{32})$'}}
+        - {name: recordingId, in: query, schema: {type: string}, description: Empty for defaults; exact capture recording owner otherwise.}
+      requestBody:
+        required: true
+        content:
+          image/jpeg: {schema: {type: string, format: binary}}
+          image/png: {schema: {type: string, format: binary}}
+      responses:
+        '403': {description: Only the CMS owner may manage images.}
+        '404': {description: Unknown upload or invalid recording/capture binding.}
+        '409': {description: Changed idempotency content, pending media, or a released reference.}
+        '503': {description: Dependency or runtime unavailable.}
+        '202':
+          description: Scoped result; bytes are private, no-store and metadata stripped.
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: false, required: [uploadId, kind, state], properties: {uploadId: {type: string}, kind: {type: string, enum: [auto, custom]}, state: {type: string, enum: [uploading, pending, processing, ready, failed, expired]}}}
+        '413': {description: Input exceeds 5 MiB.}
+        '422': {description: Unsupported JPEG/PNG, orientation, size or animation.}
+
+  /priv/recording-live-covers/{scope}/auto:
+    post:
+      summary: Owner-bound immutable live cover auto
+      operationId: liveCoverPostauto
+      x-hhc-callers: [hhc-web-api]
+      security: [{daprCaller: []}]
+      parameters:
+        - {name: scope, in: path, required: true, schema: {type: string, pattern: '^(defaults|[a-f0-9]{32})$'}}
+        - {name: recordingId, in: query, schema: {type: string}, description: Empty for defaults; exact capture recording owner otherwise.}
+      responses:
+        '403': {description: Only the CMS owner may manage images.}
+        '404': {description: Unknown upload or invalid recording/capture binding.}
+        '409': {description: Changed idempotency content, pending media, or a released reference.}
+        '503': {description: Dependency or runtime unavailable.}
+        '202':
+          description: Scoped result; bytes are private, no-store and metadata stripped.
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: false, required: [uploadId, kind, state], properties: {uploadId: {type: string}, kind: {type: string, enum: [auto, custom]}, state: {type: string, enum: [uploading, pending, processing, ready, failed, expired]}}}
+
+  /priv/recording-live-covers/{scope}/uploads/{uploadID}:
+    get:
+      summary: Owner-bound immutable live cover {uploadID}
+      operationId: liveCoverGetuploads_uploadID
+      x-hhc-callers: [hhc-web-api]
+      security: [{daprCaller: []}]
+      parameters:
+        - {name: scope, in: path, required: true, schema: {type: string, pattern: '^(defaults|[a-f0-9]{32})$'}}
+        - {name: recordingId, in: query, schema: {type: string}, description: Empty for defaults; exact capture recording owner otherwise.}
+        - {name: uploadID, in: path, required: true, schema: {type: string}}
+      responses:
+        '403': {description: Only the CMS owner may manage images.}
+        '404': {description: Unknown upload or invalid recording/capture binding.}
+        '409': {description: Changed idempotency content, pending media, or a released reference.}
+        '503': {description: Dependency or runtime unavailable.}
+        '200':
+          description: Scoped result; bytes are private, no-store and metadata stripped.
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: false, required: [uploadId, kind, state], properties: {uploadId: {type: string}, kind: {type: string, enum: [auto, custom]}, state: {type: string, enum: [uploading, pending, processing, ready, failed, expired]}}}
+
+  /priv/recording-live-covers/{scope}/uploads/{uploadID}/content:
+    get:
+      summary: Owner-bound immutable live cover content
+      operationId: liveCoverGetuploads_uploadID_content
+      x-hhc-callers: [hhc-web-api]
+      security: [{daprCaller: []}]
+      parameters:
+        - {name: scope, in: path, required: true, schema: {type: string, pattern: '^(defaults|[a-f0-9]{32})$'}}
+        - {name: recordingId, in: query, schema: {type: string}, description: Empty for defaults; exact capture recording owner otherwise.}
+        - {name: uploadID, in: path, required: true, schema: {type: string}}
+      responses:
+        '403': {description: Only the CMS owner may manage images.}
+        '404': {description: Unknown upload or invalid recording/capture binding.}
+        '409': {description: Changed idempotency content, pending media, or a released reference.}
+        '503': {description: Dependency or runtime unavailable.}
+        '200':
+          description: Scoped result; bytes are private, no-store and metadata stripped.
+          content: {image/jpeg: {schema: {type: string, format: binary}}}
+
+  /priv/recording-live-covers/{scope}/uploads/{uploadID}/retain:
+    post:
+      summary: Owner-bound immutable live cover retain
+      operationId: liveCoverPostuploads_uploadID_retain
+      x-hhc-callers: [hhc-web-api]
+      security: [{daprCaller: []}]
+      parameters:
+        - {name: scope, in: path, required: true, schema: {type: string, pattern: '^(defaults|[a-f0-9]{32})$'}}
+        - {name: recordingId, in: query, schema: {type: string}, description: Empty for defaults; exact capture recording owner otherwise.}
+        - {name: uploadID, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, additionalProperties: false, required: [referenceId], properties: {referenceId: {type: string, minLength: 1, maxLength: 160}}}
+      responses:
+        '403': {description: Only the CMS owner may manage images.}
+        '404': {description: Unknown upload or invalid recording/capture binding.}
+        '409': {description: Changed idempotency content, pending media, or a released reference.}
+        '503': {description: Dependency or runtime unavailable.}
+        '204':
+          description: Scoped result; bytes are private, no-store and metadata stripped.
+
+  /priv/recording-live-covers/{scope}/uploads/{uploadID}/promote:
+    post:
+      summary: Owner-bound immutable live cover promote
+      operationId: liveCoverPostuploads_uploadID_promote
+      x-hhc-callers: [hhc-web-api]
+      security: [{daprCaller: []}]
+      parameters:
+        - {name: scope, in: path, required: true, schema: {type: string, pattern: '^(defaults|[a-f0-9]{32})$'}}
+        - {name: recordingId, in: query, schema: {type: string}, description: Empty for defaults; exact capture recording owner otherwise.}
+        - {name: uploadID, in: path, required: true, schema: {type: string}}
+      responses:
+        '403': {description: Only the CMS owner may manage images.}
+        '404': {description: Unknown upload or invalid recording/capture binding.}
+        '409': {description: Changed idempotency content, pending media, or a released reference.}
+        '503': {description: Dependency or runtime unavailable.}
+        '202':
+          description: Scoped result; bytes are private, no-store and metadata stripped.
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: false, required: [coverId, state], properties: {coverId: {type: string}, state: {type: string}}}
+
+  /priv/recording-live-covers/{scope}/uploads/{uploadID}/references/{referenceID}:
+    delete:
+      summary: Owner-bound immutable live cover {referenceID}
+      operationId: liveCoverDeleteuploads_uploadID_references_referenceID
+      x-hhc-callers: [hhc-web-api]
+      security: [{daprCaller: []}]
+      parameters:
+        - {name: scope, in: path, required: true, schema: {type: string, pattern: '^(defaults|[a-f0-9]{32})$'}}
+        - {name: recordingId, in: query, schema: {type: string}, description: Empty for defaults; exact capture recording owner otherwise.}
+        - {name: uploadID, in: path, required: true, schema: {type: string}}
+        - {name: referenceID, in: path, required: true, schema: {type: string}}
+      responses:
+        '403': {description: Only the CMS owner may manage images.}
+        '404': {description: Unknown upload or invalid recording/capture binding.}
+        '409': {description: Changed idempotency content, pending media, or a released reference.}
+        '503': {description: Dependency or runtime unavailable.}
+        '204':
+          description: Scoped result; bytes are private, no-store and metadata stripped.
+
 components:
   securitySchemes:
     daprCaller:
