@@ -92,6 +92,7 @@ func run() error {
 			handler.WithRecordingRetention(postgres.NewRecordingPackageStore(db))
 			handler.WithRecordingDeletion(postgres.NewRecordingDeletionStore(db))
 			handler.WithRecordingCovers(postgres.NewRecordingCoverStore(db), objects)
+			handler.WithRecordingLiveCovers(postgres.NewRecordingLiveCoverStore(db))
 			if cfg.RecordingSourceAccountURL != "" {
 				sources, err := azurestorage.New(cfg.RecordingSourceAccountURL, cfg.RecordingSourceContainer)
 				if err != nil {

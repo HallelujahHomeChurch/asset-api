@@ -253,3 +253,20 @@ cost and cadence measurements remain an integration gate.
 
 Local synthetic HLS/DB/Worker tests are not provider or Windows OBS acceptance.
 No production configuration is activated by this change.
+
+## One-time live covers
+
+CMS-only `/priv/recording-live-covers/{scope}` routes store immutable pre-live
+custom uploads, shared references and a single automatic picture per capture.
+`defaults` is the CMS settings scope; capture scopes require the exact recording
+binding. Only normalized, digest-checked private JPEG output can be read.
+Migration 038 adds separate jobs/references; existing ready-package constraints
+remain in place. The recording worker reads only published verified 480p init
+and first fragment, examines at most five opening frames, and shares the same
+two processing slots with a 30-second deadline. Optional cover failure never
+rolls back the live pointer. Defaults and active captures keep independent
+references; unselected images are reclaimed after 24 hours with fenced retries.
+Promotion queues an immutable VOD cover: imported auto candidates preserve the
+live JPEG as candidate one and use measured capture boundaries for candidates
+two and three. The internal `live-auto` kind projects as the existing `auto`
+contract. This adds no OBS/C1 inventory, digest or validation exception.

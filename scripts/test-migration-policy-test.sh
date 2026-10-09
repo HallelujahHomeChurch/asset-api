@@ -14,6 +14,15 @@ if (cd "$tmp" && "$policy_script" "$retention_migration") 2>/dev/null; then
   exit 1
 fi
 
+live_cover_migration="internal/migrations/sql/038_recording_live_covers.sql"
+cp "$live_cover_migration" "$tmp/$live_cover_migration"
+(cd "$tmp" && "$policy_script" "$live_cover_migration")
+printf '%s\n' '-- test mutation' >>"$tmp/$live_cover_migration"
+if (cd "$tmp" && "$policy_script" "$live_cover_migration") 2>/dev/null; then
+  echo 'live cover additive CHECK replacement was not immutable' >&2
+  exit 1
+fi
+
 printf '%s\n' 'DROP INDEX IF EXISTS old_index;' >"$tmp/safe.sql"
 ./scripts/test-migration-policy.sh "$tmp/safe.sql"
 printf '%s\n' "ALTER TABLE asset_content_tickets ADD COLUMN role_ids text[] NOT NULL DEFAULT '{}'::text[];" >"$tmp/expand.sql"

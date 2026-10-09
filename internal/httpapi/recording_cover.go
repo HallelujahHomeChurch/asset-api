@@ -59,11 +59,15 @@ func (h *Handler) listRecordingCovers(w http.ResponseWriter, r *http.Request) {
 	items := []coverItem{}
 	for _, c := range values {
 		start, end := 0, 0
-		if c.Kind == "auto" {
+		if c.Kind == "auto" || c.Kind == "live-auto" {
 			start, end = 1, 3
 		}
 		for i := start; i <= end; i++ {
-			items = append(items, coverItem{ID: fmt.Sprintf("%s-%d", c.ID, i), UploadID: c.ID, Kind: c.Kind, State: c.State, OperationKey: c.OperationKey})
+			kind := c.Kind
+			if kind == "live-auto" {
+				kind = "auto"
+			}
+			items = append(items, coverItem{ID: fmt.Sprintf("%s-%d", c.ID, i), UploadID: c.ID, Kind: kind, State: c.State, OperationKey: c.OperationKey})
 		}
 	}
 	writeJSON(w, 200, map[string]any{"items": items})
@@ -114,7 +118,7 @@ func (h *Handler) resolveCover(r *http.Request) (assets.RecordingCover, int, err
 	if err != nil {
 		return c, 0, err
 	}
-	if c.State != "ready" || c.Kind == "auto" && (index < 1 || index > 3) || c.Kind == "custom" && index != 0 {
+	if c.State != "ready" || (c.Kind == "auto" || c.Kind == "live-auto") && (index < 1 || index > 3) || c.Kind == "custom" && index != 0 {
 		return c, 0, assets.ErrNotFound
 	}
 	return c, index, nil

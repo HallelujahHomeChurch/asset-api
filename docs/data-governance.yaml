@@ -1,6 +1,68 @@
 schema_version: 1
 service: asset-api
 datasets:
+  - id: asset.recording-live-cover-attempts
+    owner: asset-api
+    purpose: Preserve owner-bound immutable live cover processing and safe shared reference receipts.
+    necessity: required
+    storage: {kind: postgres, resource: recording_live_cover_attempts, sources: [{path: internal/postgres/recording_live_cover.go, symbol: RecordingLiveCoverStore.Claim}]}
+    subject_keys: []
+    data_classes: [identity, security, content, activity]
+    fields:
+      - {name: recording_live_cover_attempts.claim_id, purpose: Fence processing and immutable output, necessity: required, data_classes: [security, activity]}
+      - {name: recording_live_cover_attempts.cover_id, purpose: Protect shared image output, necessity: required, data_classes: [security, activity]}
+      - {name: recording_live_cover_attempts.created_at, purpose: Bound abandoned image and attempt lifetime, necessity: required, data_classes: [security, activity]}
+    attribution: {mode: manual, explanation: CMS owns administrator provenance; an image may contain other participants.}
+    legal_basis: {status: pending_legal, reference: null}
+    retention: {status: pending_legal, rule: null, action: none}
+    cleanup: {mode: none, implementation: [], evidence: []}
+  - id: asset.recording-live-cover-references
+    owner: asset-api
+    purpose: Preserve owner-bound immutable live cover processing and safe shared reference receipts.
+    necessity: required
+    storage: {kind: postgres, resource: recording_live_cover_references, sources: [{path: internal/postgres/recording_live_cover.go, symbol: RecordingLiveCoverStore.Retain}]}
+    subject_keys: []
+    data_classes: [identity, security, content, activity]
+    fields:
+      - {name: recording_live_cover_references.reference_id, purpose: Fence late retains after release, necessity: required, data_classes: [security, activity]}
+      - {name: recording_live_cover_references.cover_id, purpose: Protect shared image output, necessity: required, data_classes: [security, activity]}
+      - {name: recording_live_cover_references.scope, purpose: Bind a default or capture owner, necessity: required, data_classes: [security, activity]}
+      - {name: recording_live_cover_references.recording_id, purpose: Prevent cross-recording access, necessity: required, data_classes: [security, activity]}
+      - {name: recording_live_cover_references.created_at, purpose: Bound abandoned image and attempt lifetime, necessity: required, data_classes: [security, activity]}
+      - {name: recording_live_cover_references.released_at, purpose: Prevent resurrection of released references, necessity: required, data_classes: [security, activity]}
+    attribution: {mode: manual, explanation: CMS owns administrator provenance; an image may contain other participants.}
+    legal_basis: {status: pending_legal, reference: null}
+    retention: {status: pending_legal, rule: null, action: none}
+    cleanup: {mode: none, implementation: [], evidence: []}
+  - id: asset.recording-live-covers
+    owner: asset-api
+    purpose: Preserve owner-bound immutable live cover processing and safe shared reference receipts.
+    necessity: required
+    storage: {kind: postgres, resource: recording_live_covers, sources: [{path: internal/postgres/recording_live_cover.go, symbol: RecordingLiveCoverStore.Create}]}
+    subject_keys: []
+    data_classes: [identity, security, content, activity]
+    fields:
+      - {name: recording_live_covers.id, purpose: Identify the immutable image job, necessity: required, data_classes: [security, activity]}
+      - {name: recording_live_covers.scope, purpose: Bind a default or capture owner, necessity: required, data_classes: [security, activity]}
+      - {name: recording_live_covers.recording_id, purpose: Prevent cross-recording access, necessity: required, data_classes: [security, activity]}
+      - {name: recording_live_covers.actor_id, purpose: Bind uploader authorization, necessity: required, data_classes: [security, activity]}
+      - {name: recording_live_covers.idempotency_key, purpose: Recover an accepted upload without duplication, necessity: required, data_classes: [security, activity]}
+      - {name: recording_live_covers.kind, purpose: Distinguish capture and custom processing, necessity: required, data_classes: [security, activity]}
+      - {name: recording_live_covers.mime, purpose: Choose the validated image decoder, necessity: required, data_classes: [security, activity]}
+      - {name: recording_live_covers.digest, purpose: Verify immutable input integrity, necessity: required, data_classes: [security, activity]}
+      - {name: recording_live_covers.output_digest, purpose: Verify normalized JPEG integrity, necessity: required, data_classes: [security, activity]}
+      - {name: recording_live_covers.state, purpose: Fence reads and cleanup, necessity: required, data_classes: [security, activity]}
+      - {name: recording_live_covers.attempts, purpose: Bound processing retries, necessity: required, data_classes: [security, activity]}
+      - {name: recording_live_covers.claim_id, purpose: Fence processing and immutable output, necessity: required, data_classes: [security, activity]}
+      - {name: recording_live_covers.claimed_until, purpose: Recover abandoned processing, necessity: required, data_classes: [security, activity]}
+      - {name: recording_live_covers.output_attempt, purpose: Locate the immutable accepted output, necessity: required, data_classes: [security, activity]}
+      - {name: recording_live_covers.created_at, purpose: Bound abandoned image and attempt lifetime, necessity: required, data_classes: [security, activity]}
+      - {name: recording_live_covers.next_attempt_at, purpose: Back off failed processing, necessity: required, data_classes: [security, activity]}
+      - {name: recording_live_covers.cleanup_after, purpose: Retry remote cleanup, necessity: required, data_classes: [security, activity]}
+    attribution: {mode: manual, explanation: CMS owns administrator provenance; an image may contain other participants.}
+    legal_basis: {status: pending_legal, reference: null}
+    retention: {status: pending_legal, rule: null, action: none}
+    cleanup: {mode: none, implementation: [], evidence: []}
   - id: asset.recording-retention-policy
     owner: asset-api
     purpose: Preserve authoritative retention configuration and confirmed administrator change receipts.
@@ -47,6 +109,7 @@ datasets:
     data_classes: [identity, security, content, activity]
     fields:
       - {name: recording_covers.id, purpose: Identify the bounded image job, necessity: required, data_classes: [identity]}
+      - {name: recording_covers.inherited_cover_id, purpose: Preserve the immutable live image used by the VOD cover job, necessity: required, data_classes: [identity, security]}
       - {name: recording_covers.package_id, purpose: Bind images to an immutable package, necessity: required, data_classes: [identity]}
       - {name: recording_covers.recording_id, purpose: Enforce recording ownership, necessity: required, data_classes: [identity]}
       - {name: recording_covers.actor_id, purpose: Bind uploader authorization, necessity: required, data_classes: [identity]}

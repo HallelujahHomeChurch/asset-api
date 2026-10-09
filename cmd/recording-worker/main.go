@@ -88,6 +88,11 @@ func run(ctx context.Context) error {
 			}
 		}
 		cleanupErr = errors.Join(packages.ReconcilePackages(ctx, objects.DeletePackageObjects), liveStore.ReconcileCaptures(ctx, objects.DeletePackageObjects), liveStore.ReconcileLive(ctx, objects.DeletePackageObjects))
+		liveCovers := postgres.NewRecordingLiveCoverStore(db)
+		cleanupErr = errors.Join(cleanupErr, liveCovers.Reconcile(ctx, objects.DeleteCoverObjects))
+		if _, err := recordingvalidation.RunLiveCoverProcessing(ctx, liveCovers, objects, probe); err != nil {
+			slog.Warn("recording_live_cover_processing_failed")
+		}
 		covers := postgres.NewRecordingCoverStore(db)
 		cleanupErr = errors.Join(cleanupErr, covers.Reconcile(ctx, objects.DeleteCoverObjects))
 		if sourceAccount != "" {
@@ -106,7 +111,7 @@ func run(ctx context.Context) error {
 		}
 		// Preview claims defer to waiting validation/source work in SQL and
 		// use the same global slots. Only one long claim runs per execution.
-		processed, coverErr := recordingvalidation.RunCoverProcessing(ctx, covers, packages, objects, probe)
+		processed, coverErr := recordingvalidation.RunCoverProcessing(ctx, covers, packages, liveCovers, objects, probe)
 		if processed || coverErr != nil {
 			return errors.Join(cleanupErr, coverErr)
 		}

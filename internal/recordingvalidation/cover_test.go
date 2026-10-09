@@ -9,6 +9,7 @@ import (
 	"image/color"
 	"image/jpeg"
 	"image/png"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -138,6 +139,13 @@ func TestCoverCandidatesUseOnlyReadyFragmentsAndCleanup(t *testing.T) {
 	if len(files) != 0 {
 		t.Fatal("scratch retained")
 	}
+	inherited := writes["recordings/covers/recording-one/cover-one/auto-3.jpg"]
+	if err := probe.GenerateCoversWithTimeline(context.Background(), pkg, "inherited", inherited, nil, put); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(writes["recordings/covers/recording-one/inherited/auto-1.jpg"], inherited) {
+		t.Fatal("inherited bytes changed")
+	}
 	pkg.State = "validating"
 	if err := probe.GenerateCovers(context.Background(), pkg, "cover-two", put); err == nil {
 		t.Fatal("unvalidated media accepted")
@@ -158,5 +166,16 @@ func TestCoverSampleTimes(t *testing.T) {
 		if got != tc.want {
 			t.Fatalf("duration %v: %v", tc.duration, got)
 		}
+	}
+}
+
+func TestCaptureCoverPositionUsesMeasured2997Boundaries(t *testing.T) {
+	timeline := []assets.RecordingLiveSegment{{Sequence: 0, Renditions: map[string]assets.RecordingLiveFragment{"480p": {Start: .033, End: 30.063}}}, {Sequence: 1, Renditions: map[string]assets.RecordingLiveFragment{"480p": {Start: 30.063, End: 60.093}}}}
+	segment, offset, err := coverPosition(45, "480p", timeline)
+	if err != nil || segment != 1 || math.Abs(offset-14.97) > .000001 {
+		t.Fatal("nominal 30-second assumption", segment, offset, err)
+	}
+	if _, _, err = coverPosition(65, "480p", timeline); err == nil {
+		t.Fatal("read beyond verified media")
 	}
 }

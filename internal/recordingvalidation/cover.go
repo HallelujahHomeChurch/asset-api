@@ -55,6 +55,10 @@ func coverSampleTimes(duration, fps float64) [3]float64 {
 // GenerateCovers reads a bounded init+fragment for each candidate, never the
 // original upload or a mutable staging object. Caller fences all DB publication.
 func (p PackageMediaProbe) GenerateCovers(ctx context.Context, pkg assets.RecordingPackage, attempt string, put func(context.Context, string, []byte) error) (err error) {
+	return p.GenerateCoversWithTimeline(ctx, pkg, attempt, nil, nil, put)
+}
+
+func (p PackageMediaProbe) GenerateCoversWithTimeline(ctx context.Context, pkg assets.RecordingPackage, attempt string, inherited []byte, timeline []assets.RecordingLiveSegment, put func(context.Context, string, []byte) error) (err error) {
 	if p.Objects == nil || !filepath.IsAbs(p.FFmpeg) || pkg.State != "ready" || !packageIDPattern.MatchString(pkg.ID) || !packageIDPattern.MatchString(pkg.RecordingID) || !packageIDPattern.MatchString(attempt) || put == nil {
 		return assets.ErrInvalidInput
 	}
@@ -86,7 +90,19 @@ func (p PackageMediaProbe) GenerateCovers(ctx context.Context, pkg assets.Record
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		segment := int(seconds / 30)
+		if i == 0 && len(inherited) > 0 {
+			if len(inherited) > assets.RecordingCoverOutputMaxBytes {
+				return assets.ErrInvalidUpload
+			}
+			if err := put(ctx, fmt.Sprintf("recordings/covers/%s/%s/auto-1.jpg", pkg.RecordingID, attempt), inherited); err != nil {
+				return err
+			}
+			continue
+		}
+		segment, offset, positionErr := coverPosition(seconds, rendition.Name, timeline)
+		if positionErr != nil {
+			return positionErr
+		}
 		names := []string{rendition.Name + "/init.mp4", fmt.Sprintf("%s/seg-%06d.m4s", rendition.Name, segment)}
 		var disk syscall.Statfs_t
 		if err := syscall.Statfs(dir, &disk); err != nil {
@@ -128,7 +144,6 @@ func (p PackageMediaProbe) GenerateCovers(ctx context.Context, pkg assets.Record
 		if err := errors.Join(copyErr, file.Close()); err != nil {
 			return err
 		}
-		offset := math.Max(0, seconds-float64(segment*30))
 		filter := fmt.Sprintf("setpts=PTS-STARTPTS,select='gte(t,%.6f)',scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2", offset)
 		data, err := p.coverFrame(ctx, source, filter, "mov")
 		if err != nil {
@@ -170,4 +185,27 @@ func (p PackageMediaProbe) coverFrame(ctx context.Context, source, filter, demux
 		return nil, assets.ErrInvalidUpload
 	}
 	return output.Bytes(), nil
+}
+
+// Captures use their measured segment boundaries; older package-only uploads retain their existing schedule.
+func coverPosition(seconds float64, rendition string, timeline []assets.RecordingLiveSegment) (int, float64, error) {
+	if len(timeline) == 0 {
+		segment := int(seconds / 30)
+		return segment, math.Max(0, seconds-float64(segment*30)), nil
+	}
+	first, ok := timeline[0].Renditions[rendition]
+	if !ok {
+		return 0, 0, assets.ErrInvalidUpload
+	}
+	target := first.Start + seconds
+	for _, segment := range timeline {
+		fragment, ok := segment.Renditions[rendition]
+		if !ok {
+			return 0, 0, assets.ErrInvalidUpload
+		}
+		if target >= fragment.Start && target < fragment.End {
+			return segment.Sequence, target - fragment.Start, nil
+		}
+	}
+	return 0, 0, assets.ErrInvalidUpload
 }
