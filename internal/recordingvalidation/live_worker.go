@@ -5,6 +5,7 @@ import (
 	"errors"
 	"hhc/asset-api/internal/assets"
 	"hhc/asset-api/internal/postgres"
+	"log/slog"
 	"time"
 )
 
@@ -26,15 +27,24 @@ func RunLiveValidation(ctx context.Context, store *postgres.RecordingCaptureStor
 		return false, err
 	}
 	snapshot := claim.Snapshot
-	err = RunProcessingClaim(ctx, func(ctx context.Context) error { return store.HeartbeatLive(ctx, claim) }, func(ctx context.Context) error {
+	claimedAt := time.Now()
+	err = RunProcessingClaim(ctx, func(ctx context.Context) error { return store.HeartbeatLive(ctx, claim) }, func(ctx context.Context) (result error) {
+		stage, started := "resume_publication", time.Now()
+		logStage := func(success bool) {
+			slog.Info("recording_live_stage", "claim_id", claim.ClaimID, "sequence", claim.Sequence,
+				"stage", stage, "elapsed_ms", time.Since(started).Milliseconds(), "succeeded", success)
+		}
+		defer func() { logStage(result == nil) }()
 		if snapshot.Revision == snapshot.PublishedRevision {
 			if claim.EndOnly {
+				stage = "commit_end"
 				var err error
 				snapshot, err = store.CommitLiveEnd(ctx, claim)
 				if err != nil {
 					return err
 				}
 			} else {
+				stage = "validation"
 				batch, err := probe.ValidateLiveSegment(ctx, claim.Capture.ID, claim.ClaimID, claim.Sequence, claim.Objects)
 				if err != nil {
 					return err
@@ -51,6 +61,8 @@ func RunLiveValidation(ctx context.Context, store *postgres.RecordingCaptureStor
 				if _, err = assets.AppendLiveSegment(snapshot.Segments, batch, normalTail); err != nil {
 					return err
 				}
+				logStage(true)
+				stage, started = "stable_publication", time.Now()
 				from := "recordings/packages/" + claim.Capture.ID + "/final/" + claim.ClaimID + "/"
 				to := "recordings/captures/" + claim.Capture.ID + "/final/"
 				for _, object := range claim.Objects {
@@ -71,6 +83,8 @@ func RunLiveValidation(ctx context.Context, store *postgres.RecordingCaptureStor
 				}
 			}
 		}
+		logStage(true)
+		stage, started = "playlists", time.Now()
 		playlists, err := assets.RecordingLivePlaylists(snapshot.Segments, snapshot.Ended)
 		if err != nil {
 			return err
@@ -80,12 +94,19 @@ func RunLiveValidation(ctx context.Context, store *postgres.RecordingCaptureStor
 				return err
 			}
 		}
+		logStage(true)
+		stage, started = "pointer", time.Now()
 		return objects.AdvanceLivePointer(ctx, claim.Capture.ID, snapshot.Revision, len(snapshot.Segments)-1)
 	}, func(ctx context.Context, ready bool, failure string) error {
+		var finishErr error
 		if ready {
-			return store.FinishLivePublication(ctx, claim, snapshot.Revision)
+			finishErr = store.FinishLivePublication(ctx, claim, snapshot.Revision)
+		} else {
+			finishErr = store.FailLiveClaim(ctx, claim, failure == "invalid")
 		}
-		return store.FailLiveClaim(ctx, claim, failure == "invalid")
+		slog.Info("recording_live_claim", "claim_id", claim.ClaimID, "sequence", claim.Sequence,
+			"elapsed_ms", time.Since(claimedAt).Milliseconds(), "published", ready && finishErr == nil, "failure", failure)
+		return finishErr
 	}, 30*time.Second)
 	return true, err
 }

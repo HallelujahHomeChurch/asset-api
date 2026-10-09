@@ -91,6 +91,27 @@ hits. Browser source ingest/encode is independently gated; CMS/player integratio
 and provider acceptance remain subsequent work. Enabling these producers is not
 end-to-end readiness.
 
+Live intake validates the next three closed rendition fragments with at most
+two workers inside the existing processing claim. Scratch capacity is checked
+for both workers before intake, each decoder retains its two-thread limit, and
+failure cancels and joins siblings before cleanup. Immutable copy, exact size,
+SHA-256, full decode, approved CFR, cross-rendition continuity and fenced common
+publication remain mandatory. This changes no producer API or C1 contract.
+`recording_live_rendition` logs immutable freeze/hash and probe/decode elapsed
+milliseconds; `recording_live_stage` separates validation, stable publication,
+playlist writes and pointer advance. Claim IDs correlate these records; raw
+errors, URLs, object keys, titles and credentials are never logged.
+
+Run `go test ./internal/recordingvalidation -run '^$' -bench '^BenchmarkLiveSegmentValidation$' -benchtime=3x -count=1`
+for the 30.03-second, 29.97 fps three-rendition moving-media benchmark. On
+macOS/Apple M4 with FFmpeg 8.1.2, serial versus two-worker validation averaged 1.891 versus
+1.079 seconds per batch; with 50 ms latency on each storage operation, 3.214
+versus 1.748 seconds. These synthetic local measurements exclude the Job
+schedule, database and stable publication; they do not prove production latency.
+Windows acceptance must still measure a five-minute network outage, confirmed
+upload backlog reaching zero, recovery to normal 60–120-second live latency
+within ten minutes, and eventual stop/seal publication.
+
 Optional seek previews are generated from ready immutable HLS by the same
 recording Job, behind waiting validation/source work and sharing its two global
 slots. Migration 031 also queues existing unexpired ready packages. No CLI,
