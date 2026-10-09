@@ -2377,7 +2377,7 @@ paths:
       responses:
         '403': {description: Only the CMS owner may manage images.}
         '404': {description: Unknown upload or invalid recording/capture binding.}
-        '409': {description: Changed idempotency content, pending media, or a released reference.}
+        '409': {description: "Changed idempotency content, pending media, or a released reference."}
         '503': {description: Dependency or runtime unavailable.}
         '202':
           description: Scoped result; bytes are private, no-store and metadata stripped.
@@ -2385,7 +2385,7 @@ paths:
             application/json:
               schema: {type: object, additionalProperties: false, required: [uploadId, kind, state], properties: {uploadId: {type: string}, kind: {type: string, enum: [auto, custom]}, state: {type: string, enum: [uploading, pending, processing, ready, failed, expired]}}}
         '413': {description: Input exceeds 5 MiB.}
-        '422': {description: Unsupported JPEG/PNG, orientation, size or animation.}
+        '422': {description: "Unsupported JPEG/PNG, orientation, size or animation."}
 
   /priv/recording-live-covers/{scope}/auto:
     post:
@@ -2399,7 +2399,7 @@ paths:
       responses:
         '403': {description: Only the CMS owner may manage images.}
         '404': {description: Unknown upload or invalid recording/capture binding.}
-        '409': {description: Changed idempotency content, pending media, or a released reference.}
+        '409': {description: "Changed idempotency content, pending media, or a released reference."}
         '503': {description: Dependency or runtime unavailable.}
         '202':
           description: Scoped result; bytes are private, no-store and metadata stripped.
@@ -2420,7 +2420,7 @@ paths:
       responses:
         '403': {description: Only the CMS owner may manage images.}
         '404': {description: Unknown upload or invalid recording/capture binding.}
-        '409': {description: Changed idempotency content, pending media, or a released reference.}
+        '409': {description: "Changed idempotency content, pending media, or a released reference."}
         '503': {description: Dependency or runtime unavailable.}
         '200':
           description: Scoped result; bytes are private, no-store and metadata stripped.
@@ -2441,7 +2441,7 @@ paths:
       responses:
         '403': {description: Only the CMS owner may manage images.}
         '404': {description: Unknown upload or invalid recording/capture binding.}
-        '409': {description: Changed idempotency content, pending media, or a released reference.}
+        '409': {description: "Changed idempotency content, pending media, or a released reference."}
         '503': {description: Dependency or runtime unavailable.}
         '200':
           description: Scoped result; bytes are private, no-store and metadata stripped.
@@ -2465,7 +2465,7 @@ paths:
       responses:
         '403': {description: Only the CMS owner may manage images.}
         '404': {description: Unknown upload or invalid recording/capture binding.}
-        '409': {description: Changed idempotency content, pending media, or a released reference.}
+        '409': {description: "Changed idempotency content, pending media, or a released reference."}
         '503': {description: Dependency or runtime unavailable.}
         '204':
           description: Scoped result; bytes are private, no-store and metadata stripped.
@@ -2483,7 +2483,7 @@ paths:
       responses:
         '403': {description: Only the CMS owner may manage images.}
         '404': {description: Unknown upload or invalid recording/capture binding.}
-        '409': {description: Changed idempotency content, pending media, or a released reference.}
+        '409': {description: "Changed idempotency content, pending media, or a released reference."}
         '503': {description: Dependency or runtime unavailable.}
         '202':
           description: Scoped result; bytes are private, no-store and metadata stripped.
@@ -2505,7 +2505,7 @@ paths:
       responses:
         '403': {description: Only the CMS owner may manage images.}
         '404': {description: Unknown upload or invalid recording/capture binding.}
-        '409': {description: Changed idempotency content, pending media, or a released reference.}
+        '409': {description: "Changed idempotency content, pending media, or a released reference."}
         '503': {description: Dependency or runtime unavailable.}
         '204':
           description: Scoped result; bytes are private, no-store and metadata stripped.
