@@ -108,7 +108,7 @@ func (p PackageMediaProbe) validateLiveRendition(ctx context.Context, pack asset
 	started := time.Now()
 	var freezeTime, probeTime time.Duration
 	defer func() {
-		slog.Info("recording_live_rendition", "claim_id", attempt, "sequence", sequence, "rendition", r.Name,
+		slog.Info("recording_live_rendition", "capture_id", pack.ID, "claim_id", attempt, "sequence", sequence, "rendition", r.Name,
 			"freeze_ms", freezeTime.Milliseconds(), "probe_decode_ms", probeTime.Milliseconds(),
 			"elapsed_ms", time.Since(started).Milliseconds(), "validated", err == nil)
 	}()

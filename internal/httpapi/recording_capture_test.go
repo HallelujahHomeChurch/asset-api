@@ -1,15 +1,72 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"hhc/asset-api/internal/assets"
+	"log/slog"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestCaptureAdmissionLogsAcceptedSequenceAndTimingWithoutPrivateInputs(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	defer slog.SetDefault(previous)
+	now := time.Now().UTC()
+	id := strings.Repeat("a", 32)
+	actor := "22222222-2222-4222-8222-222222222222"
+	repo := &httpCaptureRepo{c: assets.RecordingCapture{ID: id, ActorID: actor, State: "uploading", CreatedAt: now, ExpiresAt: now.Add(time.Hour), Receipts: map[string]assets.RecordingCaptureStoredReceipt{}}}
+	h := New(nil, nil, map[string]bool{"hhc-web-api": true}, true, "", WorkloadAuthConfig{}, nil).WithRecordingCaptures(assets.NewRecordingCaptureService(repo, admissionObjects{}, time.Now)).Routes()
+	for _, request := range []struct {
+		route, body string
+		status      int
+	}{
+		{"objects", `{"operationKey":"private-operation-key","objects":[{"path":"720p/seg-000044.m4s","sizeBytes":10,"sha256":"` + strings.Repeat("b", 64) + `"}]}`, 200},
+		{"confirm", `{"operationKey":"private-confirm-key","paths":["720p/seg-000044.m4s"]}`, 202},
+	} {
+		r := httptest.NewRequest("POST", "/priv/recording-captures/"+id+"/"+request.route, strings.NewReader(request.body))
+		r.Header.Set("X-Internal-Caller-App-Id", "hhc-web-api")
+		r.Header.Set("X-HHC-Actor-ID", actor)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != request.status {
+			t.Fatalf("admission: %d %s", w.Code, w.Body.String())
+		}
+	}
+	var events []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		var value map[string]any
+		if json.Unmarshal([]byte(line), &value) == nil && value["msg"] == "recording_capture_admission" {
+			events = append(events, value)
+		}
+	}
+	if len(events) != 2 {
+		t.Fatalf("accepted declare/confirm not traceable: %s", logs.String())
+	}
+	for index, event := range events {
+		operation := []string{"declare", "confirm"}[index]
+		if event["capture_id"] != id || event["operation"] != operation || event["first_sequence"] != float64(44) || event["last_sequence"] != float64(44) || event["objects"] != float64(1) || event["accepted_at"] == nil || event["elapsed_ms"] == nil {
+			t.Fatalf("admission evidence: %+v", event)
+		}
+	}
+	for _, private := range []string{actor, "private-operation-key", "private-confirm-key", strings.Repeat("b", 64), "720p/seg-000044.m4s", "https://"} {
+		if strings.Contains(logs.String(), private) {
+			t.Fatalf("private input logged: %s", private)
+		}
+	}
+}
+
+type admissionObjects struct{ httpPackageObjects }
+
+func (admissionObjects) ListPackageObjects(context.Context, string, int) (map[string]int64, error) {
+	return map[string]int64{"720p/seg-000044.m4s": 10}, nil
+}
 
 func TestCaptureRoutesFailClosed(t *testing.T) {
 	h := New(nil, nil, map[string]bool{"hhc-web-api": true, "account-api": true}, true, "", WorkloadAuthConfig{}, nil).Routes()
