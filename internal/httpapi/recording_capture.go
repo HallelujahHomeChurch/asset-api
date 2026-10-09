@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"hhc/asset-api/internal/assets"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -126,11 +127,17 @@ func (h *Handler) declareRecordingCapture(w http.ResponseWriter, r *http.Request
 	if !decodeJSON(w, r, &input) {
 		return
 	}
+	started := time.Now()
 	result, err := h.recordingCaptures.Declare(r.Context(), r.PathValue("captureID"), captureActor(r), input.OperationKey, input.Objects)
 	if err != nil {
 		captureError(w, err)
 		return
 	}
+	paths := make([]string, len(input.Objects))
+	for i, object := range input.Objects {
+		paths[i] = object.Path
+	}
+	logCaptureAdmission(result.Receipt, paths, started)
 	writeJSON(w, 200, result)
 }
 func (h *Handler) signRecordingCapture(w http.ResponseWriter, r *http.Request) {
@@ -161,12 +168,33 @@ func (h *Handler) confirmRecordingCapture(w http.ResponseWriter, r *http.Request
 	if !decodeJSON(w, r, &input) {
 		return
 	}
+	started := time.Now()
 	result, err := h.recordingCaptures.Confirm(r.Context(), r.PathValue("captureID"), captureActor(r), input.OperationKey, input.Paths)
 	if err != nil {
 		captureError(w, err)
 		return
 	}
+	logCaptureAdmission(result.Receipt, input.Paths, started)
 	writeJSON(w, 202, result)
+}
+
+// Only accepted fixed-grammar paths enter numeric diagnostics, never raw inputs.
+func logCaptureAdmission(receipt assets.RecordingCaptureReceipt, paths []string, started time.Time) {
+	first, last := -1, -1
+	for _, path := range paths {
+		_, tail, found := strings.Cut(path, "/seg-")
+		sequence, err := strconv.Atoi(strings.TrimSuffix(tail, ".m4s"))
+		if !found || err != nil {
+			continue
+		}
+		if first < 0 || sequence < first {
+			first = sequence
+		}
+		last = max(last, sequence)
+	}
+	slog.Info("recording_capture_admission", "capture_id", receipt.CaptureID, "operation", receipt.Operation,
+		"objects", len(paths), "first_sequence", first, "last_sequence", last,
+		"accepted_at", receipt.AcceptedAt, "elapsed_ms", time.Since(started).Milliseconds())
 }
 func (h *Handler) sealRecordingCapture(w http.ResponseWriter, r *http.Request) {
 	if !h.captureAllowed(w, r) {

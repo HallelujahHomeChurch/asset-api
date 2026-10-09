@@ -16,22 +16,38 @@ type LiveObjects interface {
 	AdvanceLivePointer(context.Context, string, int64, int) error
 }
 
-// One claim validates one batch or resumes an already committed publication.
-// Media bytes never become reachable through the common pointer before checks.
+// Drain both global slots across captures; each capture still advances serially.
+// Join every claimed batch before the caller starts cleanup or long VOD work.
 func RunLiveValidation(ctx context.Context, store *postgres.RecordingCaptureStore, objects LiveObjects, probe PackageMediaProbe) (bool, error) {
-	claim, err := store.ClaimLiveValidation(ctx)
-	if errors.Is(err, assets.ErrNotFound) {
-		return false, nil
+	done := make(chan error, 2)
+	count := 0
+	var result error
+	for count < 2 {
+		claim, err := store.ClaimLiveValidation(ctx)
+		if errors.Is(err, assets.ErrNotFound) {
+			break
+		}
+		if err != nil {
+			result = err
+			break
+		}
+		count++
+		go func() { done <- runLiveClaim(ctx, store, objects, probe, claim) }()
 	}
-	if err != nil {
-		return false, err
+	for i := 0; i < count; i++ {
+		result = errors.Join(result, <-done)
 	}
+	return count > 0, result
+}
+
+// Media bytes never become reachable through the common pointer before checks.
+func runLiveClaim(ctx context.Context, store *postgres.RecordingCaptureStore, objects LiveObjects, probe PackageMediaProbe, claim postgres.RecordingLiveClaim) error {
 	snapshot := claim.Snapshot
 	claimedAt := time.Now()
-	err = RunProcessingClaim(ctx, func(ctx context.Context) error { return store.HeartbeatLive(ctx, claim) }, func(ctx context.Context) (result error) {
+	err := RunProcessingClaim(ctx, func(ctx context.Context) error { return store.HeartbeatLive(ctx, claim) }, func(ctx context.Context) (result error) {
 		stage, started := "resume_publication", time.Now()
 		logStage := func(success bool) {
-			slog.Info("recording_live_stage", "claim_id", claim.ClaimID, "sequence", claim.Sequence,
+			slog.Info("recording_live_stage", "capture_id", claim.Capture.ID, "claim_id", claim.ClaimID, "sequence", claim.Sequence,
 				"stage", stage, "elapsed_ms", time.Since(started).Milliseconds(), "succeeded", success)
 		}
 		defer func() { logStage(result == nil) }()
@@ -104,9 +120,9 @@ func RunLiveValidation(ctx context.Context, store *postgres.RecordingCaptureStor
 		} else {
 			finishErr = store.FailLiveClaim(ctx, claim, failure == "invalid")
 		}
-		slog.Info("recording_live_claim", "claim_id", claim.ClaimID, "sequence", claim.Sequence,
+		slog.Info("recording_live_claim", "capture_id", claim.Capture.ID, "claim_id", claim.ClaimID, "sequence", claim.Sequence,
 			"elapsed_ms", time.Since(claimedAt).Milliseconds(), "published", ready && finishErr == nil, "failure", failure)
 		return finishErr
 	}, 30*time.Second)
-	return true, err
+	return err
 }
