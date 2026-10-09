@@ -108,7 +108,10 @@ func (s *RecordingLiveCoverStore) Timeline(ctx context.Context, capture string) 
 var liveCoverScope = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
 const liveCoverColumns = `c.id,c.scope,c.recording_id,c.kind,c.state,c.mime,c.digest,c.output_digest,COALESCE(c.claim_id,''),c.output_attempt,c.created_at`
-const liveCoverAlive = `(c.scope='defaults' OR EXISTS(SELECT 1 FROM recording_captures cap WHERE cap.id=c.scope AND cap.recording_id=c.recording_id AND cap.terminal_at IS NULL AND cap.expires_at>now() AND cap.state IN ('uploading','freezing','validating','ready'))) AND NOT EXISTS(SELECT 1 FROM recording_deletions d WHERE d.recording_id=c.recording_id)`
+
+// Ready derivatives follow package retention, not the closed intake deadline.
+const liveCoverCaptureAlive = `cap.terminal_at IS NULL AND cap.state IN ('uploading','freezing','validating','ready') AND (cap.state<>'ready' AND cap.expires_at>now() OR cap.state='ready' AND EXISTS(SELECT 1 FROM recording_packages p WHERE p.id=cap.package_id AND p.recording_id=cap.recording_id AND p.owner_service='hhc-web-api' AND p.state='ready' AND p.media_expires_at>now()))`
+const liveCoverAlive = `(c.scope='defaults' OR EXISTS(SELECT 1 FROM recording_captures cap WHERE cap.id=c.scope AND cap.recording_id=c.recording_id AND ` + liveCoverCaptureAlive + `)) AND NOT EXISTS(SELECT 1 FROM recording_deletions d WHERE d.recording_id=c.recording_id)`
 
 func scanLiveCover(row coverScanner) (assets.RecordingLiveCover, error) {
 	var c assets.RecordingLiveCover
@@ -132,7 +135,7 @@ func checkLiveCoverOwner(ctx context.Context, tx *sql.Tx, scope, recording strin
 		return err
 	}
 	var found string
-	err := tx.QueryRowContext(ctx, `SELECT id FROM recording_captures WHERE id=$1 AND recording_id=$2 AND terminal_at IS NULL AND expires_at>now() AND state IN ('uploading','freezing','validating','ready')`, scope, recording).Scan(&found)
+	err := tx.QueryRowContext(ctx, `SELECT cap.id FROM recording_captures cap WHERE cap.id=$1 AND cap.recording_id=$2 AND `+liveCoverCaptureAlive, scope, recording).Scan(&found)
 	if errors.Is(err, sql.ErrNoRows) {
 		return assets.ErrNotFound
 	}
@@ -335,6 +338,11 @@ func (s *RecordingLiveCoverStore) Finish(ctx context.Context, c assets.Recording
 	return tx.Commit()
 }
 func (s *RecordingLiveCoverStore) Reconcile(ctx context.Context, remove func(context.Context, []string) error) error {
+	// Recover the source hold after worker interruption, exhausted retries or deletion.
+	_, err := s.db.ExecContext(ctx, `UPDATE recording_live_cover_references r SET released_at=now() WHERE reference_id IN (SELECT f.reference_id FROM recording_live_cover_references f JOIN recording_covers c ON f.reference_id='vod:'||c.id AND f.cover_id=c.inherited_cover_id AND f.scope=c.package_id AND f.recording_id=c.recording_id JOIN recording_packages p ON p.id=c.package_id WHERE f.released_at IS NULL AND (c.state IN ('ready','failed','expired') OR c.expires_at<=now() OR p.media_expires_at<=now() OR EXISTS(SELECT 1 FROM recording_deletions d WHERE d.recording_id=c.recording_id)) ORDER BY f.reference_id LIMIT 100) AND r.released_at IS NULL`)
+	if err != nil {
+		return err
+	}
 	rows, err := s.db.QueryContext(ctx, `SELECT `+liveCoverColumns+` FROM recording_live_covers c WHERE cleanup_after<=now() AND (claimed_until IS NULL OR claimed_until<=now()-interval '3 minutes') AND ((created_at<=now()-interval '24 hours' AND NOT EXISTS(SELECT 1 FROM recording_live_cover_references r WHERE r.cover_id=c.id AND r.released_at IS NULL)) OR NOT (`+liveCoverAlive+`)) ORDER BY created_at LIMIT 20`)
 	if err != nil {
 		return err

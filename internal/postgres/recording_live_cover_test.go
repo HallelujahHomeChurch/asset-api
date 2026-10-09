@@ -161,3 +161,116 @@ func TestLiveCoverPromotionIsPackageBoundAndReplaySafe(t *testing.T) {
 		t.Fatal("lost source", cover)
 	}
 }
+
+func promotionFixture(t *testing.T, defaults bool) (*RecordingLiveCoverStore, assets.RecordingLiveCover, assets.RecordingCover, string, string) {
+	t.Helper()
+	ctx := context.Background()
+	db := isolatedIntegrationDB(t)
+	if err := migrations.Run(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	id := strings.Repeat("d", 32)
+	recording := "promotion-recovery"
+	pkg := testRecordingPackage(t, id, "actor", recording)
+	if err := NewRecordingPackageStore(db).Create(ctx, pkg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE recording_packages SET state='ready',completed_at=now(),ready_at=now(),final_prefix='recordings/packages/promote/final/one/',media_expires_at=now()+interval '30 days' WHERE id=$1`, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO recording_captures(id,actor_id,recording_id,create_key,state,created_at,expires_at,package_id) VALUES($1,'actor',$2,'promote','ready',now(),now()+interval '1 hour',$1)`, id, recording); err != nil {
+		t.Fatal(err)
+	}
+	store := NewRecordingLiveCoverStore(db)
+	scope, owner := id, recording
+	if defaults {
+		scope, owner = "defaults", ""
+	}
+	upload, err := store.Create(ctx, scope, owner, "actor", "upload", "image/png", "input", "custom")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Queue(ctx, upload.ID); err != nil {
+		t.Fatal(err)
+	}
+	claim, err := store.Claim(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Finish(ctx, claim, "normalized", true); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Retain(ctx, upload.ID, id, recording, "capture-source"); err != nil {
+		t.Fatal(err)
+	}
+	cover, err := store.Promote(ctx, upload.ID, id, recording)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store, upload, cover, id, recording
+}
+func TestLiveCoverReadyPromotionOutlivesCaptureUploadDeadline(t *testing.T) {
+	store, upload, cover, id, recording := promotionFixture(t, false)
+	ctx := context.Background()
+	if _, err := store.db.Exec(`UPDATE recording_captures SET created_at=now()-interval '2 hours',expires_at=now()-interval '1 hour' WHERE id=$1`, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`UPDATE recording_live_covers SET created_at=now()-interval '2 days' WHERE id=$1`, upload.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Get(ctx, upload.ID, id, recording); err != nil {
+		t.Errorf("lost retained ready source: %v", err)
+	}
+	if value, err := store.Promote(ctx, upload.ID, id, recording); err != nil || value.ID != cover.ID {
+		t.Errorf("lost ready promotion: %+v %v", value, err)
+	}
+	removed := 0
+	if err := store.Reconcile(ctx, func(context.Context, []string) error { removed++; return nil }); err != nil || removed != 0 {
+		t.Fatalf("cleaned retained VOD source %d %v", removed, err)
+	}
+}
+func TestLiveCoverPromotionSourceReferencesHaveDurableCleanup(t *testing.T) {
+	for _, state := range []string{"pending", "ready", "failed", "deleted"} {
+		t.Run(state, func(t *testing.T) {
+			store, upload, cover, _, recording := promotionFixture(t, true)
+			ctx := context.Background()
+			if _, err := store.db.Exec(`UPDATE recording_live_covers SET created_at=now()-interval '2 days' WHERE id=$1`, upload.ID); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Retain(ctx, upload.ID, "defaults", "", "shared-default"); err != nil {
+				t.Fatal(err)
+			}
+			if state == "deleted" {
+				if err := NewRecordingDeletionStore(store.db).DeleteRecording(ctx, recording); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if _, err := store.db.Exec(`UPDATE recording_covers SET state=$2 WHERE id=$1`, cover.ID, state); err != nil {
+					t.Fatal(err)
+				}
+			}
+			removed := 0
+			if err := store.Reconcile(ctx, func(context.Context, []string) error { removed++; return nil }); err != nil || removed != 0 {
+				t.Fatal("deleted shared source", removed, err)
+			}
+			var released bool
+			if err := store.db.QueryRow(`SELECT released_at IS NOT NULL FROM recording_live_cover_references WHERE reference_id=$1`, "vod:"+cover.ID).Scan(&released); err != nil {
+				t.Fatal(err)
+			}
+			if released != (state != "pending") {
+				t.Fatalf("source ref release=%t state=%s", released, state)
+			}
+			if state != "pending" {
+				if err := store.Release(ctx, upload.ID, "defaults", "shared-default"); err != nil {
+					t.Fatal(err)
+				}
+				if err := store.Release(ctx, upload.ID, cover.PackageID, "capture-source"); err != nil {
+					t.Fatal(err)
+				}
+				if err := store.Reconcile(ctx, func(context.Context, []string) error { removed++; return nil }); err != nil || removed != 1 {
+					t.Fatal("unreferenced source leaked", removed, err)
+				}
+			}
+		})
+	}
+}
