@@ -35,7 +35,11 @@ func RunPackagePreview(ctx context.Context, repo *postgres.RecordingPackageStore
 		return false, err
 	}
 	return true, RunProcessingClaim(ctx, func(ctx context.Context) error { return repo.HeartbeatPackagePreview(ctx, c.Package.ID, c.ClaimID) }, func(ctx context.Context) error {
-		return probe.GeneratePreviews(ctx, c.Package, c.ClaimID, objects.PutPackagePreview)
+		timeline, err := repo.PreviewTimeline(ctx, c.Package.ID)
+		if err != nil {
+			return err
+		}
+		return probe.GeneratePreviewsWithTimeline(ctx, c.Package, c.ClaimID, timeline, objects.PutPackagePreview)
 	}, func(ctx context.Context, ready bool, _ string) error {
 		return repo.FinishPackagePreview(ctx, c.Package.ID, c.ClaimID, ready, func(ctx context.Context) error {
 			return objects.PutPackagePreview(ctx, c.Package.FinalPrefix+"previews/current.json", []byte(fmt.Sprintf(`{"attempt":"%s"}`, c.ClaimID)))
@@ -47,6 +51,9 @@ func RunPackagePreview(ctx context.Context, repo *postgres.RecordingPackageStore
 // at a time. Reset PTS before selecting frames: later fMP4 fragments retain
 // the full recording timeline. Partial tiles are never referenced by cues.
 func (p PackageMediaProbe) GeneratePreviews(ctx context.Context, pkg assets.RecordingPackage, attempt string, put func(context.Context, string, []byte) error) (result error) {
+	return p.GeneratePreviewsWithTimeline(ctx, pkg, attempt, nil, put)
+}
+func (p PackageMediaProbe) GeneratePreviewsWithTimeline(ctx context.Context, pkg assets.RecordingPackage, attempt string, timeline []assets.RecordingLiveSegment, put func(context.Context, string, []byte) error) (result error) {
 	if p.Objects == nil || !filepath.IsAbs(p.FFmpeg) || !filepath.IsAbs(p.FFprobe) || pkg.State != "ready" || !packageIDPattern.MatchString(pkg.ID) || !packageIDPattern.MatchString(attempt) || put == nil {
 		return assets.ErrInvalidInput
 	}
@@ -117,7 +124,16 @@ func (p PackageMediaProbe) GeneratePreviews(ctx context.Context, pkg assets.Reco
 		if err := errors.Join(copyErr, f.Close()); err != nil {
 			return err
 		}
+		startSeconds := float64(i) * 30
 		end := math.Min(float64(i+1)*30, r.DurationSeconds)
+		if len(timeline) > 0 {
+			if i >= len(timeline) || timeline[i].Sequence != i {
+				return assets.ErrInvalidUpload
+			}
+			origin := timeline[0].Renditions[r.Name].Start
+			startSeconds = timeline[i].Renditions[r.Name].Start - origin
+			end = timeline[i].Renditions[r.Name].End - origin
+		}
 		// Validation permits a frame of declared-duration rounding error.
 		// Count available sample instants from real packet PTS so a tail just
 		// beyond a five-second boundary cannot expose tile's black padding.
@@ -125,7 +141,7 @@ func (p PackageMediaProbe) GeneratePreviews(ctx context.Context, pkg assets.Reco
 		if err != nil {
 			return err
 		}
-		cells, err := previewCells(packetData, end-float64(i)*30)
+		cells, err := previewCells(packetData, end-startSeconds)
 		if err != nil {
 			return err
 		}
@@ -156,7 +172,7 @@ func (p PackageMediaProbe) GeneratePreviews(ctx context.Context, pkg assets.Reco
 			return err
 		}
 		for cell := 0; cell < cells; cell++ {
-			start := float64(i*30 + cell*5)
+			start := startSeconds + float64(cell*5)
 			fmt.Fprintf(&vtt, "%s --> %s\nseg-%06d.jpg#xywh=%d,0,160,90\n\n", previewTimestamp(start), previewTimestamp(math.Min(start+5, end)), i, cell*160)
 		}
 		if vtt.Len() > 1<<20 {

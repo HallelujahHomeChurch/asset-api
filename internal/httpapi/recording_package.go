@@ -42,6 +42,23 @@ func (h *Handler) issueRecordingPackageGrant(w http.ResponseWriter, r *http.Requ
 	var grant assets.RecordingGrant
 	err := h.recordingPackages.WithReady(r.Context(), r.PathValue("packageID"), input.RecordingID, func(p assets.RecordingPackage) error {
 		var err error
+		if h.recordingBroadcasts != nil {
+			policy, readErr := h.recordingBroadcasts.GetBroadcastRange(r.Context(), p.ID)
+			if readErr != nil {
+				return readErr
+			}
+			if policy != nil {
+				projection, readErr := h.recordingBroadcasts.GetBroadcastProjection(r.Context(), p.ID)
+				if readErr != nil {
+					return readErr
+				}
+				if policy.MemberState != "vod" || policy.Revoked || policy.EndSequenceExclusive == nil || projection.State != "ready" {
+					return assets.ErrConflict
+				}
+				grant, err = h.recordingSigner.IssueBroadcastPackage(p, input.ScopeID, input.RecordingExpiresAt, time.Now(), *policy)
+				return err
+			}
+		}
 		grant, err = h.recordingSigner.IssuePackage(p, input.ScopeID, input.RecordingExpiresAt, time.Now())
 		return err
 	})

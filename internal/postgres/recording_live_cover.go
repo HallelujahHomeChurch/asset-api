@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"hhc/asset-api/internal/assets"
 	"regexp"
 	"strings"
@@ -19,7 +20,7 @@ func NewRecordingLiveCoverStore(db *sql.DB) *RecordingLiveCoverStore {
 
 func (s *RecordingLiveCoverStore) AutoMedia(ctx context.Context, c assets.RecordingLiveCover) (float64, []assets.RecordingPackageObject, error) {
 	var raw []byte
-	err := s.db.QueryRowContext(ctx, `SELECT l.segments->0 FROM recording_live l JOIN recording_live_covers c ON c.scope=l.capture_id WHERE c.id=$1 AND c.claim_id=$2 AND c.state='processing' AND c.claimed_until>now() AND l.published_sequence>=0 AND `+liveCoverAlive, c.ID, c.ClaimID).Scan(&raw)
+	err := s.db.QueryRowContext(ctx, `SELECT l.segments->COALESCE(b.start_sequence,0) FROM recording_live l LEFT JOIN recording_broadcast_ranges b ON b.capture_id=l.capture_id JOIN recording_live_covers c ON c.scope=l.capture_id WHERE c.id=$1 AND c.claim_id=$2 AND c.state='processing' AND c.claimed_until>now() AND l.published_sequence>=COALESCE(b.start_sequence,0) AND (b.capture_id IS NULL OR b.start_sequence IS NOT NULL AND NOT b.revoked) AND `+liveCoverAlive, c.ID, c.ClaimID).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, nil, assets.ErrConflict
 	}
@@ -30,7 +31,7 @@ func (s *RecordingLiveCoverStore) AutoMedia(ctx context.Context, c assets.Record
 	if err = json.Unmarshal(raw, &segment); err != nil {
 		return 0, nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT path,size_bytes,sha256 FROM recording_capture_objects WHERE capture_id=$1 AND state='verified' AND path IN ('480p/init.mp4','480p/seg-000000.m4s') ORDER BY path`, c.Scope)
+	rows, err := s.db.QueryContext(ctx, `SELECT path,size_bytes,sha256 FROM recording_capture_objects WHERE capture_id=$1 AND state='verified' AND path IN ('480p/init.mp4',$2) ORDER BY path`, c.Scope, fmt.Sprintf("480p/seg-%06d.m4s", segment.Sequence))
 	if err != nil {
 		return 0, nil, err
 	}
@@ -52,6 +53,10 @@ func (s *RecordingLiveCoverStore) Promote(ctx context.Context, id, capture, reco
 	if err != nil {
 		return assets.RecordingCover{}, err
 	}
+	return s.promoteSource(ctx, source, capture, recording)
+}
+func (s *RecordingLiveCoverStore) promoteSource(ctx context.Context, source assets.RecordingLiveCover, capture, recording string) (assets.RecordingCover, error) {
+	id := source.ID
 	if source.State != "ready" {
 		return assets.RecordingCover{}, assets.ErrConflict
 	}
@@ -93,25 +98,29 @@ func (s *RecordingLiveCoverStore) Promote(ctx context.Context, id, capture, reco
 }
 func (s *RecordingLiveCoverStore) Timeline(ctx context.Context, capture string) ([]assets.RecordingLiveSegment, error) {
 	var raw []byte
-	err := s.db.QueryRowContext(ctx, `SELECT segments FROM recording_live WHERE capture_id=$1`, capture).Scan(&raw)
+	err := s.db.QueryRowContext(ctx, `SELECT CASE WHEN b.capture_id IS NULL THEN l.segments WHEN b.start_sequence IS NOT NULL AND b.end_sequence_exclusive IS NOT NULL AND NOT b.revoked AND l.published_sequence>=b.end_sequence_exclusive-1 THEN (SELECT jsonb_agg(v ORDER BY ord) FROM jsonb_array_elements(l.segments) WITH ORDINALITY AS x(v,ord) WHERE ord>b.start_sequence AND ord<=b.end_sequence_exclusive) ELSE NULL END FROM recording_live l LEFT JOIN recording_broadcast_ranges b ON b.capture_id=l.capture_id WHERE l.capture_id=$1`, capture).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	if len(raw) == 0 {
+		return nil, assets.ErrConflict
+	}
 	var result []assets.RecordingLiveSegment
 	err = json.Unmarshal(raw, &result)
 	return result, err
 }
 
+var broadcastRecordingUUID = regexp.MustCompile(`^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$`)
 var liveCoverScope = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
 const liveCoverColumns = `c.id,c.scope,c.recording_id,c.kind,c.state,c.mime,c.digest,c.output_digest,COALESCE(c.claim_id,''),c.output_attempt,c.created_at`
 
 // Ready derivatives follow package retention, not the closed intake deadline.
 const liveCoverCaptureAlive = `cap.terminal_at IS NULL AND cap.state IN ('uploading','freezing','validating','ready') AND (cap.state<>'ready' AND cap.expires_at>now() OR cap.state='ready' AND EXISTS(SELECT 1 FROM recording_packages p WHERE p.id=cap.package_id AND p.recording_id=cap.recording_id AND p.owner_service='hhc-web-api' AND p.state='ready' AND p.media_expires_at>now()))`
-const liveCoverAlive = `(c.scope='defaults' OR EXISTS(SELECT 1 FROM recording_captures cap WHERE cap.id=c.scope AND cap.recording_id=c.recording_id AND ` + liveCoverCaptureAlive + `)) AND NOT EXISTS(SELECT 1 FROM recording_deletions d WHERE d.recording_id=c.recording_id)`
+const liveCoverAlive = `(c.scope='defaults' OR c.scope='broadcast-'||c.recording_id OR EXISTS(SELECT 1 FROM recording_captures cap WHERE cap.id=c.scope AND cap.recording_id=c.recording_id AND ` + liveCoverCaptureAlive + `)) AND NOT EXISTS(SELECT 1 FROM recording_deletions d WHERE d.recording_id=c.recording_id)`
 
 func scanLiveCover(row coverScanner) (assets.RecordingLiveCover, error) {
 	var c assets.RecordingLiveCover
@@ -128,6 +137,12 @@ func checkLiveCoverOwner(ctx context.Context, tx *sql.Tx, scope, recording strin
 		}
 		return nil
 	}
+	if strings.HasPrefix(scope, "broadcast-") {
+		if !broadcastRecordingUUID.MatchString(recording) || scope != "broadcast-"+recording {
+			return assets.ErrInvalidInput
+		}
+		return checkRecordingNotDeleted(ctx, tx, recording)
+	}
 	if !liveCoverScope.MatchString(scope) || recording == "" {
 		return assets.ErrInvalidInput
 	}
@@ -143,7 +158,7 @@ func checkLiveCoverOwner(ctx context.Context, tx *sql.Tx, scope, recording strin
 }
 func (s *RecordingLiveCoverStore) Create(ctx context.Context, scope, recording, actor, key, mime, digest, kind string) (assets.RecordingLiveCover, error) {
 	var empty assets.RecordingLiveCover
-	if actor == "" || len(actor) > 160 || key == "" || len(key) > 160 || strings.ContainsAny(key, "\r\n") || (kind != "auto" && kind != "custom") || kind == "auto" && scope == "defaults" {
+	if actor == "" || len(actor) > 160 || key == "" || len(key) > 160 || strings.ContainsAny(key, "\r\n") || (kind != "auto" && kind != "custom") || kind == "auto" && (scope == "defaults" || strings.HasPrefix(scope, "broadcast-")) {
 		return empty, assets.ErrInvalidInput
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -241,7 +256,7 @@ func (s *RecordingLiveCoverStore) Retain(ctx context.Context, id, scope, recordi
 		return err
 	}
 	var found string
-	err = tx.QueryRowContext(ctx, `SELECT c.id FROM recording_live_covers c WHERE id=$1 AND state='ready' AND (c.scope='defaults' OR c.scope=$2 AND c.recording_id=$3) AND (created_at>now()-interval '24 hours' OR EXISTS(SELECT 1 FROM recording_live_cover_references r WHERE r.cover_id=c.id AND r.released_at IS NULL)) AND `+liveCoverAlive+` FOR UPDATE`, id, scope, recording).Scan(&found)
+	err = tx.QueryRowContext(ctx, `SELECT c.id FROM recording_live_covers c WHERE id=$1 AND state='ready' AND (c.scope='defaults' OR c.scope=$2 AND c.recording_id=$3 OR c.scope='broadcast-'||$3 AND c.recording_id=$3) AND (created_at>now()-interval '24 hours' OR EXISTS(SELECT 1 FROM recording_live_cover_references r WHERE r.cover_id=c.id AND r.released_at IS NULL)) AND `+liveCoverAlive+` FOR UPDATE`, id, scope, recording).Scan(&found)
 	if errors.Is(err, sql.ErrNoRows) {
 		return assets.ErrNotFound
 	}
@@ -292,7 +307,7 @@ func (s *RecordingLiveCoverStore) Claim(ctx context.Context) (assets.RecordingLi
 	if _, err = tx.ExecContext(ctx, `UPDATE recording_live_covers SET state='failed',claim_id=NULL,claimed_until=NULL WHERE state='processing' AND attempts=3 AND claimed_until<=now()`); err != nil {
 		return empty, err
 	}
-	c, err := scanLiveCover(tx.QueryRowContext(ctx, `SELECT `+liveCoverColumns+` FROM recording_live_covers c WHERE state IN ('pending','processing') AND attempts<3 AND next_attempt_at<=now() AND (claimed_until IS NULL OR claimed_until<=now()) AND created_at>now()-interval '24 hours' AND `+liveCoverAlive+` AND (kind='custom' OR EXISTS(SELECT 1 FROM recording_live l WHERE l.capture_id=c.scope AND l.published_sequence>=0)) ORDER BY created_at FOR UPDATE OF c SKIP LOCKED LIMIT 1`))
+	c, err := scanLiveCover(tx.QueryRowContext(ctx, `SELECT `+liveCoverColumns+` FROM recording_live_covers c WHERE state IN ('pending','processing') AND attempts<3 AND next_attempt_at<=now() AND (claimed_until IS NULL OR claimed_until<=now()) AND created_at>now()-interval '24 hours' AND `+liveCoverAlive+` AND (kind='custom' OR EXISTS(SELECT 1 FROM recording_live l LEFT JOIN recording_broadcast_ranges b ON b.capture_id=l.capture_id WHERE l.capture_id=c.scope AND l.published_sequence>=COALESCE(b.start_sequence,0) AND (b.capture_id IS NULL OR b.start_sequence IS NOT NULL AND NOT b.revoked))) ORDER BY created_at FOR UPDATE OF c SKIP LOCKED LIMIT 1`))
 	if errors.Is(err, assets.ErrNotFound) {
 		if err = tx.Commit(); err != nil {
 			return empty, err
@@ -390,4 +405,18 @@ func (s *RecordingLiveCoverStore) Reconcile(ctx context.Context, remove func(con
 		err = errors.Join(err, e, updateErr)
 	}
 	return err
+}
+
+func (s *RecordingLiveCoverStore) PromoteTo(ctx context.Context, id, scope, sourceRecording, capture, recording string) (assets.RecordingCover, error) {
+	if scope != "defaults" && scope != "broadcast-"+recording {
+		return assets.RecordingCover{}, assets.ErrInvalidInput
+	}
+	source, err := s.Get(ctx, id, scope, sourceRecording)
+	if err != nil {
+		return assets.RecordingCover{}, err
+	}
+	if source.Kind != "custom" || source.State != "ready" || scope != "defaults" && sourceRecording != recording {
+		return assets.RecordingCover{}, assets.ErrConflict
+	}
+	return s.promoteSource(ctx, source, capture, recording)
 }

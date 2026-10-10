@@ -28,6 +28,7 @@ var operationalColumnExclusions = map[string]string{
 }
 
 var governedTables = map[string]bool{
+	"recording_broadcast_ranges":       true,
 	"recording_live_covers":            true,
 	"recording_live_cover_references":  true,
 	"recording_live_cover_attempts":    true,
@@ -67,6 +68,7 @@ func TestDataGovernanceManifest(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(raw), "account.avatar, account.dsr-export and account.dsr-supplement")
 	ids := []string{
+		"asset.recording-broadcast-ranges", "asset.recording-broadcast-authority",
 		"asset.recording-live-cover-attempts", "asset.recording-live-cover-references", "asset.recording-live-covers",
 		"asset.recording-retention-policy", "asset.recording-retention-previews",
 		"asset.recording-covers", "asset.recording-cover-attempts", "asset.recording-cover-references",
@@ -267,6 +269,7 @@ func migratedColumns(t *testing.T) (map[string]struct{}, map[string]bool) {
 		t.Fatal(err)
 	}
 	tableNames := []string{
+		"recording_broadcast_ranges",
 		"recording_live_covers", "recording_live_cover_references", "recording_live_cover_attempts",
 		"recording_retention_policy", "recording_retention_previews",
 		"recording_covers", "recording_cover_attempts", "recording_cover_references",

@@ -86,7 +86,11 @@ func (p PackageMediaProbe) GenerateCoversWithTimeline(ctx context.Context, pkg a
 		return err
 	}
 	defer func() { err = errors.Join(err, os.RemoveAll(dir)) }()
-	for i, seconds := range coverSampleTimes(rendition.DurationSeconds, rendition.FrameRate) {
+	duration := rendition.DurationSeconds
+	if len(timeline) > 0 {
+		duration = timeline[len(timeline)-1].Renditions[rendition.Name].End - timeline[0].Renditions[rendition.Name].Start
+	}
+	for i, seconds := range coverSampleTimes(duration, rendition.FrameRate) {
 		if err := ctx.Err(); err != nil {
 			return err
 		}

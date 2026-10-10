@@ -13,6 +13,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"syscall"
 	"time"
 )
@@ -48,7 +49,11 @@ func (p PackageMediaProbe) GenerateLiveCover(ctx context.Context, capture string
 	if err != nil {
 		return nil, err
 	}
-	for i, name := range []string{"480p/init.mp4", "480p/seg-000000.m4s"} {
+	if !regexp.MustCompile(`^480p/seg-[0-9]{6}\.m4s$`).MatchString(media[1].Path) {
+		file.Close()
+		return nil, assets.ErrInvalidInput
+	}
+	for i, name := range []string{"480p/init.mp4", media[1].Path} {
 		object := media[i]
 		if object.Path != name || object.SizeBytes <= 0 || object.SizeBytes > assets.RecordingObjectMaxBytes {
 			file.Close()

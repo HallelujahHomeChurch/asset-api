@@ -88,7 +88,9 @@ func run() error {
 		handler.WithRecordingSigner(signer)
 		if cfg.RecordingHLSEnabled {
 			handler.WithRecordingPackages(assets.NewRecordingPackageService(postgres.NewRecordingPackageStore(db), objects, time.Now))
-			handler.WithRecordingCaptures(assets.NewRecordingCaptureService(postgres.NewRecordingCaptureStore(db), objects, time.Now))
+			captureStore := postgres.NewRecordingCaptureStore(db).WithBroadcastObjects(objects)
+			handler.WithRecordingCaptures(assets.NewRecordingCaptureService(captureStore, objects, time.Now))
+			handler.WithRecordingBroadcasts(captureStore)
 			handler.WithRecordingRetention(postgres.NewRecordingPackageStore(db))
 			handler.WithRecordingDeletion(postgres.NewRecordingDeletionStore(db))
 			handler.WithRecordingCovers(postgres.NewRecordingCoverStore(db), objects)

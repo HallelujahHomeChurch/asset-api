@@ -113,3 +113,82 @@ func TestLiveGrantCapsDeadlineAndProtectsReadLease(t *testing.T) {
 		t.Fatalf("expired replay: %v", err)
 	}
 }
+
+type broadcastGrantRepo struct {
+	RecordingCaptureRepository
+	policy RecordingBroadcastRange
+	state  string
+}
+
+func (r *broadcastGrantRepo) SetBroadcastRange(context.Context, string, RecordingBroadcastRange) (RecordingBroadcastRange, error) {
+	return r.policy, nil
+}
+func (r *broadcastGrantRepo) GetBroadcastRange(context.Context, string) (*RecordingBroadcastRange, error) {
+	return &r.policy, nil
+}
+func (r *broadcastGrantRepo) GetBroadcastProjection(context.Context, string) (RecordingBroadcastProjection, error) {
+	return RecordingBroadcastProjection{Epoch: r.policy.Epoch, RangeRevision: r.policy.RangeRevision, State: r.state, Revision: 1}, nil
+}
+func TestBroadcastGrantsCarryAuthorityAndSeparatePreviewPurpose(t *testing.T) {
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	encoded, _ := x509.MarshalPKCS8PrivateKey(key)
+	signer, _ := NewRecordingSigner(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: encoded}), "test", "fixture")
+	_, repo, objects, now, c := captureTest(t)
+	c.BroadcastEpoch = 1
+	c.Progress = RecordingLiveProgress{Revision: 3, LastSequence: 2, MediaEndSeconds: 90}
+	repo.captures[c.ID] = c
+	policy := RecordingBroadcastRange{MemberState: "blocked", RecordingID: c.RecordingID, Epoch: 1, RangeRevision: 1}
+	broadcast := &broadcastGrantRepo{RecordingCaptureRepository: repo, policy: policy, state: "pending"}
+	service := NewRecordingCaptureService(broadcast, objects, func() time.Time { return *now })
+	if _, err := service.GrantLive(context.Background(), signer, c.ID, c.RecordingID, c.ActorID, c.RecordingID, now.Add(time.Hour)); !errors.Is(err, ErrConflict) {
+		t.Fatalf("prestart member grant: %v", err)
+	}
+	preview, err := service.GrantPreview(context.Background(), signer, c.ID, c.RecordingID, c.ActorID, c.RecordingID, 1, now.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var exchange, playback map[string]any
+	verifyJWT(t, preview.ExchangeCredential, &key.PublicKey, &exchange)
+	verifyJWT(t, exchange["playback"].(string), &key.PublicKey, &playback)
+	if playback["purpose"] != "staff-preview" || playback["broadcastEpoch"] != float64(1) || playback["rangeRevision"] != float64(1) || exchange["purpose"] != "staff-preview" {
+		t.Fatalf("preview purpose: %+v", playback)
+	}
+	if _, err := service.GrantPreview(context.Background(), signer, c.ID, c.RecordingID, c.ActorID, c.RecordingID, 2, now.Add(time.Hour)); !errors.Is(err, ErrConflict) {
+		t.Fatalf("wrong preview epoch: %v", err)
+	}
+	start := 0
+	broadcast.policy.StartSequence = &start
+	broadcast.policy.RangeRevision = 2
+	broadcast.policy.MemberState = "live"
+	broadcast.state = "ready"
+	member, err := service.GrantLive(context.Background(), signer, c.ID, c.RecordingID, c.ActorID, c.RecordingID, now.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifyJWT(t, member.ExchangeCredential, &key.PublicKey, &exchange)
+	verifyJWT(t, exchange["playback"].(string), &key.PublicKey, &playback)
+	if playback["purpose"] != "member" || playback["rangeRevision"] != float64(2) {
+		t.Fatalf("member purpose: %+v", playback)
+	}
+	broadcast.state = "pending"
+	end := 5
+	broadcast.policy.EndSequenceExclusive = &end
+	if _, err := service.GrantLive(context.Background(), signer, c.ID, c.RecordingID, c.ActorID, c.RecordingID, now.Add(time.Hour)); err != nil {
+		t.Fatalf("end pending live window: %v", err)
+	}
+	broadcast.policy.StartSequence = &end
+	if _, err := service.GrantLive(context.Background(), signer, c.ID, c.RecordingID, c.ActorID, c.RecordingID, now.Add(time.Hour)); !errors.Is(err, ErrConflict) {
+		t.Fatalf("future start admitted: %v", err)
+	}
+	broadcast.policy.StartSequence = &start
+	broadcast.state = "ready"
+	broadcast.policy.MemberState = "blocked"
+	if _, err := service.GrantLive(context.Background(), signer, c.ID, c.RecordingID, c.ActorID, c.RecordingID, now.Add(time.Hour)); !errors.Is(err, ErrConflict) {
+		t.Fatalf("unpublished new grant: %v", err)
+	}
+	broadcast.policy.MemberState = "live"
+	broadcast.policy.Revoked = true
+	if _, err := service.GrantLive(context.Background(), signer, c.ID, c.RecordingID, c.ActorID, c.RecordingID, now.Add(time.Hour)); !errors.Is(err, ErrConflict) {
+		t.Fatalf("revoked new grant: %v", err)
+	}
+}

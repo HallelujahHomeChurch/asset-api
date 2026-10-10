@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -111,4 +112,20 @@ func (s *RecordingPackageStore) FinishPackagePreview(ctx context.Context, id, cl
 		_, err := tx.ExecContext(ctx, `UPDATE recording_processing_slots SET job_id=NULL,claim_id=NULL,leased_until=NULL WHERE claim_id=$1`, claim)
 		return err
 	})
+}
+
+func (s *RecordingPackageStore) PreviewTimeline(ctx context.Context, id string) ([]assets.RecordingLiveSegment, error) {
+	var raw []byte
+	err := s.db.QueryRowContext(ctx, `SELECT segments FROM recording_live WHERE capture_id=$1`, id).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var timeline []assets.RecordingLiveSegment
+	if err = json.Unmarshal(raw, &timeline); err != nil {
+		return nil, err
+	}
+	return timeline, nil
 }

@@ -83,13 +83,20 @@ func (h *Handler) createRecordingCapture(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var input struct {
-		RecordingID  string `json:"recordingId"`
-		OperationKey string `json:"operationKey"`
+		RecordingID    string `json:"recordingId"`
+		OperationKey   string `json:"operationKey"`
+		BroadcastEpoch *int64 `json:"broadcastEpoch,omitempty"`
 	}
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	result, err := h.recordingCaptures.Create(r.Context(), input.RecordingID, captureActor(r), input.OperationKey)
+	var result assets.RecordingCaptureResult
+	var err error
+	if input.BroadcastEpoch != nil {
+		result, err = h.recordingCaptures.CreateBroadcast(r.Context(), input.RecordingID, captureActor(r), input.OperationKey, *input.BroadcastEpoch)
+	} else {
+		result, err = h.recordingCaptures.Create(r.Context(), input.RecordingID, captureActor(r), input.OperationKey)
+	}
 	if err != nil {
 		captureError(w, err)
 		return

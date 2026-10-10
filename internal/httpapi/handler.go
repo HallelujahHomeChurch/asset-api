@@ -39,6 +39,7 @@ type Handler struct {
 	recordingSigner      *assets.RecordingSigner
 	recordingDeletion    RecordingDeleter
 	recordingCovers      RecordingCoverStore
+	recordingBroadcasts  assets.RecordingBroadcastRepository
 	recordingLiveCovers  RecordingLiveCoverStore
 	coverObjects         *r2.Store
 }
@@ -137,6 +138,9 @@ func (h *Handler) Routes() http.Handler {
 	mux.Handle("POST /priv/recording-captures/{captureID}/abort", h.captureInternal(h.abortRecordingCapture))
 	mux.Handle("GET /priv/recording-captures/{captureID}/progress", h.captureInternal(h.recordingLiveProgress))
 	mux.Handle("POST /priv/recording-captures/{captureID}/grant", h.captureInternal(h.grantRecordingLive))
+	mux.Handle("PUT /priv/recording-captures/{captureID}/broadcast-range", h.internal(http.HandlerFunc(h.setRecordingBroadcastRange)))
+	mux.Handle("GET /priv/recording-captures/{captureID}/broadcast-projection", h.internal(http.HandlerFunc(h.getRecordingBroadcastProjection)))
+	mux.Handle("POST /priv/recording-captures/{captureID}/preview-grant", h.internal(http.HandlerFunc(h.grantRecordingPreview)))
 	mux.Handle("POST /priv/recording-packages", h.internal(http.HandlerFunc(h.createRecordingPackage)))
 	mux.Handle("GET /priv/recordings/retention-policy", h.internal(http.HandlerFunc(h.getRecordingRetention)))
 	mux.Handle("POST /priv/recordings/lifecycle", h.internal(http.HandlerFunc(h.recordingLifecycle)))

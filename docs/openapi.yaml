@@ -2367,7 +2367,7 @@ paths:
       x-hhc-callers: [hhc-web-api]
       security: [{daprCaller: []}]
       parameters:
-        - {name: scope, in: path, required: true, schema: {type: string, pattern: '^(defaults|[a-f0-9]{32})$'}}
+        - {name: scope, in: path, required: true, schema: {type: string, pattern: '^(defaults|[a-f0-9]{32}|broadcast-[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})$'}}
         - {name: recordingId, in: query, schema: {type: string}, description: Empty for defaults; exact capture recording owner otherwise.}
       requestBody:
         required: true
@@ -2394,7 +2394,7 @@ paths:
       x-hhc-callers: [hhc-web-api]
       security: [{daprCaller: []}]
       parameters:
-        - {name: scope, in: path, required: true, schema: {type: string, pattern: '^(defaults|[a-f0-9]{32})$'}}
+        - {name: scope, in: path, required: true, schema: {type: string, pattern: '^(defaults|[a-f0-9]{32}|broadcast-[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})$'}}
         - {name: recordingId, in: query, schema: {type: string}, description: Empty for defaults; exact capture recording owner otherwise.}
       responses:
         '403': {description: Only the CMS owner may manage images.}
@@ -2414,7 +2414,7 @@ paths:
       x-hhc-callers: [hhc-web-api]
       security: [{daprCaller: []}]
       parameters:
-        - {name: scope, in: path, required: true, schema: {type: string, pattern: '^(defaults|[a-f0-9]{32})$'}}
+        - {name: scope, in: path, required: true, schema: {type: string, pattern: '^(defaults|[a-f0-9]{32}|broadcast-[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})$'}}
         - {name: recordingId, in: query, schema: {type: string}, description: Empty for defaults; exact capture recording owner otherwise.}
         - {name: uploadID, in: path, required: true, schema: {type: string}}
       responses:
@@ -2435,7 +2435,7 @@ paths:
       x-hhc-callers: [hhc-web-api]
       security: [{daprCaller: []}]
       parameters:
-        - {name: scope, in: path, required: true, schema: {type: string, pattern: '^(defaults|[a-f0-9]{32})$'}}
+        - {name: scope, in: path, required: true, schema: {type: string, pattern: '^(defaults|[a-f0-9]{32}|broadcast-[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})$'}}
         - {name: recordingId, in: query, schema: {type: string}, description: Empty for defaults; exact capture recording owner otherwise.}
         - {name: uploadID, in: path, required: true, schema: {type: string}}
       responses:
@@ -2454,7 +2454,7 @@ paths:
       x-hhc-callers: [hhc-web-api]
       security: [{daprCaller: []}]
       parameters:
-        - {name: scope, in: path, required: true, schema: {type: string, pattern: '^(defaults|[a-f0-9]{32})$'}}
+        - {name: scope, in: path, required: true, schema: {type: string, pattern: '^(defaults|[a-f0-9]{32}|broadcast-[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})$'}}
         - {name: recordingId, in: query, schema: {type: string}, description: Empty for defaults; exact capture recording owner otherwise.}
         - {name: uploadID, in: path, required: true, schema: {type: string}}
       requestBody:
@@ -2477,10 +2477,23 @@ paths:
       x-hhc-callers: [hhc-web-api]
       security: [{daprCaller: []}]
       parameters:
-        - {name: scope, in: path, required: true, schema: {type: string, pattern: '^(defaults|[a-f0-9]{32})$'}}
+        - {name: scope, in: path, required: true, schema: {type: string, pattern: '^(defaults|[a-f0-9]{32}|broadcast-[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})$'}}
         - {name: recordingId, in: query, schema: {type: string}, description: Empty for defaults; exact capture recording owner otherwise.}
         - {name: uploadID, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: false
+        description: Defaults or broadcast custom source promotion requires the target B1 ready package with a verified frozen member range. Omit for the existing capture-scope promotion.
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [targetCaptureId, recordingId]
+              properties:
+                targetCaptureId: {type: string, pattern: '^[a-f0-9]{32}$'}
+                recordingId: {type: string, format: uuid}
       responses:
+        '400': {description: Invalid source scope or target binding.}
         '403': {description: Only the CMS owner may manage images.}
         '404': {description: Unknown upload or invalid recording/capture binding.}
         '409': {description: "Changed idempotency content, pending media, or a released reference."}
@@ -2498,7 +2511,7 @@ paths:
       x-hhc-callers: [hhc-web-api]
       security: [{daprCaller: []}]
       parameters:
-        - {name: scope, in: path, required: true, schema: {type: string, pattern: '^(defaults|[a-f0-9]{32})$'}}
+        - {name: scope, in: path, required: true, schema: {type: string, pattern: '^(defaults|[a-f0-9]{32}|broadcast-[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})$'}}
         - {name: recordingId, in: query, schema: {type: string}, description: Empty for defaults; exact capture recording owner otherwise.}
         - {name: uploadID, in: path, required: true, schema: {type: string}}
         - {name: referenceID, in: path, required: true, schema: {type: string}}
@@ -2510,6 +2523,223 @@ paths:
         '204':
           description: Scoped result; bytes are private, no-store and metadata stripped.
 
+  /priv/recording-captures/{captureId}/broadcast-range:
+    put:
+      operationId: setRecordingBroadcastRange
+      summary: setRecordingBroadcastRange
+      description: CMS-only B1 producer. Capture create with broadcastEpoch initializes
+        denied member range atomically. Range CAS and R2 conditional authority writes
+        finish before acknowledgement. Projection confirms current Worker authority
+        and published verified media. Legacy C1 captures are unchanged.
+      tags:
+      - Private
+      x-hhc-visibility: private
+      x-hhc-callers:
+      - hhc-web-api
+      x-hhc-cache: private, no-store
+      security:
+      - daprCaller: []
+      parameters:
+      - name: captureId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+      responses:
+        '200':
+          description: Accepted durable range
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BroadcastRangeInput'
+        '400':
+          description: Rejected or unavailable; state must not be inferred from failed
+            reads.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Rejected or unavailable; state must not be inferred from failed
+            reads.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Rejected or unavailable; state must not be inferred from failed
+            reads.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Rejected or unavailable; state must not be inferred from failed
+            reads.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Rejected or unavailable; state must not be inferred from failed
+            reads.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Rejected or unavailable; state must not be inferred from failed
+            reads.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BroadcastRangeInput'
+  /priv/recording-captures/{captureId}/broadcast-projection:
+    get:
+      operationId: getRecordingBroadcastProjection
+      summary: getRecordingBroadcastProjection
+      description: CMS-only B1 producer. Capture create with broadcastEpoch initializes
+        denied member range atomically. Range CAS and R2 conditional authority writes
+        finish before acknowledgement. Projection confirms current Worker authority
+        and published verified media. Legacy C1 captures are unchanged.
+      tags:
+      - Private
+      x-hhc-visibility: private
+      x-hhc-callers:
+      - hhc-web-api
+      x-hhc-cache: private, no-store
+      security:
+      - daprCaller: []
+      parameters:
+      - name: captureId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+      responses:
+        '200':
+          description: Projection status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BroadcastProjection'
+        '400':
+          description: Rejected or unavailable; state must not be inferred from failed
+            reads.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Rejected or unavailable; state must not be inferred from failed
+            reads.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Rejected or unavailable; state must not be inferred from failed
+            reads.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Rejected or unavailable; state must not be inferred from failed
+            reads.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Rejected or unavailable; state must not be inferred from failed
+            reads.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Rejected or unavailable; state must not be inferred from failed
+            reads.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /priv/recording-captures/{captureId}/preview-grant:
+    post:
+      operationId: grantRecordingBroadcastPreview
+      summary: Issue isolated staff preview playback
+      tags:
+      - Private
+      x-hhc-visibility: private
+      x-hhc-callers:
+      - hhc-web-api
+      security:
+      - daprCaller: []
+      parameters:
+      - name: captureId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BroadcastPreviewGrantInput'
+      responses:
+        '200':
+          description: Isolated staff preview grant
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BroadcastPreviewGrant'
+        '400':
+          description: Request rejected or preview unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Request rejected or preview unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Request rejected or preview unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Request rejected or preview unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Request rejected or preview unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Request rejected or preview unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 components:
   securitySchemes:
     daprCaller:
@@ -2595,6 +2825,170 @@ components:
     CollectionACLMutation: { description: Collection ACL mutation., content: { application/json: { schema: { $ref: '#/components/schemas/CollectionACLMutation' } } } }
     DeleteCollectionItems: { description: Collection deletion result., content: { application/json: { schema: { $ref: '#/components/schemas/DeleteCollectionItemsResult' } } } }
   schemas:
+    BroadcastRangeInput:
+      type: object
+      additionalProperties: false
+      required:
+      - recordingId
+      - epoch
+      - rangeRevision
+      - startSequence
+      - endSequenceExclusive
+      - revoked
+      properties:
+        recordingId:
+          type: string
+          format: uuid
+        epoch:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+        rangeRevision:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+        startSequence:
+          type:
+          - integer
+          - 'null'
+          minimum: 0
+          maximum: 2147483647
+        endSequenceExclusive:
+          type:
+          - integer
+          - 'null'
+          minimum: 0
+          maximum: 2147483647
+        revoked:
+          type: boolean
+        memberState:
+          type: string
+          enum: [live, blocked, vod]
+          default: blocked
+          description: CMS-owned member admission; absent denies member bytes. Live permits the verified range intersection; vod additionally permits published package playback.
+    BroadcastProjection:
+      type: object
+      additionalProperties: false
+      required:
+      - epoch
+      - rangeRevision
+      - state
+      - startSequence
+      - endSequenceExclusive
+      - mediaStartSeconds
+      - durationSeconds
+      - revision
+      properties:
+        epoch:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+        rangeRevision:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+        state:
+          type: string
+          enum:
+          - pending
+          - ready
+          - failed
+        startSequence:
+          type:
+          - integer
+          - 'null'
+          minimum: 0
+          maximum: 2147483647
+        endSequenceExclusive:
+          type:
+          - integer
+          - 'null'
+          minimum: 0
+          maximum: 2147483647
+        mediaStartSeconds:
+          type:
+          - number
+          - 'null'
+          minimum: 0
+        durationSeconds:
+          type:
+          - number
+          - 'null'
+          minimum: 0
+        revision:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+    BroadcastPreviewGrantInput:
+      type: object
+      additionalProperties: false
+      required:
+      - recordingId
+      - epoch
+      - userId
+      - playbackScopeId
+      - expiresAt
+      properties:
+        recordingId:
+          type: string
+          format: uuid
+        epoch:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+        userId:
+          type: string
+          format: uuid
+          description: Authenticated staff user; CMS enforces current staff authorization.
+        playbackScopeId:
+          type: string
+          format: uuid
+        expiresAt:
+          type: string
+          format: date-time
+    BroadcastPreviewGrant:
+      type: object
+      additionalProperties: false
+      required:
+      - recordingId
+      - captureId
+      - epoch
+      - purpose
+      - scope
+      - mediaPath
+      - exchangeCredential
+      - issuedAt
+      - expiresAt
+      properties:
+        recordingId:
+          type: string
+          format: uuid
+        captureId:
+          type: string
+          pattern: ^[a-f0-9]{32}$
+        epoch:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+        purpose:
+          type: string
+          enum:
+          - staff-preview
+        scope:
+          type: string
+          format: uuid
+        mediaPath:
+          type: string
+          description: Only /videos/{recordingId}/captures/{captureId}/previews/{scope}/master.m3u8;
+            cookie sibling. Cannot exchange or read a member sessions URL.
+        exchangeCredential:
+          type: string
+        issuedAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
     RecordingCaptureOperationInput:
       type: object
       additionalProperties: false
@@ -2818,6 +3212,11 @@ components:
       - recordingId
       - operationKey
       properties:
+        broadcastEpoch:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+          description: Private CMS B1 binding epoch. Omit for unchanged legacy C1 intake. Present initializes deny-all range revision 1 before successful create.
         recordingId:
           type: string
           format: uuid

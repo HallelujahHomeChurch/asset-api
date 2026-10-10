@@ -32,6 +32,8 @@ func TestRecordingPackageWireFieldsMatchOpenAPI(t *testing.T) {
 		t.Fatalf("segment count contract must use actual bounded media: %+v", count)
 	}
 	for name, value := range map[string]any{
+		"BroadcastRangeInput":        assets.RecordingBroadcastRange{},
+		"BroadcastProjection":        assets.RecordingBroadcastProjection{},
 		"RecordingCover":             coverItem{OperationKey: "cover-upload"},
 		"RecordingSource":            assets.RecordingSource{},
 		"RecordingSourceStatus":      assets.RecordingSourceStatus{},

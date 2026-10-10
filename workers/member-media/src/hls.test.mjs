@@ -28,6 +28,7 @@ async function fixture() {
     MEDIA_BUCKET: {
       async head(key) { calls.push(['head', key]); return { size: 6, httpEtag: '"v1"' }; },
       async get(key, options) {
+        if (key.endsWith('/broadcast.json')) return null;
         calls.push(['get', key]);
         const body = options?.range ? 'ab' : 'abcdef';
         return { body: new Response(body).body, size: 6, httpEtag: '"v1"' };

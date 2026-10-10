@@ -24,6 +24,11 @@ for file in "$@"; do
       # data, and keeps old expiry semantics until separately confirmed activation.
       legacy_hash='51e032de6c3f27962f23f3510e7bb765a97ee360feaf387a3fbb65f58a7d99f0'
       ;;
+    internal/migrations/sql/039_recording_broadcast_ranges.sql)
+      # Preserve C1 uniqueness at epoch zero; allow owner-locked terminal B1
+      # rebinds while retaining every old capture/package recovery record.
+      legacy_hash='fb332a34736e68f9522598d99e0698e3edac5294d51a457ba0345c78530f8f2a'
+      ;;
     internal/migrations/sql/038_recording_live_covers.sql)
       # Additive CHECK domain expansion preserves existing rows and writes;
       # the exact hash permits this reviewed replacement, not future edits.

@@ -44,13 +44,32 @@ func NewRecordingSigner(privatePEM []byte, kid, issuer string) (*RecordingSigner
 }
 
 func (s *RecordingSigner) IssuePackage(p RecordingPackage, scopeID string, recordingExpiry, now time.Time) (RecordingGrant, error) {
+	return s.issuePackage(p, scopeID, recordingExpiry, now, nil)
+}
+func (s *RecordingSigner) issuePackage(p RecordingPackage, scopeID string, recordingExpiry, now time.Time, policy *RecordingBroadcastRange) (RecordingGrant, error) {
 	if !mediaID.MatchString(p.ID) || !mediaID.MatchString(p.RecordingID) || !mediaID.MatchString(scopeID) || p.State != "ready" || p.OwnerService != "hhc-web-api" || p.ReadyAt == nil || p.MediaExpiresAt == nil || !recordingFinalPrefix.MatchString(p.FinalPrefix) || strings.Split(p.FinalPrefix, "/")[2] != p.ID {
 		return RecordingGrant{}, ErrInvalidInput
 	}
 	if p.MediaExpiresAt.Before(recordingExpiry) {
 		recordingExpiry = *p.MediaExpiresAt
 	}
-	return s.issue(map[string]any{"recordingId": p.RecordingID, "packageId": p.ID, "scopeId": scopeID}, map[string]any{"prefix": p.FinalPrefix}, recordingExpiry, now)
+	claims := map[string]any{"recordingId": p.RecordingID, "packageId": p.ID, "scopeId": scopeID}
+	if policy != nil {
+		if err := ValidateBroadcastRangeChange(nil, *policy); err != nil {
+			return RecordingGrant{}, err
+		}
+		if policy.RecordingID != p.RecordingID || policy.StartSequence == nil || policy.EndSequenceExclusive == nil || policy.Revoked || policy.MemberState != "vod" {
+			return RecordingGrant{}, ErrConflict
+		}
+		claims["purpose"] = "member"
+		claims["broadcastEpoch"] = policy.Epoch
+		claims["rangeRevision"] = policy.RangeRevision
+	}
+	return s.issue(claims, map[string]any{"prefix": p.FinalPrefix}, recordingExpiry, now)
+}
+
+func (s *RecordingSigner) IssueBroadcastPackage(p RecordingPackage, scope string, expiry, now time.Time, policy RecordingBroadcastRange) (RecordingGrant, error) {
+	return s.issuePackage(p, scope, expiry, now, &policy)
 }
 
 func (s *RecordingSigner) issue(base, resource map[string]any, recordingExpiry, now time.Time) (RecordingGrant, error) {
@@ -126,6 +145,15 @@ func (s *RecordingSigner) sign(claims map[string]any) (string, error) {
 // GrantLive runs signing and the cleanup fence in the same owner transaction.
 // CMS owns membership and stopped-scope policy; Asset independently bounds bytes and time.
 func (s *RecordingCaptureService) GrantLive(ctx context.Context, signer *RecordingSigner, id, recording, user, scope string, requested time.Time) (RecordingGrant, error) {
+	return s.grantLive(ctx, signer, id, recording, user, scope, 0, false, requested)
+}
+func (s *RecordingCaptureService) GrantPreview(ctx context.Context, signer *RecordingSigner, id, recording, user, scope string, epoch int64, requested time.Time) (RecordingGrant, error) {
+	if epoch < 1 || epoch > BroadcastMaxRevision {
+		return RecordingGrant{}, ErrInvalidInput
+	}
+	return s.grantLive(ctx, signer, id, recording, user, scope, epoch, true, requested)
+}
+func (s *RecordingCaptureService) grantLive(ctx context.Context, signer *RecordingSigner, id, recording, user, scope string, epoch int64, preview bool, requested time.Time) (RecordingGrant, error) {
 	var grant RecordingGrant
 	if signer == nil {
 		return grant, errors.New("live signer unavailable")
@@ -163,7 +191,41 @@ func (s *RecordingCaptureService) GrantLive(ctx context.Context, signer *Recordi
 			return ErrCaptureExpired
 		}
 		var err error
-		grant, err = signer.issue(map[string]any{"recordingId": recording, "captureId": c.ID, "scopeId": scope, "userId": user}, map[string]any{"prefix": "recordings/captures/" + c.ID + "/final/"}, expiry, now)
+		claims := map[string]any{"recordingId": recording, "captureId": c.ID, "scopeId": scope, "userId": user}
+		if c.BroadcastEpoch > 0 {
+			repo, ok := s.repository.(RecordingBroadcastRepository)
+			if !ok {
+				return errors.New("broadcast ranges unavailable")
+			}
+			policy, err := repo.GetBroadcastRange(ctx, c.ID)
+			if err != nil {
+				return err
+			}
+			if policy == nil {
+				return ErrConflict
+			}
+			if preview {
+				if epoch != c.BroadcastEpoch {
+					return ErrConflict
+				}
+				claims["purpose"] = "staff-preview"
+			} else {
+				projection, err := repo.GetBroadcastProjection(ctx, c.ID)
+				if err != nil {
+					return err
+				}
+				verifiedLive := projection.State == "ready" || projection.State == "pending" && policy.StartSequence != nil && *policy.StartSequence <= c.Progress.LastSequence && policy.EndSequenceExclusive != nil && *policy.EndSequenceExclusive > c.Progress.LastSequence+1
+				if policy.Revoked || policy.MemberState == "blocked" || !verifiedLive {
+					return ErrConflict
+				}
+				claims["purpose"] = "member"
+			}
+			claims["broadcastEpoch"] = policy.Epoch
+			claims["rangeRevision"] = policy.RangeRevision
+		} else if preview {
+			return ErrConflict
+		}
+		grant, err = signer.issue(claims, map[string]any{"prefix": "recordings/captures/" + c.ID + "/final/"}, expiry, now)
 		if err != nil {
 			return err
 		}

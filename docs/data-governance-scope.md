@@ -13,3 +13,8 @@ Collection retention runs daily at 19:00 UTC (03:00 Asia/Taipei): `retentionSche
 Checksums, hashes, and public visibility do not anonymize an artifact or remove its Account-artifact classification.
 
 schema_migrations.version, schema_migrations.checksum, and schema_migrations.applied_at are excluded operational metadata.
+
+
+## Broadcast policy metadata
+
+B1 capture/package epochs, recording_broadcast_ranges, and the R2 broadcast.json authority mirror are CMS-owned security and activity metadata. Raw media cleanup does not remove these fences, revoke their history, or imply a legal retention period. They contain no viewer credentials or viewer identity. Their retention remains manual and pending_legal, independently of Account-artifact purging and disposable HLS bytes.
