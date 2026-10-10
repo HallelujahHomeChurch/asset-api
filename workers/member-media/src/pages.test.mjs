@@ -25,8 +25,8 @@ test('test and production Pages deployments bind separate private media', () => 
     readFileSync(new URL('../pages/production/dist/_worker.js', import.meta.url)),
   );
   const expected = [
-    ['test', 'hhc-member-media-test', 'hhc-member-recordings-test', 'hhc-media-test', 'https://www-test.alive.org.tw'],
-    ['production', 'hhc-member-media', 'hhc-member-recordings-prod', 'hhc-media-prod', 'https://www.alive.org.tw'],
+    ['test', 'hhc-member-media-test', 'hhc-member-recordings-test', 'hhc-media-test', 'https://www-test.alive.org.tw,https://admin-test.alive.org.tw'],
+    ['production', 'hhc-member-media', 'hhc-member-recordings-prod', 'hhc-media-prod', 'https://www.alive.org.tw,https://admin.alive.org.tw'],
   ];
   for (const [environment, name, bucket, issuer, origin] of expected) {
     const config = JSON.parse(readFileSync(new URL(`../pages/${environment}/wrangler.jsonc`, import.meta.url), 'utf8'));
@@ -38,3 +38,16 @@ test('test and production Pages deployments bind separate private media', () => 
     assert.equal(config.workers_dev, undefined);
   }
 });
+
+ test('deployed origins permit Admin preview preflight without granting media access', async () => {
+  const {default: media} = await import('../pages/production/dist/_worker.js');
+  const {vars} = JSON.parse(readFileSync(new URL('../pages/production/wrangler.jsonc', import.meta.url), 'utf8'));
+  const url='https://media.alive.org.tw/videos/11111111-1111-4111-8111-111111111111/captures/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/previews/22222222-2222-4222-8222-222222222222/cookie';
+  const headers={Origin:'https://admin.alive.org.tw','Access-Control-Request-Method':'POST','Access-Control-Request-Headers':'content-type'};
+  const preflight=await media.fetch(new Request(url,{method:'OPTIONS',headers}),vars);
+  assert.equal(preflight.status,204);
+  assert.equal(preflight.headers.get('Access-Control-Allow-Origin'),headers.Origin);
+  assert.equal(preflight.headers.get('Access-Control-Allow-Credentials'),'true');
+  assert.equal((await media.fetch(new Request(url,{method:'POST',headers,body:JSON.stringify({credential:'invalid'})}),vars)).status,401);
+  assert.equal((await media.fetch(new Request(url,{method:'OPTIONS',headers:{...headers,Origin:'https://attacker.example'}}),vars)).status,403);
+ });

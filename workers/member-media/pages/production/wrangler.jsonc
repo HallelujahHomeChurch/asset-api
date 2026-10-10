@@ -5,6 +5,6 @@
   "r2_buckets": [{ "binding": "MEDIA_BUCKET", "bucket_name": "hhc-member-recordings-prod" }],
   "vars": {
     "MEDIA_ISSUER": "hhc-media-prod",
-    "ALLOWED_ORIGINS": "https://www.alive.org.tw"
+    "ALLOWED_ORIGINS": "https://www.alive.org.tw,https://admin.alive.org.tw"
   }
 }

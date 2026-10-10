@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"fmt"
@@ -147,7 +148,14 @@ func (h *Handler) promoteLiveCover(w http.ResponseWriter, r *http.Request) {
 	}
 	var c assets.RecordingCover
 	var err error
-	if r.ContentLength != 0 {
+	// Dapr can forward an empty POST with unknown length (chunked).
+	body, readErr := io.ReadAll(http.MaxBytesReader(w, r.Body, 2048))
+	if readErr != nil {
+		writeError(w, http.StatusBadRequest, "AST_INVALID_REQUEST", "invalid request body")
+		return
+	}
+	if len(body) != 0 {
+		r.Body = io.NopCloser(bytes.NewReader(body))
 		var input struct {
 			TargetCaptureID string `json:"targetCaptureId"`
 			RecordingID     string `json:"recordingId"`
