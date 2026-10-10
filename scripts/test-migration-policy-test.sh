@@ -50,3 +50,12 @@ do
     exit 1
   fi
 done
+
+broadcast_migration="internal/migrations/sql/039_recording_broadcast_ranges.sql"
+cp "$broadcast_migration" "$tmp/$broadcast_migration"
+(cd "$tmp" && "$policy_script" "$broadcast_migration")
+printf '%s\n' '-- test mutation' >>"$tmp/$broadcast_migration"
+if (cd "$tmp" && "$policy_script" "$broadcast_migration") 2>/dev/null; then
+  echo 'broadcast epoch uniqueness expansion was not immutable' >&2
+  exit 1
+fi

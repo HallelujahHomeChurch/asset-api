@@ -1,6 +1,44 @@
 schema_version: 1
 service: asset-api
 datasets:
+  - id: asset.recording-broadcast-ranges
+    owner: asset-api
+    purpose: Persist the CMS-owned public media boundaries and irreversible member revocation independently of raw C1 intake.
+    necessity: required
+    storage: {kind: postgres, resource: recording_broadcast_ranges, sources: [{path: internal/postgres/recording_broadcast_range.go, symbol: RecordingCaptureStore.SetBroadcastRange}]}
+    subject_keys: []
+    data_classes: [identity, security, activity]
+    fields:
+      - {name: recording_broadcast_ranges.capture_id, purpose: Bind policy to the immutable capture, necessity: required, data_classes: [identity, security]}
+      - {name: recording_broadcast_ranges.recording_id, purpose: Fence ownership and later binding epochs, necessity: required, data_classes: [identity, security]}
+      - {name: recording_broadcast_ranges.epoch, purpose: Reject stale binding operations, necessity: required, data_classes: [security]}
+      - {name: recording_broadcast_ranges.range_revision, purpose: Fence retries and issued playback grants, necessity: required, data_classes: [security]}
+      - {name: recording_broadcast_ranges.start_sequence, purpose: Exclude rehearsal bytes from member playback, necessity: required, data_classes: [security, activity]}
+      - {name: recording_broadcast_ranges.end_sequence_exclusive, purpose: Freeze the public end without exposing post-service bytes, necessity: required, data_classes: [security, activity]}
+      - {name: recording_broadcast_ranges.member_state, purpose: Enforce CMS live or published archive admission before media reads, necessity: required, data_classes: [security]}
+      - {name: recording_broadcast_ranges.revoked, purpose: Deny member bytes including cache hits after emergency close, necessity: required, data_classes: [security]}
+    attribution: {mode: manual, explanation: CMS owns staff authorization and command provenance; this policy identifies no viewer or video participant.}
+    legal_basis: {status: pending_legal, reference: null}
+    retention: {status: pending_legal, rule: null, action: none}
+    cleanup: {mode: none, implementation: [], evidence: []}
+  - id: asset.recording-broadcast-authority
+    owner: asset-api
+    purpose: Let the media Worker verify current public boundaries and revocation before every media or cache read.
+    necessity: required
+    storage: {kind: blob, resource: 'recordings/captures/{captureId}/final/broadcast.json', sources: [{path: internal/storage/r2/broadcast.go, symbol: Store.PutBroadcastRange}]}
+    subject_keys: []
+    data_classes: [identity, security, activity]
+    fields:
+      - {name: broadcast_authority.recordingId, purpose: Prevent cross-recording scope reuse, necessity: required, data_classes: [identity, security]}
+      - {name: broadcast_authority.epoch, purpose: Bind signed playback to the current capture epoch, necessity: required, data_classes: [security]}
+      - {name: broadcast_authority.rangeRevision, purpose: Invalidate old grants when policy changes, necessity: required, data_classes: [security]}
+      - {name: broadcast_authority.startSequence, purpose: Enforce the inclusive public start, necessity: required, data_classes: [security, activity]}
+      - {name: broadcast_authority.endSequenceExclusive, purpose: Enforce the exclusive immutable public end, necessity: required, data_classes: [security, activity]}
+      - {name: broadcast_authority.revoked, purpose: Prevent cached byte disclosure after emergency close, necessity: required, data_classes: [security]}
+    attribution: {mode: manual, explanation: This capability-free policy mirrors the durable CMS-owned range; no playback credential or viewer identity is persisted.}
+    legal_basis: {status: pending_legal, reference: null}
+    retention: {status: pending_legal, rule: null, action: none}
+    cleanup: {mode: none, implementation: [], evidence: []}
   - id: asset.recording-live-cover-attempts
     owner: asset-api
     purpose: Preserve owner-bound immutable live cover processing and safe shared reference receipts.
@@ -183,6 +221,7 @@ datasets:
     subject_keys: []
     data_classes: [identity, content, security, activity]
     fields:
+      - {name: recording_captures.broadcast_epoch, purpose: Preserve legacy epoch-zero uniqueness while fencing B1 rebinding, necessity: required, data_classes: [security]}
       - {"name": "recording_captures.id", "purpose": "Identify capture and staging scope", "necessity": "required", "data_classes": ["identity"]}
       - {"name": "recording_captures.actor_id", "purpose": "Bind capture to the CMS authorized human uploader", "necessity": "required", "data_classes": ["identity", "security"]}
       - {"name": "recording_captures.recording_id", "purpose": "Link intake to the CMS recording", "necessity": "required", "data_classes": ["identity"]}
@@ -327,6 +366,7 @@ datasets:
     subject_keys: []
     data_classes: [identity, content, security, activity]
     fields:
+      - {name: recording_packages.broadcast_epoch, purpose: Preserve immutable package history across terminal unpublished B1 epochs, necessity: required, data_classes: [security]}
       - {name: recording_packages.id, purpose: Server-owned package identifier and storage scope, necessity: required, data_classes: [identity]}
       - {name: recording_packages.session_id, purpose: Identify the single upload session for the package, necessity: required, data_classes: [identity]}
       - {name: recording_packages.owner_service, purpose: Enforce CMS ownership, necessity: required, data_classes: [security]}

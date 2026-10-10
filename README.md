@@ -270,3 +270,47 @@ Promotion queues an immutable VOD cover: imported auto candidates preserve the
 live JPEG as candidate one and use measured capture boundaries for candidates
 two and three. The internal `live-auto` kind projects as the existing `auto`
 contract. This adds no OBS/C1 inventory, digest or validation exception.
+
+## Broadcast media authority
+
+The private CMS capture-create request may supply `broadcastEpoch` to opt into
+B1 media authority. The same transaction initializes a deny-all range at revision
+1, with `memberState: blocked`, before capture bytes can receive member grants.
+Omitting the field retains the existing C1 create, inventory, seal, and playback
+behavior. B1 epoch recovery retains terminal, never-public prior epochs; it does
+not replace or truncate raw C1 media.
+
+CMS uses `/priv/recording-captures/{captureID}/broadcast-range` and
+`broadcast-projection` to reconcile immutable `[startSequence,endSequenceExclusive)`
+boundaries. A successful PUT has committed the DB policy and synchronously
+published its conditional R2 authority object. The projection GET independently
+checks the matching R2 policy and measures only the published raw timeline.
+Future boundaries remain pending; the media Worker serves the verified
+intersection as EVENT until the frozen end is verified. Emergency close sets
+`revoked` while preserving the immutable boundaries, including a null end.
+
+The optional private `memberState` field defaults to `blocked`. CMS sets `live`
+for public capture playback, `blocked` for an unpublished archive or withdrawal,
+and `vod` for a published archive. Package grants require `vod`; capture grants
+and compatible capture URLs allow `live` or `vod`. Every media request reads
+uncached current authority before any cache, HEAD, manifest, segment, or sprite
+response, and checks the signed epoch and range revision. Failed authority
+publication remains retryable and is never acknowledged as an applied policy.
+Staff preview uses a separate purpose and `/captures/{captureID}/previews/{scope}`
+path. Its private grant cannot be exchanged or played on member session paths.
+
+Public HLS retains the original fMP4 segments and measured durations; no cloud
+transcode is added. Normalized player time starts at zero and source bookmarks
+use the projection's measured `mediaStartSeconds` origin. Auto covers select the
+first public fragment; cropped preview cues and sprite checks exclude rehearsal
+and post-service sequences. Raw inventory hashes, first sequence zero, and full
+validation remain mandatory. Verification scheduling and processing concurrency
+are unchanged.
+
+Deploy producers and Worker authority support before enabling B1 CMS commands.
+Migrations 039 and 040 retain historical epochs and admission policy. Once more
+than one epoch exists for a recording, restoring the former global uniqueness
+constraint requires data reconciliation; an automatic destructive down migration
+is intentionally absent. Rolling back to a Worker without B1 authority checks is
+unsafe while B1 media exists. Local decode, DB, and Worker tests do not establish
+provider publication, deployment, or Windows OBS acceptance.

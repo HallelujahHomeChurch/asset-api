@@ -36,6 +36,7 @@ before(async () => {
     ALLOWED_ORIGINS: origin,
     MEDIA_BUCKET: {
       async get(key, options) {
+        if (key.endsWith('/broadcast.json')) return null;
         assert.equal(key, prefix + '720p/seg-000000.m4s');
         const range = options?.range;
         const bytes = range?.offset === 0 && range?.length === 2 ? 'ab' : 'abcdef';

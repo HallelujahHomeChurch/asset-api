@@ -12,7 +12,7 @@ async function fixture(){
  let pointer={revision:3,lastSequence:2};
  const env={MEDIA_ISSUER:'test',ALLOWED_ORIGINS:'https://www.alive.org.tw',MEDIA_PUBLIC_KEYS:JSON.stringify({test:await crypto.subtle.exportKey('jwk',keys.publicKey)}),MEDIA_BUCKET:{
   async head(key){calls.push(key);return {size:6,httpEtag:'"media"'};},
-  async get(key){calls.push(key);const body=key===prefix+'current.json'?JSON.stringify(pointer):'abcdef';return {size:Buffer.byteLength(body),httpEtag:'"media"',body:new Response(body).body};}
+  async get(key){if(key.endsWith('/broadcast.json')) return null;calls.push(key);const body=key===prefix+'current.json'?JSON.stringify(pointer):'abcdef';return {size:Buffer.byteLength(body),httpEtag:'"media"',body:new Response(body).body};}
  }};
  const token=await sign(claims);
  return {env,token,calls,claims,now,sign,setPointer:value=>{pointer=value;},get:(resource,credential=token)=>worker.fetch(new Request(`https://media.alive.org.tw${path}${resource}`,{headers:{Cookie:`hhc_media=${credential}`}}),env)};

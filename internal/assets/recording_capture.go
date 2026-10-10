@@ -48,6 +48,7 @@ type RecordingCapture struct {
 	TerminalAt                                 *time.Time
 	TerminalReason                             *string
 	Progress                                   RecordingLiveProgress
+	BroadcastEpoch                             int64
 	ReadGrantUntil                             *time.Time
 	Inventory                                  *RecordingPackageInventory
 }
@@ -119,12 +120,24 @@ func captureOwner(c RecordingCapture, actor string) error {
 	return nil
 }
 func (s *RecordingCaptureService) Create(ctx context.Context, recording, actor, key string) (RecordingCaptureResult, error) {
+	return s.create(ctx, recording, actor, key, 0)
+}
+func (s *RecordingCaptureService) CreateBroadcast(ctx context.Context, recording, actor, key string, epoch int64) (RecordingCaptureResult, error) {
+	if epoch < 1 || epoch > BroadcastMaxRevision {
+		return RecordingCaptureResult{}, ErrInvalidInput
+	}
+	return s.create(ctx, recording, actor, key, epoch)
+}
+func (s *RecordingCaptureService) create(ctx context.Context, recording, actor, key string, epoch int64) (RecordingCaptureResult, error) {
 	if !captureUUID.MatchString(recording) || !captureUUID.MatchString(actor) || !captureOperationKey.MatchString(key) {
 		return RecordingCaptureResult{}, ErrInvalidInput
 	}
 	now := s.now().UTC().Truncate(time.Microsecond)
-	c := RecordingCapture{ID: newID(), RecordingID: recording, ActorID: actor, CreateKey: key, State: "uploading", Progress: RecordingLiveProgress{LastSequence: -1}, CreatedAt: now, ExpiresAt: now.Add(RecordingUploadTTL), Receipts: map[string]RecordingCaptureStoredReceipt{}}
+	c := RecordingCapture{BroadcastEpoch: epoch, ID: newID(), RecordingID: recording, ActorID: actor, CreateKey: key, State: "uploading", Progress: RecordingLiveProgress{LastSequence: -1}, CreatedAt: now, ExpiresAt: now.Add(RecordingUploadTTL), Receipts: map[string]RecordingCaptureStoredReceipt{}}
 	digest := captureDigest([]string{recording, actor})
+	if epoch > 0 {
+		digest = captureDigest([]any{recording, actor, epoch})
+	}
 	c.Receipts[key] = RecordingCaptureStoredReceipt{digest, RecordingCaptureReceipt{key, "create", now, c.ID}}
 	got, err := s.repository.CreateCapture(ctx, c)
 	if err != nil {

@@ -145,7 +145,49 @@ func (h *Handler) promoteLiveCover(w http.ResponseWriter, r *http.Request) {
 	if !h.liveCoverAllowed(w, r) {
 		return
 	}
-	c, err := h.recordingLiveCovers.Promote(r.Context(), r.PathValue("uploadID"), r.PathValue("scope"), r.URL.Query().Get("recordingId"))
+	var c assets.RecordingCover
+	var err error
+	if r.ContentLength != 0 {
+		var input struct {
+			TargetCaptureID string `json:"targetCaptureId"`
+			RecordingID     string `json:"recordingId"`
+		}
+		if !decodeJSONLimit(w, r, &input, 2048) {
+			return
+		}
+		if h.recordingBroadcasts == nil {
+			writeError(w, 503, "AST_NOT_READY", "broadcast projection unavailable")
+			return
+		}
+		policy, readErr := h.recordingBroadcasts.GetBroadcastRange(r.Context(), input.TargetCaptureID)
+		if readErr != nil {
+			handleError(w, readErr)
+			return
+		}
+		if policy == nil || policy.RecordingID != input.RecordingID || policy.Revoked || policy.EndSequenceExclusive == nil {
+			handleError(w, assets.ErrConflict)
+			return
+		}
+		projection, readErr := h.recordingBroadcasts.GetBroadcastProjection(r.Context(), input.TargetCaptureID)
+		if readErr != nil {
+			handleError(w, readErr)
+			return
+		}
+		if projection.State != "ready" {
+			handleError(w, assets.ErrConflict)
+			return
+		}
+		repo, ok := h.recordingLiveCovers.(interface {
+			PromoteTo(context.Context, string, string, string, string, string) (assets.RecordingCover, error)
+		})
+		if !ok {
+			writeError(w, 503, "AST_NOT_READY", "broadcast promotion unavailable")
+			return
+		}
+		c, err = repo.PromoteTo(r.Context(), r.PathValue("uploadID"), r.PathValue("scope"), r.URL.Query().Get("recordingId"), input.TargetCaptureID, input.RecordingID)
+	} else {
+		c, err = h.recordingLiveCovers.Promote(r.Context(), r.PathValue("uploadID"), r.PathValue("scope"), r.URL.Query().Get("recordingId"))
+	}
 	if err != nil {
 		handleError(w, err)
 		return

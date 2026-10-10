@@ -9,16 +9,21 @@ import (
 	"time"
 )
 
-type RecordingCaptureStore struct{ db *sql.DB }
+type RecordingCaptureStore struct {
+	db               *sql.DB
+	broadcastObjects assets.RecordingBroadcastObjects
+}
 
-func NewRecordingCaptureStore(db *sql.DB) *RecordingCaptureStore { return &RecordingCaptureStore{db} }
+func NewRecordingCaptureStore(db *sql.DB) *RecordingCaptureStore {
+	return &RecordingCaptureStore{db: db}
+}
 
-const captureColumns = `id,actor_id,recording_id,create_key,state,created_at,expires_at,declared_bytes,declared_objects,receipts,package_id,inventory,terminal_at,terminal_reason`
+const captureColumns = `id,actor_id,recording_id,create_key,state,created_at,expires_at,declared_bytes,declared_objects,receipts,package_id,inventory,terminal_at,terminal_reason,broadcast_epoch`
 
 func scanCapture(row *sql.Row) (assets.RecordingCapture, error) {
 	var c assets.RecordingCapture
 	var receipts, inv []byte
-	err := row.Scan(&c.ID, &c.ActorID, &c.RecordingID, &c.CreateKey, &c.State, &c.CreatedAt, &c.ExpiresAt, &c.DeclaredBytes, &c.DeclaredObjects, &receipts, &c.PackageID, &inv, &c.TerminalAt, &c.TerminalReason)
+	err := row.Scan(&c.ID, &c.ActorID, &c.RecordingID, &c.CreateKey, &c.State, &c.CreatedAt, &c.ExpiresAt, &c.DeclaredBytes, &c.DeclaredObjects, &receipts, &c.PackageID, &inv, &c.TerminalAt, &c.TerminalReason, &c.BroadcastEpoch)
 	if errors.Is(err, sql.ErrNoRows) {
 		return c, assets.ErrNotFound
 	}
@@ -63,7 +68,7 @@ func (s *RecordingCaptureStore) CreateCapture(ctx context.Context, c assets.Reco
 	}
 	old, err := scanCapture(tx.QueryRowContext(ctx, `SELECT `+captureColumns+` FROM recording_captures WHERE create_key=$1`, c.CreateKey))
 	if err == nil {
-		if old.ActorID != c.ActorID || old.RecordingID != c.RecordingID {
+		if old.ActorID != c.ActorID || old.RecordingID != c.RecordingID || old.BroadcastEpoch != c.BroadcastEpoch {
 			return c, assets.ErrConflict
 		}
 		if err = readCaptureObjects(ctx, tx, &old); err != nil {
@@ -86,23 +91,52 @@ func (s *RecordingCaptureStore) CreateCapture(ctx context.Context, c assets.Reco
 		return c, assets.ErrConflict
 	}
 	var exists bool
-	err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM recording_packages WHERE recording_id=$1 UNION ALL SELECT 1 FROM recording_sources WHERE recording_id=$1)`, c.RecordingID).Scan(&exists)
+	err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM recording_packages WHERE recording_id=$1 AND ($2=0 OR broadcast_epoch=0 OR state NOT IN ('failed','expired')) UNION ALL SELECT 1 FROM recording_sources WHERE recording_id=$1)`, c.RecordingID, c.BroadcastEpoch).Scan(&exists)
 	if err != nil {
 		return c, err
 	}
 	if exists {
 		return c, assets.ErrConflict
 	}
+	var legacyExists bool
+	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM recording_captures WHERE recording_id=$1 AND ($2=0 OR broadcast_epoch=0))`, c.RecordingID, c.BroadcastEpoch).Scan(&legacyExists); err != nil {
+		return c, err
+	}
+	if legacyExists {
+		return c, assets.ErrConflict
+	}
+	if c.BroadcastEpoch > 0 {
+		if s.broadcastObjects == nil {
+			return c, errors.New("broadcast policy storage unavailable")
+		}
+		var previousEpoch int64
+		var bound bool
+		if err = tx.QueryRowContext(ctx, `SELECT COALESCE(max(epoch),0),EXISTS(SELECT 1 FROM recording_broadcast_ranges b JOIN recording_captures c ON c.id=b.capture_id WHERE b.recording_id=$1 AND (b.start_sequence IS NOT NULL OR c.terminal_at IS NULL)) FROM recording_broadcast_ranges WHERE recording_id=$1`, c.RecordingID).Scan(&previousEpoch, &bound); err != nil {
+			return c, err
+		}
+		if bound || c.BroadcastEpoch != previousEpoch+1 {
+			return c, assets.ErrConflict
+		}
+	}
 	receipts, err := json.Marshal(c.Receipts)
 	if err != nil {
 		return c, err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO recording_captures(id,actor_id,recording_id,create_key,state,created_at,expires_at,receipts) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, c.ID, c.ActorID, c.RecordingID, c.CreateKey, c.State, c.CreatedAt, c.ExpiresAt, receipts)
+	_, err = tx.ExecContext(ctx, `INSERT INTO recording_captures(id,actor_id,recording_id,create_key,state,created_at,expires_at,receipts,broadcast_epoch) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, c.ID, c.ActorID, c.RecordingID, c.CreateKey, c.State, c.CreatedAt, c.ExpiresAt, receipts, c.BroadcastEpoch)
 	if err != nil {
 		return c, mapCollectionError(err)
 	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO recording_live(capture_id) VALUES($1)`, c.ID); err != nil {
 		return c, err
+	}
+	if c.BroadcastEpoch > 0 {
+		policy := assets.RecordingBroadcastRange{MemberState: "blocked", RecordingID: c.RecordingID, Epoch: c.BroadcastEpoch, RangeRevision: 1}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO recording_broadcast_ranges(capture_id,recording_id,epoch,range_revision) VALUES($1,$2,$3,1)`, c.ID, c.RecordingID, c.BroadcastEpoch); err != nil {
+			return c, err
+		}
+		if err = s.broadcastObjects.PutBroadcastRange(ctx, c.ID, broadcastRangeJSON(policy)); err != nil {
+			return c, err
+		}
 	}
 	return c, tx.Commit()
 }
@@ -216,7 +250,7 @@ func (s *RecordingCaptureStore) UpdateCapture(ctx context.Context, id string, fn
 		if accepted.IsZero() {
 			return c, assets.ErrInvalidInput
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO recording_packages(`+recordingPackageColumns+`,completed_at) VALUES($1,$1,'hhc-web-api',$2,$3,$4,'freezing',$5,$6,$7,$8,$9)`, c.ID, c.ActorID, c.RecordingID, "capture:"+c.ID, size, c.CreatedAt, c.ExpiresAt, data, accepted)
+		_, err = tx.ExecContext(ctx, `INSERT INTO recording_packages(`+recordingPackageColumns+`,completed_at,broadcast_epoch) VALUES($1,$1,'hhc-web-api',$2,$3,$4,'freezing',$5,$6,$7,$8,$9,$10)`, c.ID, c.ActorID, c.RecordingID, "capture:"+c.ID, size, c.CreatedAt, c.ExpiresAt, data, accepted, c.BroadcastEpoch)
 		if err != nil {
 			return c, mapCollectionError(err)
 		}
