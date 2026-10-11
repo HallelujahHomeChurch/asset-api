@@ -186,6 +186,58 @@ func personalXMLAttr(element xml.StartElement, name string) string {
 	return ""
 }
 
+func personalPptxXMLDeclaration(instruction []byte) bool {
+	decoder := xml.NewDecoder(strings.NewReader("<declaration " + string(instruction) + "/>"))
+	token, err := decoder.Token()
+	element, ok := token.(xml.StartElement)
+	if err != nil || !ok || len(element.Attr) == 0 || len(element.Attr) > 3 ||
+		element.Attr[0].Name != (xml.Name{Local: "version"}) || element.Attr[0].Value != "1.0" {
+		return false
+	}
+	for i, attribute := range element.Attr[1:] {
+		if attribute.Name == (xml.Name{Local: "encoding"}) && i == 0 && strings.EqualFold(attribute.Value, "utf-8") {
+			continue
+		}
+		if attribute.Name == (xml.Name{Local: "standalone"}) && i == len(element.Attr)-2 && (attribute.Value == "yes" || attribute.Value == "no") {
+			continue
+		}
+		return false
+	}
+	token, err = decoder.Token()
+	if _, ok := token.(xml.EndElement); err != nil || !ok {
+		return false
+	}
+	_, err = decoder.Token()
+	return err == io.EOF
+}
+
+// RawToken retains prefixes so undeclared names cannot masquerade as namespace URIs.
+func personalPptxXMLName(name xml.Name, scopes []map[string]string, attribute bool) (xml.Name, error) {
+	if strings.Contains(name.Local, ":") || strings.Contains(name.Space, ":") || name.Space == "xmlns" {
+		return name, ErrInvalidUpload
+	}
+	if name.Space == "xml" {
+		name.Space = "http://www.w3.org/XML/1998/namespace"
+		return name, nil
+	}
+	if name.Space == "" && attribute {
+		return name, nil
+	}
+	for i := len(scopes) - 1; i >= 0; i-- {
+		if uri, ok := scopes[i][name.Space]; ok {
+			if name.Space != "" && uri == "" {
+				return name, ErrInvalidUpload
+			}
+			name.Space = uri
+			return name, nil
+		}
+	}
+	if name.Space != "" {
+		return name, ErrInvalidUpload
+	}
+	return name, nil
+}
+
 func personalPptxXMLRead(ctx context.Context, data []byte) (personalPptxXML, error) {
 	result := personalPptxXML{defaults: map[string]string{}, overrides: map[string]string{}, nodes: map[string]string{}}
 	if !utf8.Valid(data) || personalPptxDTD.Match(data) {
@@ -194,11 +246,14 @@ func personalPptxXMLRead(ctx context.Context, data []byte) (personalPptxXML, err
 	data = bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf})
 	decoder := xml.NewDecoder(&contextReader{ctx: ctx, reader: bytes.NewReader(data)})
 	stack := []xml.Name{}
+	rawStack := []xml.Name{}
+	scopes := []map[string]string{}
 	roots := 0
 	ids := map[string]bool{}
 	relIDs := map[string]bool{}
 	for {
-		token, err := decoder.Token()
+		offset := decoder.InputOffset()
+		token, err := decoder.RawToken()
 		if err == io.EOF {
 			break
 		}
@@ -210,6 +265,42 @@ func personalPptxXMLRead(ctx context.Context, data []byte) (personalPptxXML, err
 		}
 		switch element := token.(type) {
 		case xml.StartElement:
+			rawName := element.Name
+			scope := map[string]string{}
+			lexicalAttributes := map[xml.Name]bool{}
+			for _, a := range element.Attr {
+				if lexicalAttributes[a.Name] {
+					return result, ErrInvalidUpload
+				}
+				lexicalAttributes[a.Name] = true
+				if a.Name.Space == "xmlns" || (a.Name.Space == "" && a.Name.Local == "xmlns") {
+					prefix := a.Name.Local
+					if a.Name.Space == "" {
+						prefix = ""
+					}
+					if strings.Contains(prefix, ":") || prefix == "xmlns" || a.Value == "http://www.w3.org/2000/xmlns/" ||
+						(prefix == "xml" && a.Value != "http://www.w3.org/XML/1998/namespace") ||
+						(prefix != "xml" && a.Value == "http://www.w3.org/XML/1998/namespace") || (prefix != "" && a.Value == "") {
+						return result, ErrInvalidUpload
+					}
+					scope[prefix] = a.Value
+				}
+			}
+			scopes = append(scopes, scope)
+			element.Name, err = personalPptxXMLName(element.Name, scopes, false)
+			if err != nil {
+				return result, err
+			}
+			for i, a := range element.Attr {
+				if a.Name.Space == "xmlns" || (a.Name.Space == "" && a.Name.Local == "xmlns") {
+					continue
+				}
+				element.Attr[i].Name, err = personalPptxXMLName(a.Name, scopes, true)
+				if err != nil {
+					return result, err
+				}
+			}
+			rawStack = append(rawStack, rawName)
 			attributes := map[xml.Name]bool{}
 			for _, a := range element.Attr {
 				if attributes[a.Name] {
@@ -254,6 +345,11 @@ func personalPptxXMLRead(ctx context.Context, data []byte) (personalPptxXML, err
 				if element.Name != (xml.Name{Space: personalPptxRelationshipNS, Local: "Relationship"}) || rel.id == "" || rel.kind == "" || rel.target == "" || relIDs[rel.id] {
 					return result, ErrInvalidUpload
 				}
+				for _, a := range element.Attr {
+					if a.Name == (xml.Name{Local: "TargetMode"}) && a.Value != "Internal" && a.Value != "External" {
+						return result, ErrInvalidUpload
+					}
+				}
 				relIDs[rel.id] = true
 				result.rels = append(result.rels, rel)
 			}
@@ -271,11 +367,20 @@ func personalPptxXMLRead(ctx context.Context, data []byte) (personalPptxXML, err
 				}
 			}
 		case xml.EndElement:
+			if len(rawStack) == 0 || rawStack[len(rawStack)-1] != element.Name {
+				return result, ErrInvalidUpload
+			}
+			rawStack = rawStack[:len(rawStack)-1]
+			scopes = scopes[:len(scopes)-1]
 			stack = stack[:len(stack)-1]
+		case xml.ProcInst:
+			if strings.EqualFold(element.Target, "xml") && (element.Target != "xml" || offset != 0 || !personalPptxXMLDeclaration(element.Inst)) {
+				return result, ErrInvalidUpload
+			}
 		case xml.Directive:
 			return result, ErrInvalidUpload
 		case xml.CharData:
-			if len(stack) == 0 && strings.TrimSpace(string(element)) != "" {
+			if len(stack) == 0 && (strings.TrimSpace(string(element)) != "" || bytes.HasPrefix(data[offset:], []byte("<![CDATA["))) {
 				return result, ErrInvalidUpload
 			}
 		}

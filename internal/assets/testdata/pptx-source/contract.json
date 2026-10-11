@@ -316,5 +316,429 @@
         "sha256": "02c01a688a41ddbe862e358b5a533ea2b12b30c6e5dc40bfef8aa5935a20df3c"
       }
     }
+  },
+  {
+    "name": "undeclared-prefix",
+    "valid": false,
+    "document": {
+      "schemaVersion": 2,
+      "id": "d",
+      "name": "Source contract",
+      "width": 1920,
+      "height": 1080,
+      "slideOrder": ["s"],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000"
+          },
+          "notes": "",
+          "elementOrder": ["e"],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "rectangle",
+              "x": 0,
+              "y": 0,
+              "width": 100,
+              "height": 100,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#ffffff",
+              "strokeColor": "#000000",
+              "strokeWidth": 0,
+              "pptxSourceNode": {
+                "id": "2",
+                "role": "geometry"
+              }
+            }
+          },
+          "pptxSourcePart": "ppt/slides/slide1.xml"
+        }
+      },
+      "assets": {},
+      "createdAt": 0,
+      "updatedAt": 0,
+      "pptxSource": {
+        "version": 1,
+        "base64": "UEsDBAoAAAAAAAAAIQBMagnj/QEAAP0BAAATAAAAW0NvbnRlbnRfVHlwZXNdLnhtbDxUeXBlcyB4bWxucz0iaHR0cDovL3NjaGVtYXMub3BlbnhtbGZvcm1hdHMub3JnL3BhY2thZ2UvMjAwNi9jb250ZW50LXR5cGVzIj48RGVmYXVsdCBFeHRlbnNpb249InJlbHMiIENvbnRlbnRUeXBlPSJhcHBsaWNhdGlvbi92bmQub3BlbnhtbGZvcm1hdHMtcGFja2FnZS5yZWxhdGlvbnNoaXBzK3htbCIvPjxEZWZhdWx0IEV4dGVuc2lvbj0ieG1sIiBDb250ZW50VHlwZT0iYXBwbGljYXRpb24veG1sIi8+PE92ZXJyaWRlIFBhcnROYW1lPSIvcHB0L3ByZXNlbnRhdGlvbi54bWwiIENvbnRlbnRUeXBlPSJhcHBsaWNhdGlvbi92bmQub3BlbnhtbGZvcm1hdHMtb2ZmaWNlZG9jdW1lbnQucHJlc2VudGF0aW9ubWwucHJlc2VudGF0aW9uLm1haW4reG1sIi8+PE92ZXJyaWRlIFBhcnROYW1lPSIvcHB0L3NsaWRlcy9zbGlkZTEueG1sIiBDb250ZW50VHlwZT0iYXBwbGljYXRpb24vdm5kLm9wZW54bWxmb3JtYXRzLW9mZmljZWRvY3VtZW50LnByZXNlbnRhdGlvbm1sLnNsaWRlK3htbCIvPjwvVHlwZXM+UEsDBAoAAAAAAAAAIQAvm14o9QAAAPUAAAALAAAAX3JlbHMvLnJlbHM8UmVsYXRpb25zaGlwcyB4bWxucz0iaHR0cDovL3NjaGVtYXMub3BlbnhtbGZvcm1hdHMub3JnL3BhY2thZ2UvMjAwNi9yZWxhdGlvbnNoaXBzIj48UmVsYXRpb25zaGlwIElkPSJySWQxIiBUeXBlPSJodHRwOi8vc2NoZW1hcy5vcGVueG1sZm9ybWF0cy5vcmcvb2ZmaWNlRG9jdW1lbnQvMjAwNi9yZWxhdGlvbnNoaXBzL29mZmljZURvY3VtZW50IiBUYXJnZXQ9InBwdC9wcmVzZW50YXRpb24ueG1sIi8+PC9SZWxhdGlvbnNoaXBzPlBLAwQKAAAAAAAEmktdRwGJuXgAAAB4AAAAFAAAAHBwdC9wcmVzZW50YXRpb24ueG1sPHA6cHJlc2VudGF0aW9uIHhtbG5zOnA9Imh0dHA6Ly9zY2hlbWFzLm9wZW54bWxmb3JtYXRzLm9yZy9wcmVzZW50YXRpb25tbC8yMDA2L21haW4iPjx1bmRlZmluZWQ6Y2hpbGQvPjwvcDpwcmVzZW50YXRpb24+UEsDBAoAAAAAAAAAIQDP4NdyrQAAAK0AAAAVAAAAcHB0L3NsaWRlcy9zbGlkZTEueG1sPHA6c2xkIHhtbG5zOnA9Imh0dHA6Ly9zY2hlbWFzLm9wZW54bWxmb3JtYXRzLm9yZy9wcmVzZW50YXRpb25tbC8yMDA2L21haW4iPjxwOmNTbGQ+PHA6c3BUcmVlPjxwOnNwPjxwOm52U3BQcj48cDpjTnZQciBpZD0iMiIvPjwvcDpudlNwUHI+PC9wOnNwPjwvcDpzcFRyZWU+PC9wOmNTbGQ+PC9wOnNsZD5QSwMECgAAAAAABJpLXQAAAAAAAAAAAAAAAAQAAABwcHQvUEsBAhQACgAAAAAAAAAhAExqCeP9AQAA/QEAABMAAAAAAAAAAAAAAAAAAAAAAFtDb250ZW50X1R5cGVzXS54bWxQSwECFAAKAAAAAAAAACEAL5teKPUAAAD1AAAACwAAAAAAAAAAAAAAAAAuAgAAX3JlbHMvLnJlbHNQSwECFAAKAAAAAAAEmktdRwGJuXgAAAB4AAAAFAAAAAAAAAAAAAAAAABMAwAAcHB0L3ByZXNlbnRhdGlvbi54bWxQSwECFAAKAAAAAAAAACEAz+DXcq0AAACtAAAAFQAAAAAAAAAAAAAAAAD2AwAAcHB0L3NsaWRlcy9zbGlkZTEueG1sUEsBAhQACgAAAAAABJpLXQAAAAAAAAAAAAAAAAQAAAAAAAAAAAAQAAAA1gQAAHBwdC9QSwUGAAAAAAUABQAxAQAA+AQAAAAA",
+        "sha256": "886170658d1b44ea8f6d369bb8b7efd49ad60eda61bbc1212e683abd79e73eea"
+      }
+    }
+  },
+  {
+    "name": "invalid-xml-instruction",
+    "valid": false,
+    "document": {
+      "schemaVersion": 2,
+      "id": "d",
+      "name": "Source contract",
+      "width": 1920,
+      "height": 1080,
+      "slideOrder": ["s"],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000"
+          },
+          "notes": "",
+          "elementOrder": ["e"],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "rectangle",
+              "x": 0,
+              "y": 0,
+              "width": 100,
+              "height": 100,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#ffffff",
+              "strokeColor": "#000000",
+              "strokeWidth": 0,
+              "pptxSourceNode": {
+                "id": "2",
+                "role": "geometry"
+              }
+            }
+          },
+          "pptxSourcePart": "ppt/slides/slide1.xml"
+        }
+      },
+      "assets": {},
+      "createdAt": 0,
+      "updatedAt": 0,
+      "pptxSource": {
+        "version": 1,
+        "base64": "UEsDBAoAAAAAAAAAIQBMagnj/QEAAP0BAAATAAAAW0NvbnRlbnRfVHlwZXNdLnhtbDxUeXBlcyB4bWxucz0iaHR0cDovL3NjaGVtYXMub3BlbnhtbGZvcm1hdHMub3JnL3BhY2thZ2UvMjAwNi9jb250ZW50LXR5cGVzIj48RGVmYXVsdCBFeHRlbnNpb249InJlbHMiIENvbnRlbnRUeXBlPSJhcHBsaWNhdGlvbi92bmQub3BlbnhtbGZvcm1hdHMtcGFja2FnZS5yZWxhdGlvbnNoaXBzK3htbCIvPjxEZWZhdWx0IEV4dGVuc2lvbj0ieG1sIiBDb250ZW50VHlwZT0iYXBwbGljYXRpb24veG1sIi8+PE92ZXJyaWRlIFBhcnROYW1lPSIvcHB0L3ByZXNlbnRhdGlvbi54bWwiIENvbnRlbnRUeXBlPSJhcHBsaWNhdGlvbi92bmQub3BlbnhtbGZvcm1hdHMtb2ZmaWNlZG9jdW1lbnQucHJlc2VudGF0aW9ubWwucHJlc2VudGF0aW9uLm1haW4reG1sIi8+PE92ZXJyaWRlIFBhcnROYW1lPSIvcHB0L3NsaWRlcy9zbGlkZTEueG1sIiBDb250ZW50VHlwZT0iYXBwbGljYXRpb24vdm5kLm9wZW54bWxmb3JtYXRzLW9mZmljZWRvY3VtZW50LnByZXNlbnRhdGlvbm1sLnNsaWRlK3htbCIvPjwvVHlwZXM+UEsDBAoAAAAAAAAAIQAvm14o9QAAAPUAAAALAAAAX3JlbHMvLnJlbHM8UmVsYXRpb25zaGlwcyB4bWxucz0iaHR0cDovL3NjaGVtYXMub3BlbnhtbGZvcm1hdHMub3JnL3BhY2thZ2UvMjAwNi9yZWxhdGlvbnNoaXBzIj48UmVsYXRpb25zaGlwIElkPSJySWQxIiBUeXBlPSJodHRwOi8vc2NoZW1hcy5vcGVueG1sZm9ybWF0cy5vcmcvb2ZmaWNlRG9jdW1lbnQvMjAwNi9yZWxhdGlvbnNoaXBzL29mZmljZURvY3VtZW50IiBUYXJnZXQ9InBwdC9wcmVzZW50YXRpb24ueG1sIi8+PC9SZWxhdGlvbnNoaXBzPlBLAwQKAAAAAAAEmktdSc8QSoAAAACAAAAAFAAAAHBwdC9wcmVzZW50YXRpb24ueG1sPD94bWwgdmVyc2lvbj0iMS4wIj8+PHA6cHJlc2VudGF0aW9uIHhtbG5zOnA9Imh0dHA6Ly9zY2hlbWFzLm9wZW54bWxmb3JtYXRzLm9yZy9wcmVzZW50YXRpb25tbC8yMDA2L21haW4iLz48P3htbCB2ZXJzaW9uPSIxLjAiPz5QSwMECgAAAAAAAAAhAM/g13KtAAAArQAAABUAAABwcHQvc2xpZGVzL3NsaWRlMS54bWw8cDpzbGQgeG1sbnM6cD0iaHR0cDovL3NjaGVtYXMub3BlbnhtbGZvcm1hdHMub3JnL3ByZXNlbnRhdGlvbm1sLzIwMDYvbWFpbiI+PHA6Y1NsZD48cDpzcFRyZWU+PHA6c3A+PHA6bnZTcFByPjxwOmNOdlByIGlkPSIyIi8+PC9wOm52U3BQcj48L3A6c3A+PC9wOnNwVHJlZT48L3A6Y1NsZD48L3A6c2xkPlBLAwQKAAAAAAAEmktdAAAAAAAAAAAAAAAABAAAAHBwdC9QSwECFAAKAAAAAAAAACEATGoJ4/0BAAD9AQAAEwAAAAAAAAAAAAAAAAAAAAAAW0NvbnRlbnRfVHlwZXNdLnhtbFBLAQIUAAoAAAAAAAAAIQAvm14o9QAAAPUAAAALAAAAAAAAAAAAAAAAAC4CAABfcmVscy8ucmVsc1BLAQIUAAoAAAAAAASaS11JzxBKgAAAAIAAAAAUAAAAAAAAAAAAAAAAAEwDAABwcHQvcHJlc2VudGF0aW9uLnhtbFBLAQIUAAoAAAAAAAAAIQDP4NdyrQAAAK0AAAAVAAAAAAAAAAAAAAAAAP4DAABwcHQvc2xpZGVzL3NsaWRlMS54bWxQSwECFAAKAAAAAAAEmktdAAAAAAAAAAAAAAAABAAAAAAAAAAAABAAAADeBAAAcHB0L1BLBQYAAAAABQAFADEBAAAABQAAAAA=",
+        "sha256": "6a1b74e85ab67c8b69c44def5962150c61b7a2cb597d36a96d85adafe9b1536c"
+      }
+    }
+  },
+  {
+    "name": "empty-target-mode",
+    "valid": false,
+    "document": {
+      "schemaVersion": 2,
+      "id": "d",
+      "name": "Source contract",
+      "width": 1920,
+      "height": 1080,
+      "slideOrder": ["s"],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000"
+          },
+          "notes": "",
+          "elementOrder": ["e"],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "rectangle",
+              "x": 0,
+              "y": 0,
+              "width": 100,
+              "height": 100,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#ffffff",
+              "strokeColor": "#000000",
+              "strokeWidth": 0,
+              "pptxSourceNode": {
+                "id": "2",
+                "role": "geometry"
+              }
+            }
+          },
+          "pptxSourcePart": "ppt/slides/slide1.xml"
+        }
+      },
+      "assets": {},
+      "createdAt": 0,
+      "updatedAt": 0,
+      "pptxSource": {
+        "version": 1,
+        "base64": "UEsDBAoAAAAAAAAAIQBMagnj/QEAAP0BAAATAAAAW0NvbnRlbnRfVHlwZXNdLnhtbDxUeXBlcyB4bWxucz0iaHR0cDovL3NjaGVtYXMub3BlbnhtbGZvcm1hdHMub3JnL3BhY2thZ2UvMjAwNi9jb250ZW50LXR5cGVzIj48RGVmYXVsdCBFeHRlbnNpb249InJlbHMiIENvbnRlbnRUeXBlPSJhcHBsaWNhdGlvbi92bmQub3BlbnhtbGZvcm1hdHMtcGFja2FnZS5yZWxhdGlvbnNoaXBzK3htbCIvPjxEZWZhdWx0IEV4dGVuc2lvbj0ieG1sIiBDb250ZW50VHlwZT0iYXBwbGljYXRpb24veG1sIi8+PE92ZXJyaWRlIFBhcnROYW1lPSIvcHB0L3ByZXNlbnRhdGlvbi54bWwiIENvbnRlbnRUeXBlPSJhcHBsaWNhdGlvbi92bmQub3BlbnhtbGZvcm1hdHMtb2ZmaWNlZG9jdW1lbnQucHJlc2VudGF0aW9ubWwucHJlc2VudGF0aW9uLm1haW4reG1sIi8+PE92ZXJyaWRlIFBhcnROYW1lPSIvcHB0L3NsaWRlcy9zbGlkZTEueG1sIiBDb250ZW50VHlwZT0iYXBwbGljYXRpb24vdm5kLm9wZW54bWxmb3JtYXRzLW9mZmljZWRvY3VtZW50LnByZXNlbnRhdGlvbm1sLnNsaWRlK3htbCIvPjwvVHlwZXM+UEsDBAoAAAAAAASaS11kYuk7AwEAAAMBAAALAAAAX3JlbHMvLnJlbHM8UmVsYXRpb25zaGlwcyB4bWxucz0iaHR0cDovL3NjaGVtYXMub3BlbnhtbGZvcm1hdHMub3JnL3BhY2thZ2UvMjAwNi9yZWxhdGlvbnNoaXBzIj48UmVsYXRpb25zaGlwIFRhcmdldE1vZGU9IiIgSWQ9InJJZDEiIFR5cGU9Imh0dHA6Ly9zY2hlbWFzLm9wZW54bWxmb3JtYXRzLm9yZy9vZmZpY2VEb2N1bWVudC8yMDA2L3JlbGF0aW9uc2hpcHMvb2ZmaWNlRG9jdW1lbnQiIFRhcmdldD0icHB0L3ByZXNlbnRhdGlvbi54bWwiLz48L1JlbGF0aW9uc2hpcHM+UEsDBAoAAAAAAAAAIQDFqL4nVgAAAFYAAAAUAAAAcHB0L3ByZXNlbnRhdGlvbi54bWw8cDpwcmVzZW50YXRpb24geG1sbnM6cD0iaHR0cDovL3NjaGVtYXMub3BlbnhtbGZvcm1hdHMub3JnL3ByZXNlbnRhdGlvbm1sLzIwMDYvbWFpbiIvPlBLAwQKAAAAAAAAACEAz+DXcq0AAACtAAAAFQAAAHBwdC9zbGlkZXMvc2xpZGUxLnhtbDxwOnNsZCB4bWxuczpwPSJodHRwOi8vc2NoZW1hcy5vcGVueG1sZm9ybWF0cy5vcmcvcHJlc2VudGF0aW9ubWwvMjAwNi9tYWluIj48cDpjU2xkPjxwOnNwVHJlZT48cDpzcD48cDpudlNwUHI+PHA6Y052UHIgaWQ9IjIiLz48L3A6bnZTcFByPjwvcDpzcD48L3A6c3BUcmVlPjwvcDpjU2xkPjwvcDpzbGQ+UEsDBAoAAAAAAASaS10AAAAAAAAAAAAAAAAGAAAAX3JlbHMvUEsBAhQACgAAAAAAAAAhAExqCeP9AQAA/QEAABMAAAAAAAAAAAAAAAAAAAAAAFtDb250ZW50X1R5cGVzXS54bWxQSwECFAAKAAAAAAAEmktdZGLpOwMBAAADAQAACwAAAAAAAAAAAAAAAAAuAgAAX3JlbHMvLnJlbHNQSwECFAAKAAAAAAAAACEAxai+J1YAAABWAAAAFAAAAAAAAAAAAAAAAABaAwAAcHB0L3ByZXNlbnRhdGlvbi54bWxQSwECFAAKAAAAAAAAACEAz+DXcq0AAACtAAAAFQAAAAAAAAAAAAAAAADiAwAAcHB0L3NsaWRlcy9zbGlkZTEueG1sUEsBAhQACgAAAAAABJpLXQAAAAAAAAAAAAAAAAYAAAAAAAAAAAAQAAAAwgQAAF9yZWxzL1BLBQYAAAAABQAFADMBAADmBAAAAAA=",
+        "sha256": "b46b6fd15d85c9fc53ff8ffebf7dc6866942871491a99b1664fce2d4499e5733"
+      }
+    }
+  },
+  {
+    "name": "undeclared-attribute-prefix",
+    "valid": false,
+    "document": {
+      "schemaVersion": 2,
+      "id": "d",
+      "name": "Source contract",
+      "width": 1920,
+      "height": 1080,
+      "slideOrder": ["s"],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000"
+          },
+          "notes": "",
+          "elementOrder": ["e"],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "rectangle",
+              "x": 0,
+              "y": 0,
+              "width": 100,
+              "height": 100,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#ffffff",
+              "strokeColor": "#000000",
+              "strokeWidth": 0,
+              "pptxSourceNode": {
+                "id": "2",
+                "role": "geometry"
+              }
+            }
+          },
+          "pptxSourcePart": "ppt/slides/slide1.xml"
+        }
+      },
+      "assets": {},
+      "createdAt": 0,
+      "updatedAt": 0,
+      "pptxSource": {
+        "version": 1,
+        "base64": "UEsDBBQAAAAIAJcaTF1Magnj0QAAAP0BAAATAAAAW0NvbnRlbnRfVHlwZXNdLnhtbK1RvU7DQAx+lejWqnHpwICaLsBKGXgB6+I0J+7HOrtVeXuctEiACixMlv39St68vDFJc0oxS+dGVb4DED9SQmkLUzZkKDWh2lr3wOhfcU+wXq1uwZeslHWpk4fbbh5owEPU5vFkZwkld65SFNfcn4lTVueQOQaPajgcc/8tZXlJaE05c2QMLAsjOLiaMCE/B1x0uyPVGnpqnrHqEyZjAbMCVxLTzdz2d6crVcswBE998YdkkvazWYpf1jZhyIs/yki0o5zHzX+3mV0/GsD89e07UEsDBBQAAAAIAJcaTF0vm14oigAAAPUAAAALAAAAX3JlbHMvLnJlbHONzz0OwjAMBeCrVDlAXRgYUJKJpSvqBaLU+RFNYiVGgtsTMRXEwOjnp8+yvOJmOJbcQqQ2PNKWmxKBmc4AzQZMpo2FMPeNKzUZ7mP1QMbejEc4TtMJ6t4QWu7NYV6VqPN6EMPyJPzHLs5Fi5di7wkz/zjx1eiyqR5ZCSIGqth6+G6PXRagJXx8qV9QSwMEFAAAAAgAlxpMXXcBWr9ZAAAAaQAAABQAAABwcHQvcHJlc2VudGF0aW9uLnhtbE3MwQmAMAxA0VWkA5jiwUOx7hI02kKThjZCx9ejx8+Dv2nQRp3E0HKV6ZGTrix0BjRr0Q03DS7Sg0aXzDQA9CMRY5+rknx21cZoX7Yb/isusHi/AmMWB/sLUEsDBBQAAAAIAJcaTF3P4NdyfgAAAK0AAAAVAAAAcHB0L3NsaWRlcy9zbGlkZTEueG1sRY5LCsMwDESvEnyAKmTRhXF8hBJIL2AStTHYspBMyPGbDyUbaYY3GuTYapqbLSdSy71ZamULoNOCOeijMNLOPkVyqLuVL7CgItVQY6GcoGvbJ+QQyXjHdhrTfGzltyBe6pi0jjzImXitgzRx7k1nwDu4GVxhuK/hXwjnl/4HUEsBAhQDFAAAAAgAlxpMXUxqCePRAAAA/QEAABMAAAAAAAAAAAAAAIABAAAAAFtDb250ZW50X1R5cGVzXS54bWxQSwECFAMUAAAACACXGkxdL5teKIoAAAD1AAAACwAAAAAAAAAAAAAAgAECAQAAX3JlbHMvLnJlbHNQSwECFAMUAAAACACXGkxddwFav1kAAABpAAAAFAAAAAAAAAAAAAAAgAG1AQAAcHB0L3ByZXNlbnRhdGlvbi54bWxQSwECFAMUAAAACACXGkxdz+DXcn4AAACtAAAAFQAAAAAAAAAAAAAAgAFAAgAAcHB0L3NsaWRlcy9zbGlkZTEueG1sUEsFBgAAAAAEAAQA/wAAAPECAAAAAA==",
+        "sha256": "bcdd2862da89cada377f4dd1819153ba1d33ce5d321a4460ecb99dbafeb9e46e"
+      }
+    }
+  },
+  {
+    "name": "invalid-xml-prefix-binding",
+    "valid": false,
+    "document": {
+      "schemaVersion": 2,
+      "id": "d",
+      "name": "Source contract",
+      "width": 1920,
+      "height": 1080,
+      "slideOrder": ["s"],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000"
+          },
+          "notes": "",
+          "elementOrder": ["e"],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "rectangle",
+              "x": 0,
+              "y": 0,
+              "width": 100,
+              "height": 100,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#ffffff",
+              "strokeColor": "#000000",
+              "strokeWidth": 0,
+              "pptxSourceNode": {
+                "id": "2",
+                "role": "geometry"
+              }
+            }
+          },
+          "pptxSourcePart": "ppt/slides/slide1.xml"
+        }
+      },
+      "assets": {},
+      "createdAt": 0,
+      "updatedAt": 0,
+      "pptxSource": {
+        "version": 1,
+        "base64": "UEsDBBQAAAAIAJcaTF1Magnj0QAAAP0BAAATAAAAW0NvbnRlbnRfVHlwZXNdLnhtbK1RvU7DQAx+lejWqnHpwICaLsBKGXgB6+I0J+7HOrtVeXuctEiACixMlv39St68vDFJc0oxS+dGVb4DED9SQmkLUzZkKDWh2lr3wOhfcU+wXq1uwZeslHWpk4fbbh5owEPU5vFkZwkld65SFNfcn4lTVueQOQaPajgcc/8tZXlJaE05c2QMLAsjOLiaMCE/B1x0uyPVGnpqnrHqEyZjAbMCVxLTzdz2d6crVcswBE998YdkkvazWYpf1jZhyIs/yki0o5zHzX+3mV0/GsD89e07UEsDBBQAAAAIAJcaTF0vm14oigAAAPUAAAALAAAAX3JlbHMvLnJlbHONzz0OwjAMBeCrVDlAXRgYUJKJpSvqBaLU+RFNYiVGgtsTMRXEwOjnp8+yvOJmOJbcQqQ2PNKWmxKBmc4AzQZMpo2FMPeNKzUZ7mP1QMbejEc4TtMJ6t4QWu7NYV6VqPN6EMPyJPzHLs5Fi5di7wkz/zjx1eiyqR5ZCSIGqth6+G6PXRagJXx8qV9QSwMEFAAAAAgAlxpMXXGNg/hZAAAAbAAAABQAAABwcHQvcHJlc2VudGF0aW9uLnhtbE2MQQqAIBBFrxIeoJEWLSS7i4Sp4IzDOFHHz0WLNh/ee/A3diyxR9KgpdH0YKXuxnpzCblbGiXzWfYmq7ID6EeOGPrcONJoZxMMOlAS/N+wwmLtChgKGdhfUEsDBBQAAAAIAJcaTF3P4NdyfgAAAK0AAAAVAAAAcHB0L3NsaWRlcy9zbGlkZTEueG1sRY5LCsMwDESvEnyAKmTRhXF8hBJIL2AStTHYspBMyPGbDyUbaYY3GuTYapqbLSdSy71ZamULoNOCOeijMNLOPkVyqLuVL7CgItVQY6GcoGvbJ+QQyXjHdhrTfGzltyBe6pi0jjzImXitgzRx7k1nwDu4GVxhuK/hXwjnl/4HUEsBAhQDFAAAAAgAlxpMXUxqCePRAAAA/QEAABMAAAAAAAAAAAAAAIABAAAAAFtDb250ZW50X1R5cGVzXS54bWxQSwECFAMUAAAACACXGkxdL5teKIoAAAD1AAAACwAAAAAAAAAAAAAAgAECAQAAX3JlbHMvLnJlbHNQSwECFAMUAAAACACXGkxdcY2D+FkAAABsAAAAFAAAAAAAAAAAAAAAgAG1AQAAcHB0L3ByZXNlbnRhdGlvbi54bWxQSwECFAMUAAAACACXGkxdz+DXcn4AAACtAAAAFQAAAAAAAAAAAAAAgAFAAgAAcHB0L3NsaWRlcy9zbGlkZTEueG1sUEsFBgAAAAAEAAQA/wAAAPECAAAAAA==",
+        "sha256": "0314607591ee9c8d73a982445a32137f2d17475aacdc04e4a3b5b5b6f9f572c7"
+      }
+    }
+  },
+  {
+    "name": "xml-declaration-missing-version",
+    "valid": false,
+    "document": {
+      "schemaVersion": 2,
+      "id": "d",
+      "name": "Source contract",
+      "width": 1920,
+      "height": 1080,
+      "slideOrder": ["s"],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000"
+          },
+          "notes": "",
+          "elementOrder": ["e"],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "rectangle",
+              "x": 0,
+              "y": 0,
+              "width": 100,
+              "height": 100,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#ffffff",
+              "strokeColor": "#000000",
+              "strokeWidth": 0,
+              "pptxSourceNode": {
+                "id": "2",
+                "role": "geometry"
+              }
+            }
+          },
+          "pptxSourcePart": "ppt/slides/slide1.xml"
+        }
+      },
+      "assets": {},
+      "createdAt": 0,
+      "updatedAt": 0,
+      "pptxSource": {
+        "version": 1,
+        "base64": "UEsDBBQAAAAIAJcaTF1Magnj0QAAAP0BAAATAAAAW0NvbnRlbnRfVHlwZXNdLnhtbK1RvU7DQAx+lejWqnHpwICaLsBKGXgB6+I0J+7HOrtVeXuctEiACixMlv39St68vDFJc0oxS+dGVb4DED9SQmkLUzZkKDWh2lr3wOhfcU+wXq1uwZeslHWpk4fbbh5owEPU5vFkZwkld65SFNfcn4lTVueQOQaPajgcc/8tZXlJaE05c2QMLAsjOLiaMCE/B1x0uyPVGnpqnrHqEyZjAbMCVxLTzdz2d6crVcswBE998YdkkvazWYpf1jZhyIs/yki0o5zHzX+3mV0/GsD89e07UEsDBBQAAAAIAJcaTF0vm14oigAAAPUAAAALAAAAX3JlbHMvLnJlbHONzz0OwjAMBeCrVDlAXRgYUJKJpSvqBaLU+RFNYiVGgtsTMRXEwOjnp8+yvOJmOJbcQqQ2PNKWmxKBmc4AzQZMpo2FMPeNKzUZ7mP1QMbejEc4TtMJ6t4QWu7NYV6VqPN6EMPyJPzHLs5Fi5di7wkz/zjx1eiyqR5ZCSIGqth6+G6PXRagJXx8qV9QSwMEFAAAAAgAlxpMXQ78KCZQAAAAXQAAABQAAABwcHQvcHJlc2VudGF0aW9uLnhtbE2LMQ6AIAwAv2J4gCUODgTxLY2pQkJLAx18voyOd5eL58v1TFGDdhokhlaaLFPKCHq4bKYBYFyZGMfalGS2u3VGm9gf+H9cYfN+B8YiDtIHUEsDBBQAAAAIAJcaTF3P4NdyfgAAAK0AAAAVAAAAcHB0L3NsaWRlcy9zbGlkZTEueG1sRY5LCsMwDESvEnyAKmTRhXF8hBJIL2AStTHYspBMyPGbDyUbaYY3GuTYapqbLSdSy71ZamULoNOCOeijMNLOPkVyqLuVL7CgItVQY6GcoGvbJ+QQyXjHdhrTfGzltyBe6pi0jjzImXitgzRx7k1nwDu4GVxhuK/hXwjnl/4HUEsBAhQDFAAAAAgAlxpMXUxqCePRAAAA/QEAABMAAAAAAAAAAAAAAIABAAAAAFtDb250ZW50X1R5cGVzXS54bWxQSwECFAMUAAAACACXGkxdL5teKIoAAAD1AAAACwAAAAAAAAAAAAAAgAECAQAAX3JlbHMvLnJlbHNQSwECFAMUAAAACACXGkxdDvwoJlAAAABdAAAAFAAAAAAAAAAAAAAAgAG1AQAAcHB0L3ByZXNlbnRhdGlvbi54bWxQSwECFAMUAAAACACXGkxdz+DXcn4AAACtAAAAFQAAAAAAAAAAAAAAgAE3AgAAcHB0L3NsaWRlcy9zbGlkZTEueG1sUEsFBgAAAAAEAAQA/wAAAOgCAAAAAA==",
+        "sha256": "a600960771927cbe63b140fbd6e387bd38b620cc156c13cadd3cbeaa641fdc6c"
+      }
+    }
+  },
+  {
+    "name": "xml-declaration-invalid-attribute",
+    "valid": false,
+    "document": {
+      "schemaVersion": 2,
+      "id": "d",
+      "name": "Source contract",
+      "width": 1920,
+      "height": 1080,
+      "slideOrder": ["s"],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000"
+          },
+          "notes": "",
+          "elementOrder": ["e"],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "rectangle",
+              "x": 0,
+              "y": 0,
+              "width": 100,
+              "height": 100,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#ffffff",
+              "strokeColor": "#000000",
+              "strokeWidth": 0,
+              "pptxSourceNode": {
+                "id": "2",
+                "role": "geometry"
+              }
+            }
+          },
+          "pptxSourcePart": "ppt/slides/slide1.xml"
+        }
+      },
+      "assets": {},
+      "createdAt": 0,
+      "updatedAt": 0,
+      "pptxSource": {
+        "version": 1,
+        "base64": "UEsDBBQAAAAIAJcaTF1Magnj0QAAAP0BAAATAAAAW0NvbnRlbnRfVHlwZXNdLnhtbK1RvU7DQAx+lejWqnHpwICaLsBKGXgB6+I0J+7HOrtVeXuctEiACixMlv39St68vDFJc0oxS+dGVb4DED9SQmkLUzZkKDWh2lr3wOhfcU+wXq1uwZeslHWpk4fbbh5owEPU5vFkZwkld65SFNfcn4lTVueQOQaPajgcc/8tZXlJaE05c2QMLAsjOLiaMCE/B1x0uyPVGnpqnrHqEyZjAbMCVxLTzdz2d6crVcswBE998YdkkvazWYpf1jZhyIs/yki0o5zHzX+3mV0/GsD89e07UEsDBBQAAAAIAJcaTF0vm14oigAAAPUAAAALAAAAX3JlbHMvLnJlbHONzz0OwjAMBeCrVDlAXRgYUJKJpSvqBaLU+RFNYiVGgtsTMRXEwOjnp8+yvOJmOJbcQqQ2PNKWmxKBmc4AzQZMpo2FMPeNKzUZ7mP1QMbejEc4TtMJ6t4QWu7NYV6VqPN6EMPyJPzHLs5Fi5di7wkz/zjx1eiyqR5ZCSIGqth6+G6PXRagJXx8qV9QSwMEFAAAAAgAlxpMXTBB0KZjAAAAdwAAABQAAABwcHQvcHJlc2VudGF0aW9uLnhtbE2LwQ3DIAwAV0EeIKZ99IFCMovVug0SNhZYUcYPzz5Pd7ful9Rwch+laYbHEiEUPamWT4YL9m21ZJ0Hq5PPJMxcR7IMh7slxPE+WGgszVin+7Yu5BP7D/8/qfiM8YVCRQG3G1BLAwQUAAAACACXGkxdz+DXcn4AAACtAAAAFQAAAHBwdC9zbGlkZXMvc2xpZGUxLnhtbEWOSwrDMAxErxJ8gCpk0YVxfIQSSC9gErUx2LKQTMjxmw8lG2mGNxrk2Gqamy0nUsu9WWplC6DTgjnoozDSzj5Fcqi7lS+woCLVUGOhnKBr2yfkEMl4x3Ya03xs5bcgXuqYtI48yJl4rYM0ce5NZ8A7uBlcYbiv4V8I55f+B1BLAQIUAxQAAAAIAJcaTF1Magnj0QAAAP0BAAATAAAAAAAAAAAAAACAAQAAAABbQ29udGVudF9UeXBlc10ueG1sUEsBAhQDFAAAAAgAlxpMXS+bXiiKAAAA9QAAAAsAAAAAAAAAAAAAAIABAgEAAF9yZWxzLy5yZWxzUEsBAhQDFAAAAAgAlxpMXTBB0KZjAAAAdwAAABQAAAAAAAAAAAAAAIABtQEAAHBwdC9wcmVzZW50YXRpb24ueG1sUEsBAhQDFAAAAAgAlxpMXc/g13J+AAAArQAAABUAAAAAAAAAAAAAAIABSgIAAHBwdC9zbGlkZXMvc2xpZGUxLnhtbFBLBQYAAAAABAAEAP8AAAD7AgAAAAA=",
+        "sha256": "db20538860660f694e655fab7dcd017230b3f098e3b540d5742d1affcb5c9536"
+      }
+    }
+  },
+  {
+    "name": "cdata-outside-root",
+    "valid": false,
+    "document": {
+      "schemaVersion": 2,
+      "id": "d",
+      "name": "Source contract",
+      "width": 1920,
+      "height": 1080,
+      "slideOrder": ["s"],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000"
+          },
+          "notes": "",
+          "elementOrder": ["e"],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "rectangle",
+              "x": 0,
+              "y": 0,
+              "width": 100,
+              "height": 100,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#ffffff",
+              "strokeColor": "#000000",
+              "strokeWidth": 0,
+              "pptxSourceNode": {
+                "id": "2",
+                "role": "geometry"
+              }
+            }
+          },
+          "pptxSourcePart": "ppt/slides/slide1.xml"
+        }
+      },
+      "assets": {},
+      "createdAt": 0,
+      "updatedAt": 0,
+      "pptxSource": {
+        "version": 1,
+        "base64": "UEsDBBQAAAAIAJcaTF1Magnj0QAAAP0BAAATAAAAW0NvbnRlbnRfVHlwZXNdLnhtbK1RvU7DQAx+lejWqnHpwICaLsBKGXgB6+I0J+7HOrtVeXuctEiACixMlv39St68vDFJc0oxS+dGVb4DED9SQmkLUzZkKDWh2lr3wOhfcU+wXq1uwZeslHWpk4fbbh5owEPU5vFkZwkld65SFNfcn4lTVueQOQaPajgcc/8tZXlJaE05c2QMLAsjOLiaMCE/B1x0uyPVGnpqnrHqEyZjAbMCVxLTzdz2d6crVcswBE998YdkkvazWYpf1jZhyIs/yki0o5zHzX+3mV0/GsD89e07UEsDBBQAAAAIAJcaTF0vm14oigAAAPUAAAALAAAAX3JlbHMvLnJlbHONzz0OwjAMBeCrVDlAXRgYUJKJpSvqBaLU+RFNYiVGgtsTMRXEwOjnp8+yvOJmOJbcQqQ2PNKWmxKBmc4AzQZMpo2FMPeNKzUZ7mP1QMbejEc4TtMJ6t4QWu7NYV6VqPN6EMPyJPzHLs5Fi5di7wkz/zjx1eiyqR5ZCSIGqth6+G6PXRagJXx8qV9QSwMEFAAAAAgAlxpMXce9SdFYAAAAYwAAABQAAABwcHQvcHJlc2VudGF0aW9uLnhtbLMpsCooSi1OzStJLMnMz1OoyM3JK7YqsFXKKCkpsNLXL07OSM1NLNbLL0jNA8ql5RflJpYAuUXp+sj6cnP0jQwMzPRzEzPzlPTtbBSjnV0cQxyjFWJj7QBQSwMEFAAAAAgAlxpMXc/g13J+AAAArQAAABUAAABwcHQvc2xpZGVzL3NsaWRlMS54bWxFjksKwzAMRK8SfIAqZNGFcXyEEkgvYBK1MdiykEzI8ZsPJRtphjca5NhqmpstJ1LLvVlqZQug04I56KMw0s4+RXKou5UvsKAi1VBjoZyga9sn5BDJeMd2GtN8bOW3IF7qmLSOPMiZeK2DNHHuTWfAO7gZXGG4r+FfCOeX/gdQSwECFAMUAAAACACXGkxdTGoJ49EAAAD9AQAAEwAAAAAAAAAAAAAAgAEAAAAAW0NvbnRlbnRfVHlwZXNdLnhtbFBLAQIUAxQAAAAIAJcaTF0vm14oigAAAPUAAAALAAAAAAAAAAAAAACAAQIBAABfcmVscy8ucmVsc1BLAQIUAxQAAAAIAJcaTF3HvUnRWAAAAGMAAAAUAAAAAAAAAAAAAACAAbUBAABwcHQvcHJlc2VudGF0aW9uLnhtbFBLAQIUAxQAAAAIAJcaTF3P4NdyfgAAAK0AAAAVAAAAAAAAAAAAAACAAT8CAABwcHQvc2xpZGVzL3NsaWRlMS54bWxQSwUGAAAAAAQABAD/AAAA8AIAAAAA",
+        "sha256": "3f20b709e1965bbf264c0fedb7cf02cd6c4a62f494eef436950a98821d1bf735"
+      }
+    }
   }
 ]

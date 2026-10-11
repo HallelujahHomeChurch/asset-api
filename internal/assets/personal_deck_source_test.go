@@ -276,3 +276,29 @@ func TestPersonalPptxDirectoryExpandedLimits(t *testing.T) {
 		})
 	}
 }
+
+func TestPersonalPptxXMLNamespaceScopes(t *testing.T) {
+	for _, test := range []struct {
+		name, xml string
+		valid     bool
+	}{
+		{"declaration", `<?xml version='1.0' encoding='utf-8' standalone='yes'?><root/>`, true},
+		{"scope restore", `<p:root xmlns:p="urn:parent"><p:child xmlns:p="urn:child"/><p:child/></p:root>`, true},
+		{"default clear", `<root xmlns="urn:parent"><child xmlns=""/></root>`, true},
+		{"xml built-in", `<root xml:lang="en"/>`, true},
+		{"undeclared attribute", `<root unknown:attr="x"/>`, false},
+		{"mismatched prefix", `<p:root xmlns:p="urn:same" xmlns:q="urn:same"></q:root>`, false},
+		{"duplicate expanded attributes", `<root xmlns:p="urn:same" xmlns:q="urn:same" p:attr="a" q:attr="b"/>`, false},
+		{"reserved binding", `<root xmlns:xml="urn:wrong"/>`, false},
+		{"empty prefix binding", `<root xmlns:p=""/>`, false},
+		{"leading declaration whitespace", ` <?xml version="1.0"?><root/>`, false},
+		{"declaration order", `<?xml encoding="UTF-8" version="1.0"?><root/>`, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := personalPptxXMLRead(context.Background(), []byte(test.xml))
+			if (err == nil) != test.valid {
+				t.Fatalf("valid=%v err=%v", test.valid, err)
+			}
+		})
+	}
+}
