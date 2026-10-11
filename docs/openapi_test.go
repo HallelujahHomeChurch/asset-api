@@ -1,6 +1,7 @@
 package docs_test
 
 import (
+	"gopkg.in/yaml.v3"
 	"os"
 	"strings"
 	"testing"
@@ -356,5 +357,32 @@ func assertContains(t *testing.T, value, want string) {
 	t.Helper()
 	if !strings.Contains(value, want) {
 		t.Fatalf("missing %q", want)
+	}
+}
+
+func TestPersonalPptxSourceContract(t *testing.T) {
+	raw, err := os.ReadFile("openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Components struct {
+			Schemas map[string]struct {
+				Properties map[string]map[string]any `yaml:"properties"`
+			} `yaml:"schemas"`
+		} `yaml:"components"`
+	}
+	if err := yaml.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+	source := document.Components.Schemas["PersonalPptxSource"].Properties
+	if source == nil || source["version"]["const"] != 1 || source["base64"]["maxLength"] != 279620268 || source["sha256"]["pattern"] != "^[a-f0-9]{64}$" {
+		t.Fatal("portable source contract missing or inconsistent")
+	}
+	if document.Components.Schemas["PersonalDeckDocument"].Properties["pptxSource"]["$ref"] != "#/components/schemas/PersonalPptxSource" {
+		t.Fatal("source schema is not linked from portable document")
+	}
+	if document.Components.Schemas["PersonalDeckSlide"].Properties["elements"] == nil {
+		t.Fatal("slide graph missing")
 	}
 }

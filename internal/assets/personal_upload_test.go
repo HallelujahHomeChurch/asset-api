@@ -151,3 +151,29 @@ func TestPersonalLatePutRemovesObsoleteStaging(t *testing.T) {
 		t.Fatal("late staging retained")
 	}
 }
+
+func TestPersonalCompletionRejectsInvalidPptxSource(t *testing.T) {
+	repo := &personalUploadRepository{newMemoryRepository()}
+	blobs := &personalUploadBlobs{newMemoryBlobStore()}
+	service := NewService(repo, blobs, "", time.Now)
+	payload := personalSourceCorpus(t)[1].Document
+	upload, err := service.CreatePersonalUpload(context.Background(), "alice", PersonalUploadInput{FileName: "source.lpdeck", MIMEType: "application/vnd.hhc.presenter+json", SizeBytes: int64(len(payload))}, "source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.PutPersonalUpload(context.Background(), "alice", upload.ID, int64(len(payload)), bytes.NewReader(payload)); err != nil {
+		t.Fatal(err)
+	}
+	checksum := sha256.Sum256(payload)
+	_, err = service.CompletePersonalUpload(context.Background(), "alice", upload.ID, CompleteUploadInput{SizeBytes: int64(len(payload)), MIMEType: "application/vnd.hhc.presenter+json", ChecksumSHA256: hex.EncodeToString(checksum[:])})
+	if !errors.Is(err, ErrInvalidUpload) {
+		t.Fatalf("invalid source=%v", err)
+	}
+	if len(repo.scanRequests) != 0 {
+		t.Fatal("invalid source queued for scanning")
+	}
+	state, err := service.PersonalUpload(context.Background(), "alice", upload.ID)
+	if err != nil || state.UploadStatus == UploadCompleted {
+		t.Fatalf("rejected upload sealed: %+v %v", state, err)
+	}
+}
