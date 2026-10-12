@@ -3,6 +3,7 @@ package docs_test
 import (
 	"gopkg.in/yaml.v3"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -384,5 +385,112 @@ func TestPersonalPptxSourceContract(t *testing.T) {
 	}
 	if document.Components.Schemas["PersonalDeckSlide"].Properties["elements"] == nil {
 		t.Fatal("slide graph missing")
+	}
+}
+
+func TestPersonalDeckGeometryContract(t *testing.T) {
+	raw, err := os.ReadFile("openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Components struct {
+			Schemas map[string]struct {
+				Properties map[string]map[string]any `yaml:"properties"`
+			} `yaml:"schemas"`
+		} `yaml:"components"`
+	}
+	if err := yaml.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+	versions := document.Components.Schemas["PersonalDeckDocument"].Properties["schemaVersion"]["enum"]
+	if !reflect.DeepEqual(versions, []any{1, 2, 3}) {
+		t.Fatalf("schema versions=%v", versions)
+	}
+	element := document.Components.Schemas["PersonalDeckElement"].Properties
+	if !reflect.DeepEqual(element["shape"]["enum"], []any{"rectangle", "ellipse", "roundRect", "triangle", "rtTriangle", "diamond", "rightArrow", "leftArrow", "upArrow", "downArrow"}) {
+		t.Fatal("preset allow-list missing")
+	}
+	adjustment := element["adjustments"]
+	if adjustment["type"] != "array" || adjustment["maxItems"] != 16 {
+		t.Fatal("adjustment limit missing")
+	}
+	items, ok := adjustment["items"].(map[string]any)
+	if !ok || items["type"] != "integer" || items["minimum"] != -2147483648 || items["maximum"] != 2147483647 {
+		t.Fatal("adjustments must be signed 32-bit integers")
+	}
+}
+
+func TestPersonalDeckGeometryVersionAndPresetRestrictions(t *testing.T) {
+	raw, err := os.ReadFile("openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Components struct {
+			Schemas map[string]struct {
+				AllOf []map[string]any `yaml:"allOf"`
+			} `yaml:"schemas"`
+		} `yaml:"components"`
+	}
+	if err := yaml.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+	contracts := document.Components.Schemas
+	expectedDocument := []map[string]any{}
+	if err := yaml.Unmarshal([]byte(`- if:
+    properties: { schemaVersion: { const: 3 } }
+    required: [schemaVersion]
+  else:
+    properties:
+      slides:
+        additionalProperties:
+          properties:
+            elements:
+              additionalProperties:
+                properties:
+                  shape: { enum: [rectangle, ellipse] }
+                  adjustments: false
+`), &expectedDocument); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, rule := range contracts["PersonalDeckDocument"].AllOf {
+		if reflect.DeepEqual(rule, expectedDocument[0]) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("old schema geometry restriction missing")
+	}
+	for _, expected := range []struct {
+		shapes []any
+		count  int
+	}{
+		{[]any{"rectangle", "ellipse", "rtTriangle", "diamond"}, 0},
+		{[]any{"roundRect", "triangle"}, 1},
+		{[]any{"rightArrow", "leftArrow", "upArrow", "downArrow"}, 2},
+	} {
+		found := false
+		for _, rule := range contracts["PersonalDeckElement"].AllOf {
+			condition, ok := rule["if"].(map[string]any)
+			if !ok {
+				continue
+			}
+			properties, ok := condition["properties"].(map[string]any)
+			if !ok {
+				continue
+			}
+			shape, ok := properties["shape"].(map[string]any)
+			if !ok || !reflect.DeepEqual(shape["enum"], expected.shapes) {
+				continue
+			}
+			then := rule["then"].(map[string]any)
+			adjustment := then["properties"].(map[string]any)["adjustments"].(map[string]any)
+			found = adjustment["maxItems"] == expected.count
+		}
+		if !found {
+			t.Fatalf("missing per-preset adjustment count: %v", expected.shapes)
+		}
 	}
 }

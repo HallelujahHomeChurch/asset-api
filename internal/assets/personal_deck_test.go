@@ -15,7 +15,7 @@ func TestPersonalDeckValidation(t *testing.T) {
 		ok         bool
 	}{
 		{"valid", valid, true}, {"legacy", strings.Replace(valid, `"schemaVersion":1,`, "", 1), true},
-		{"future", strings.Replace(valid, `"schemaVersion":1`, `"schemaVersion":3`, 1), false},
+		{"future", strings.Replace(valid, `"schemaVersion":1`, `"schemaVersion":4`, 1), false},
 		{"reference", strings.Replace(valid, `"assetId":"image"`, `"assetId":"missing"`, 1), false},
 		{"duplicate-order", strings.Replace(valid, `["e"]`, `["e","e"]`, 1), false},
 		{"zero-size", strings.Replace(valid, `"width":1920`, `"width":0`, 1), false},

@@ -3628,14 +3628,14 @@ components:
       type: object
       description: >-
         Portable Presenter JSON. Omitted schemaVersion is legacy v1; schema v1 forbids source fields.
-        v2 supports optional immutable source. Map keys must equal object IDs; ordered IDs must be
+        v2/v3 support optional immutable source. v3 adds bounded preset geometry adjustments. Map keys must equal object IDs; ordered IDs must be
         unique and cover their maps. Maximum 2000 slides, 10000 assets, 10000 elements per slide and
         100000 elements overall. Maximum serialized UTF-8 size is 209715200 bytes, including source
         base64 and image data. Opening a document does not rewrite it. New source writes require
-        coordinated client/API rollout; schema v2 is not readable by older clients.
+        coordinated client/API rollout; schemas v2/v3 are not readable by older clients.
       required: [id, name, width, height, slideOrder, slides]
       properties:
-        schemaVersion: { type: integer, enum: [1, 2] }
+        schemaVersion: { type: integer, enum: [1, 2, 3] }
         id: { type: string, minLength: 1 }
         name: { type: string, minLength: 1 }
         width: { type: number, exclusiveMinimum: 0, maximum: 100000 }
@@ -3646,7 +3646,7 @@ components:
         pptxSource: { $ref: '#/components/schemas/PersonalPptxSource' }
       allOf:
         - if:
-            properties: { schemaVersion: { const: 2 } }
+            properties: { schemaVersion: { enum: [2, 3] } }
             required: [schemaVersion]
           else:
             properties:
@@ -3656,6 +3656,19 @@ components:
                   properties:
                     pptxSourcePart: false
                     elements: { additionalProperties: { properties: { pptxSourceNode: false } } }
+        - if:
+            properties: { schemaVersion: { const: 3 } }
+            required: [schemaVersion]
+          else:
+            properties:
+              slides:
+                additionalProperties:
+                  properties:
+                    elements:
+                      additionalProperties:
+                        properties:
+                          shape: { enum: [rectangle, ellipse] }
+                          adjustments: false
         - if:
             not: { properties: { pptxSource: {} }, required: [pptxSource] }
           then:
@@ -3688,8 +3701,35 @@ components:
         height: { type: number, minimum: -1000000, maximum: 1000000 }
         rotation: { type: number, minimum: -1000000, maximum: 1000000 }
         opacity: { type: number, minimum: 0, maximum: 1 }
+        shape: { type: string, enum: [rectangle, ellipse, roundRect, triangle, rtTriangle, diamond, rightArrow, leftArrow, upArrow, downArrow] }
+        adjustments:
+          type: array
+          maxItems: 16
+          description: Optional prefix of preset parameters; omission retains defaults. Raw stored values are unchanged on opening; rendering clamps by preset and dimensions. roundRect/triangle have one parameter, arrows two, other supported presets zero. Requires document schema v3.
+          items: { type: integer, minimum: -2147483648, maximum: 2147483647 }
         pptxSourceNode: { $ref: '#/components/schemas/PersonalPptxSourceNode' }
       allOf:
+        - if:
+            properties: { type: { const: shape } }
+          then:
+            required: [shape]
+          else:
+            properties: { adjustments: false }
+        - if:
+            properties: { shape: { enum: [rectangle, ellipse, rtTriangle, diamond] } }
+            required: [shape]
+          then:
+            properties: { adjustments: { maxItems: 0 } }
+        - if:
+            properties: { shape: { enum: [roundRect, triangle] } }
+            required: [shape]
+          then:
+            properties: { adjustments: { maxItems: 1 } }
+        - if:
+            properties: { shape: { enum: [rightArrow, leftArrow, upArrow, downArrow] } }
+            required: [shape]
+          then:
+            properties: { adjustments: { maxItems: 2 } }
         - if:
             properties: { type: { const: line } }
           else:
