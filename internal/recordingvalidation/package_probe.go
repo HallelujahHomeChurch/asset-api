@@ -25,6 +25,7 @@ type PackageMediaProbe struct {
 	Objects                      PackageObjects
 	FFmpeg, FFprobe, ScratchRoot string
 	OnProgress                   func(assets.RecordingProcessingProgress)
+	OnStage                      func(string, time.Duration)
 }
 
 // Validate decodes bounded init+fragments. Untrusted media cannot
@@ -67,7 +68,15 @@ func (p PackageMediaProbe) Validate(ctx context.Context, inv assets.RecordingPac
 	return p.validateMedia(ctx, inv, master, read, read)
 }
 
-func (p PackageMediaProbe) probeFragment(ctx context.Context, path string, r assets.RecordingRendition) (segmentProbe, error) {
+func (p PackageMediaProbe) probeFragment(ctx context.Context, path string, r assets.RecordingRendition) (result segmentProbe, resultErr error) {
+	stage := "probe"
+	started := time.Now()
+	defer func() {
+		if p.OnStage != nil {
+			p.OnStage(stage, time.Since(started))
+		}
+	}()
+	defer func() { resultErr = packageStageError(stage, resultErr) }()
 	data, err := ProbeCommand(ctx, p.FFprobe, "-v", "error", "-protocol_whitelist", "file", "-enable_drefs", "0", "-use_absolute_path", "0", "-show_data", "-show_streams", "-show_packets", "-show_entries", "stream=index,codec_type,codec_name,width,height,pix_fmt,sample_rate,channels,profile,r_frame_rate,sample_aspect_ratio,extradata:packet=stream_index,pts_time,duration_time,flags", "-of", "json", path)
 	if err != nil {
 		return segmentProbe{}, err
@@ -83,6 +92,11 @@ func (p PackageMediaProbe) probeFragment(ctx context.Context, path string, r ass
 	if err := validateFirstIDRPacket(first); err != nil {
 		return segmentProbe{}, fmt.Errorf("segment IDR: %w", err)
 	}
+	if p.OnStage != nil {
+		p.OnStage(stage, time.Since(started))
+	}
+	stage = "decode"
+	started = time.Now()
 	decodeCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	err = exec.CommandContext(decodeCtx, p.FFmpeg, "-nostdin", "-v", "error", "-xerror", "-protocol_whitelist", "file", "-enable_drefs", "0", "-use_absolute_path", "0", "-threads", "2", "-i", path, "-map", "0:v:0", "-map", "0:a:0", "-f", "null", "-").Run()
 	deadlineErr := decodeCtx.Err()

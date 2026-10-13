@@ -110,9 +110,22 @@ func TestPackagePipelineActualFrameRates(t *testing.T) {
 
 func TestPackagePipelineSingleReadAndBound(t *testing.T) {
 	p, objects, probe := realPackageFixture(t)
+	var stageMu sync.Mutex
+	stageCalls := map[string]int{}
+	probe.OnStage = func(stage string, elapsed time.Duration) {
+		stageMu.Lock()
+		defer stageMu.Unlock()
+		if elapsed < 0 {
+			t.Errorf("negative stage duration: %s", stage)
+		}
+		stageCalls[stage]++
+	}
 	observed := &orderedPackageObjects{packageMemoryObjects: objects, secondClosed: make(chan struct{}), firstOpened: make(chan struct{})}
 	if _, err := FreezeRecordingPackage(context.Background(), p, "single-read", observed, probe); err != nil {
 		t.Fatal(err)
+	}
+	if stageCalls["freeze_hash"] != len(p.Inventory.Objects) || stageCalls["probe"] != 2 || stageCalls["decode"] != 2 {
+		t.Fatalf("missing bounded stage timing: %v", stageCalls)
 	}
 	var objectBytes int64
 	for _, object := range p.Inventory.Objects {
