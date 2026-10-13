@@ -170,7 +170,7 @@ func (p PackageMediaProbe) validateMedia(ctx context.Context, inv assets.Recordi
 			return err
 		}
 		if err := validateRenditionTimeline(r, timeline, reference); err != nil {
-			return err
+			return packageStageError("timeline", err)
 		}
 		codecs[r.Name] = timeline[0].Codecs
 		if reference == nil {
