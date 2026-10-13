@@ -77,6 +77,13 @@ only declared inventory paths with matching remote sizes are confirmed. Provider
 errors fail closed. Status paging and owner checks are unchanged, and size
 confirmation is not SHA-256/media validation or evidence of `ready`.
 The flag defaults off and must remain off until the reviewed HLS cutover.
+Package validation renews its fenced lease before persisting display progress.
+A progress-write deadline after successful renewal is logged and retried on the
+next heartbeat; lease loss and terminal progress/ready commits still fail closed.
+`recording_package_stage_totals` reports cumulative worker milliseconds for
+immutable freeze/hash, metadata probe and full decode. Parallel worker times
+can overlap and must not be summed as wall-clock latency.
+
 Completion means `freezing`, not ready. In HLS mode the recording Job uses two
 global DB slots, renewable fenced leases and bounded per-fragment media validation;
 it does not re-encode CLI packages. Retention defaults to thirty days, with a one-hour

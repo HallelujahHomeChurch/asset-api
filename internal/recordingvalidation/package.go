@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"hhc/asset-api/internal/assets"
 	"hhc/asset-api/internal/storage/r2"
@@ -42,6 +43,15 @@ func FreezeRecordingPackage(ctx context.Context, p assets.RecordingPackage, atte
 		return "", assets.ErrInvalidInput
 	}
 	prefix = "recordings/packages/" + p.ID + "/final/" + attempt + "/"
+	freezeObject := func(ctx context.Context, object assets.RecordingPackageObject, destination io.Writer) error {
+		started := time.Now()
+		defer func() {
+			if probe.OnStage != nil {
+				probe.OnStage("freeze_hash", time.Since(started))
+			}
+		}()
+		return freezePackageObject(ctx, p, prefix, object, objects, destination)
+	}
 	stage = "playlists"
 	playlists := map[string][]byte{}
 	inventoryObjects := make(map[string]assets.RecordingPackageObject, len(p.Inventory.Objects))
@@ -49,7 +59,7 @@ func FreezeRecordingPackage(ctx context.Context, p assets.RecordingPackage, atte
 		inventoryObjects[object.Path] = object
 		if strings.HasSuffix(object.Path, ".m3u8") {
 			var manifest bytes.Buffer
-			if err := freezePackageObject(ctx, p, prefix, object, objects, &manifest); err != nil {
+			if err := freezeObject(ctx, object, &manifest); err != nil {
 				return "", err
 			}
 			playlists[object.Path] = manifest.Bytes()
@@ -63,7 +73,7 @@ func FreezeRecordingPackage(ctx context.Context, p assets.RecordingPackage, atte
 		if !ok {
 			return assets.ErrInvalidUpload
 		}
-		return freezePackageObject(ctx, p, prefix, object, objects, w)
+		return freezeObject(ctx, object, w)
 	}
 	stage = "media"
 	if err := probe.validateMedia(ctx, p.Inventory, playlists["master.m3u8"], freeze, freeze); err != nil {

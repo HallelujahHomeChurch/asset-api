@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync"
 	"time"
 
 	"hhc/asset-api/internal/assets"
@@ -23,6 +24,13 @@ func RunPackageValidation(ctx context.Context, repository *postgres.RecordingPac
 	logger.Info("recording_package_claim", "objects_total", len(claim.Package.Inventory.Objects), "bytes_total", claim.Package.SizeBytes)
 	defer func() { logPackageResult(logger, "recording_package_claim_exit", started, result) }()
 	progress := NewProcessingProgressTracker(*claim.Package.ProcessingProgress)
+	var timingMu sync.Mutex
+	stageTimes := map[string]time.Duration{}
+	probe.OnStage = func(stage string, elapsed time.Duration) {
+		timingMu.Lock()
+		defer timingMu.Unlock()
+		stageTimes[stage] += elapsed
+	}
 	var lastLog time.Time
 	var lastPhase, lastRendition string
 	probe.OnProgress = func(value assets.RecordingProcessingProgress) {
@@ -39,14 +47,17 @@ func RunPackageValidation(ctx context.Context, repository *postgres.RecordingPac
 		})
 	}
 	return RunProcessingClaim(ctx, func(ctx context.Context) error {
-		if err := flush(ctx); err != nil {
-			return err
-		}
-		return packageStageError("heartbeat", repository.HeartbeatPackageValidation(ctx, claim.Package.ID, claim.ClaimID))
+		return heartbeatPackageProgress(ctx, func(ctx context.Context) error {
+			return repository.HeartbeatPackageValidation(ctx, claim.Package.ID, claim.ClaimID)
+		}, flush, logger)
 	}, func(ctx context.Context) error {
 		logger.Info("recording_package_validation_start")
 		_, err := FreezeRecordingPackage(ctx, claim.Package, claim.ClaimID, objects, probe)
 		logPackageResult(logger, "recording_package_validation_result", started, err)
+		// Worker durations overlap; totals attribute work, not wall-clock latency.
+		for _, stage := range []string{"freeze_hash", "probe", "decode"} {
+			logger.Info("recording_package_stage_totals", "stage", stage, "worker_elapsed_ms", stageTimes[stage].Milliseconds())
+		}
 		return err
 	}, func(ctx context.Context, ready bool, failure string) error {
 		if err := flush(ctx); err != nil {
@@ -96,4 +107,18 @@ func RunProcessingClaim(ctx context.Context, heartbeat, validate func(context.Co
 		return finish(ctx, true, "")
 	}
 	return finish(ctx, false, processingFailure(err))
+}
+
+// Display progress may lag after a timeout only while the fenced lease is renewed.
+func heartbeatPackageProgress(ctx context.Context, heartbeat, flush func(context.Context) error, logger *slog.Logger) error {
+	if err := heartbeat(ctx); err != nil {
+		return packageStageError("heartbeat", err)
+	}
+	started := time.Now()
+	err := flush(ctx)
+	if errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) && !errors.Is(err, assets.ErrConflict) && processingFailure(err) != "invalid" {
+		logPackageResult(logger, "recording_package_progress_deferred", started, packageStageError("progress_flush", err))
+		return nil
+	}
+	return err
 }
