@@ -36,7 +36,7 @@ func TestCoverBoundaryRecoveryMigrationFencesAndRunsOnce(t *testing.T) {
 		if e := NewRecordingPackageStore(db).Create(ctx, pkg); e != nil {
 			t.Fatal(e)
 		}
-		if _, e := db.Exec(`UPDATE recording_packages SET state='ready',ready_at=now(),media_expires_at=now()+interval '30 days' WHERE id=$1`, id); e != nil {
+		if _, e := db.Exec(`UPDATE recording_packages SET state='ready',completed_at=now(),ready_at=now(),final_prefix='recordings/packages/recovery/final/fixture/',media_expires_at=now()+interval '30 days' WHERE id=$1`, id); e != nil {
 			t.Fatal(e)
 		}
 		if _, e := db.Exec(`INSERT INTO recording_captures(id,actor_id,recording_id,create_key,state,created_at,expires_at,package_id) VALUES($1,'actor',$2,$1,'ready',now(),now()+interval '1 hour',$1)`, id, recording); e != nil {
