@@ -179,3 +179,76 @@ func TestCaptureCoverPositionUsesMeasured2997Boundaries(t *testing.T) {
 		t.Fatal("read beyond verified media")
 	}
 }
+
+func TestCaptureCoverPositionAtRoundedSegmentBoundary(t *testing.T) {
+	timeline := make([]assets.RecordingLiveSegment, 14)
+	for i := range timeline {
+		timeline[i] = assets.RecordingLiveSegment{Sequence: i, Renditions: map[string]assets.RecordingLiveFragment{"480p": {Start: math.Round((.021+float64(i)*30.03)*1000) / 1000, End: math.Round((.021+float64(i+1)*30.03)*1000) / 1000}}}
+	}
+	duration := timeline[13].Renditions["480p"].End - timeline[0].Renditions["480p"].Start
+	segment, offset, err := coverPosition(duration*.5, "480p", timeline)
+	if err != nil || segment != 7 || math.Abs(offset) > 1e-9 {
+		t.Fatalf("boundary sample chose exhausted fragment: segment=%d offset=%.17g err=%v", segment, offset, err)
+	}
+}
+
+func Test2997CoverCandidatesAtBoundaryDecodeAllThree(t *testing.T) {
+	dir := t.TempDir()
+	ffmpeg := coverFFmpeg(t)
+	args := []string{"-nostdin", "-v", "error", "-f", "lavfi", "-i", "color=c=red:size=320x180:rate=30000/1001", "-frames:v", "12600", "-c:v", "libx264", "-threads", "2", "-preset", "ultrafast", "-g", "900", "-f", "hls", "-hls_time", "30.03", "-hls_playlist_type", "vod", "-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", "init.mp4", "-hls_segment_filename", filepath.Join(dir, "seg-%06d.m4s"), filepath.Join(dir, "index.m3u8")}
+	if out, err := exec.Command(ffmpeg, args...).CombinedOutput(); err != nil {
+		t.Fatalf("fixture %v %s", err, out)
+	}
+	pkg, objects := packageTransferFixture()
+	pkg.State = "ready"
+	pkg.RecordingID = "recording-boundary"
+	pkg.FinalPrefix = "recordings/packages/" + pkg.ID + "/final/validated/"
+	pkg.Inventory.InventoryDigest = ""
+	pkg.Inventory.Renditions[0].FrameRate = 30000. / 1001
+	pkg.Inventory.Renditions[0].DurationSeconds = 420.42
+	pkg.Inventory.Renditions[0].SegmentCount = 14
+	for i := 1; i < 14; i++ {
+		pkg.Inventory.Objects = append(pkg.Inventory.Objects, assets.RecordingPackageObject{Path: fmt.Sprintf("720p/seg-%06d.m4s", i)})
+	}
+	for i, o := range pkg.Inventory.Objects {
+		data := []byte("playlist")
+		if !strings.HasSuffix(o.Path, ".m3u8") {
+			var err error
+			data, err = os.ReadFile(filepath.Join(dir, filepath.Base(o.Path)))
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		objects.bytes[pkg.FinalPrefix+o.Path] = data
+		pkg.Inventory.Objects[i].SizeBytes = int64(len(data))
+		pkg.Inventory.Objects[i].SHA256 = fmt.Sprintf("%x", sha256.Sum256(data))
+	}
+	timeline := make([]assets.RecordingLiveSegment, 14)
+	for i := range timeline {
+		timeline[i] = assets.RecordingLiveSegment{Sequence: i, Renditions: map[string]assets.RecordingLiveFragment{"720p": {Start: math.Round((.021+float64(i)*30.03)*1000) / 1000, End: math.Round((.021+float64(i+1)*30.03)*1000) / 1000}}}
+	}
+	p := PackageMediaProbe{Objects: objects, FFmpeg: ffmpeg}
+	var candidates [][]byte
+	put := func(_ context.Context, _ string, data []byte) error {
+		cfg, err := jpeg.DecodeConfig(bytes.NewReader(data))
+		if err != nil || cfg.Width != 1280 || cfg.Height != 720 {
+			t.Fatalf("bad candidate %+v %v", cfg, err)
+		}
+		candidates = append(candidates, data)
+		return nil
+	}
+	if err := p.GenerateCoversWithTimeline(context.Background(), pkg, "boundary", nil, timeline, put); err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 3 {
+		t.Fatalf("got %d candidates", len(candidates))
+	}
+	inherited := candidates[0]
+	candidates = nil
+	if err := p.GenerateCoversWithTimeline(context.Background(), pkg, "inherited-boundary", inherited, timeline, put); err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 3 || !bytes.Equal(candidates[0], inherited) {
+		t.Fatal("lost inherited image")
+	}
+}

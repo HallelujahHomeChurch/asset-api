@@ -207,8 +207,9 @@ func coverPosition(seconds float64, rendition string, timeline []assets.Recordin
 		if !ok {
 			return 0, 0, assets.ErrInvalidUpload
 		}
-		if target >= fragment.Start && target < fragment.End {
-			return segment.Sequence, target - fragment.Start, nil
+		// JSON round trips can put an exact boundary a few ULPs before the next fragment.
+		if target >= fragment.Start-1e-9 && target < fragment.End-1e-9 {
+			return segment.Sequence, math.Max(0, target-fragment.Start), nil
 		}
 	}
 	return 0, 0, assets.ErrInvalidUpload
