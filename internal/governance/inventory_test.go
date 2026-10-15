@@ -83,10 +83,12 @@ func TestDataGovernanceManifest(t *testing.T) {
 		"asset.audit-outbox",
 	}
 	require.Equal(t, ids, manifestDatasetIDs(document))
-	for _, namespace := range []string{"account.avatar", "account.dsr-export", "account.dsr-supplement"} {
-		policy, ok := assets.PolicyFor(namespace)
-		require.Truef(t, ok, "%s policy", namespace)
-		require.Equal(t, "account-api", policy.OwnerService)
+	policy, ok := assets.PolicyFor("account.avatar")
+	require.True(t, ok)
+	require.Equal(t, "account-api", policy.OwnerService)
+	for _, namespace := range []string{"account.dsr-export", "account.dsr-supplement"} {
+		_, ok := assets.PolicyFor(namespace)
+		require.Falsef(t, ok, "%s intake is retired; historical cleanup scope remains", namespace)
 	}
 	upload := manifestDataset(t, document, "asset.account-upload-sessions")
 	require.Equal(t, "expires_at < now", upload["retention"].(map[string]any)["rule"].(map[string]any)["predicate"])

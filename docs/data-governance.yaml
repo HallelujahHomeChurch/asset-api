@@ -449,7 +449,7 @@ datasets:
     cleanup: {mode: none, implementation: [], evidence: []}
   - id: asset.account-artifact-content
     owner: asset-api
-    purpose: Store Account avatar and DSR-export Blob bytes; physically delete them idempotently only after Store.ClaimPurge finds an eligible asset.
+    purpose: Store Account avatar and historical DSR-export/supplement Blob bytes (DSR intake retired); physically delete them idempotently only after Store.ClaimPurge finds an eligible asset.
     necessity: required
     storage:
       kind: blob
@@ -467,14 +467,14 @@ datasets:
             symbol: Service.CreateUploadSession
     data_classes: [identity, content]
     fields:
-      - {name: blob.bytes, purpose: Account avatar or DSR export bytes, necessity: required, data_classes: [content]}
+      - {name: blob.bytes, purpose: Account avatar or historical DSR export/supplement bytes, necessity: required, data_classes: [content]}
     attribution: {mode: direct, explanation: assets.owner_id identifies the Account artifact subject.}
     legal_basis: {status: pending_legal, reference: null}
     retention: {status: pending_legal, rule: null, action: none}
     cleanup: {mode: none, implementation: [], evidence: []}
   - id: asset.account-artifact-metadata
     owner: asset-api
-    purpose: Identify and safely serve Account avatar and DSR-export assets.
+    purpose: Identify Account avatar and historical DSR-export/supplement assets; DSR intake is retired and historical cleanup remains.
     necessity: required
     storage: {kind: postgres, resource: assets, sources: [{path: internal/postgres/store.go, symbol: Store.CreateUpload}]}
     subject_keys: [{kind: user_id, field: assets.owner_id, evidence: [{path: internal/assets/service.go, symbol: Service.CreateUploadSession}]}]

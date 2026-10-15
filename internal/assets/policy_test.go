@@ -21,25 +21,6 @@ func TestAccountAvatarPolicy(t *testing.T) {
 	}
 }
 
-func TestAccountDSRExportPolicy(t *testing.T) {
-	policy, ok := PolicyFor("account.dsr-export")
-	if !ok {
-		t.Fatal("account.dsr-export policy is missing")
-	}
-	if !policy.AllowsMIME("application/zip") {
-		t.Fatal("ZIP MIME type is not allowed")
-	}
-	if policy.MaxSizeBytes != 50<<20 {
-		t.Fatalf("max size = %d", policy.MaxSizeBytes)
-	}
-	if policy.DefaultVisibility != VisibilityPrivate {
-		t.Fatalf("default visibility = %q", policy.DefaultVisibility)
-	}
-	if policy.AllowsVisibility(VisibilityPublic) {
-		t.Fatal("public visibility must not be allowed")
-	}
-}
-
 func TestWeeklyBulletinPolicyIsPermanentlyPrivate(t *testing.T) {
 	policy, ok := PolicyFor("cms.weekly.pdf")
 	if !ok {
@@ -133,12 +114,5 @@ func TestLineGroupMediaSyncPolicy(t *testing.T) {
 		if policy.AllowsMIME(mime) {
 			t.Errorf("MIME %q must be rejected", mime)
 		}
-	}
-}
-
-func TestAccountDSRSupplementPolicy(t *testing.T) {
-	policy, ok := PolicyFor("account.dsr-supplement")
-	if !ok || policy.OwnerService != "account-api" || !policy.AllowsMIME("application/zip") || policy.MaxSizeBytes != 10<<20 || policy.AllowsVisibility(VisibilityPublic) || !policy.AllowsVisibility(VisibilityPrivate) {
-		t.Fatal("missing private bounded supplement policy")
 	}
 }
