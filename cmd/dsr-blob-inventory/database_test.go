@@ -107,6 +107,15 @@ func TestDatabaseInventoryScopeAndReadOnly(t *testing.T) {
 	if _, err := db.Exec(`DROP TABLE unknown_dependency`); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.Exec(`ALTER TABLE asset_grants ADD COLUMN related_asset_id text REFERENCES assets(id); UPDATE asset_grants SET related_asset_id='export' WHERE id='ordinary-grant'`); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot, err := databaseInventory(ctx, db, databaseName); err == nil || snapshot.Complete {
+		t.Fatal("accepted unknown FK mapping on known table")
+	}
+	if _, err := db.Exec(`ALTER TABLE asset_grants DROP COLUMN related_asset_id`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.Exec(`INSERT INTO asset_grants(id,asset_id) SELECT 'overflow-' || n,'export' FROM generate_series(1,10001) n`); err != nil {
 		t.Fatal(err)
 	}
@@ -131,6 +140,15 @@ func TestDatabaseInventoryScopeAndReadOnly(t *testing.T) {
 
 func TestDatabaseTargetFence(t *testing.T) {
 	good := "postgres://asset_runtime:unused@hhc-pg.postgres.database.azure.com:5432/asset?sslmode=require"
+	for _, mode := range []string{"require", "verify-ca", "verify-full"} {
+		config, err := inventoryDatabaseConfig(strings.Replace(good, "sslmode=require", "sslmode="+mode, 1))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if config.TLSConfig.InsecureSkipVerify || config.TLSConfig.ServerName != "hhc-pg.postgres.database.azure.com" {
+			t.Fatalf("unauthenticated TLS for %s", mode)
+		}
+	}
 	db, err := openInventoryDatabase(good)
 	if err != nil {
 		t.Fatal(err)
