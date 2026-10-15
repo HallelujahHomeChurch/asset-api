@@ -7,7 +7,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /asset-api .
  && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /asset-migrate ./cmd/migrate \
  && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /asset-derivative-worker ./cmd/derivative-worker \
  && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /asset-scan-warmer ./cmd/scan-warmer \
- && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /asset-retention-worker ./cmd/retention-worker
+ && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /asset-retention-worker ./cmd/retention-worker \
+ && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /asset-dsr-blob-inventory ./cmd/dsr-blob-inventory
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /asset-api /asset-api
@@ -15,6 +16,7 @@ COPY --from=build /asset-migrate /asset-migrate
 COPY --from=build /asset-derivative-worker /asset-derivative-worker
 COPY --from=build /asset-scan-warmer /asset-scan-warmer
 COPY --from=build /asset-retention-worker /asset-retention-worker
+COPY --from=build /asset-dsr-blob-inventory /asset-dsr-blob-inventory
 EXPOSE 8080
 USER nonroot:nonroot
 ENTRYPOINT ["/asset-api"]
