@@ -883,8 +883,6 @@ func TestCleanupAccountSoftDeletesEveryAccountArtifactAndRevokesGrants(t *testin
 	service := NewService(repo, newMemoryBlobStore(), "https://www.alive.org.tw/api/assets", func() time.Time { return now })
 	repo.assets["avatar-current"] = Asset{ID: "avatar-current", Namespace: "account.avatar", OwnerService: "account-api", OwnerID: "user-1"}
 	repo.assets["avatar-replaced"] = Asset{ID: "avatar-replaced", Namespace: "account.avatar", OwnerService: "account-api", OwnerID: "user-1"}
-	repo.assets["dsr-export"] = Asset{ID: "dsr-export", Namespace: "account.dsr-export", OwnerService: "account-api", OwnerID: "user-1"}
-	repo.assets["dsr-supplement"] = Asset{ID: "dsr-supplement", Namespace: "account.dsr-supplement", OwnerService: "account-api", OwnerID: "user-1"}
 	repo.assets["other-user"] = Asset{ID: "other-user", Namespace: "account.avatar", OwnerService: "account-api", OwnerID: "user-2"}
 	repo.assets["other-owner"] = Asset{ID: "other-owner", Namespace: "cms.news.cover", OwnerService: "hhc-web-api", OwnerID: "user-1"}
 	repo.grants["grant-current"] = Grant{ID: "grant-current", AssetID: "avatar-current"}
@@ -893,10 +891,10 @@ func TestCleanupAccountSoftDeletesEveryAccountArtifactAndRevokesGrants(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Status != AccountCleanupPending || result.AffectedCount != 4 || result.RemainingCount != 4 {
+	if result.Status != AccountCleanupPending || result.AffectedCount != 2 || result.RemainingCount != 2 {
 		t.Fatalf("result=%+v", result)
 	}
-	for _, id := range []string{"avatar-current", "avatar-replaced", "dsr-export", "dsr-supplement"} {
+	for _, id := range []string{"avatar-current", "avatar-replaced"} {
 		if repo.assets[id].DeletedAt != now {
 			t.Fatalf("asset %s deleted_at=%v", id, repo.assets[id].DeletedAt)
 		}
@@ -1517,7 +1515,7 @@ func (r *memoryRepository) SoftDeleteAsset(_ context.Context, assetID, owner str
 func (r *memoryRepository) CleanupAccountAssets(_ context.Context, userID, _ string, now time.Time) (AccountCleanupResult, error) {
 	var affected, remaining int64
 	for id, asset := range r.assets {
-		if asset.OwnerService != "account-api" || asset.OwnerID != userID || (asset.Namespace != "account.avatar" && asset.Namespace != "account.dsr-export" && asset.Namespace != "account.dsr-supplement") {
+		if asset.OwnerService != "account-api" || asset.OwnerID != userID || asset.Namespace != "account.avatar" {
 			continue
 		}
 		affected++

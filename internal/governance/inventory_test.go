@@ -66,7 +66,8 @@ func TestDataGovernanceManifest(t *testing.T) {
 	require.NoError(t, err)
 	document, err := validateManifest("../..", raw, manifestService)
 	require.NoError(t, err)
-	require.Contains(t, string(raw), "account.avatar, account.dsr-export and account.dsr-supplement")
+	require.Contains(t, string(raw), "Only account.avatar uses assets.owner_id as the Account subject.")
+	require.NotContains(t, string(raw), "historical DSR")
 	ids := []string{
 		"asset.recording-broadcast-ranges", "asset.recording-broadcast-authority",
 		"asset.recording-live-cover-attempts", "asset.recording-live-cover-references", "asset.recording-live-covers",
@@ -88,7 +89,7 @@ func TestDataGovernanceManifest(t *testing.T) {
 	require.Equal(t, "account-api", policy.OwnerService)
 	for _, namespace := range []string{"account.dsr-export", "account.dsr-supplement"} {
 		_, ok := assets.PolicyFor(namespace)
-		require.Falsef(t, ok, "%s intake is retired; historical cleanup scope remains", namespace)
+		require.Falsef(t, ok, "%s intake is retired", namespace)
 	}
 	upload := manifestDataset(t, document, "asset.account-upload-sessions")
 	require.Equal(t, "expires_at < now", upload["retention"].(map[string]any)["rule"].(map[string]any)["predicate"])
