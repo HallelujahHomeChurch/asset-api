@@ -2129,31 +2129,34 @@ func TestAccountCleanupWaitsForPurgeThenDeidentifiesSubjectMetadata(t *testing.T
 	store := New(db)
 	ctx := context.Background()
 	now := time.Date(2026, 9, 23, 13, 30, 0, 0, time.UTC)
-	for _, id := range []string{"account-avatar", "account-export", "account-supplement"} {
-		insertAsset(t, db, id, assets.UploadCompleted, assets.ScanClean, assets.ProcessingNotRequired, now, time.Time{})
-	}
+	insertAsset(t, db, "account-avatar", assets.UploadCompleted, assets.ScanClean, assets.ProcessingNotRequired, now, time.Time{})
 	if _, err := db.Exec(`UPDATE assets SET namespace='account.avatar',owner_service='account-api',owner_type='user',owner_id='user-1',original_file_name='person.jpg' WHERE id='account-avatar'`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`UPDATE assets SET namespace='account.dsr-export',owner_service='account-api',owner_type='dsr_export',owner_id='user-1',original_file_name='export.zip' WHERE id='account-export'`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`UPDATE assets SET namespace='account.dsr-supplement',owner_service='account-api',owner_type='dsr_supplement',owner_id='user-1',original_file_name='supplement.zip' WHERE id='account-supplement'`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO asset_grants(id,asset_id,subject_type,subject_id,permission,idempotency_key,created_at) VALUES('account-grant','account-avatar','public','*','read','account-grant',$1)`, now); err != nil {
 		t.Fatal(err)
 	}
 
+	for _, fixture := range []struct{ id, namespace, service, owner string }{
+		{"other-owner", "account.avatar", "account-api", "user-2"},
+		{"other-service", "account.avatar", "other-service", "user-1"},
+		{"other-namespace", "cms.home.banner", "account-api", "user-1"},
+	} {
+		insertAsset(t, db, fixture.id, assets.UploadCompleted, assets.ScanClean, assets.ProcessingNotRequired, now, time.Time{})
+		if _, err := db.Exec(`UPDATE assets SET namespace=$2,owner_service=$3,owner_id=$4 WHERE id=$1`, fixture.id, fixture.namespace, fixture.service, fixture.owner); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	result, err := store.CleanupAccountAssets(ctx, "user-1", "delete-1", now)
-	if err != nil || result.Status != assets.AccountCleanupPending || result.AffectedCount != 3 || result.RemainingCount != 3 {
+	if err != nil || result.Status != assets.AccountCleanupPending || result.AffectedCount != 1 || result.RemainingCount != 1 {
 		t.Fatalf("pending result=%+v err=%v", result, err)
 	}
 	var liveAssets, liveGrants int
-	if err := db.QueryRow(`SELECT count(*) FROM assets WHERE owner_id='user-1' AND deleted_at IS NULL`).Scan(&liveAssets); err != nil {
+	if err := db.QueryRow(`SELECT count(*) FROM assets WHERE id='account-avatar' AND deleted_at IS NULL`).Scan(&liveAssets); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.QueryRow(`SELECT count(*) FROM asset_grants WHERE asset_id IN ('account-avatar','account-export','account-supplement') AND revoked_at IS NULL`).Scan(&liveGrants); err != nil {
+	if err := db.QueryRow(`SELECT count(*) FROM asset_grants WHERE asset_id='account-avatar' AND revoked_at IS NULL`).Scan(&liveGrants); err != nil {
 		t.Fatal(err)
 	}
 	if liveAssets != 0 || liveGrants != 0 {
@@ -2163,22 +2166,23 @@ func TestAccountCleanupWaitsForPurgeThenDeidentifiesSubjectMetadata(t *testing.T
 	if err := store.CompletePurge(ctx, "account-avatar", now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.CompletePurge(ctx, "account-export", now.Add(time.Minute)); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.CompletePurge(ctx, "account-supplement", now.Add(time.Minute)); err != nil {
-		t.Fatal(err)
-	}
 	result, err = store.CleanupAccountAssets(ctx, "user-1", "delete-1", now.Add(2*time.Minute))
-	if err != nil || result.Status != assets.AccountCleanupCompleted || result.AffectedCount != 3 || result.RemainingCount != 0 {
+	if err != nil || result.Status != assets.AccountCleanupCompleted || result.AffectedCount != 1 || result.RemainingCount != 0 {
 		t.Fatalf("completed result=%+v err=%v", result, err)
 	}
 	var attributed, named int
-	if err := db.QueryRow(`SELECT count(*) FILTER (WHERE owner_id='user-1'),count(*) FILTER (WHERE original_file_name<>'') FROM assets WHERE id IN ('account-avatar','account-export','account-supplement')`).Scan(&attributed, &named); err != nil {
+	if err := db.QueryRow(`SELECT count(*) FILTER (WHERE owner_id='user-1'),count(*) FILTER (WHERE original_file_name<>'') FROM assets WHERE id='account-avatar'`).Scan(&attributed, &named); err != nil {
 		t.Fatal(err)
 	}
 	if attributed != 0 || named != 0 {
 		t.Fatalf("attributed=%d named=%d", attributed, named)
+	}
+	var untouched int
+	if err := db.QueryRow(`SELECT count(*) FROM assets WHERE id IN ('other-owner','other-service','other-namespace') AND deleted_at IS NULL AND purged_at IS NULL AND owner_id NOT LIKE 'erased:%'`).Scan(&untouched); err != nil {
+		t.Fatal(err)
+	}
+	if untouched != 3 {
+		t.Fatalf("untouched ordinary assets=%d", untouched)
 	}
 	if _, err := store.CleanupAccountAssets(ctx, "user-2", "delete-1", now); !errors.Is(err, assets.ErrConflict) {
 		t.Fatalf("idempotency collision error=%v", err)

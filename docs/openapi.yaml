@@ -670,7 +670,7 @@ paths:
       operationId: cleanupAccountAssets
       summary: Delete every Account-owned asset attributed to one Account user
       tags: [Private]
-      description: Idempotently revokes grants and soft-deletes account.avatar and account.dsr-export assets. Returns pending until the existing lifecycle worker has removed Blob bytes and deidentified subject metadata.
+      description: Idempotently revokes grants and soft-deletes account.avatar assets. Returns pending until the existing lifecycle worker has removed Blob bytes and deidentified subject metadata.
       x-hhc-visibility: private
       x-hhc-callers: [account-api]
       security: [ { daprCaller: [] } ]
