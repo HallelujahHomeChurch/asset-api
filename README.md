@@ -192,29 +192,6 @@ PostgreSQL-leased worker removes expired staging uploads, deleted assets,
 derivatives, and retained terminal scan failures. Blob deletion is idempotent
 and retried independently of the database transaction.
 
-### Temporary DSR reconciliation inventory
-
-The image temporarily includes `/asset-dsr-blob-inventory` for the approved A4
-operator diagnostic, using resident `DATABASE_URL`, `ASSET_AZURE_ACCOUNT_URL`,
-`ASSET_AZURE_CONTAINER` and `DefaultAzureCredential`. It accepts no arguments and
-requires the exact production Asset database and Blob target. It starts no API,
-migrations or workers. Its read-only repeatable-read database snapshot projects
-only Account's two DSR namespaces and dependency metadata; Blob enumeration
-includes deleted objects, versions, snapshots and uncommitted blobs under exactly
-`assets/account.dsr-export/` and `assets/account.dsr-supplement/`.
-
-The combined inventory is bounded to 10,000 records, a 4 MiB JSON payload and two
-minutes. Nullable Blob properties remain null, including properties unavailable
-for uncommitted/version-only entries. `complete` proves both enumerations ended;
-the database and Blob observations are not an atomic cross-provider snapshot.
-Capture the private operator exec stream directly into a local mode-0600 file;
-do not send it to application logs. Accept only the three-line
-`HHC_DSR_BLOB_INVENTORY_V1`, JSON, `HHC_DSR_BLOB_INVENTORY_COMPLETE` frame after
-verifying the trailing SHA-256 and byte count against the exact JSON line.
-Any command failure, missing frame or digest mismatch invalidates the inventory.
-Remove this command and its Dockerfile entries after A5 reconciliation/cleanup
-acceptance; it is not a permanent operational API.
-
 ## Azure deployment
 
 `infra/main.bicep` provisions the internal Dapr-enabled Container App, migration
