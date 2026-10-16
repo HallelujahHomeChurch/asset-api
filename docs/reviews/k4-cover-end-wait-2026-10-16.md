@@ -1,0 +1,9 @@
+# K4 cover dependency recovery
+
+The preserved direct recording `89cf022d-e80e-479f-9bbe-d8590771cc59` / capture `32264350a74315406f3d119a72023cce` reached media-ready while its public End boundary was missing. CMS #228 now naturally supplies [0,10). Authenticated Admin cover discovery shows the ordinary auto cover `ce9d53c03737e84af2b8369acba2a434` and promoted live-auto cover `40d710ca35646d68c18bd54684693113` failed. Worker logs show six conflict exits during 01:51–02:03 UTC, while the range was open. No per-cover attempt IDs were logged, so those individual log lines are corroboration, not exact per-cover attribution.
+
+The PostgreSQL regression reproduces Claim accepting both types with an open range. RunCoverProcessing immediately calls Timeline, which rejects it and spends an attempt. Claims now wait for a matching, nonrevoked, closed and fully published range. Live preview covers, custom images, ordinary uploads and worker-side validation stay unchanged.
+
+Migration 042 is an exact, one-time repair for the two IDs above only. It requires the original capture/recording, expected kind, failed state, exactly three attempts, empty output/no claim, ready unexpired package/cover, nonterminal ready capture, matching [0,10) and fully published timeline, no deletion. It changes only state to pending, attempts to zero and next-attempt time. It preserves history, references, bytes, boundaries and CMS publication. Any drift outside these predicates is a no-op. It does not requeue unrelated failures.
+
+Local tests cover waiting without spending attempts, claim after readiness, custom preservation, exact recovery fences and ledger replay. Release uses the normal reviewed migration/API/recording-worker workflow; no ad hoc production SQL or manual publication. Observe the original recording naturally selecting its promoted cover and publishing afterward. Keep both Windows diagnostic recordings intact.
