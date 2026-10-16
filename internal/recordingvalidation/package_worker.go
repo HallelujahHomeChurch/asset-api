@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"sync"
 	"time"
 
 	"hhc/asset-api/internal/assets"
@@ -24,17 +23,13 @@ func RunPackageValidation(ctx context.Context, repository *postgres.RecordingPac
 	logger.Info("recording_package_claim", "objects_total", len(claim.Package.Inventory.Objects), "bytes_total", claim.Package.SizeBytes)
 	defer func() { logPackageResult(logger, "recording_package_claim_exit", started, result) }()
 	progress := NewProcessingProgressTracker(*claim.Package.ProcessingProgress)
-	var timingMu sync.Mutex
-	stageTimes := map[string]time.Duration{}
-	probe.OnStage = func(stage string, elapsed time.Duration) {
-		timingMu.Lock()
-		defer timingMu.Unlock()
-		stageTimes[stage] += elapsed
-	}
+	timing := NewAttemptTiming("package_validation")
+	probe.OnStage = timing.Stage
 	var lastLog time.Time
 	var lastPhase, lastRendition string
 	probe.OnProgress = func(value assets.RecordingProcessingProgress) {
 		progress.Report(value)
+		timing.Phase(value.Phase)
 		if time.Since(lastLog) < 30*time.Second && value.Phase == lastPhase && value.Rendition == lastRendition {
 			return
 		}
@@ -42,6 +37,9 @@ func RunPackageValidation(ctx context.Context, repository *postgres.RecordingPac
 		logPackageProgress(logger, started, value)
 	}
 	flush := func(ctx context.Context) error {
+		defer timing.Flush(ctx, func(ctx context.Context, value assets.RecordingAttemptDiagnostics) error {
+			return repository.UpdatePackageAttemptDiagnostics(ctx, claim.Package.ID, claim.ClaimID, value)
+		})
 		return progress.Flush(ctx, time.Now().UTC(), func(ctx context.Context, value assets.RecordingProcessingProgress) error {
 			return packageStageError("progress_flush", repository.UpdatePackageProcessingProgress(ctx, claim.Package.ID, claim.ClaimID, value))
 		})
@@ -53,10 +51,11 @@ func RunPackageValidation(ctx context.Context, repository *postgres.RecordingPac
 	}, func(ctx context.Context) error {
 		logger.Info("recording_package_validation_start")
 		_, err := FreezeRecordingPackage(ctx, claim.Package, claim.ClaimID, objects, probe)
+		timing.Finish(err)
 		logPackageResult(logger, "recording_package_validation_result", started, err)
 		// Worker durations overlap; totals attribute work, not wall-clock latency.
 		for _, stage := range []string{"freeze_hash", "probe", "decode"} {
-			logger.Info("recording_package_stage_totals", "stage", stage, "worker_elapsed_ms", stageTimes[stage].Milliseconds())
+			logger.Info("recording_package_stage_totals", "stage", stage, "worker_elapsed_ms", timing.Snapshot().Stages[stage].ElapsedMS)
 		}
 		return err
 	}, func(ctx context.Context, ready bool, failure string) error {

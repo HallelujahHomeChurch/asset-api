@@ -120,10 +120,10 @@ func (p PackageMediaProbe) validateLiveRendition(ctx context.Context, pack asset
 	path := filepath.Join(dir, r.Name+".mp4")
 	freezeStarted := time.Now()
 	err = writePackageScratch(path, func(w io.Writer) error {
-		if err := freezePackageObject(ctx, pack, prefix, init, p.Objects, w); err != nil {
+		if err := freezePackageObject(ctx, pack, prefix, init, p.Objects, w, p.OnStage); err != nil {
 			return err
 		}
-		return freezePackageObject(ctx, pack, prefix, segment, p.Objects, w)
+		return freezePackageObject(ctx, pack, prefix, segment, p.Objects, w, p.OnStage)
 	})
 	freezeTime = time.Since(freezeStarted)
 	if err != nil {

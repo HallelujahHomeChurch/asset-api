@@ -24,24 +24,31 @@ func RunSourceProcessing(ctx context.Context, repository *postgres.RecordingSour
 	var inventory assets.RecordingPackageInventory
 	var processingErr error
 	progress := recordingvalidation.NewProcessingProgressTracker(*claim.Source.ProcessingProgress)
-	probe.OnProgress = progress.Report
+	timing := recordingvalidation.NewAttemptTiming("source_finalization")
+	probe.OnStage = timing.Stage
+	probe.OnProgress = func(value assets.RecordingProcessingProgress) { progress.Report(value); timing.Phase(value.Phase) }
 	flush := func(ctx context.Context) error {
+		defer timing.Flush(ctx, func(ctx context.Context, value assets.RecordingAttemptDiagnostics) error {
+			return repository.UpdateSourceAttemptDiagnostics(ctx, claim.Source.ID, claim.ClaimID, value)
+		})
 		return progress.Flush(ctx, time.Now().UTC(), func(ctx context.Context, value assets.RecordingProcessingProgress) error {
 			return repository.UpdateSourceProcessingProgress(ctx, claim.Source.ID, claim.ClaimID, value)
 		})
 	}
 	return true, recordingvalidation.RunProcessingClaim(ctx, func(ctx context.Context) error {
-		if err := flush(ctx); err != nil {
+		if err := repository.HeartbeatSourceProcessing(ctx, claim.Source.ID, claim.ClaimID); err != nil {
 			return err
 		}
-		return repository.HeartbeatSourceProcessing(ctx, claim.Source.ID, claim.ClaimID)
+		return flush(ctx)
 	}, func(ctx context.Context) error {
 		inventory, processingErr = processSourceClaim(ctx, claim, func(ctx context.Context, copy assets.RecordingSourceCopy) error {
 			return repository.CheckpointSourceCopy(ctx, claim.Source.ID, claim.ClaimID, copy)
 		}, sources, outputs, probe, func(phase string) error {
 			progress.Phase(phase, time.Now().UTC())
+			timing.Phase(phase)
 			return flush(ctx)
 		})
+		timing.Finish(processingErr)
 		return processingErr
 	}, func(ctx context.Context, ready bool, failure string) error {
 		if err := flush(ctx); err != nil {

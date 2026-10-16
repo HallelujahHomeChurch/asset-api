@@ -31,7 +31,14 @@ type PackageObjects interface {
 // Only playlists are held in memory, never the complete package or source.
 func FreezeRecordingPackage(ctx context.Context, p assets.RecordingPackage, attempt string, objects PackageObjects, probe PackageMediaProbe) (prefix string, result error) {
 	stage := "inventory"
-	defer func() { result = packageStageError(stage, result) }()
+	stageStarted := time.Now()
+	reportStage := func() {
+		if probe.OnStage != nil {
+			probe.OnStage(stage, time.Since(stageStarted))
+		}
+	}
+	nextStage := func(next string) { reportStage(); stage, stageStarted = next, time.Now() }
+	defer func() { reportStage(); result = packageStageError(stage, result) }()
 	if !packageIDPattern.MatchString(p.ID) || !packageIDPattern.MatchString(attempt) || objects == nil || !filepath.IsAbs(probe.FFmpeg) || !filepath.IsAbs(probe.FFprobe) || p.Inventory.InventoryDigest == "" {
 		return "", assets.ErrInvalidInput
 	}
@@ -50,9 +57,9 @@ func FreezeRecordingPackage(ctx context.Context, p assets.RecordingPackage, atte
 				probe.OnStage("freeze_hash", time.Since(started))
 			}
 		}()
-		return freezePackageObject(ctx, p, prefix, object, objects, destination)
+		return freezePackageObject(ctx, p, prefix, object, objects, destination, probe.OnStage)
 	}
-	stage = "playlists"
+	nextStage("playlists")
 	playlists := map[string][]byte{}
 	inventoryObjects := make(map[string]assets.RecordingPackageObject, len(p.Inventory.Objects))
 	for _, object := range p.Inventory.Objects {
@@ -75,14 +82,14 @@ func FreezeRecordingPackage(ctx context.Context, p assets.RecordingPackage, atte
 		}
 		return freezeObject(ctx, object, w)
 	}
-	stage = "media"
+	nextStage("media")
 	if err := probe.validateMedia(ctx, p.Inventory, playlists["master.m3u8"], freeze, freeze); err != nil {
 		return "", err
 	}
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	stage = "inventory_write"
+	nextStage("inventory_write")
 	inventory, err := json.Marshal(p.Inventory)
 	if err != nil {
 		return "", err
@@ -95,9 +102,16 @@ func FreezeRecordingPackage(ctx context.Context, p assets.RecordingPackage, atte
 
 // The final stream is hashed while writing its owned scratch destination.
 // Init bytes prepended by the caller are never included in the fragment hash.
-func freezePackageObject(ctx context.Context, p assets.RecordingPackage, prefix string, object assets.RecordingPackageObject, objects PackageObjects, destination io.Writer) (result error) {
+func freezePackageObject(ctx context.Context, p assets.RecordingPackage, prefix string, object assets.RecordingPackageObject, objects PackageObjects, destination io.Writer, onStage func(string, time.Duration)) (result error) {
 	stage := "object_head_staging"
-	defer func() { result = packageStageError(stage, result) }()
+	timingStage, started := stage, time.Now()
+	reportStage := func() {
+		if onStage != nil {
+			onStage(timingStage, time.Since(started))
+		}
+	}
+	nextTimingStage := func(next string) { reportStage(); timingStage, started = next, time.Now() }
+	defer func() { reportStage(); result = packageStageError(stage, result) }()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -112,10 +126,12 @@ func freezePackageObject(ctx context.Context, p assets.RecordingPackage, prefix 
 		return assets.ErrInvalidUpload
 	}
 	key := prefix + object.Path
+	nextTimingStage("object_copy")
 	stage = "object_copy"
 	if err := objects.CopyPackageObject(ctx, p.StagingKey(object.Path), key, etag); err != nil {
 		return err
 	}
+	nextTimingStage("object_head_final")
 	stage = "object_head_final"
 	size, _, err = objects.Head(ctx, key)
 	if err != nil {
@@ -124,6 +140,7 @@ func freezePackageObject(ctx context.Context, p assets.RecordingPackage, prefix 
 	if size != object.SizeBytes {
 		return assets.ErrInvalidUpload
 	}
+	nextTimingStage("object_download_hash")
 	stage = "object_open"
 	body, err := objects.Open(ctx, key)
 	if err != nil {

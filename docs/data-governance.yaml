@@ -354,6 +354,7 @@ datasets:
       - {name: recording_source_attempts.state, purpose: Distinguish active and abandoned output, necessity: required, data_classes: [activity]}
       - {name: recording_source_attempts.created_at, purpose: Order processing attempts, necessity: required, data_classes: [activity]}
       - {name: recording_source_attempts.finished_at, purpose: Anchor stale-worker cleanup grace, necessity: required, data_classes: [activity]}
+      - {name: recording_source_attempts.diagnostics, purpose: Preserve bounded stage timing and sanitized failure categories per processing attempt, necessity: required, data_classes: [activity]}
     attribution: {mode: manual, explanation: The source carries uploader provenance; attempts do not identify recorded participants.}
     legal_basis: {status: pending_legal, reference: null}
     retention: {status: pending_legal, rule: null, action: none}
@@ -429,6 +430,7 @@ datasets:
       - {name: recording_package_attempts.state, purpose: Distinguish active and abandoned byte prefixes, necessity: required, data_classes: [activity]}
       - {name: recording_package_attempts.created_at, purpose: Schedule orphan cleanup, necessity: required, data_classes: [activity]}
       - {name: recording_package_attempts.finished_at, purpose: Record attempt completion or abandonment, necessity: required, data_classes: [activity]}
+      - {name: recording_package_attempts.diagnostics, purpose: Preserve bounded stage timing and sanitized failure categories per processing attempt, necessity: required, data_classes: [activity]}
     attribution: {mode: manual, explanation: The package carries upstream actor provenance; attempts do not identify video participants.}
     legal_basis: {status: pending_legal, reference: null}
     retention: {status: pending_legal, rule: null, action: none}

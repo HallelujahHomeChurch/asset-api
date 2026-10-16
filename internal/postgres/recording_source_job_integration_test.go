@@ -57,6 +57,10 @@ func TestSourceJobsShareGlobalSlotsAndFenceStaleWorkers(t *testing.T) {
 	if err := store.HeartbeatSourceProcessing(ctx, first.Source.ID, first.ClaimID); err != nil {
 		t.Fatal(err)
 	}
+	timing := assets.RecordingAttemptDiagnostics{ObservedAt: time.Now().UTC(), ElapsedMS: 123, Stages: map[string]assets.RecordingStageTiming{"decode": {ElapsedMS: 100, Calls: 2}}}
+	if err := store.UpdateSourceAttemptDiagnostics(ctx, first.Source.ID, first.ClaimID, timing); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.ExecContext(ctx, `UPDATE recording_processing_slots SET leased_until=clock_timestamp()-interval '1 second' WHERE claim_id=$1`, first.ClaimID); err != nil {
 		t.Fatal(err)
 	}
@@ -70,6 +74,17 @@ func TestSourceJobsShareGlobalSlotsAndFenceStaleWorkers(t *testing.T) {
 	copy := assets.RecordingSourceCopy{Key: "recording-sources/" + first.Source.ID + "/final/" + first.ClaimID + "/source", State: "success", SizeBytes: 5, ETag: "verified-etag"}
 	if err := store.CheckpointSourceCopy(ctx, first.Source.ID, first.ClaimID, copy); !errors.Is(err, assets.ErrConflict) {
 		t.Fatalf("stale checkpoint: %v", err)
+	}
+	if err := store.UpdateSourceAttemptDiagnostics(ctx, first.Source.ID, first.ClaimID, timing); !errors.Is(err, assets.ErrConflict) {
+		t.Fatalf("stale timing: %v", err)
+	}
+	timing.ElapsedMS = 456
+	if err := store.UpdateSourceAttemptDiagnostics(ctx, reclaimed.Source.ID, reclaimed.ClaimID, timing); err != nil {
+		t.Fatal(err)
+	}
+	var previous int
+	if err := db.QueryRowContext(ctx, `SELECT (diagnostics->>'elapsedMs')::int FROM recording_source_attempts WHERE claim_id=$1`, first.ClaimID).Scan(&previous); err != nil || previous != 123 {
+		t.Fatalf("previous attempt overwritten: %d %v", previous, err)
 	}
 	if err := store.HeartbeatSourceProcessing(ctx, first.Source.ID, first.ClaimID); !errors.Is(err, assets.ErrConflict) {
 		t.Fatalf("stale heartbeat: %v", err)
