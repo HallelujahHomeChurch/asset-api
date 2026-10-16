@@ -146,6 +146,10 @@ func TestPackageJobsGlobalSlotsAndStaleClaimFencing(t *testing.T) {
 	if err := store.HeartbeatPackageValidation(ctx, a.Package.ID, a.ClaimID); err != nil {
 		t.Fatal(err)
 	}
+	timing := assets.RecordingAttemptDiagnostics{ObservedAt: time.Now().UTC(), ElapsedMS: 123, Stages: map[string]assets.RecordingStageTiming{"decode": {ElapsedMS: 100, Calls: 2}}}
+	if err := store.UpdatePackageAttemptDiagnostics(ctx, a.Package.ID, a.ClaimID, timing); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.ExecContext(ctx, `UPDATE recording_packages SET claimed_until=now()-interval '1 minute' WHERE id=$1`, a.Package.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -158,6 +162,17 @@ func TestPackageJobsGlobalSlotsAndStaleClaimFencing(t *testing.T) {
 	}
 	if c.Package.ID != a.Package.ID || c.ClaimID == a.ClaimID || c.Attempts != 2 {
 		t.Fatalf("reclaim: %+v", c)
+	}
+	if err := store.UpdatePackageAttemptDiagnostics(ctx, a.Package.ID, a.ClaimID, timing); !errors.Is(err, assets.ErrConflict) {
+		t.Fatalf("stale timing: %v", err)
+	}
+	timing.ElapsedMS = 456
+	if err := store.UpdatePackageAttemptDiagnostics(ctx, c.Package.ID, c.ClaimID, timing); err != nil {
+		t.Fatal(err)
+	}
+	var previous int
+	if err := db.QueryRowContext(ctx, `SELECT (diagnostics->>'elapsedMs')::int FROM recording_package_attempts WHERE claim_id=$1`, a.ClaimID).Scan(&previous); err != nil || previous != 123 {
+		t.Fatalf("previous attempt overwritten: %d %v", previous, err)
 	}
 	if err := store.HeartbeatPackageValidation(ctx, a.Package.ID, a.ClaimID); !errors.Is(err, assets.ErrConflict) {
 		t.Fatalf("stale heartbeat: %v", err)

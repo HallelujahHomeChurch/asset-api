@@ -127,6 +127,16 @@ func TestPackagePipelineSingleReadAndBound(t *testing.T) {
 	if stageCalls["freeze_hash"] != len(p.Inventory.Objects) || stageCalls["probe"] != 2 || stageCalls["decode"] != 2 {
 		t.Fatalf("missing bounded stage timing: %v", stageCalls)
 	}
+	for _, stage := range []string{"object_head_staging", "object_copy", "object_head_final", "object_download_hash"} {
+		if stageCalls[stage] != len(p.Inventory.Objects) {
+			t.Fatalf("missing %s timing: %v", stage, stageCalls)
+		}
+	}
+	for _, stage := range []string{"inventory", "playlists", "inventory_write"} {
+		if stageCalls[stage] != 1 {
+			t.Fatalf("missing %s timing: %v", stage, stageCalls)
+		}
+	}
 	var objectBytes int64
 	for _, object := range p.Inventory.Objects {
 		objectBytes += object.SizeBytes

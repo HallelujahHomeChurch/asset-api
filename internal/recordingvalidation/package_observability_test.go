@@ -60,7 +60,15 @@ func TestPackageObjectFailureStageAndRedaction(t *testing.T) {
 				cause = assets.ErrInvalidUpload
 			}
 			objects := &diagnosticFailingObjects{PackageObjects: store, stage: stage, err: cause}
-			err := freezePackageObject(context.Background(), p, "private-final/", object, objects, io.Discard)
+			timing := NewAttemptTiming("package_validation")
+			err := freezePackageObject(context.Background(), p, "private-final/", object, objects, io.Discard, timing.Stage)
+			measuredStage := stage
+			if stage == "object_open" || stage == "object_read" || stage == "object_hash" {
+				measuredStage = "object_download_hash"
+			}
+			if timing.Snapshot().Stages[measuredStage].Calls != 1 {
+				t.Fatal("failed stage duration missing")
+			}
 			var diagnostic *packageValidationError
 			if !errors.As(err, &diagnostic) || diagnostic.stage != stage || !errors.Is(err, cause) {
 				t.Fatalf("stage or cause lost: %v", err)

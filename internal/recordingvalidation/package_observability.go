@@ -38,7 +38,7 @@ func processingFailure(err error) string {
 	return "retry"
 }
 
-func logPackageResult(logger *slog.Logger, event string, started time.Time, err error) {
+func packageFailureDiagnostic(err error) (string, string) {
 	stage, reason := "none", "none"
 	if err != nil {
 		stage, reason = "unknown", "transient"
@@ -55,6 +55,11 @@ func logPackageResult(logger *slog.Logger, event string, started time.Time, err 
 			reason = "invalid"
 		}
 	}
+	return stage, reason
+}
+
+func logPackageResult(logger *slog.Logger, event string, started time.Time, err error) {
+	stage, reason := packageFailureDiagnostic(err)
 	logger.Info(event, "elapsed_ms", time.Since(started).Milliseconds(), "stage", stage, "reason", reason, "failed", err != nil)
 }
 
