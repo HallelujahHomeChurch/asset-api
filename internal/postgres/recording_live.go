@@ -274,3 +274,11 @@ func (s *RecordingCaptureStore) CommitLiveEnd(ctx context.Context, claim Recordi
 	})
 	return result, err
 }
+
+// An incomplete input is not a failed claim. Do not keep workers awake for
+// ended, expired, terminal, or currently claimed inputs.
+func (s *RecordingCaptureStore) LiveInputPending(ctx context.Context) (bool, error) {
+	var pending bool
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM recording_captures c JOIN recording_live l ON l.capture_id=c.id WHERE c.state IN ('uploading','freezing','validating','ready') AND c.terminal_at IS NULL AND NOT (`+capturePackageTerminal+`) AND c.expires_at>clock_timestamp() AND GREATEST(c.created_at,l.last_advanced_at)>clock_timestamp()-interval '2 minutes' AND NOT l.ended AND l.next_attempt_at<=clock_timestamp() AND (l.claimed_until IS NULL OR l.claimed_until<=clock_timestamp()))`).Scan(&pending)
+	return pending, err
+}

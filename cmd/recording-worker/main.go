@@ -77,16 +77,14 @@ func run(ctx context.Context) error {
 		// A bounded batch loop drains live backlog within the existing Job and
 		// shared two-slot budget. Scheduled executions continue normal work.
 		liveStore := postgres.NewRecordingCaptureStore(db)
-		liveDeadline := time.Now().Add(50 * time.Second)
-		for time.Now().Before(liveDeadline) {
-			processed, liveErr := recordingvalidation.RunLiveValidation(ctx, liveStore, objects, probe)
-			if liveErr != nil {
-				return errors.Join(cleanupErr, liveErr)
-			}
-			if !processed {
-				break
-			}
+		if err := drainLiveValidation(ctx, time.Now().Add(50*time.Second), 5*time.Second,
+			func(ctx context.Context) (bool, error) {
+				return recordingvalidation.RunLiveValidation(ctx, liveStore, objects, probe)
+			},
+			liveStore.LiveInputPending); err != nil {
+			return err
 		}
+
 		cleanupErr = errors.Join(packages.ReconcilePackages(ctx, objects.DeletePackageObjects), liveStore.ReconcileCaptures(ctx, objects.DeletePackageObjects), liveStore.ReconcileLive(ctx, objects.DeletePackageObjects))
 		liveCovers := postgres.NewRecordingLiveCoverStore(db)
 		cleanupErr = errors.Join(cleanupErr, liveCovers.Reconcile(ctx, objects.DeleteCoverObjects))
@@ -121,6 +119,38 @@ func run(ctx context.Context) error {
 		}
 		validationErr := recordingvalidation.RunPackageValidation(ctx, packages, objects, probe)
 		return errors.Join(validationErr, cleanupErr)
+	}
+	return nil
+}
+
+// Keep a scheduled execution available while a live input is assembling its
+// next complete segment; idle sites still exit immediately.
+func drainLiveValidation(ctx context.Context, deadline time.Time, interval time.Duration, run func(context.Context) (bool, error), pending func(context.Context) (bool, error)) error {
+	for time.Now().Before(deadline) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		processed, err := run(ctx)
+		if err != nil {
+			return err
+		}
+		if processed {
+			continue
+		}
+		active, err := pending(ctx)
+		if err != nil {
+			return err
+		}
+		if !active {
+			return nil
+		}
+		timer := time.NewTimer(min(interval, time.Until(deadline)))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
 	}
 	return nil
 }
