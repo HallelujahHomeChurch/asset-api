@@ -1535,6 +1535,49 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/RecordingCaptureCreateInput'
+  /priv/recording-captures/{captureId}/broadcast-signal:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [closeIfIdle]
+              additionalProperties: false
+              properties:
+                closeIfIdle: {type: boolean, description: False after CMS Stop; recover an existing cutoff without creating a new one.}
+      operationId: reconcileRecordingBroadcastSignal
+      summary: Reconcile a direct broadcast signal deadline
+      description: CMS calls only for a public direct stream. Atomically freezes the contiguous confirmed three-rendition end after 60 seconds without a new segment following the expected next segment time. Does not validate, stop, seal, release input or publish. Duplicate confirms do not renew the clock. Late uploads remain accepted for the original capture.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      x-hhc-cache: private, no-store
+      security: [{daprCaller: []}]
+      parameters:
+        - $ref: '#/components/parameters/RecordingActorID'
+        - name: captureId
+          in: path
+          required: true
+          schema: {type: string, pattern: '^[a-f0-9]{32}$'}
+      responses:
+        '200':
+          description: Current receipt clock and immutable cutoff, if elapsed.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [state, lastMediaConfirmedAt, deadline, endSequenceExclusive]
+                properties:
+                  state: {type: string, enum: [waiting, healthy, interrupted, ended]}
+                  lastMediaConfirmedAt: {type: [string, 'null'], format: date-time}
+                  deadline: {type: [string, 'null'], format: date-time}
+                  endSequenceExclusive: {type: [integer, 'null'], minimum: 1, maximum: 4320}
+        '403': {description: Caller or owner is not authorized.}
+        '404': {description: Capture does not exist.}
+        '409': {description: Capture is not a broadcast.}
+        '503': {description: Dependency unavailable; retain state and retry with backoff.}
   /priv/recording-captures/{captureId}:
     get:
       operationId: getRecordingCapture

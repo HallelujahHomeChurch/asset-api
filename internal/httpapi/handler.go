@@ -133,6 +133,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.Handle("GET /priv/recording-captures/{captureID}", h.captureInternal(h.getRecordingCapture))
 	mux.Handle("POST /priv/recording-captures/{captureID}/objects", h.captureInternal(h.declareRecordingCapture))
 	mux.Handle("POST /priv/recording-captures/{captureID}/sign", h.captureInternal(h.signRecordingCapture))
+	mux.Handle("POST /priv/recording-captures/{captureID}/broadcast-signal", h.captureInternal(h.recordingBroadcastSignal))
 	mux.Handle("POST /priv/recording-captures/{captureID}/confirm", h.captureInternal(h.confirmRecordingCapture))
 	mux.Handle("POST /priv/recording-captures/{captureID}/seal", h.captureInternal(h.sealRecordingCapture))
 	mux.Handle("POST /priv/recording-captures/{captureID}/abort", h.captureInternal(h.abortRecordingCapture))

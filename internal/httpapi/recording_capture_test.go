@@ -70,7 +70,7 @@ func (admissionObjects) ListPackageObjects(context.Context, string, int) (map[st
 
 func TestCaptureRoutesFailClosed(t *testing.T) {
 	h := New(nil, nil, map[string]bool{"hhc-web-api": true, "account-api": true}, true, "", WorkloadAuthConfig{}, nil).Routes()
-	for _, route := range []string{"", "/capture-a", "/capture-a/objects", "/capture-a/sign", "/capture-a/confirm", "/capture-a/seal", "/capture-a/abort", "/capture-a/progress", "/capture-a/grant"} {
+	for _, route := range []string{"", "/capture-a", "/capture-a/objects", "/capture-a/sign", "/capture-a/confirm", "/capture-a/broadcast-signal", "/capture-a/seal", "/capture-a/abort", "/capture-a/progress", "/capture-a/grant"} {
 		for _, caller := range []string{"hhc-web-api", "account-api"} {
 			method := "POST"
 			if route == "/capture-a" || route == "/capture-a/progress" {
@@ -202,6 +202,27 @@ func TestCaptureLiveProgressRequiresUploaderAndReportsPublishedWaterline(t *test
 		}
 		if want == 200 && (!strings.Contains(w.Body.String(), `"lastSequence":2`) || w.Header().Get("Cache-Control") != "private, no-store") {
 			t.Fatal(w.Body.String())
+		}
+	}
+}
+
+func TestBroadcastSignalRequiresExplicitClosePolicyAndOwner(t *testing.T) {
+	now := time.Now()
+	id := strings.Repeat("a", 32)
+	actor := "22222222-2222-4222-8222-222222222222"
+	repo := &httpCaptureRepo{c: assets.RecordingCapture{ID: id, ActorID: actor, BroadcastEpoch: 1, State: "uploading", ExpiresAt: now.Add(time.Hour)}}
+	h := New(nil, nil, map[string]bool{"hhc-web-api": true}, true, "", WorkloadAuthConfig{}, nil).WithRecordingCaptures(assets.NewRecordingCaptureService(repo, nil, time.Now)).Routes()
+	for _, tc := range []struct {
+		body, owner string
+		status      int
+	}{{`{}`, actor, 400}, {`{"closeIfIdle":false}`, actor, 200}, {`{"closeIfIdle":true}`, "other", 403}, {`{"closeIfIdle":null}`, actor, 400}} {
+		req := httptest.NewRequest("POST", "/priv/recording-captures/"+id+"/broadcast-signal", strings.NewReader(tc.body))
+		req.Header.Set("X-Internal-Caller-App-Id", "hhc-web-api")
+		req.Header.Set("X-HHC-Actor-ID", tc.owner)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != tc.status {
+			t.Fatalf("%s got %d", tc.body, w.Code)
 		}
 	}
 }

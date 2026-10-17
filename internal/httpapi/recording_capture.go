@@ -280,3 +280,25 @@ func (h *Handler) grantRecordingLive(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, result)
 }
+
+func (h *Handler) recordingBroadcastSignal(w http.ResponseWriter, r *http.Request) {
+	if !h.captureAllowed(w, r) {
+		return
+	}
+	var input struct {
+		CloseIfIdle *bool `json:"closeIfIdle"`
+	}
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if input.CloseIfIdle == nil {
+		captureError(w, assets.ErrInvalidInput)
+		return
+	}
+	result, err := h.recordingCaptures.BroadcastSignal(r.Context(), r.PathValue("captureID"), captureActor(r), *input.CloseIfIdle)
+	if err != nil {
+		captureError(w, err)
+		return
+	}
+	writeJSON(w, 200, result)
+}
