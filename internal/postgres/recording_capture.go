@@ -18,12 +18,12 @@ func NewRecordingCaptureStore(db *sql.DB) *RecordingCaptureStore {
 	return &RecordingCaptureStore{db: db}
 }
 
-const captureColumns = `id,actor_id,recording_id,create_key,state,created_at,expires_at,declared_bytes,declared_objects,receipts,package_id,inventory,terminal_at,terminal_reason,broadcast_epoch`
+const captureColumns = `id,actor_id,recording_id,create_key,state,created_at,expires_at,declared_bytes,declared_objects,receipts,package_id,inventory,terminal_at,terminal_reason,broadcast_epoch,segment_frames`
 
 func scanCapture(row *sql.Row) (assets.RecordingCapture, error) {
 	var c assets.RecordingCapture
 	var receipts, inv []byte
-	err := row.Scan(&c.ID, &c.ActorID, &c.RecordingID, &c.CreateKey, &c.State, &c.CreatedAt, &c.ExpiresAt, &c.DeclaredBytes, &c.DeclaredObjects, &receipts, &c.PackageID, &inv, &c.TerminalAt, &c.TerminalReason, &c.BroadcastEpoch)
+	err := row.Scan(&c.ID, &c.ActorID, &c.RecordingID, &c.CreateKey, &c.State, &c.CreatedAt, &c.ExpiresAt, &c.DeclaredBytes, &c.DeclaredObjects, &receipts, &c.PackageID, &inv, &c.TerminalAt, &c.TerminalReason, &c.BroadcastEpoch, &c.SegmentFrames)
 	if errors.Is(err, sql.ErrNoRows) {
 		return c, assets.ErrNotFound
 	}
@@ -122,7 +122,7 @@ func (s *RecordingCaptureStore) CreateCapture(ctx context.Context, c assets.Reco
 	if err != nil {
 		return c, err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO recording_captures(id,actor_id,recording_id,create_key,state,created_at,expires_at,receipts,broadcast_epoch) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, c.ID, c.ActorID, c.RecordingID, c.CreateKey, c.State, c.CreatedAt, c.ExpiresAt, receipts, c.BroadcastEpoch)
+	_, err = tx.ExecContext(ctx, `INSERT INTO recording_captures(id,actor_id,recording_id,create_key,state,created_at,expires_at,receipts,broadcast_epoch,segment_frames) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, c.ID, c.ActorID, c.RecordingID, c.CreateKey, c.State, c.CreatedAt, c.ExpiresAt, receipts, c.BroadcastEpoch, captureSegmentFrames(c))
 	if err != nil {
 		return c, mapCollectionError(err)
 	}
@@ -315,3 +315,10 @@ func (s *RecordingCaptureStore) UpdateCapture(ctx context.Context, id string, fn
 }
 
 var _ assets.RecordingCaptureRepository = (*RecordingCaptureStore)(nil)
+
+func captureSegmentFrames(c assets.RecordingCapture) int {
+	if c.SegmentFrames == 0 {
+		return 900
+	}
+	return c.SegmentFrames
+}

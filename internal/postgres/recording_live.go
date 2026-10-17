@@ -97,7 +97,7 @@ func (s *RecordingCaptureStore) ClaimLiveValidation(ctx context.Context) (Record
 		return claim, err
 	}
 	var id string
-	err := s.db.QueryRowContext(ctx, `SELECT c.id FROM recording_captures c JOIN recording_live l ON l.capture_id=c.id WHERE c.state IN ('uploading','freezing','validating','ready') AND c.terminal_at IS NULL AND NOT (`+capturePackageTerminal+`) AND c.expires_at>clock_timestamp() AND l.next_attempt_at<=clock_timestamp() AND (l.claimed_until IS NULL OR l.claimed_until<=clock_timestamp()) AND (l.revision>l.published_revision OR (NOT l.ended AND c.package_id IS NOT NULL AND jsonb_array_length(c.inventory->'renditions')=3 AND jsonb_array_length(l.segments)>0 AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(c.inventory->'renditions') r WHERE (r->>'segmentCount')::int<>jsonb_array_length(l.segments))) OR (NOT l.ended AND jsonb_array_length(l.segments)<1440 AND (SELECT count(*) FROM recording_capture_objects o WHERE o.capture_id=c.id AND o.state IN ('queued','verified') AND (o.path IN ('1080p/init.mp4','720p/init.mp4','480p/init.mp4') OR o.path IN ('1080p/seg-'||lpad(jsonb_array_length(l.segments)::text,6,'0')||'.m4s','720p/seg-'||lpad(jsonb_array_length(l.segments)::text,6,'0')||'.m4s','480p/seg-'||lpad(jsonb_array_length(l.segments)::text,6,'0')||'.m4s')))=6)) ORDER BY c.created_at LIMIT 1`).Scan(&id)
+	err := s.db.QueryRowContext(ctx, `SELECT c.id FROM recording_captures c JOIN recording_live l ON l.capture_id=c.id WHERE c.state IN ('uploading','freezing','validating','ready') AND c.terminal_at IS NULL AND NOT (`+capturePackageTerminal+`) AND c.expires_at>clock_timestamp() AND l.next_attempt_at<=clock_timestamp() AND (l.claimed_until IS NULL OR l.claimed_until<=clock_timestamp()) AND (l.revision>l.published_revision OR (NOT l.ended AND c.package_id IS NOT NULL AND jsonb_array_length(c.inventory->'renditions')=3 AND jsonb_array_length(l.segments)>0 AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(c.inventory->'renditions') r WHERE (r->>'segmentCount')::int<>jsonb_array_length(l.segments))) OR (NOT l.ended AND jsonb_array_length(l.segments)<4320 AND (SELECT count(*) FROM recording_capture_objects o WHERE o.capture_id=c.id AND o.state IN ('queued','verified') AND (o.path IN ('1080p/init.mp4','720p/init.mp4','480p/init.mp4') OR o.path IN ('1080p/seg-'||lpad(jsonb_array_length(l.segments)::text,6,'0')||'.m4s','720p/seg-'||lpad(jsonb_array_length(l.segments)::text,6,'0')||'.m4s','480p/seg-'||lpad(jsonb_array_length(l.segments)::text,6,'0')||'.m4s')))=6)) ORDER BY c.created_at LIMIT 1`).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return claim, assets.ErrNotFound
 	}
@@ -128,7 +128,7 @@ func (s *RecordingCaptureStore) ClaimLiveValidation(ctx context.Context) (Record
 			}
 		}
 		if snapshot.Revision == snapshot.PublishedRevision && !claim.EndOnly {
-			if snapshot.Ended || claim.Sequence >= 1440 {
+			if snapshot.Ended || claim.Sequence >= assets.RecordingMaxSegments {
 				return assets.ErrNotFound
 			}
 			for _, r := range assets.LiveRenditions() {
@@ -150,7 +150,7 @@ func (s *RecordingCaptureStore) ClaimLiveValidation(ctx context.Context) (Record
 		if _, err := tx.ExecContext(ctx, `UPDATE recording_processing_slots SET job_id=$2,claim_id=$3,leased_until=clock_timestamp()+interval '2 minutes' WHERE slot=$1`, slot, "live:"+id, claim.ClaimID); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO recording_live_attempts(claim_id,capture_id,sequence) VALUES($1,$2,$3)`, claim.ClaimID, id, min(claim.Sequence, 1439))
+		_, err := tx.ExecContext(ctx, `INSERT INTO recording_live_attempts(claim_id,capture_id,sequence) VALUES($1,$2,$3)`, claim.ClaimID, id, min(claim.Sequence, assets.RecordingMaxSegments-1))
 		return err
 	})
 	return claim, err
@@ -178,7 +178,7 @@ func (s *RecordingCaptureStore) CommitLiveBatch(ctx context.Context, claim Recor
 				}
 			}
 		}
-		segments, err := assets.AppendLiveSegment(snapshot.Segments, batch, normalTail)
+		segments, err := assets.AppendLiveSegment(snapshot.Segments, batch, normalTail, claim.Capture.SegmentFrames)
 		if err != nil {
 			return err
 		}

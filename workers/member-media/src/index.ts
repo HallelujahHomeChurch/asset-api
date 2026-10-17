@@ -75,7 +75,7 @@ async function broadcastPolicy(env: Env, capture: string): Promise<BroadcastPoli
 function playlistSegments(raw: string): {sequence: number; duration: number}[] {
   if (!raw.startsWith('#EXTM3U\n')) throw new Error('Invalid playlist');
   const segments = [...raw.matchAll(/#EXTINF:(\d+(?:\.\d+)?),\nseg-(\d{6})\.m4s\n/g)].map(m => ({duration:Number(m[1]),sequence:Number(m[2])}));
-  if (!segments.length || segments.length > 1440 || segments.some((s,i) => s.sequence !== i || s.duration <= 0 || s.duration > 31)) throw new Error('Invalid playlist timeline');
+  if (!segments.length || segments.length > 4320 || segments.some((s,i) => s.sequence !== i || s.duration <= 0 || s.duration > 31)) throw new Error('Invalid playlist timeline');
   return segments;
 }
 
@@ -84,7 +84,9 @@ function projectPlaylist(raw: string, policy: BroadcastPolicy): string {
   const start = policy.startSequence!; const end = Math.min(policy.endSequenceExclusive ?? segments.length, segments.length);
   if (start >= end) throw new Error('Unverified broadcast range');
   const ended = policy.endSequenceExclusive !== null && policy.endSequenceExclusive <= segments.length;
-  let out = `#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:31\n#EXT-X-MEDIA-SEQUENCE:${start}\n#EXT-X-PLAYLIST-TYPE:${ended ? 'VOD' : 'EVENT'}\n#EXT-X-MAP:URI="init.mp4"\n`;
+  const target = Number(raw.match(/^#EXT-X-TARGETDURATION:(\d+)$/m)?.[1]);
+  if (!Number.isInteger(target) || target < 1 || target > 31 || segments.some(s => Math.round(s.duration) > target)) throw new Error("Invalid target duration");
+  let out = `#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:${target}\n#EXT-X-MEDIA-SEQUENCE:${start}\n#EXT-X-PLAYLIST-TYPE:${ended ? 'VOD' : 'EVENT'}\n#EXT-X-MAP:URI="init.mp4"\n`;
   for (const segment of segments.slice(start,end)) out += `#EXTINF:${segment.duration.toFixed(6)},\nseg-${String(segment.sequence).padStart(6,'0')}.m4s\n`;
   if (ended) out += '#EXT-X-ENDLIST\n';
   return out;
@@ -161,7 +163,7 @@ async function livePointer(env: Env, prefix: string): Promise<{revision: number;
     bytes.set(value, size); size += value.length;
   }
   const value = JSON.parse(new TextDecoder().decode(bytes.subarray(0, size)));
-  if (!value || Object.keys(value).sort().join(',') !== 'lastSequence,revision' || !Number.isSafeInteger(value.revision) || value.revision < 1 || value.revision > 1441 || !Number.isSafeInteger(value.lastSequence) || value.lastSequence < 0 || value.lastSequence > 1439) throw new Error('Invalid live pointer');
+  if (!value || Object.keys(value).sort().join(',') !== 'lastSequence,revision' || !Number.isSafeInteger(value.revision) || value.revision < 1 || value.revision > 4321 || !Number.isSafeInteger(value.lastSequence) || value.lastSequence < 0 || value.lastSequence > 4319) throw new Error('Invalid live pointer');
   return value;
 }
 

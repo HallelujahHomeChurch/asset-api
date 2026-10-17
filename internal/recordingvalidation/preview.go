@@ -61,6 +61,9 @@ func (p PackageMediaProbe) GeneratePreviewsWithTimeline(ctx context.Context, pkg
 	if len(prefixParts) != 6 || prefixParts[0] != "recordings" || prefixParts[1] != "packages" || prefixParts[2] != pkg.ID || prefixParts[3] != "final" || !packageIDPattern.MatchString(prefixParts[4]) || prefixParts[5] != "" {
 		return assets.ErrInvalidInput
 	}
+	if pkg.Inventory.PresetVersion == assets.RecordingTenSecondPreset && len(timeline) == 0 {
+		return assets.ErrInvalidUpload
+	}
 	if _, err := assets.ValidateRecordingInventory(pkg.Inventory); err != nil {
 		return err
 	}

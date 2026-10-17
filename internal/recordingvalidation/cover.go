@@ -66,6 +66,9 @@ func (p PackageMediaProbe) GenerateCoversWithTimeline(ctx context.Context, pkg a
 	if len(parts) != 6 || parts[0] != "recordings" || parts[1] != "packages" || parts[2] != pkg.ID || parts[3] != "final" || !packageIDPattern.MatchString(parts[4]) || parts[5] != "" {
 		return assets.ErrInvalidInput
 	}
+	if pkg.Inventory.PresetVersion == assets.RecordingTenSecondPreset && len(timeline) == 0 {
+		return assets.ErrInvalidUpload
+	}
 	if _, err := assets.ValidateRecordingInventory(pkg.Inventory); err != nil {
 		return err
 	}

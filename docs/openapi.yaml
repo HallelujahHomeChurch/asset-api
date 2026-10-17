@@ -1200,7 +1200,7 @@ paths:
     get:
       operationId: getRecordingPackage
       summary: Query state and a bounded page of remotely observed upload objects.
-      description: confirmedObjects means remote size matches the inventory, not verified SHA-256 or ready media. A strongly consistent R2 listing is scoped to the package staging prefix and bounded to 10000 objects; provider failures never imply missing or confirmed objects. Results follow sorted inventory path order; use nextCursor until empty. Non-uploading states do not query mutable staging objects.
+      description: confirmedObjects means remote size matches the inventory, not verified SHA-256 or ready media. A strongly consistent R2 listing is scoped to the package staging prefix and bounded to 13000 objects; provider failures never imply missing or confirmed objects. Results follow sorted inventory path order; use nextCursor until empty. Non-uploading states do not query mutable staging objects.
       tags: [Private]
       x-hhc-visibility: private
       x-hhc-callers: [hhc-web-api]
@@ -3164,7 +3164,7 @@ components:
         lastSequence:
           type: integer
           minimum: -1
-          maximum: 1439
+          maximum: 4319
         mediaEndSeconds:
           type: number
           minimum: 0
@@ -3212,6 +3212,10 @@ components:
       - recordingId
       - operationKey
       properties:
+        segmentFrames:
+          type: integer
+          enum: [300, 900]
+          description: S10 opt-in for B1 captures only. Omitted means 900; 300 requires 30000/1001 fps and preset obs-hls-10s-v1 at seal. Immutable per capture.
         broadcastEpoch:
           type: integer
           minimum: 1
@@ -3274,7 +3278,7 @@ components:
           type: integer
           format: int64
           minimum: 0
-          maximum: 10000
+          maximum: 13000
         objects:
           type: array
           minItems: 0
@@ -3523,7 +3527,7 @@ components:
         objects:
           type: array
           minItems: 4
-          maxItems: 10000
+          maxItems: 13000
           items: { $ref: '#/components/schemas/RecordingPackageObject' }
         renditions:
           type: array
@@ -3554,7 +3558,7 @@ components:
         videoBitrate: { type: integer, minimum: 500000, maximum: 8000000 }
         audioBitrate: { type: integer, const: 128000 }
         durationSeconds: { type: number, exclusiveMinimum: 0, maximum: 43200 }
-        segmentCount: { type: integer, minimum: 1, maximum: 1440, description: 'Actual number of contiguous media segments, including a legal short final segment; validated against playlists and decoded media, not inferred from duration. All renditions require aligned actual boundaries.' }
+        segmentCount: { type: integer, minimum: 1, maximum: 4320, description: 'Actual number of contiguous media segments, including a legal short final segment; validated against playlists and decoded media, not inferred from duration. All renditions require aligned actual boundaries. The obs-hls-10s-v1 profile allows up to 4320 segments; other profiles remain limited to 1440.' }
     RecordingPartTarget:
       type: object
       required: [url, method, headers]

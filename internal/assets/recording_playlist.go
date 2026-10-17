@@ -72,7 +72,7 @@ func ValidateRecordingPlaylists(inv RecordingPackageInventory, files map[string]
 		if err != nil {
 			return err
 		}
-		boundaries, err := validateRecordingMedia(lines, r)
+		boundaries, err := validateRecordingMedia(lines, r, inv.PresetVersion)
 		if err != nil {
 			return err
 		}
@@ -139,7 +139,7 @@ func RecordingPlaylistBitrates(sizes []int64, durations []float64, target int) (
 	totalDuration := 0.0
 	for n, size := range sizes {
 		d := durations[n]
-		if size <= 0 || size > RecordingObjectMaxBytes || math.IsNaN(d) || math.IsInf(d, 0) || d <= 0 || d > 31 || (n < len(sizes)-1 && d < 29) {
+		if size <= 0 || size > RecordingObjectMaxBytes || math.IsNaN(d) || math.IsInf(d, 0) || d <= 0 || d > 31 || (n < len(sizes)-1 && d < 9) {
 			return 0, 0, ErrInvalidUpload
 		}
 		totalSize += size
@@ -152,8 +152,8 @@ func RecordingPlaylistBitrates(sizes []int64, durations []float64, target int) (
 	for start := range sizes {
 		var bytes int64
 		seconds := 0.0
-		// HHC non-tail segments are >=29s, so a qualifying window has at
-		// most two segments; this is bounded even for the longest recording.
+		// Both approved profiles have bounded non-tail segments (at least 9s).
+		// The target-duration window bounds work independently of recording length.
 		for end := start; end < len(sizes); end++ {
 			bytes += sizes[end]
 			seconds += durations[end]
@@ -274,7 +274,11 @@ func validateRecordingMaster(lines []string, renditions []RecordingRendition) er
 	return nil
 }
 
-func validateRecordingMedia(lines []string, r RecordingRendition) ([]float64, error) {
+func validateRecordingMedia(lines []string, r RecordingRendition, preset ...string) ([]float64, error) {
+	nominal := 30.0
+	if len(preset) > 0 && preset[0] == RecordingTenSecondPreset {
+		nominal = 10.01
+	}
 	headers := make(map[string]bool)
 	target := 0
 	pending := 0.0
@@ -293,7 +297,7 @@ func validateRecordingMedia(lines []string, r RecordingRendition) ([]float64, er
 				return nil, ErrInvalidUpload
 			}
 			tolerance := 1/r.FrameRate + 0.001
-			if pending > 30+tolerance || (len(boundaries) < r.SegmentCount-1 && pending < 30-tolerance) {
+			if pending > nominal+tolerance || (len(boundaries) < r.SegmentCount-1 && pending < nominal-tolerance) {
 				return nil, ErrInvalidUpload
 			}
 			total += pending

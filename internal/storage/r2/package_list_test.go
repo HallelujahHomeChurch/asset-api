@@ -42,7 +42,7 @@ func TestListPackageObjectsUsesScopedProviderPagesNotHeadRequests(t *testing.T) 
 			t.Fatalf("invalid package sent: %q", id)
 		}
 	}
-	for _, limit := range []int{0, 10_001} {
+	for _, limit := range []int{0, 13_001} {
 		if _, err := store.ListPackageObjects(context.Background(), "package-a", limit); err == nil {
 			t.Fatal("unbounded listing accepted")
 		}

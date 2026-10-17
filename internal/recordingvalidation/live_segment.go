@@ -16,7 +16,7 @@ import (
 // ValidateLiveSegment decodes only the next three closed fragments. Copies are
 // attempt-private; the caller publishes them only after the whole batch passes.
 func (p PackageMediaProbe) ValidateLiveSegment(ctx context.Context, captureID, attempt string, sequence int, declarations []assets.RecordingPackageObject) (result map[string]assets.RecordingLiveFragment, err error) {
-	if !packageIDPattern.MatchString(captureID) || !packageIDPattern.MatchString(attempt) || sequence < 0 || sequence >= 1440 || p.Objects == nil || !filepath.IsAbs(p.FFmpeg) || !filepath.IsAbs(p.FFprobe) {
+	if !packageIDPattern.MatchString(captureID) || !packageIDPattern.MatchString(attempt) || sequence < 0 || sequence >= assets.RecordingMaxSegments || p.Objects == nil || !filepath.IsAbs(p.FFmpeg) || !filepath.IsAbs(p.FFprobe) {
 		return nil, assets.ErrInvalidInput
 	}
 	selected := map[string]assets.RecordingPackageObject{}
@@ -99,7 +99,7 @@ func (p PackageMediaProbe) ValidateLiveSegment(ctx context.Context, captureID, a
 		if actual.AudioChannels != 2 || actual.FrameRate != actuals[0].FrameRate {
 			return nil, assets.ErrInvalidUpload
 		}
-		result[r.Name] = assets.RecordingLiveFragment{Start: actual.Start, End: actual.End, Codecs: actual.Codecs, FrameRate: actual.FrameRate}
+		result[r.Name] = assets.RecordingLiveFragment{VideoFrames: actual.VideoFrames, Start: actual.Start, End: actual.End, Codecs: actual.Codecs, FrameRate: actual.FrameRate}
 	}
 	return result, nil
 }

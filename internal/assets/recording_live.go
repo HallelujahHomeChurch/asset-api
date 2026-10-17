@@ -8,10 +8,11 @@ import (
 )
 
 type RecordingLiveFragment struct {
-	FrameRate float64 `json:"frameRate,omitempty"`
-	Start     float64 `json:"start"`
-	End       float64 `json:"end"`
-	Codecs    string  `json:"codecs"`
+	VideoFrames int     `json:"videoFrames,omitempty"`
+	FrameRate   float64 `json:"frameRate,omitempty"`
+	Start       float64 `json:"start"`
+	End         float64 `json:"end"`
+	Codecs      string  `json:"codecs"`
 }
 type RecordingLiveSegment struct {
 	Sequence   int                              `json:"sequence"`
@@ -39,11 +40,22 @@ func historicalLiveFrameRate(fragment RecordingLiveFragment) float64 {
 
 // Only a complete, decoded three-rendition batch advances the common waterline.
 // Short segments wait for normal seal so a crash cannot manufacture an ENDLIST.
-func AppendLiveSegment(history []RecordingLiveSegment, batch map[string]RecordingLiveFragment, normalTail bool) ([]RecordingLiveSegment, error) {
+func AppendLiveSegment(history []RecordingLiveSegment, batch map[string]RecordingLiveFragment, normalTail bool, profile ...int) ([]RecordingLiveSegment, error) {
+	frames := 900
+	if len(profile) > 0 && profile[0] != 0 {
+		frames = profile[0]
+	}
+	if frames != 900 && frames != 300 {
+		return nil, ErrInvalidInput
+	}
+	nominal := 30.0
+	if frames == 300 {
+		nominal = 10.01
+	}
 	if len(batch) != 3 {
 		return nil, ErrCaptureMissingObjects
 	}
-	if len(history) >= 1440 {
+	if len(history) >= RecordingMaxSegments {
 		return nil, ErrInvalidUpload
 	}
 	var reference *RecordingLiveFragment
@@ -53,12 +65,15 @@ func AppendLiveSegment(history []RecordingLiveSegment, batch map[string]Recordin
 		if !ok {
 			return nil, ErrCaptureMissingObjects
 		}
-		if value.FrameRate != 30 && value.FrameRate != 30000.0/1001 {
+		if frames == 300 && value.FrameRate != 30000.0/1001 || value.FrameRate != 30 && value.FrameRate != 30000.0/1001 {
+			return nil, ErrInvalidUpload
+		}
+		if frames == 300 && (value.VideoFrames < 1 || value.VideoFrames > 300 || !normalTail && value.VideoFrames != 300) {
 			return nil, ErrInvalidUpload
 		}
 		tolerance := 1/value.FrameRate + 0.001
 		duration := value.End - value.Start
-		if math.IsNaN(duration) || math.IsInf(duration, 0) || math.IsNaN(value.Start) || math.IsInf(value.Start, 0) || duration <= 0 || duration > 30+tolerance || !liveCodecs.MatchString(value.Codecs) {
+		if math.IsNaN(duration) || math.IsInf(duration, 0) || math.IsNaN(value.Start) || math.IsInf(value.Start, 0) || duration <= 0 || duration > nominal+tolerance || !liveCodecs.MatchString(value.Codecs) {
 			return nil, ErrInvalidUpload
 		}
 		if len(history) == 0 {
@@ -67,7 +82,10 @@ func AppendLiveSegment(history []RecordingLiveSegment, batch map[string]Recordin
 			}
 		} else {
 			last, ok := history[len(history)-1].Renditions[r.Name]
-			if !ok || history[len(history)-1].Sequence != len(history)-1 || math.Abs(last.End-value.Start) > tolerance || last.Codecs != value.Codecs || historicalLiveFrameRate(last) != value.FrameRate || math.Abs(last.End-last.Start-30) > tolerance {
+			if frames == 300 && last.VideoFrames != 300 {
+				return nil, ErrInvalidUpload
+			}
+			if !ok || history[len(history)-1].Sequence != len(history)-1 || math.Abs(last.End-value.Start) > tolerance || last.Codecs != value.Codecs || historicalLiveFrameRate(last) != value.FrameRate || math.Abs(last.End-last.Start-nominal) > tolerance {
 				return nil, ErrInvalidUpload
 			}
 		}
@@ -85,7 +103,7 @@ func AppendLiveSegment(history []RecordingLiveSegment, batch map[string]Recordin
 			copy := value
 			reference = &copy
 		}
-		if !normalTail && duration < 30-tolerance {
+		if !normalTail && duration < nominal-tolerance {
 			return nil, ErrCaptureMissingObjects
 		}
 		cloned[r.Name] = value
@@ -93,8 +111,8 @@ func AppendLiveSegment(history []RecordingLiveSegment, batch map[string]Recordin
 	return append(history, RecordingLiveSegment{Sequence: len(history), Renditions: cloned}), nil
 }
 
-func RecordingLivePlaylists(history []RecordingLiveSegment, ended bool) (map[string][]byte, error) {
-	if len(history) == 0 || len(history) > 1440 {
+func RecordingLivePlaylists(history []RecordingLiveSegment, ended bool, profile ...int) (map[string][]byte, error) {
+	if len(history) == 0 || len(history) > RecordingMaxSegments {
 		return nil, ErrInvalidInput
 	}
 	var verified []RecordingLiveSegment
@@ -108,7 +126,7 @@ func RecordingLivePlaylists(history []RecordingLiveSegment, ended bool) (map[str
 			fragment.FrameRate = historicalLiveFrameRate(fragment)
 			batch[name] = fragment
 		}
-		verified, err = AppendLiveSegment(verified, batch, ended && i == len(history)-1)
+		verified, err = AppendLiveSegment(verified, batch, ended && i == len(history)-1, profile...)
 		if err != nil {
 			return nil, err
 		}
@@ -119,7 +137,11 @@ func RecordingLivePlaylists(history []RecordingLiveSegment, ended bool) (map[str
 	for _, r := range LiveRenditions() {
 		fmt.Fprintf(&master, "#EXT-X-STREAM-INF:BANDWIDTH=%d,RESOLUTION=%dx%d,FRAME-RATE=%.3f,CODECS=\"%s\"\n%s/index.m3u8\n", r.VideoBitrate+r.AudioBitrate, r.Width, r.Height, historicalLiveFrameRate(history[0].Renditions[r.Name]), history[0].Renditions[r.Name].Codecs, r.Name)
 		var playlist strings.Builder
-		playlist.WriteString("#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:31\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:EVENT\n#EXT-X-MAP:URI=\"init.mp4\"\n")
+		target := 31
+		if len(profile) > 0 && profile[0] == 300 {
+			target = 11
+		}
+		fmt.Fprintf(&playlist, "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:%d\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:EVENT\n#EXT-X-MAP:URI=\"init.mp4\"\n", target)
 		for _, segment := range history {
 			v := segment.Renditions[r.Name]
 			fmt.Fprintf(&playlist, "#EXTINF:%.6f,\nseg-%06d.m4s\n", v.End-v.Start, segment.Sequence)

@@ -18,24 +18,28 @@ import (
 // Same 29.97 fps moving-media fixture and tools for before/after measurements.
 // Provider latency is controlled; this does not model production R2 throughput.
 func BenchmarkLiveSegmentValidation(b *testing.B) {
-	probe, p, objects, declarations, mediaBytes := liveMovingMediaFixture(b)
-	for _, latency := range []time.Duration{0, 50 * time.Millisecond} {
-		b.Run(fmt.Sprintf("provider_%dms", latency.Milliseconds()), func(b *testing.B) {
-			probe := probe
-			probe.Objects = latencyLiveObjects{PackageObjects: objects, latency: latency}
-			b.SetBytes(mediaBytes)
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				batch, err := probe.ValidateLiveSegment(context.Background(), p.ID, fmt.Sprintf("bench-%d", i), 0, declarations)
-				if err != nil {
-					b.Fatal(err)
-				}
-				if _, err := assets.AppendLiveSegment(nil, batch, false); err != nil {
-					b.Fatal(err)
-				}
+	for _, frames := range []int{900, 300} {
+		b.Run(fmt.Sprintf("frames_%d", frames), func(b *testing.B) {
+			probe, p, objects, declarations, mediaBytes := liveMovingMediaFixture(b, frames)
+			for _, latency := range []time.Duration{0, 50 * time.Millisecond} {
+				b.Run(fmt.Sprintf("provider_%dms", latency.Milliseconds()), func(b *testing.B) {
+					probe := probe
+					probe.Objects = latencyLiveObjects{PackageObjects: objects, latency: latency}
+					b.SetBytes(mediaBytes)
+					b.ResetTimer()
+					for i := 0; i < b.N; i++ {
+						batch, err := probe.ValidateLiveSegment(context.Background(), p.ID, fmt.Sprintf("bench-%d", i), 0, declarations)
+						if err != nil {
+							b.Fatal(err)
+						}
+						if _, err := assets.AppendLiveSegment(nil, batch, false, frames); err != nil {
+							b.Fatal(err)
+						}
+					}
+					b.StopTimer()
+					b.ReportMetric((float64(frames)*1001/30000)*float64(b.N)/b.Elapsed().Seconds(), "media_s/wall_s")
+				})
 			}
-			b.StopTimer()
-			b.ReportMetric(30.03*float64(b.N)/b.Elapsed().Seconds(), "media_s/wall_s")
 		})
 	}
 }
@@ -74,7 +78,12 @@ func (s latencyLiveObjects) Open(ctx context.Context, key string) (io.ReadCloser
 	return s.PackageObjects.Open(ctx, key)
 }
 
-func liveMovingMediaFixture(tb testing.TB) (PackageMediaProbe, assets.RecordingPackage, *packageMemoryObjects, []assets.RecordingPackageObject, int64) {
+func liveMovingMediaFixture(tb testing.TB, profile ...int) (PackageMediaProbe, assets.RecordingPackage, *packageMemoryObjects, []assets.RecordingPackageObject, int64) {
+	frames := 900
+	if len(profile) > 0 {
+		frames = profile[0]
+	}
+	duration := fmt.Sprintf("%.2f", float64(frames)*1001/30000)
 	ffmpeg, err := exec.LookPath("ffmpeg")
 	if err != nil {
 		tb.Fatal(err)
@@ -88,7 +97,7 @@ func liveMovingMediaFixture(tb testing.TB) (PackageMediaProbe, assets.RecordingP
 	var mediaBytes int64
 	for _, r := range assets.LiveRenditions() {
 		dir := tb.TempDir()
-		args := []string{"-nostdin", "-v", "error", "-f", "lavfi", "-i", fmt.Sprintf("testsrc2=size=%dx%d:rate=30000/1001", r.Width, r.Height), "-f", "lavfi", "-i", "sine=sample_rate=48000", "-t", "30.03", "-c:v", "libx264", "-threads", "2", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-b:v", fmt.Sprint(r.VideoBitrate), "-maxrate", fmt.Sprint(r.VideoBitrate), "-bufsize", fmt.Sprint(2 * r.VideoBitrate), "-g", "900", "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-f", "hls", "-hls_time", "30.03", "-hls_playlist_type", "vod", "-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", "init.mp4", "-hls_segment_filename", filepath.Join(dir, "seg-%06d.m4s"), filepath.Join(dir, "index.m3u8")}
+		args := []string{"-nostdin", "-v", "error", "-f", "lavfi", "-i", fmt.Sprintf("testsrc2=size=%dx%d:rate=30000/1001", r.Width, r.Height), "-f", "lavfi", "-i", "sine=sample_rate=48000", "-t", duration, "-c:v", "libx264", "-threads", "2", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-b:v", fmt.Sprint(r.VideoBitrate), "-maxrate", fmt.Sprint(r.VideoBitrate), "-bufsize", fmt.Sprint(2 * r.VideoBitrate), "-g", fmt.Sprint(frames), "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-f", "hls", "-hls_time", duration, "-hls_playlist_type", "vod", "-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", "init.mp4", "-hls_segment_filename", filepath.Join(dir, "seg-%06d.m4s"), filepath.Join(dir, "index.m3u8")}
 		if out, err := exec.Command(ffmpeg, args...).CombinedOutput(); err != nil {
 			tb.Fatalf("fixture: %v %s", err, out)
 		}

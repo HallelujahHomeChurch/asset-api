@@ -14,7 +14,7 @@ import (
 // staging prefix. It never reads final media or establishes package readiness.
 func (s *Store) ListPackageObjects(ctx context.Context, id string, maxObjects int) (map[string]int64, error) {
 	prefix := "recordings/packages/" + id + "/staging/"
-	if !packageStagingKey.MatchString(prefix+"master.m3u8") || maxObjects < 1 || maxObjects > 10_000 {
+	if !packageStagingKey.MatchString(prefix+"master.m3u8") || maxObjects < 1 || maxObjects > 13_000 {
 		return nil, errors.New("invalid recording package listing")
 	}
 	input := &s3.ListObjectsV2Input{Bucket: aws.String(s.bucket), Prefix: aws.String(prefix), MaxKeys: aws.Int32(1000)}
