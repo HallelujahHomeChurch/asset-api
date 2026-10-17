@@ -18,12 +18,12 @@ func NewRecordingCaptureStore(db *sql.DB) *RecordingCaptureStore {
 	return &RecordingCaptureStore{db: db}
 }
 
-const captureColumns = `id,actor_id,recording_id,create_key,state,created_at,expires_at,declared_bytes,declared_objects,receipts,package_id,inventory,terminal_at,terminal_reason,broadcast_epoch,segment_frames`
+const captureColumns = `id,actor_id,recording_id,create_key,state,created_at,expires_at,declared_bytes,declared_objects,receipts,package_id,inventory,terminal_at,terminal_reason,broadcast_epoch,segment_frames,last_media_confirmed_at,idle_end_sequence_exclusive`
 
 func scanCapture(row *sql.Row) (assets.RecordingCapture, error) {
 	var c assets.RecordingCapture
 	var receipts, inv []byte
-	err := row.Scan(&c.ID, &c.ActorID, &c.RecordingID, &c.CreateKey, &c.State, &c.CreatedAt, &c.ExpiresAt, &c.DeclaredBytes, &c.DeclaredObjects, &receipts, &c.PackageID, &inv, &c.TerminalAt, &c.TerminalReason, &c.BroadcastEpoch, &c.SegmentFrames)
+	err := row.Scan(&c.ID, &c.ActorID, &c.RecordingID, &c.CreateKey, &c.State, &c.CreatedAt, &c.ExpiresAt, &c.DeclaredBytes, &c.DeclaredObjects, &receipts, &c.PackageID, &inv, &c.TerminalAt, &c.TerminalReason, &c.BroadcastEpoch, &c.SegmentFrames, &c.LastMediaConfirmedAt, &c.IdleEndSequenceExclusive)
 	if errors.Is(err, sql.ErrNoRows) {
 		return c, assets.ErrNotFound
 	}
@@ -298,7 +298,7 @@ func (s *RecordingCaptureStore) UpdateCapture(ctx context.Context, id string, fn
 		}
 		inventory = data
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE recording_captures SET state=$2,declared_bytes=$3,declared_objects=$4,receipts=$5,package_id=$6,inventory=$7,terminal_at=$8,terminal_reason=$9 WHERE id=$1`, id, c.State, c.DeclaredBytes, c.DeclaredObjects, receipts, c.PackageID, inventory, c.TerminalAt, c.TerminalReason)
+	_, err = tx.ExecContext(ctx, `UPDATE recording_captures SET state=$2,declared_bytes=$3,declared_objects=$4,receipts=$5,package_id=$6,inventory=$7,terminal_at=$8,terminal_reason=$9,last_media_confirmed_at=$10,idle_end_sequence_exclusive=$11 WHERE id=$1`, id, c.State, c.DeclaredBytes, c.DeclaredObjects, receipts, c.PackageID, inventory, c.TerminalAt, c.TerminalReason, c.LastMediaConfirmedAt, c.IdleEndSequenceExclusive)
 	if err != nil {
 		return c, err
 	}

@@ -38,6 +38,8 @@ type RecordingCaptureStoredReceipt struct {
 // Receipts and declarations are persisted together. Queued is upload evidence,
 // never immutable hash/media validation or an authorization to play.
 type RecordingCapture struct {
+	LastMediaConfirmedAt                       *time.Time
+	IdleEndSequenceExclusive                   *int
 	SegmentFrames                              int
 	ID, ActorID, RecordingID, CreateKey, State string
 	CreatedAt, ExpiresAt                       time.Time
@@ -347,6 +349,10 @@ func (s *RecordingCaptureService) Confirm(ctx context.Context, id, actor, key st
 		for _, i := range indices {
 			if c.Objects[i].State == "declared" {
 				c.Objects[i].State = "queued"
+				if strings.HasSuffix(c.Objects[i].Path, ".m4s") {
+					now := s.now().UTC()
+					c.LastMediaConfirmedAt = &now
+				}
 			}
 		}
 		return nil
