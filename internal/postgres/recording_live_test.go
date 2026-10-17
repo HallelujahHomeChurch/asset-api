@@ -26,6 +26,9 @@ func TestLiveProgressFencesUnpublishedAndStaleClaims(t *testing.T) {
 	if _, err := store.ClaimLiveValidation(ctx); !errors.Is(err, assets.ErrNotFound) {
 		t.Fatalf("claimed missing renditions: %v", err)
 	}
+	if pending, err := store.LiveInputPending(ctx); err != nil || !pending {
+		t.Fatalf("active input was discarded before all renditions arrived: %v", err)
+	}
 	_, err := store.UpdateCapture(ctx, c.ID, func(c *assets.RecordingCapture) error {
 		for _, r := range assets.LiveRenditions() {
 			for _, name := range []string{"init.mp4", "seg-000000.m4s", "seg-000001.m4s"} {
@@ -45,6 +48,9 @@ func TestLiveProgressFencesUnpublishedAndStaleClaims(t *testing.T) {
 	}
 	if _, err := store.ClaimLiveValidation(ctx); !errors.Is(err, assets.ErrNotFound) {
 		t.Fatalf("double claim: %v", err)
+	}
+	if pending, err := store.LiveInputPending(ctx); err != nil || pending {
+		t.Fatalf("another worker waits on an already claimed input: %v", err)
 	}
 	batch := map[string]assets.RecordingLiveFragment{}
 	for _, r := range assets.LiveRenditions() {
@@ -362,5 +368,22 @@ func TestLiveCleanupRetainsAuthoritativeTerminalPackageWithoutStatus(t *testing.
 				t.Fatal("expired seven-day hold did not release live objects")
 			}
 		})
+	}
+}
+
+func TestIdleLiveInputDoesNotKeepWorkerWarm(t *testing.T) {
+	ctx := context.Background()
+	db := isolatedIntegrationDB(t)
+	if err := migrations.Run(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	store := NewRecordingCaptureStore(db)
+	now := time.Now().UTC()
+	c := assets.RecordingCapture{ID: strings.Repeat("e", 32), ActorID: "22222222-2222-4222-8222-222222222222", RecordingID: "11111111-1111-4111-8111-111111111111", CreateKey: "idle", State: "uploading", CreatedAt: now.Add(-3 * time.Minute), ExpiresAt: now.Add(time.Hour), Receipts: map[string]assets.RecordingCaptureStoredReceipt{}}
+	if _, err := store.CreateCapture(ctx, c); err != nil {
+		t.Fatal(err)
+	}
+	if pending, err := store.LiveInputPending(ctx); err != nil || pending {
+		t.Fatalf("stale input keeps idle worker awake: %v", err)
 	}
 }
