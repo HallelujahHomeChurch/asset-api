@@ -321,3 +321,31 @@ constraint requires data reconciliation; an automatic destructive down migration
 is intentionally absent. Rolling back to a Worker without B1 authority checks is
 unsafe while B1 media exists. Local decode, DB, and Worker tests do not establish
 provider publication, deployment, or Windows OBS acceptance.
+
+### Opt-in short-segment evaluation
+
+`obs-hls-10s-v1` is a capture-pinned 300-frame / 10.01-second profile at
+30000/1001 fps; it requires the CMS S10 opt-in supplement. Legacy captures and
+CLI packages retain 900-frame validation. No existing capture changes profile.
+The live and final validators count actual video packets as well as checking
+CFR, continuity, IDR, SHA-256 and full decode. Normal S10 segments require 300
+frames; the existing legal final-tail checks remain.
+
+The benchmark above now reports both `frames_900` and `frames_300`. A bounded
+local run on 2026-10-17 (Apple M4, three samples per case, no concurrent full
+test suite) measured:
+
+| Profile | Provider delay per operation | Three-rendition batch seconds | Media seconds / wall second |
+| --- | ---: | ---: | ---: |
+| 900 frames | 0 ms | 3.306 | 9.084 |
+| 300 frames | 0 ms | 1.695 | 5.906 |
+| 900 frames | 50 ms | 4.106 | 7.314 |
+| 300 frames | 50 ms | 1.891 | 5.293 |
+
+A smaller batch finishes sooner, but there are three times as many batches per
+media hour. These samples show increased overhead per media second, not a
+production price estimate. They exclude queue scheduling, API confirmation
+listing, final publication, real NVENC output and viewer startup. An earlier
+run competing with the full UI test suite is discarded for comparison. The
+new profile still needs Windows/cloud A/B measurements before its latency and
+cost acceptance can be claimed.
