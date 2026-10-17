@@ -70,7 +70,7 @@ const segmentProbeFixture = `{"streams":[{"index":0,"codec_name":"h264","codec_t
 func TestFragmentProbeChecksCodecDimensionsIDRAndTimeline(t *testing.T) {
 	r := assets.RecordingRendition{Width: 1280, Height: 720, FrameRate: 30}
 	got, err := validatePackageSegmentProbe([]byte(segmentProbeFixture), r)
-	if err != nil || got.Codecs != "avc1.64001f,mp4a.40.2" || got.Start != 0 || got.End < 0.066665 || got.End > 0.066668 {
+	if err != nil || got.VideoFrames != 2 || got.Codecs != "avc1.64001f,mp4a.40.2" || got.Start != 0 || got.End < 0.066665 || got.End > 0.066668 {
 		t.Fatalf("probe: %+v %v", got, err)
 	}
 	for _, tc := range []struct{ old, replacement string }{
@@ -160,6 +160,18 @@ func TestLiveProbeRequiresMeasuredApprovedCFR(t *testing.T) {
 	} {
 		if _, err := validatePackageSegmentProbe([]byte(data), r); !errors.Is(err, assets.ErrInvalidUpload) {
 			t.Fatalf("unknown/mismatched fps accepted: %v", err)
+		}
+	}
+}
+
+func TestTenSecondArchiveChecksActualFrameCount(t *testing.T) {
+	for _, frames := range []int{299, 300, 301} {
+		end := float64(frames) * 1001 / 30000
+		r := assets.RecordingRendition{FrameRate: 30000.0 / 1001, DurationSeconds: end + 10.01, SegmentCount: 2}
+		timeline := []segmentProbe{{VideoFrames: frames, Start: 0, End: end, Codecs: "same"}, {VideoFrames: 300, Start: end, End: end + 10.01, Codecs: "same"}}
+		err := validateRenditionTimeline(r, timeline, nil, assets.RecordingTenSecondPreset)
+		if (err == nil) != (frames == 300) {
+			t.Fatalf("frames=%d: %v", frames, err)
 		}
 	}
 }

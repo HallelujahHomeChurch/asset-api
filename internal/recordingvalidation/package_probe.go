@@ -146,6 +146,7 @@ func ProbeCommand(ctx context.Context, binary string, args ...string) ([]byte, e
 }
 
 type segmentProbe struct {
+	VideoFrames   int
 	AudioChannels int
 	Start, End    float64
 	FrameRate     float64
@@ -304,7 +305,7 @@ func validatePackageSegmentProbe(data []byte, r assets.RecordingRendition) (segm
 	if math.Abs(v[0].pts-a[0].pts) > 0.1 || math.Abs(end-a[len(a)-1].pts-a[len(a)-1].duration) > 0.1 || end-v[0].pts > 30+1/r.FrameRate+0.001 {
 		return invalid()
 	}
-	return segmentProbe{Start: v[0].pts, End: end, Codecs: codecs, AudioChannels: audioChannels, FrameRate: r.FrameRate}, nil
+	return segmentProbe{VideoFrames: len(v), Start: v[0].pts, End: end, Codecs: codecs, AudioChannels: audioChannels, FrameRate: r.FrameRate}, nil
 }
 
 func avccCodecs(extra string) (string, error) {

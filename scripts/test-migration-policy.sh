@@ -34,6 +34,10 @@ for file in "$@"; do
       # the exact hash permits this reviewed replacement, not future edits.
       legacy_hash='aca2777f851f7edaca7c4534e1a6d62f0ca79c8274c20769e9579d482b639671'
       ;;
+    internal/migrations/sql/044_recording_ten_second_profile.sql)
+      # Exact additive counter-domain expansion; preserves existing rows/writes.
+      legacy_hash='c2a3b6ed1ca4f3eb6ff06adee751cb650c4d0578b5baeb041ebc56f42fc4d81b'
+      ;;
     internal/migrations/sql/016_drop_legacy_ticket_roles.sql)
       contract_hash='55baa077395f0347fee354efd2998f1f31bd0a6db33ec60508ad72fe22d0bc86'
       ;;

@@ -11,6 +11,7 @@ func TestTenSecondProfileIsExplicitAndStable(t *testing.T) {
 	batch := liveBatch(0, 10.01)
 	for name, f := range batch {
 		f.FrameRate = 30000.0 / 1001
+		f.VideoFrames = 300
 		batch[name] = f
 	}
 	if _, err := AppendLiveSegment(nil, batch, false); err == nil {
@@ -34,6 +35,7 @@ func TestTenSecondProfileIsExplicitAndStable(t *testing.T) {
 	}
 	for name, f := range batch {
 		f.End = 15
+		f.VideoFrames = 150
 		batch[name] = f
 	}
 	if _, err := AppendLiveSegment(history, batch, false, 300); err == nil {
@@ -68,6 +70,7 @@ func TestTenSecondTimelineKeepsTwelveHourLimit(t *testing.T) {
 		batch := liveBatch(float64(i)*10.01, float64(i+1)*10.01)
 		for name, f := range batch {
 			f.FrameRate = 30000.0 / 1001
+			f.VideoFrames = 300
 			batch[name] = f
 		}
 		var err error
@@ -78,5 +81,19 @@ func TestTenSecondTimelineKeepsTwelveHourLimit(t *testing.T) {
 	}
 	if _, err := RecordingLivePlaylists(history, false, 300); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestTenSecondProfileRejectsOffByOneFrames(t *testing.T) {
+	for _, frames := range []int{299, 301} {
+		batch := liveBatch(0, float64(frames)*1001/30000)
+		for name, f := range batch {
+			f.FrameRate = 30000.0 / 1001
+			f.VideoFrames = frames
+			batch[name] = f
+		}
+		if _, err := AppendLiveSegment(nil, batch, false, 300); err == nil {
+			t.Fatalf("accepted %d interior frames", frames)
+		}
 	}
 }

@@ -223,6 +223,9 @@ func validateRenditionTimeline(r assets.RecordingRendition, timeline, reference 
 		nominal = 10.01
 	}
 	for i, actual := range timeline {
+		if nominal == 10.01 && (actual.VideoFrames < 1 || actual.VideoFrames > 300 || i < len(timeline)-1 && actual.VideoFrames != 300) {
+			return assets.ErrInvalidUpload
+		}
 		if i == 0 {
 			if actual.Start < -0.1 || actual.Start > 0.25 {
 				return assets.ErrInvalidUpload

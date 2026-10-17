@@ -8,10 +8,11 @@ import (
 )
 
 type RecordingLiveFragment struct {
-	FrameRate float64 `json:"frameRate,omitempty"`
-	Start     float64 `json:"start"`
-	End       float64 `json:"end"`
-	Codecs    string  `json:"codecs"`
+	VideoFrames int     `json:"videoFrames,omitempty"`
+	FrameRate   float64 `json:"frameRate,omitempty"`
+	Start       float64 `json:"start"`
+	End         float64 `json:"end"`
+	Codecs      string  `json:"codecs"`
 }
 type RecordingLiveSegment struct {
 	Sequence   int                              `json:"sequence"`
@@ -67,6 +68,9 @@ func AppendLiveSegment(history []RecordingLiveSegment, batch map[string]Recordin
 		if frames == 300 && value.FrameRate != 30000.0/1001 || value.FrameRate != 30 && value.FrameRate != 30000.0/1001 {
 			return nil, ErrInvalidUpload
 		}
+		if frames == 300 && (value.VideoFrames < 1 || value.VideoFrames > 300 || !normalTail && value.VideoFrames != 300) {
+			return nil, ErrInvalidUpload
+		}
 		tolerance := 1/value.FrameRate + 0.001
 		duration := value.End - value.Start
 		if math.IsNaN(duration) || math.IsInf(duration, 0) || math.IsNaN(value.Start) || math.IsInf(value.Start, 0) || duration <= 0 || duration > nominal+tolerance || !liveCodecs.MatchString(value.Codecs) {
@@ -78,6 +82,9 @@ func AppendLiveSegment(history []RecordingLiveSegment, batch map[string]Recordin
 			}
 		} else {
 			last, ok := history[len(history)-1].Renditions[r.Name]
+			if frames == 300 && last.VideoFrames != 300 {
+				return nil, ErrInvalidUpload
+			}
 			if !ok || history[len(history)-1].Sequence != len(history)-1 || math.Abs(last.End-value.Start) > tolerance || last.Codecs != value.Codecs || historicalLiveFrameRate(last) != value.FrameRate || math.Abs(last.End-last.Start-nominal) > tolerance {
 				return nil, ErrInvalidUpload
 			}
