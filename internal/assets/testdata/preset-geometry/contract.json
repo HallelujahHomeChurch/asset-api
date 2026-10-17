@@ -1,0 +1,2558 @@
+[
+  {
+    "name": "valid-vNone-rectangle",
+    "valid": true,
+    "document": {
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "rectangle",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "valid-vNone-ellipse",
+    "valid": true,
+    "document": {
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "ellipse",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "valid-v1-rectangle",
+    "valid": true,
+    "document": {
+      "schemaVersion": 1,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "rectangle",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "valid-v1-ellipse",
+    "valid": true,
+    "document": {
+      "schemaVersion": 1,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "ellipse",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "valid-v2-rectangle",
+    "valid": true,
+    "document": {
+      "schemaVersion": 2,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "rectangle",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "valid-v2-ellipse",
+    "valid": true,
+    "document": {
+      "schemaVersion": 2,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "ellipse",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "valid-v3-rectangle",
+    "valid": true,
+    "document": {
+      "schemaVersion": 3,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "rectangle",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "valid-v3-ellipse",
+    "valid": true,
+    "document": {
+      "schemaVersion": 3,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "ellipse",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "valid-v3-roundRect",
+    "valid": true,
+    "document": {
+      "schemaVersion": 3,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "roundRect",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "valid-v3-triangle",
+    "valid": true,
+    "document": {
+      "schemaVersion": 3,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "triangle",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "valid-v3-rtTriangle",
+    "valid": true,
+    "document": {
+      "schemaVersion": 3,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "rtTriangle",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "valid-v3-diamond",
+    "valid": true,
+    "document": {
+      "schemaVersion": 3,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "diamond",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "valid-v3-rightArrow",
+    "valid": true,
+    "document": {
+      "schemaVersion": 3,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "rightArrow",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "valid-v3-leftArrow",
+    "valid": true,
+    "document": {
+      "schemaVersion": 3,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "leftArrow",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "valid-v3-upArrow",
+    "valid": true,
+    "document": {
+      "schemaVersion": 3,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "upArrow",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "valid-v3-downArrow",
+    "valid": true,
+    "document": {
+      "schemaVersion": 3,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "downArrow",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "valid-adjustments-roundRect",
+    "valid": true,
+    "document": {
+      "schemaVersion": 3,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "roundRect",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2,
+              "adjustments": [
+                16667
+              ]
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "valid-adjustments-triangle",
+    "valid": true,
+    "document": {
+      "schemaVersion": 3,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "triangle",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2,
+              "adjustments": [
+                50000
+              ]
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "valid-adjustments-rightArrow",
+    "valid": true,
+    "document": {
+      "schemaVersion": 3,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "rightArrow",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2,
+              "adjustments": [
+                25000,
+                75000
+              ]
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "valid-adjustments-leftArrow",
+    "valid": true,
+    "document": {
+      "schemaVersion": 3,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "leftArrow",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2,
+              "adjustments": []
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "valid-adjustments-upArrow",
+    "valid": true,
+    "document": {
+      "schemaVersion": 3,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "upArrow",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2,
+              "adjustments": [
+                10000
+              ]
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "valid-adjustments-downArrow",
+    "valid": true,
+    "document": {
+      "schemaVersion": 3,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "downArrow",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2,
+              "adjustments": [
+                -2147483648,
+                2147483647
+              ]
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "valid-adjustments-rectangle",
+    "valid": true,
+    "document": {
+      "schemaVersion": 3,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "rectangle",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2,
+              "adjustments": []
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "invalid-vNone-extended",
+    "valid": false,
+    "document": {
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "roundRect",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "invalid-vNone-empty-adjustments",
+    "valid": false,
+    "document": {
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "rectangle",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2,
+              "adjustments": []
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "invalid-v1-extended",
+    "valid": false,
+    "document": {
+      "schemaVersion": 1,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "roundRect",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "invalid-v1-empty-adjustments",
+    "valid": false,
+    "document": {
+      "schemaVersion": 1,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "rectangle",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2,
+              "adjustments": []
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "invalid-v2-extended",
+    "valid": false,
+    "document": {
+      "schemaVersion": 2,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "roundRect",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "invalid-v2-empty-adjustments",
+    "valid": false,
+    "document": {
+      "schemaVersion": 2,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "rectangle",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2,
+              "adjustments": []
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "invalid-adjustments-null",
+    "valid": false,
+    "document": {
+      "schemaVersion": 3,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "roundRect",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2,
+              "adjustments": null
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "invalid-adjustments-object",
+    "valid": false,
+    "document": {
+      "schemaVersion": 3,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "roundRect",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2,
+              "adjustments": {}
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "invalid-adjustments-string",
+    "valid": false,
+    "document": {
+      "schemaVersion": 3,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "roundRect",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2,
+              "adjustments": "16667"
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "invalid-adjustments-fraction",
+    "valid": false,
+    "document": {
+      "schemaVersion": 3,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "roundRect",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2,
+              "adjustments": [
+                1.5
+              ]
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "invalid-adjustments-string-value",
+    "valid": false,
+    "document": {
+      "schemaVersion": 3,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "roundRect",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2,
+              "adjustments": [
+                "16667"
+              ]
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "invalid-adjustments-null-value",
+    "valid": false,
+    "document": {
+      "schemaVersion": 3,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "roundRect",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2,
+              "adjustments": [
+                null
+              ]
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "invalid-adjustments-high",
+    "valid": false,
+    "document": {
+      "schemaVersion": 3,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "roundRect",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2,
+              "adjustments": [
+                2147483648
+              ]
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "invalid-adjustments-low",
+    "valid": false,
+    "document": {
+      "schemaVersion": 3,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "roundRect",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2,
+              "adjustments": [
+                -2147483649
+              ]
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "invalid-adjustments-excess",
+    "valid": false,
+    "document": {
+      "schemaVersion": 3,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "roundRect",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2,
+              "adjustments": [
+                1,
+                2
+              ]
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "invalid-adjustments-too-many",
+    "valid": false,
+    "document": {
+      "schemaVersion": 3,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "rightArrow",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2,
+              "adjustments": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ]
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "invalid-adjustments-basic",
+    "valid": false,
+    "document": {
+      "schemaVersion": 3,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "ellipse",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2,
+              "adjustments": [
+                0
+              ]
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "invalid-unknown-preset",
+    "valid": false,
+    "document": {
+      "schemaVersion": 3,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "hexagon",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "invalid-version4",
+    "valid": false,
+    "document": {
+      "schemaVersion": 4,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "roundRect",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "invalid-nonshape-adjustments",
+    "valid": false,
+    "document": {
+      "schemaVersion": 3,
+      "id": "geometry-doc",
+      "name": "Geometry",
+      "width": 1280,
+      "height": 720,
+      "createdAt": 1,
+      "updatedAt": 1,
+      "defaultSlideBackground": {
+        "type": "solid",
+        "color": "#000000",
+        "transparency": 0
+      },
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000",
+            "transparency": 0
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "locked",
+              "shape": "rectangle",
+              "x": 10,
+              "y": 20,
+              "width": 200,
+              "height": 120,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#0088ff",
+              "strokeColor": "#000000",
+              "strokeWidth": 2,
+              "adjustments": [],
+              "label": "Locked"
+            }
+          }
+        }
+      },
+      "assets": {},
+      "themes": {}
+    }
+  },
+  {
+    "name": "valid-source-v2",
+    "valid": true,
+    "document": {
+      "schemaVersion": 2,
+      "id": "d",
+      "name": "Source contract",
+      "width": 1920,
+      "height": 1080,
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000"
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "rectangle",
+              "x": 0,
+              "y": 0,
+              "width": 100,
+              "height": 100,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#ffffff",
+              "strokeColor": "#000000",
+              "strokeWidth": 0,
+              "pptxSourceNode": {
+                "id": "2",
+                "role": "geometry"
+              }
+            }
+          },
+          "pptxSourcePart": "ppt/slides/slide1.xml"
+        }
+      },
+      "assets": {},
+      "createdAt": 0,
+      "updatedAt": 0,
+      "pptxSource": {
+        "version": 1,
+        "base64": "UEsDBBQAAAAIAAAAIQBMagnj0QAAAP0BAAATAAAAW0NvbnRlbnRfVHlwZXNdLnhtbK1RvU7DQAx+lejWqnHpwICaLsBKGXgB6+I0J+7HOrtVeXuctEiACixMlv39St68vDFJc0oxS+dGVb4DED9SQmkLUzZkKDWh2lr3wOhfcU+wXq1uwZeslHWpk4fbbh5owEPU5vFkZwkld65SFNfcn4lTVueQOQaPajgcc/8tZXlJaE05c2QMLAsjOLiaMCE/B1x0uyPVGnpqnrHqEyZjAbMCVxLTzdz2d6crVcswBE998YdkkvazWYpf1jZhyIs/yki0o5zHzX+3mV0/GsD89e07UEsDBBQAAAAIAAAAIQAvm14oigAAAPUAAAALAAAAX3JlbHMvLnJlbHONzz0OwjAMBeCrVDlAXRgYUJKJpSvqBaLU+RFNYiVGgtsTMRXEwOjnp8+yvOJmOJbcQqQ2PNKWmxKBmc4AzQZMpo2FMPeNKzUZ7mP1QMbejEc4TtMJ6t4QWu7NYV6VqPN6EMPyJPzHLs5Fi5di7wkz/zjx1eiyqR5ZCSIGqth6+G6PXRagJXx8qV9QSwMEFAAAAAgAAAAhAMWovidLAAAAVgAAABQAAABwcHQvcHJlc2VudGF0aW9uLnhtbLMpsCooSi1OzStJLMnMz1OoyM3JK7YqsFXKKCkpsNLXL07OSM1NLNbLL0jNA8ql5RflJpYAuUXp+sj6cnP0jQwMzPRzEzPzlPTtAFBLAwQUAAAACAAAACEAz+DXcn4AAACtAAAAFQAAAHBwdC9zbGlkZXMvc2xpZGUxLnhtbEWOSwrDMAxErxJ8gCpk0YVxfIQSSC9gErUx2LKQTMjxmw8lG2mGNxrk2Gqamy0nUsu9WWplC6DTgjnoozDSzj5Fcqi7lS+woCLVUGOhnKBr2yfkEMl4x3Ya03xs5bcgXuqYtI48yJl4rYM0ce5NZ8A7uBlcYbiv4V8I55f+B1BLAQIUAxQAAAAIAAAAIQBMagnj0QAAAP0BAAATAAAAAAAAAAAAAACAAQAAAABbQ29udGVudF9UeXBlc10ueG1sUEsBAhQDFAAAAAgAAAAhAC+bXiiKAAAA9QAAAAsAAAAAAAAAAAAAAIABAgEAAF9yZWxzLy5yZWxzUEsBAhQDFAAAAAgAAAAhAMWovidLAAAAVgAAABQAAAAAAAAAAAAAAIABtQEAAHBwdC9wcmVzZW50YXRpb24ueG1sUEsBAhQDFAAAAAgAAAAhAM/g13J+AAAArQAAABUAAAAAAAAAAAAAAIABMgIAAHBwdC9zbGlkZXMvc2xpZGUxLnhtbFBLBQYAAAAABAAEAP8AAADjAgAAAAA=",
+        "sha256": "02c01a688a41ddbe862e358b5a533ea2b12b30c6e5dc40bfef8aa5935a20df3c"
+      }
+    }
+  },
+  {
+    "name": "valid-source-v3",
+    "valid": true,
+    "document": {
+      "schemaVersion": 3,
+      "id": "d",
+      "name": "Source contract",
+      "width": 1920,
+      "height": 1080,
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000"
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "rectangle",
+              "x": 0,
+              "y": 0,
+              "width": 100,
+              "height": 100,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#ffffff",
+              "strokeColor": "#000000",
+              "strokeWidth": 0,
+              "pptxSourceNode": {
+                "id": "2",
+                "role": "geometry"
+              }
+            }
+          },
+          "pptxSourcePart": "ppt/slides/slide1.xml"
+        }
+      },
+      "assets": {},
+      "createdAt": 0,
+      "updatedAt": 0,
+      "pptxSource": {
+        "version": 1,
+        "base64": "UEsDBBQAAAAIAAAAIQBMagnj0QAAAP0BAAATAAAAW0NvbnRlbnRfVHlwZXNdLnhtbK1RvU7DQAx+lejWqnHpwICaLsBKGXgB6+I0J+7HOrtVeXuctEiACixMlv39St68vDFJc0oxS+dGVb4DED9SQmkLUzZkKDWh2lr3wOhfcU+wXq1uwZeslHWpk4fbbh5owEPU5vFkZwkld65SFNfcn4lTVueQOQaPajgcc/8tZXlJaE05c2QMLAsjOLiaMCE/B1x0uyPVGnpqnrHqEyZjAbMCVxLTzdz2d6crVcswBE998YdkkvazWYpf1jZhyIs/yki0o5zHzX+3mV0/GsD89e07UEsDBBQAAAAIAAAAIQAvm14oigAAAPUAAAALAAAAX3JlbHMvLnJlbHONzz0OwjAMBeCrVDlAXRgYUJKJpSvqBaLU+RFNYiVGgtsTMRXEwOjnp8+yvOJmOJbcQqQ2PNKWmxKBmc4AzQZMpo2FMPeNKzUZ7mP1QMbejEc4TtMJ6t4QWu7NYV6VqPN6EMPyJPzHLs5Fi5di7wkz/zjx1eiyqR5ZCSIGqth6+G6PXRagJXx8qV9QSwMEFAAAAAgAAAAhAMWovidLAAAAVgAAABQAAABwcHQvcHJlc2VudGF0aW9uLnhtbLMpsCooSi1OzStJLMnMz1OoyM3JK7YqsFXKKCkpsNLXL07OSM1NLNbLL0jNA8ql5RflJpYAuUXp+sj6cnP0jQwMzPRzEzPzlPTtAFBLAwQUAAAACAAAACEAz+DXcn4AAACtAAAAFQAAAHBwdC9zbGlkZXMvc2xpZGUxLnhtbEWOSwrDMAxErxJ8gCpk0YVxfIQSSC9gErUx2LKQTMjxmw8lG2mGNxrk2Gqamy0nUsu9WWplC6DTgjnoozDSzj5Fcqi7lS+woCLVUGOhnKBr2yfkEMl4x3Ya03xs5bcgXuqYtI48yJl4rYM0ce5NZ8A7uBlcYbiv4V8I55f+B1BLAQIUAxQAAAAIAAAAIQBMagnj0QAAAP0BAAATAAAAAAAAAAAAAACAAQAAAABbQ29udGVudF9UeXBlc10ueG1sUEsBAhQDFAAAAAgAAAAhAC+bXiiKAAAA9QAAAAsAAAAAAAAAAAAAAIABAgEAAF9yZWxzLy5yZWxzUEsBAhQDFAAAAAgAAAAhAMWovidLAAAAVgAAABQAAAAAAAAAAAAAAIABtQEAAHBwdC9wcmVzZW50YXRpb24ueG1sUEsBAhQDFAAAAAgAAAAhAM/g13J+AAAArQAAABUAAAAAAAAAAAAAAIABMgIAAHBwdC9zbGlkZXMvc2xpZGUxLnhtbFBLBQYAAAAABAAEAP8AAADjAgAAAAA=",
+        "sha256": "02c01a688a41ddbe862e358b5a533ea2b12b30c6e5dc40bfef8aa5935a20df3c"
+      }
+    }
+  },
+  {
+    "name": "invalid-v3-source-node-without-part",
+    "valid": false,
+    "document": {
+      "schemaVersion": 3,
+      "id": "d",
+      "name": "Source contract",
+      "width": 1920,
+      "height": 1080,
+      "slideOrder": [
+        "s"
+      ],
+      "slides": {
+        "s": {
+          "id": "s",
+          "name": "Slide",
+          "background": {
+            "type": "solid",
+            "color": "#000000"
+          },
+          "notes": "",
+          "elementOrder": [
+            "e"
+          ],
+          "elements": {
+            "e": {
+              "id": "e",
+              "type": "shape",
+              "shape": "rectangle",
+              "x": 0,
+              "y": 0,
+              "width": 100,
+              "height": 100,
+              "rotation": 0,
+              "opacity": 1,
+              "fillColor": "#ffffff",
+              "strokeColor": "#000000",
+              "strokeWidth": 0,
+              "pptxSourceNode": {
+                "id": "2",
+                "role": "geometry"
+              }
+            }
+          }
+        }
+      },
+      "assets": {},
+      "createdAt": 0,
+      "updatedAt": 0,
+      "pptxSource": {
+        "version": 1,
+        "base64": "UEsDBBQAAAAIAAAAIQBMagnj0QAAAP0BAAATAAAAW0NvbnRlbnRfVHlwZXNdLnhtbK1RvU7DQAx+lejWqnHpwICaLsBKGXgB6+I0J+7HOrtVeXuctEiACixMlv39St68vDFJc0oxS+dGVb4DED9SQmkLUzZkKDWh2lr3wOhfcU+wXq1uwZeslHWpk4fbbh5owEPU5vFkZwkld65SFNfcn4lTVueQOQaPajgcc/8tZXlJaE05c2QMLAsjOLiaMCE/B1x0uyPVGnpqnrHqEyZjAbMCVxLTzdz2d6crVcswBE998YdkkvazWYpf1jZhyIs/yki0o5zHzX+3mV0/GsD89e07UEsDBBQAAAAIAAAAIQAvm14oigAAAPUAAAALAAAAX3JlbHMvLnJlbHONzz0OwjAMBeCrVDlAXRgYUJKJpSvqBaLU+RFNYiVGgtsTMRXEwOjnp8+yvOJmOJbcQqQ2PNKWmxKBmc4AzQZMpo2FMPeNKzUZ7mP1QMbejEc4TtMJ6t4QWu7NYV6VqPN6EMPyJPzHLs5Fi5di7wkz/zjx1eiyqR5ZCSIGqth6+G6PXRagJXx8qV9QSwMEFAAAAAgAAAAhAMWovidLAAAAVgAAABQAAABwcHQvcHJlc2VudGF0aW9uLnhtbLMpsCooSi1OzStJLMnMz1OoyM3JK7YqsFXKKCkpsNLXL07OSM1NLNbLL0jNA8ql5RflJpYAuUXp+sj6cnP0jQwMzPRzEzPzlPTtAFBLAwQUAAAACAAAACEAz+DXcn4AAACtAAAAFQAAAHBwdC9zbGlkZXMvc2xpZGUxLnhtbEWOSwrDMAxErxJ8gCpk0YVxfIQSSC9gErUx2LKQTMjxmw8lG2mGNxrk2Gqamy0nUsu9WWplC6DTgjnoozDSzj5Fcqi7lS+woCLVUGOhnKBr2yfkEMl4x3Ya03xs5bcgXuqYtI48yJl4rYM0ce5NZ8A7uBlcYbiv4V8I55f+B1BLAQIUAxQAAAAIAAAAIQBMagnj0QAAAP0BAAATAAAAAAAAAAAAAACAAQAAAABbQ29udGVudF9UeXBlc10ueG1sUEsBAhQDFAAAAAgAAAAhAC+bXiiKAAAA9QAAAAsAAAAAAAAAAAAAAIABAgEAAF9yZWxzLy5yZWxzUEsBAhQDFAAAAAgAAAAhAMWovidLAAAAVgAAABQAAAAAAAAAAAAAAIABtQEAAHBwdC9wcmVzZW50YXRpb24ueG1sUEsBAhQDFAAAAAgAAAAhAM/g13J+AAAArQAAABUAAAAAAAAAAAAAAIABMgIAAHBwdC9zbGlkZXMvc2xpZGUxLnhtbFBLBQYAAAAABAAEAP8AAADjAgAAAAA=",
+        "sha256": "02c01a688a41ddbe862e358b5a533ea2b12b30c6e5dc40bfef8aa5935a20df3c"
+      }
+    }
+  }
+]

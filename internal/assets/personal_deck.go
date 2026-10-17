@@ -11,34 +11,36 @@ import (
 )
 
 type personalDeckElement struct {
-	ID       string  `json:"id"`
-	Type     string  `json:"type"`
-	AssetID  string  `json:"assetId"`
-	X        float64 `json:"x"`
-	Y        float64 `json:"y"`
-	Width    float64 `json:"width"`
-	Height   float64 `json:"height"`
-	Rotation float64 `json:"rotation"`
-	Opacity  float64 `json:"opacity"`
+	Adjustments json.RawMessage `json:"adjustments"`
+	Shape       string          `json:"shape"`
+	SourceNode  json.RawMessage `json:"pptxSourceNode"`
+	ID          string          `json:"id"`
+	Type        string          `json:"type"`
+	AssetID     string          `json:"assetId"`
+	X           float64         `json:"x"`
+	Y           float64         `json:"y"`
+	Width       float64         `json:"width"`
+	Height      float64         `json:"height"`
+	Rotation    float64         `json:"rotation"`
+	Opacity     float64         `json:"opacity"`
 }
 
 // ValidatePersonalDeck checks the portable document graph before it can become a cloud head.
 // Legacy documents without a schema version use the same graph; clients migrate them to v1.
 func ValidatePersonalDeck(ctx context.Context, reader io.Reader) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	var deck struct {
-		SchemaVersion *int     `json:"schemaVersion"`
-		ID            string   `json:"id"`
-		Name          string   `json:"name"`
-		Width         float64  `json:"width"`
-		Height        float64  `json:"height"`
-		SlideOrder    []string `json:"slideOrder"`
-		Slides        map[string]struct {
-			ID           string                         `json:"id"`
-			ThemeID      string                         `json:"themeId"`
-			ElementOrder []string                       `json:"elementOrder"`
-			Elements     map[string]personalDeckElement `json:"elements"`
-		} `json:"slides"`
-		Assets map[string]struct {
+		SchemaVersion *int                               `json:"schemaVersion"`
+		ID            string                             `json:"id"`
+		Name          string                             `json:"name"`
+		Width         float64                            `json:"width"`
+		Height        float64                            `json:"height"`
+		SlideOrder    []string                           `json:"slideOrder"`
+		Slides        map[string]personalDeckSourceSlide `json:"slides"`
+		Source        json.RawMessage                    `json:"pptxSource"`
+		Assets        map[string]struct {
 			ID       string `json:"id"`
 			MIMEType string `json:"mimeType"`
 			DataURL  string `json:"dataUrl"`
@@ -46,14 +48,27 @@ func ValidatePersonalDeck(ctx context.Context, reader io.Reader) error {
 		Themes         map[string]json.RawMessage `json:"themes"`
 		DefaultThemeID string                     `json:"defaultThemeId"`
 	}
-	decoder := json.NewDecoder(&contextReader{ctx: ctx, reader: io.LimitReader(reader, PersonalMaxFileSize+1)})
+	limited := &io.LimitedReader{R: &contextReader{ctx: ctx, reader: reader}, N: PersonalMaxFileSize + 1}
+	decoder := json.NewDecoder(limited)
 	if err := decoder.Decode(&deck); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return ErrInvalidUpload
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return ErrInvalidUpload
 	}
-	if deck.SchemaVersion != nil && *deck.SchemaVersion != 1 {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if limited.N <= 0 {
+		return ErrInvalidUpload
+	}
+	if deck.SchemaVersion != nil && *deck.SchemaVersion != 1 && *deck.SchemaVersion != 2 && *deck.SchemaVersion != 3 {
 		return ErrInvalidUpload
 	}
 	if strings.TrimSpace(deck.ID) == "" || strings.TrimSpace(deck.Name) == "" || !personalDimension(deck.Width) || !personalDimension(deck.Height) || deck.Slides == nil || len(deck.Slides) > 2000 || len(deck.Assets) > 10000 || len(deck.Themes) > 2000 || !personalOrder(deck.SlideOrder, deck.Slides) {
@@ -61,6 +76,26 @@ func ValidatePersonalDeck(ctx context.Context, reader io.Reader) error {
 	}
 	if deck.DefaultThemeID != "" && deck.Themes[deck.DefaultThemeID] == nil {
 		return ErrInvalidUpload
+	}
+	var source *personalDeckSource
+	if deck.SchemaVersion == nil || *deck.SchemaVersion == 1 {
+		if len(deck.Source) > 0 {
+			return ErrInvalidUpload
+		}
+		for _, slide := range deck.Slides {
+			if len(slide.SourcePart) > 0 {
+				return ErrInvalidUpload
+			}
+			for _, element := range slide.Elements {
+				if len(element.SourceNode) > 0 {
+					return ErrInvalidUpload
+				}
+			}
+		}
+	} else if len(deck.Source) > 0 {
+		if err := json.Unmarshal(deck.Source, &source); err != nil || source == nil {
+			return ErrInvalidUpload
+		}
 	}
 	total := 0
 	for id, slide := range deck.Slides {
@@ -84,6 +119,26 @@ func ValidatePersonalDeck(ctx context.Context, reader io.Reader) error {
 				}
 			} else if !personalDimension(e.Width) || !personalDimension(e.Height) {
 				return ErrInvalidUpload
+			}
+			if len(e.Adjustments) > 0 && (deck.SchemaVersion == nil || *deck.SchemaVersion != 3 || e.Type != "shape") {
+				return ErrInvalidUpload
+			}
+			if e.Type == "shape" {
+				count := personalPresetAdjustmentCount(e.Shape)
+				if count < 0 || ((deck.SchemaVersion == nil || *deck.SchemaVersion != 3) && e.Shape != "rectangle" && e.Shape != "ellipse") {
+					return ErrInvalidUpload
+				}
+				if len(e.Adjustments) > 0 {
+					var values []*float64
+					if err := json.Unmarshal(e.Adjustments, &values); err != nil || values == nil || len(values) > 16 || len(values) > count {
+						return ErrInvalidUpload
+					}
+					for _, value := range values {
+						if value == nil || math.Trunc(*value) != *value || *value < -2147483648 || *value > 2147483647 {
+							return ErrInvalidUpload
+						}
+					}
+				}
 			}
 			switch e.Type {
 			case "image":
@@ -130,7 +185,7 @@ func ValidatePersonalDeck(ctx context.Context, reader io.Reader) error {
 			return ErrInvalidUpload
 		}
 	}
-	return ctx.Err()
+	return validatePersonalDeckSource(ctx, source, deck.Slides)
 }
 func personalDimension(n float64) bool  { return n > 0 && n <= 100000 && !math.IsNaN(n) }
 func personalCoordinate(n float64) bool { return math.Abs(n) <= 1000000 && !math.IsNaN(n) }
@@ -149,4 +204,17 @@ func personalOrder[T any](order []string, items map[string]T) bool {
 		seen[id] = true
 	}
 	return true
+}
+
+func personalPresetAdjustmentCount(shape string) int {
+	switch shape {
+	case "rectangle", "ellipse", "rtTriangle", "diamond":
+		return 0
+	case "roundRect", "triangle":
+		return 1
+	case "rightArrow", "leftArrow", "upArrow", "downArrow":
+		return 2
+	default:
+		return -1
+	}
 }

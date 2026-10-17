@@ -398,6 +398,8 @@ paths:
         content:
           application/octet-stream:
             schema: { type: string, format: binary }
+          application/vnd.hhc.presenter+json:
+            schema: { $ref: '#/components/schemas/PersonalDeckDocument' }
       responses:
         '204': { description: Bytes stored without replacing prior content. }
         '400': { $ref: '#/components/responses/Error' }
@@ -411,6 +413,11 @@ paths:
     post:
       operationId: completePersonalUpload
       summary: Validate and seal an owner-scoped upload
+      description: >-
+        Presenter JSON bytes conform to PersonalDeckDocument. Legacy and schema v1 remain supported;
+        schema v2 may retain a validated original PPTX package. Invalid graph, source, ZIP/XML bounds
+        or digest returns 422 before completion or cloud-head eligibility. Source validation does not
+        fetch external relationships. The whole UTF-8 document remains limited to 200 MiB.
       tags: [Public]
       x-hhc-visibility: public
       x-hhc-callers: [api-gateway]
@@ -3664,6 +3671,144 @@ components:
         nextCursor: { type: string }
         hasMore: { type: boolean }
         reset: { type: boolean, const: true }
+    PersonalDeckDocument:
+      type: object
+      description: >-
+        Portable Presenter JSON. Omitted schemaVersion is legacy v1; schema v1 forbids source fields.
+        v2/v3 support optional immutable source. v3 adds bounded preset geometry adjustments. Map keys must equal object IDs; ordered IDs must be
+        unique and cover their maps. Maximum 2000 slides, 10000 assets, 10000 elements per slide and
+        100000 elements overall. Maximum serialized UTF-8 size is 209715200 bytes, including source
+        base64 and image data. Opening a document does not rewrite it. New source writes require
+        coordinated client/API rollout; schemas v2/v3 are not readable by older clients.
+      required: [id, name, width, height, slideOrder, slides]
+      properties:
+        schemaVersion: { type: integer, enum: [1, 2, 3] }
+        id: { type: string, minLength: 1 }
+        name: { type: string, minLength: 1 }
+        width: { type: number, exclusiveMinimum: 0, maximum: 100000 }
+        height: { type: number, exclusiveMinimum: 0, maximum: 100000 }
+        slideOrder: { type: array, maxItems: 2000, uniqueItems: true, items: { type: string, minLength: 1 } }
+        slides: { type: object, maxProperties: 2000, additionalProperties: { $ref: '#/components/schemas/PersonalDeckSlide' } }
+        assets: { type: object, maxProperties: 10000 }
+        pptxSource: { $ref: '#/components/schemas/PersonalPptxSource' }
+      allOf:
+        - if:
+            properties: { schemaVersion: { enum: [2, 3] } }
+            required: [schemaVersion]
+          else:
+            properties:
+              pptxSource: false
+              slides:
+                additionalProperties:
+                  properties:
+                    pptxSourcePart: false
+                    elements: { additionalProperties: { properties: { pptxSourceNode: false } } }
+        - if:
+            properties: { schemaVersion: { const: 3 } }
+            required: [schemaVersion]
+          else:
+            properties:
+              slides:
+                additionalProperties:
+                  properties:
+                    elements:
+                      additionalProperties:
+                        properties:
+                          shape: { enum: [rectangle, ellipse] }
+                          adjustments: false
+        - if:
+            not: { properties: { pptxSource: {} }, required: [pptxSource] }
+          then:
+            properties:
+              slides:
+                additionalProperties:
+                  properties:
+                    pptxSourcePart: false
+                    elements: { additionalProperties: { properties: { pptxSourceNode: false } } }
+    PersonalDeckSlide:
+      type: object
+      required: [id, elementOrder, elements]
+      properties:
+        id: { type: string, minLength: 1 }
+        elementOrder: { type: array, maxItems: 10000, uniqueItems: true, items: { type: string, minLength: 1 } }
+        elements: { type: object, maxProperties: 10000, additionalProperties: { $ref: '#/components/schemas/PersonalDeckElement' } }
+        pptxSourcePart:
+          type: string
+          pattern: '^ppt/slides/[^/]+\.xml$'
+          description: Existing source slide part. Required when any element has pptxSourceNode; inserted/copied slides need no source reference.
+    PersonalDeckElement:
+      type: object
+      required: [id, type, x, y, width, height, rotation, opacity]
+      properties:
+        id: { type: string, minLength: 1 }
+        type: { type: string, enum: [text, image, shape, line, locked] }
+        x: { type: number, minimum: -1000000, maximum: 1000000 }
+        y: { type: number, minimum: -1000000, maximum: 1000000 }
+        width: { type: number, minimum: -1000000, maximum: 1000000 }
+        height: { type: number, minimum: -1000000, maximum: 1000000 }
+        rotation: { type: number, minimum: -1000000, maximum: 1000000 }
+        opacity: { type: number, minimum: 0, maximum: 1 }
+        shape: { type: string, enum: [rectangle, ellipse, roundRect, triangle, rtTriangle, diamond, rightArrow, leftArrow, upArrow, downArrow] }
+        adjustments:
+          type: array
+          maxItems: 16
+          description: Optional prefix of preset parameters; omission retains defaults. Raw stored values are unchanged on opening; rendering clamps by preset and dimensions. roundRect/triangle have one parameter, arrows two, other supported presets zero. Requires document schema v3.
+          items: { type: integer, minimum: -2147483648, maximum: 2147483647 }
+        pptxSourceNode: { $ref: '#/components/schemas/PersonalPptxSourceNode' }
+      allOf:
+        - if:
+            properties: { type: { const: shape } }
+          then:
+            required: [shape]
+          else:
+            properties: { adjustments: false }
+        - if:
+            properties: { shape: { enum: [rectangle, ellipse, rtTriangle, diamond] } }
+            required: [shape]
+          then:
+            properties: { adjustments: { maxItems: 0 } }
+        - if:
+            properties: { shape: { enum: [roundRect, triangle] } }
+            required: [shape]
+          then:
+            properties: { adjustments: { maxItems: 1 } }
+        - if:
+            properties: { shape: { enum: [rightArrow, leftArrow, upArrow, downArrow] } }
+            required: [shape]
+          then:
+            properties: { adjustments: { maxItems: 2 } }
+        - if:
+            properties: { type: { const: line } }
+          else:
+            properties:
+              width: { exclusiveMinimum: 0, maximum: 100000 }
+              height: { exclusiveMinimum: 0, maximum: 100000 }
+    PersonalPptxSource:
+      type: object
+      required: [version, base64, sha256]
+      description: >-
+        Exact original non-macro PPTX ZIP with canonical RFC4648 base64 and matching SHA-256.
+        Compressed source is bounded by 200 MiB; whole-document limit is usually tighter after
+        base64 overhead and duplicated images. ZIP limits: 4000 members, 33554432 expanded bytes
+        per member, 268435456 expanded bytes total, 201326592 media bytes. XML depth maximum 128.
+        Malformed XML, DTD/entities, encrypted entries, ZIP64, macros, duplicate/unsafe paths,
+        inconsistent sizes and CRC failures are rejected. OPC roots/content types/relationships
+        and referenced nodes are validated. External relationships remain inert and are never fetched.
+      properties:
+        version: { type: integer, const: 1 }
+        base64: { type: string, minLength: 4, maxLength: 279620268, contentEncoding: base64, contentMediaType: application/vnd.openxmlformats-officedocument.presentationml.presentation }
+        sha256: { type: string, pattern: '^[a-f0-9]{64}$' }
+    PersonalPptxSourceNode:
+      type: object
+      required: [id, role]
+      description: >-
+        Original p:cNvPr/@id in the parent slide part. text requires a text element and p:sp;
+        geometry requires shape/line and p:sp; image requires an image element and p:pic.
+        Duplicate (part, node ID, role) claims are rejected; geometry and text may share a node.
+        Copy/duplicate detaches references, edits/reorder retain them, undo restores previous refs.
+      properties:
+        id: { type: string, minLength: 1, maxLength: 512 }
+        role: { type: string, enum: [geometry, text, image] }
     PersonalUploadInput:
       type: object
       additionalProperties: false
