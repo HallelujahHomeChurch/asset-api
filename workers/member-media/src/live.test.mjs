@@ -38,7 +38,7 @@ test('live manifests resolve revisions and segments cannot pass the common water
 });
 test('live pointer rejects invalid fields and staging routes',async()=>{
  const f=await fixture();
- for(const pointer of [{revision:'../other',lastSequence:2},{revision:0,lastSequence:2},{revision:2,lastSequence:1440},{revision:2,lastSequence:2,extra:'x'},{revision:2,lastSequence:-1}]) {f.setPointer(pointer);assert.equal((await f.get('master.m3u8')).status,503);}
+ for(const pointer of [{revision:'../other',lastSequence:2},{revision:0,lastSequence:2},{revision:2,lastSequence:4320},{revision:2,lastSequence:2,extra:'x'},{revision:2,lastSequence:-1}]) {f.setPointer(pointer);assert.equal((await f.get('master.m3u8')).status,503);}
  assert.equal((await f.get('staging/720p/init.mp4')).status,404);
 });
 

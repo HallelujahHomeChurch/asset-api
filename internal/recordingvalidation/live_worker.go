@@ -48,7 +48,7 @@ func runLiveClaim(ctx context.Context, store *postgres.RecordingCaptureStore, ob
 		stage, started := "resume_publication", time.Now()
 		logStage := func(success bool) {
 			slog.Info("recording_live_stage", "capture_id", claim.Capture.ID, "claim_id", claim.ClaimID, "sequence", claim.Sequence,
-				"stage", stage, "elapsed_ms", time.Since(started).Milliseconds(), "succeeded", success)
+				"segment_frames", claim.Capture.SegmentFrames, "stage", stage, "elapsed_ms", time.Since(started).Milliseconds(), "succeeded", success)
 		}
 		defer func() { logStage(result == nil) }()
 		if snapshot.Revision == snapshot.PublishedRevision {
@@ -74,7 +74,7 @@ func runLiveClaim(ctx context.Context, store *postgres.RecordingCaptureStore, ob
 						}
 					}
 				}
-				if _, err = assets.AppendLiveSegment(snapshot.Segments, batch, normalTail); err != nil {
+				if _, err = assets.AppendLiveSegment(snapshot.Segments, batch, normalTail, claim.Capture.SegmentFrames); err != nil {
 					return err
 				}
 				logStage(true)
@@ -101,7 +101,7 @@ func runLiveClaim(ctx context.Context, store *postgres.RecordingCaptureStore, ob
 		}
 		logStage(true)
 		stage, started = "playlists", time.Now()
-		playlists, err := assets.RecordingLivePlaylists(snapshot.Segments, snapshot.Ended)
+		playlists, err := assets.RecordingLivePlaylists(snapshot.Segments, snapshot.Ended, claim.Capture.SegmentFrames)
 		if err != nil {
 			return err
 		}

@@ -72,7 +72,7 @@ PUT signing and durable completion handlers. These routes fail closed with 503
 unless `ASSET_RECORDING_HLS_ENABLED=true` is set for the API and recording Job.
 Upload status uses a strongly consistent, package-scoped R2 object listing
 instead of sequential HEAD requests per fragment, so long recordings do not
-exhaust the CMS control-request deadline. Listings are bounded to 10,000 objects;
+exhaust the CMS control-request deadline. Listings are bounded to 13,000 objects;
 only declared inventory paths with matching remote sizes are confirmed. Provider
 errors fail closed. Status paging and owner checks are unchanged, and size
 confirmation is not SHA-256/media validation or evidence of `ready`.

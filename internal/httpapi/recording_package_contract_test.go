@@ -28,7 +28,7 @@ func TestRecordingPackageWireFieldsMatchOpenAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	count := api.Components.Schemas["RecordingRendition"].Properties["segmentCount"].(map[string]any)
-	if count["minimum"] != 1 || count["maximum"] != 1440 || !strings.Contains(count["description"].(string), "Actual number of contiguous media segments") || strings.Contains(count["description"].(string), "ceil(") {
+	if count["minimum"] != 1 || count["maximum"] != assets.RecordingMaxSegments || !strings.Contains(count["description"].(string), "Actual number of contiguous media segments") || strings.Contains(count["description"].(string), "ceil(") {
 		t.Fatalf("segment count contract must use actual bounded media: %+v", count)
 	}
 	for name, value := range map[string]any{

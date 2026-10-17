@@ -37,7 +37,7 @@ func TestLiveSegmentRejectsMissingOrChangedObject(t *testing.T) {
 }
 
 func TestLiveSegmentDecodesThreeProfilesAndNormalTail(t *testing.T) {
-	for _, rate := range []string{"30", "30000/1001", "30000/1001-full", "mixed"} {
+	for _, rate := range []string{"30", "30000/1001", "30000/1001-full", "30000/1001-short", "mixed"} {
 		t.Run(rate, func(t *testing.T) { testLiveSegmentFrameRate(t, rate) })
 	}
 }
@@ -56,6 +56,10 @@ func testLiveSegmentFrameRate(t *testing.T, rate string) {
 	p, objects := packageTransferFixture()
 	declarations := map[int][]assets.RecordingPackageObject{0: {}, 1: {}}
 	duration := "35"
+	frames, segmentTime, profile := "900", "30", 900
+	if rate == "30000/1001-short" {
+		rate, duration, frames, segmentTime, profile = "30000/1001", "15", "300", "10.01", 300
+	}
 	if rate == "30000/1001-full" {
 		rate, duration = "30000/1001", "60.06"
 	}
@@ -68,7 +72,7 @@ func testLiveSegmentFrameRate(t *testing.T, rate string) {
 				profileRate = "30000/1001"
 			}
 		}
-		cmd := exec.Command(ffmpeg, "-nostdin", "-v", "error", "-f", "lavfi", "-i", fmt.Sprintf("color=size=%dx%d:rate=%s", r.Width, r.Height, profileRate), "-f", "lavfi", "-i", "sine=sample_rate=48000", "-t", duration, "-c:v", "libx264", "-threads", "2", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-g", "900", "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-f", "hls", "-hls_time", "30", "-hls_playlist_type", "vod", "-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", "init.mp4", "-hls_segment_filename", filepath.Join(dir, "seg-%06d.m4s"), filepath.Join(dir, "index.m3u8"))
+		cmd := exec.Command(ffmpeg, "-nostdin", "-v", "error", "-f", "lavfi", "-i", fmt.Sprintf("color=size=%dx%d:rate=%s", r.Width, r.Height, profileRate), "-f", "lavfi", "-i", "sine=sample_rate=48000", "-t", duration, "-c:v", "libx264", "-threads", "2", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-g", frames, "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-f", "hls", "-hls_time", segmentTime, "-hls_playlist_type", "vod", "-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", "init.mp4", "-hls_segment_filename", filepath.Join(dir, "seg-%06d.m4s"), filepath.Join(dir, "index.m3u8"))
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("fixture: %v %s", err, out)
 		}
@@ -96,7 +100,7 @@ func testLiveSegmentFrameRate(t *testing.T, rate string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	history, err := assets.AppendLiveSegment(nil, batch, false)
+	history, err := assets.AppendLiveSegment(nil, batch, false, profile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,20 +108,23 @@ func testLiveSegmentFrameRate(t *testing.T, rate string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = assets.AppendLiveSegment(history, tail, false); duration == "35" && !errors.Is(err, assets.ErrCaptureMissingObjects) {
+	if _, err = assets.AppendLiveSegment(history, tail, false, profile); duration == "35" && !errors.Is(err, assets.ErrCaptureMissingObjects) {
 		t.Fatalf("unsealed tail: %v", err)
 	}
-	history, err = assets.AppendLiveSegment(history, tail, true)
+	history, err = assets.AppendLiveSegment(history, tail, true, profile)
 	if err != nil {
 		t.Fatal(err)
 	}
-	playlists, err := assets.RecordingLivePlaylists(history, true)
+	playlists, err := assets.RecordingLivePlaylists(history, true, profile)
 	expected := "FRAME-RATE=30.000"
 	if rate != "30" {
 		expected = "FRAME-RATE=29.970"
 	}
 	if err != nil || strings.Count(string(playlists["master.m3u8"]), expected) != 3 {
 		t.Fatalf("master: %v %s", err, playlists["master.m3u8"])
+	}
+	if profile == 300 {
+		p.Inventory.PresetVersion = assets.RecordingTenSecondPreset
 	}
 	p.Inventory.Objects, p.Inventory.Renditions = nil, nil
 	master := "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-INDEPENDENT-SEGMENTS\n"
@@ -128,7 +135,11 @@ func testLiveSegmentFrameRate(t *testing.T, rate string) {
 		p.Inventory.Renditions = append(p.Inventory.Renditions, r)
 		sizes := []int64{int64(len(objects.bytes[p.StagingKey(r.Name+"/seg-000000.m4s")])), int64(len(objects.bytes[p.StagingKey(r.Name+"/seg-000001.m4s")]))}
 		durations := []float64{history[0].Renditions[r.Name].End - history[0].Renditions[r.Name].Start, history[1].Renditions[r.Name].End - history[1].Renditions[r.Name].Start}
-		peak, average, err := assets.RecordingPlaylistBitrates(sizes, durations, 31)
+		target := 31
+		if profile == 300 {
+			target = 11
+		}
+		peak, average, err := assets.RecordingPlaylistBitrates(sizes, durations, target)
 		if err != nil {
 			t.Fatal(err)
 		}

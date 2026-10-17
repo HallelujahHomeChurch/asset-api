@@ -169,7 +169,7 @@ func (p PackageMediaProbe) validateMedia(ctx context.Context, inv assets.Recordi
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := validateRenditionTimeline(r, timeline, reference); err != nil {
+		if err := validateRenditionTimeline(r, timeline, reference, inv.PresetVersion); err != nil {
 			return packageStageError("timeline", err)
 		}
 		codecs[r.Name] = timeline[0].Codecs
@@ -214,9 +214,13 @@ func removePackageScratch(path string) error {
 	return err
 }
 
-func validateRenditionTimeline(r assets.RecordingRendition, timeline, reference []segmentProbe) error {
+func validateRenditionTimeline(r assets.RecordingRendition, timeline, reference []segmentProbe, preset ...string) error {
 	if len(timeline) != r.SegmentCount || len(timeline) == 0 {
 		return assets.ErrInvalidUpload
+	}
+	nominal := 30.0
+	if len(preset) > 0 && preset[0] == assets.RecordingTenSecondPreset {
+		nominal = 10.01
 	}
 	for i, actual := range timeline {
 		if i == 0 {
@@ -226,7 +230,7 @@ func validateRenditionTimeline(r assets.RecordingRendition, timeline, reference 
 		} else if math.Abs(actual.Start-timeline[i-1].End) > 1/r.FrameRate+0.001 || actual.Codecs != timeline[0].Codecs {
 			return fmt.Errorf("segment decode: %w", assets.ErrInvalidUpload)
 		}
-		if i < r.SegmentCount-1 && math.Abs(actual.End-actual.Start-30) > 1/r.FrameRate+0.001 {
+		if i < r.SegmentCount-1 && math.Abs(actual.End-actual.Start-nominal) > 1/r.FrameRate+0.001 {
 			return assets.ErrInvalidUpload
 		}
 	}

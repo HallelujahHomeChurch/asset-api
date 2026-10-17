@@ -4,14 +4,14 @@ import worker from './index.ts';
 const recording='11111111-1111-4111-8111-111111111111',capture='a'.repeat(32),scope='22222222-2222-4222-8222-222222222222';
 const prefix=`recordings/captures/${capture}/final/`,path=`/videos/${recording}/captures/${capture}/sessions/${scope}/`;
 const encode=x=>Buffer.from(JSON.stringify(x)).toString('base64url');
-async function fixture(){
+async function fixture(segmentSeconds=30.03){
  const keys=await crypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},true,['sign','verify']);
  const now=Math.floor(Date.now()/1000),calls=[];
  const claims={iss:'test',aud:'hhc-media',typ:'playback',exp:now+300,recordingId:recording,captureId:capture,scopeId:scope,prefix,broadcastEpoch:1,rangeRevision:3,purpose:'member'};
  const sign=async c=>{const input=`${encode({alg:'ES256',typ:'JWT',kid:'test'})}.${encode(c)}`;return `${input}.${Buffer.from(await crypto.subtle.sign({name:'ECDSA',hash:'SHA-256'},keys.privateKey,new TextEncoder().encode(input))).toString('base64url')}`;};
  let policy={recordingId:recording,epoch:1,rangeRevision:3,startSequence:8,endSequenceExclusive:20,revoked:false,memberState:'live'};
  let lastSequence=23;
- const playlist='#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:31\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:EVENT\n#EXT-X-MAP:URI="init.mp4"\n'+Array.from({length:24},(_,i)=>`#EXTINF:30.030000,\nseg-${String(i).padStart(6,'0')}.m4s\n`).join('')+'#EXT-X-ENDLIST\n';
+ const playlist='#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:'+Math.ceil(segmentSeconds)+'\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:EVENT\n#EXT-X-MAP:URI="init.mp4"\n'+Array.from({length:24},(_,i)=>`#EXTINF:${segmentSeconds.toFixed(6)},\nseg-${String(i).padStart(6,'0')}.m4s\n`).join('')+'#EXT-X-ENDLIST\n';
  const env={MEDIA_ISSUER:'test',MEDIA_PUBLIC_KEYS:JSON.stringify({test:await crypto.subtle.exportKey('jwk',keys.publicKey)}),ALLOWED_ORIGINS:'https://www.alive.org.tw',MEDIA_BUCKET:{
  async get(key){calls.push(key);const value=key.endsWith('broadcast.json')?policy===null?null:JSON.stringify(policy):key.endsWith('current.json')?JSON.stringify({revision:25,lastSequence}):key.endsWith('index.m3u8')?playlist.split('#EXTINF:').slice(0,lastSequence+2).join('#EXTINF:'):'abcdef';return value===null?null:{size:Buffer.byteLength(value),httpEtag:'"media"',body:new Response(value).body};},
  async head(key){calls.push(key);return {size:6,httpEtag:'"media"'};}}};
@@ -46,3 +46,12 @@ test('end pending serves verified public prefix until the end marker arrives',as
 test('member admission blocks existing live and VOD grants before cache and admits only published VOD',async()=>{const f=await fixture();const token=await f.sign({...f.claims,captureId:undefined,packageId:capture,prefix:`recordings/packages/${capture}/final/attempt/`});const vod=()=>worker.fetch(new Request(`https://media.alive.org.tw/videos/${recording}/packages/${capture}/sessions/${scope}/480p/seg-000008.m4s`,{headers:{Cookie:`hhc_media=${token}`}}),f.env);assert.equal((await vod()).status,403);f.setPolicy({...f.policy,memberState:'vod'});assert.equal((await vod()).status,200);f.setPolicy({...f.policy,memberState:'blocked'});assert.equal((await f.get('480p/seg-000008.m4s')).status,403);assert.equal((await vod()).status,403);const preview=await f.sign({...f.claims,purpose:'staff-preview'});assert.equal((await f.get('480p/seg-000000.m4s',preview,'previews')).status,200);});
 
 test('existing member credential survives end revision while current authority still governs bytes',async()=>{const f=await fixture();f.setLastSequence(14);f.setPolicy({...f.policy,rangeRevision:4,endSequenceExclusive:20});assert.equal((await f.get('480p/seg-000010.m4s')).status,200);assert.equal((await f.get('480p/seg-000020.m4s')).status,404);f.setPolicy({...f.policy,rangeRevision:5,memberState:'blocked'});assert.equal((await f.get('480p/seg-000010.m4s')).status,403);f.setPolicy({...f.policy,rangeRevision:6,revoked:true});assert.equal((await f.get('480p/seg-000010.m4s')).status,403);});
+
+test('ten-second member projection preserves target duration and public boundaries',async()=>{
+ const f=await fixture(10.01),response=await f.get('720p/index.m3u8');
+ assert.equal(response.status,200);const body=await response.text();
+ assert.ok(body.includes('#EXT-X-TARGETDURATION:11\n'));
+ assert.ok(body.includes('#EXT-X-MEDIA-SEQUENCE:8\n'));
+ assert.equal((body.match(/#EXTINF:10.010000,/g)||[]).length,12);
+ assert.ok(!body.includes('seg-000007'));assert.ok(!body.includes('seg-000020'));
+});

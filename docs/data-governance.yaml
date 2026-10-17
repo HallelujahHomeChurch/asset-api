@@ -221,6 +221,7 @@ datasets:
     subject_keys: []
     data_classes: [identity, content, security, activity]
     fields:
+      - {name: recording_captures.segment_frames, purpose: Pin the validated segment profile across reconnects, necessity: required, data_classes: [security]}
       - {name: recording_captures.broadcast_epoch, purpose: Preserve legacy epoch-zero uniqueness while fencing B1 rebinding, necessity: required, data_classes: [security]}
       - {"name": "recording_captures.id", "purpose": "Identify capture and staging scope", "necessity": "required", "data_classes": ["identity"]}
       - {"name": "recording_captures.actor_id", "purpose": "Bind capture to the CMS authorized human uploader", "necessity": "required", "data_classes": ["identity", "security"]}

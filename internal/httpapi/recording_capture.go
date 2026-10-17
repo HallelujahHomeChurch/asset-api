@@ -86,6 +86,7 @@ func (h *Handler) createRecordingCapture(w http.ResponseWriter, r *http.Request)
 		RecordingID    string `json:"recordingId"`
 		OperationKey   string `json:"operationKey"`
 		BroadcastEpoch *int64 `json:"broadcastEpoch,omitempty"`
+		SegmentFrames  int    `json:"segmentFrames,omitempty"`
 	}
 	if !decodeJSON(w, r, &input) {
 		return
@@ -93,7 +94,9 @@ func (h *Handler) createRecordingCapture(w http.ResponseWriter, r *http.Request)
 	var result assets.RecordingCaptureResult
 	var err error
 	if input.BroadcastEpoch != nil {
-		result, err = h.recordingCaptures.CreateBroadcast(r.Context(), input.RecordingID, captureActor(r), input.OperationKey, *input.BroadcastEpoch)
+		result, err = h.recordingCaptures.CreateBroadcast(r.Context(), input.RecordingID, captureActor(r), input.OperationKey, *input.BroadcastEpoch, input.SegmentFrames)
+	} else if input.SegmentFrames != 0 {
+		err = assets.ErrInvalidInput
 	} else {
 		result, err = h.recordingCaptures.Create(r.Context(), input.RecordingID, captureActor(r), input.OperationKey)
 	}

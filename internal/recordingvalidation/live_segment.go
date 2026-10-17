@@ -16,7 +16,7 @@ import (
 // ValidateLiveSegment decodes only the next three closed fragments. Copies are
 // attempt-private; the caller publishes them only after the whole batch passes.
 func (p PackageMediaProbe) ValidateLiveSegment(ctx context.Context, captureID, attempt string, sequence int, declarations []assets.RecordingPackageObject) (result map[string]assets.RecordingLiveFragment, err error) {
-	if !packageIDPattern.MatchString(captureID) || !packageIDPattern.MatchString(attempt) || sequence < 0 || sequence >= 1440 || p.Objects == nil || !filepath.IsAbs(p.FFmpeg) || !filepath.IsAbs(p.FFprobe) {
+	if !packageIDPattern.MatchString(captureID) || !packageIDPattern.MatchString(attempt) || sequence < 0 || sequence >= assets.RecordingMaxSegments || p.Objects == nil || !filepath.IsAbs(p.FFmpeg) || !filepath.IsAbs(p.FFprobe) {
 		return nil, assets.ErrInvalidInput
 	}
 	selected := map[string]assets.RecordingPackageObject{}

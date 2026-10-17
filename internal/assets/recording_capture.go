@@ -38,6 +38,7 @@ type RecordingCaptureStoredReceipt struct {
 // Receipts and declarations are persisted together. Queued is upload evidence,
 // never immutable hash/media validation or an authorization to play.
 type RecordingCapture struct {
+	SegmentFrames                              int
 	ID, ActorID, RecordingID, CreateKey, State string
 	CreatedAt, ExpiresAt                       time.Time
 	DeclaredBytes                              int64
@@ -120,23 +121,33 @@ func captureOwner(c RecordingCapture, actor string) error {
 	return nil
 }
 func (s *RecordingCaptureService) Create(ctx context.Context, recording, actor, key string) (RecordingCaptureResult, error) {
-	return s.create(ctx, recording, actor, key, 0)
+	return s.create(ctx, recording, actor, key, 0, 900)
 }
-func (s *RecordingCaptureService) CreateBroadcast(ctx context.Context, recording, actor, key string, epoch int64) (RecordingCaptureResult, error) {
+func (s *RecordingCaptureService) CreateBroadcast(ctx context.Context, recording, actor, key string, epoch int64, profile ...int) (RecordingCaptureResult, error) {
+	frames := 900
+	if len(profile) > 0 && profile[0] != 0 {
+		frames = profile[0]
+	}
+	if frames != 300 && frames != 900 {
+		return RecordingCaptureResult{}, ErrInvalidInput
+	}
 	if epoch < 1 || epoch > BroadcastMaxRevision {
 		return RecordingCaptureResult{}, ErrInvalidInput
 	}
-	return s.create(ctx, recording, actor, key, epoch)
+	return s.create(ctx, recording, actor, key, epoch, frames)
 }
-func (s *RecordingCaptureService) create(ctx context.Context, recording, actor, key string, epoch int64) (RecordingCaptureResult, error) {
+func (s *RecordingCaptureService) create(ctx context.Context, recording, actor, key string, epoch int64, frames int) (RecordingCaptureResult, error) {
 	if !captureUUID.MatchString(recording) || !captureUUID.MatchString(actor) || !captureOperationKey.MatchString(key) {
 		return RecordingCaptureResult{}, ErrInvalidInput
 	}
 	now := s.now().UTC().Truncate(time.Microsecond)
-	c := RecordingCapture{BroadcastEpoch: epoch, ID: newID(), RecordingID: recording, ActorID: actor, CreateKey: key, State: "uploading", Progress: RecordingLiveProgress{LastSequence: -1}, CreatedAt: now, ExpiresAt: now.Add(RecordingUploadTTL), Receipts: map[string]RecordingCaptureStoredReceipt{}}
+	c := RecordingCapture{SegmentFrames: frames, BroadcastEpoch: epoch, ID: newID(), RecordingID: recording, ActorID: actor, CreateKey: key, State: "uploading", Progress: RecordingLiveProgress{LastSequence: -1}, CreatedAt: now, ExpiresAt: now.Add(RecordingUploadTTL), Receipts: map[string]RecordingCaptureStoredReceipt{}}
 	digest := captureDigest([]string{recording, actor})
 	if epoch > 0 {
 		digest = captureDigest([]any{recording, actor, epoch})
+	}
+	if frames == 300 {
+		digest = captureDigest([]any{recording, actor, epoch, frames})
 	}
 	c.Receipts[key] = RecordingCaptureStoredReceipt{digest, RecordingCaptureReceipt{key, "create", now, c.ID}}
 	got, err := s.repository.CreateCapture(ctx, c)
@@ -352,6 +363,9 @@ func (s *RecordingCaptureService) Seal(ctx context.Context, id, actor, key strin
 		NormalEnd bool
 		Digest    string
 	}{normalEnd, inv.InventoryDigest}, func(c *RecordingCapture) error {
+		if (c.SegmentFrames == 300) != (inv.PresetVersion == RecordingTenSecondPreset) {
+			return ErrInvalidInput
+		}
 		if len(inv.Objects) != len(c.Objects) {
 			return ErrCaptureMissingObjects
 		}
