@@ -19,7 +19,7 @@ func TestDisabledHLSDoesNotStartLegacyProcessing(t *testing.T) {
 
 func TestDrainLiveWaitsForIncomingFragments(t *testing.T) {
 	calls := 0
-	err := drainLiveValidation(context.Background(), time.Now().Add(time.Second), time.Millisecond, func(context.Context) (bool, error) { calls++; return calls == 2, nil }, func(context.Context) (bool, error) { return calls < 2, nil })
+	err := drainLiveValidation(context.Background(), time.Now().Add(time.Second), time.Millisecond, func(context.Context) (bool, error) { calls++; return calls == 2, nil }, func(context.Context) (bool, error) { return calls < 2, nil }, func(context.Context) bool { return false })
 	if err != nil || calls != 3 {
 		t.Fatalf("missed arriving segment: calls=%d err=%v", calls, err)
 	}
@@ -36,7 +36,7 @@ func TestDrainLiveIdleAndCancellation(t *testing.T) {
 					cancel()
 				}
 				return false, nil
-			}, func(context.Context) (bool, error) { return pending, nil })
+			}, func(context.Context) (bool, error) { return pending, nil }, func(context.Context) bool { return false })
 			if pending && !errors.Is(err, context.Canceled) || !pending && err != nil || calls != 1 {
 				t.Fatalf("unexpected wait: %d %v", calls, err)
 			}
@@ -47,7 +47,7 @@ func TestDrainLiveIdleAndCancellation(t *testing.T) {
 func TestDrainLiveStandbyHonorsDeadline(t *testing.T) {
 	started := time.Now()
 	calls := 0
-	err := drainLiveValidation(context.Background(), started.Add(20*time.Millisecond), time.Millisecond, func(context.Context) (bool, error) { calls++; return false, nil }, func(context.Context) (bool, error) { return true, nil })
+	err := drainLiveValidation(context.Background(), started.Add(20*time.Millisecond), time.Millisecond, func(context.Context) (bool, error) { calls++; return false, nil }, func(context.Context) (bool, error) { return true, nil }, func(context.Context) bool { return false })
 	if err != nil || calls < 1 || time.Since(started) < 20*time.Millisecond || time.Since(started) > time.Second {
 		t.Fatalf("standby escaped its bounded window: calls=%d elapsed=%s err=%v", calls, time.Since(started), err)
 	}
@@ -70,10 +70,44 @@ func TestLiveOwnerBridgesCronBoundariesWithoutCancellingClaims(t *testing.T) {
 			claims++
 			next = next.Add(10 * time.Second)
 			return true, nil
-		}, func(context.Context) (bool, error) { return time.Since(start) < 3*time.Minute, nil })
+		}, func(context.Context) (bool, error) { return time.Since(start) < 3*time.Minute, nil }, func(context.Context) bool { return false })
 		if err != nil || claims != 17 {
 			t.Fatalf("continuous service: claims=%d err=%v", claims, err)
 		}
 		t.Logf("simulated live interval=%s claims=%d processing=%s", time.Since(start), claims, time.Duration(claims)*8*time.Second)
+	})
+}
+
+// A background validation holds slot 1 throughout; optional media must reuse
+// slot 2 between live fragments instead of waiting for the live session to end.
+func TestLiveOwnerServicesOptionalMediaBetweenFragments(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		start := time.Now()
+		next := start
+		fragments, images := 0, 0
+		err := drainLiveValidation(context.Background(), start.Add(time.Minute), time.Second,
+			func(context.Context) (bool, error) {
+				if fragments == 3 || time.Now().Before(next) {
+					return false, nil
+				}
+				time.Sleep(5 * time.Second)
+				fragments++
+				next = next.Add(10 * time.Second)
+				return true, nil
+			}, func(context.Context) (bool, error) { return time.Since(start) < 30*time.Second, nil },
+			func(context.Context) bool {
+				if images == fragments {
+					return false
+				}
+				if fragments == 0 {
+					t.Fatal("optional media ran before live verification")
+				}
+				time.Sleep(time.Second)
+				images++
+				return true
+			})
+		if err != nil || fragments != 3 || images != 3 {
+			t.Fatalf("live=%d images=%d err=%v", fragments, images, err)
+		}
 	})
 }

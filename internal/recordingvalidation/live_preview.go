@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hhc/asset-api/internal/assets"
 	"hhc/asset-api/internal/postgres"
+	"log/slog"
 	"strings"
 	"time"
 )
@@ -43,6 +44,8 @@ func RunLivePreview(ctx context.Context, repo *postgres.RecordingPackageStore, o
 	if err != nil {
 		return false, err
 	}
+	started := time.Now()
+	slog.Info("recording_live_preview_claim", "capture_id", c.CaptureID, "claim_id", c.ClaimID, "first_sequence", c.Completed+1, "last_sequence", c.Last)
 	work, cancel := context.WithTimeout(ctx, 20*time.Second)
 	r := assets.RecordingRendition{Name: "480p", SegmentCount: c.Last + 1}
 	vtt, err := probe.generateSharedPreviews(work, c.CaptureID, "recordings/captures/"+c.CaptureID+"/final/", c.Objects, r, c.Timeline, c.Completed+1, c.VTT, objects)
@@ -53,5 +56,7 @@ func RunLivePreview(ctx context.Context, repo *postgres.RecordingPackageStore, o
 	if err == nil {
 		publish = func(ctx context.Context) error { return objects.AdvanceLivePreviewPointer(ctx, c.CaptureID, c.Last) }
 	}
-	return true, errors.Join(err, repo.FinishLivePreview(finish, c, vtt, publish))
+	finishErr := repo.FinishLivePreview(finish, c, vtt, publish)
+	slog.Info("recording_live_preview_result", "capture_id", c.CaptureID, "claim_id", c.ClaimID, "last_sequence", c.Last, "elapsed_ms", time.Since(started).Milliseconds(), "generated", err == nil, "committed", finishErr == nil)
+	return true, errors.Join(err, finishErr)
 }

@@ -135,8 +135,8 @@ func processRecording(ctx context.Context, mode string, db *sql.DB, objects *r2.
 					"processing_ms", busy.Milliseconds(), "non_processing_ms", (time.Since(started) - busy).Milliseconds(), "claims", liveClaims, "polls", polls, "failed", result != nil)
 			}()
 			// Stay across cron boundaries without changing claim/slot concurrency.
-			// Other executions handle non-live work; event mode supplies those
-			// through their own durable lanes rather than a minute cron.
+			// Use gaps between fragments for optional media so a background
+			// validation cannot monopolize the other global slot for a whole live.
 			return drainLiveValidation(ctx, started.Add(liveWorkerWindow), 5*time.Second,
 				func(ctx context.Context) (bool, error) {
 					if err := check(ctx); err != nil {
@@ -154,6 +154,21 @@ func processRecording(ctx context.Context, mode string, db *sql.DB, objects *r2.
 					active, err := liveStore.LiveInputPending(ctx)
 					liveSession = liveSession || active
 					return active, err
+				}, func(ctx context.Context) bool {
+					before := time.Now()
+					defer func() { busy += time.Since(before) }()
+					processed, err := recordingvalidation.RunLiveCoverProcessing(ctx, postgres.NewRecordingLiveCoverStore(db), objects, probe)
+					if err != nil {
+						slog.Warn("recording_live_cover_processing_failed")
+					}
+					if processed || err != nil {
+						return processed
+					}
+					processed, err = recordingvalidation.RunLivePreview(ctx, packages, objects, probe)
+					if err != nil {
+						slog.Warn("recording_live_preview_processing_failed")
+					}
+					return processed
 				})
 		})
 		if err != nil {
@@ -224,7 +239,7 @@ func processRecording(ctx context.Context, mode string, db *sql.DB, objects *r2.
 
 // Keep a scheduled execution available while a live input is assembling its
 // next complete segment; idle sites still exit immediately.
-func drainLiveValidation(ctx context.Context, deadline time.Time, interval time.Duration, run func(context.Context) (bool, error), pending func(context.Context) (bool, error)) error {
+func drainLiveValidation(ctx context.Context, deadline time.Time, interval time.Duration, run func(context.Context) (bool, error), pending func(context.Context) (bool, error), optional func(context.Context) bool) error {
 	for time.Now().Before(deadline) {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -242,6 +257,9 @@ func drainLiveValidation(ctx context.Context, deadline time.Time, interval time.
 		}
 		if !active {
 			return nil
+		}
+		if optional(ctx) {
+			continue
 		}
 		timer := time.NewTimer(min(interval, time.Until(deadline)))
 		select {

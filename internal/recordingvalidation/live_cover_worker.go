@@ -10,6 +10,7 @@ import (
 	"hhc/asset-api/internal/postgres"
 	"image/jpeg"
 	"io"
+	"log/slog"
 	"math"
 	"os"
 	"path/filepath"
@@ -128,6 +129,8 @@ func RunLiveCoverProcessing(ctx context.Context, repo *postgres.RecordingLiveCov
 	if err != nil {
 		return false, err
 	}
+	started := time.Now()
+	slog.Info("recording_live_cover_claim", "cover_id", c.ID, "capture_id", c.Scope, "claim_id", c.ClaimID, "kind", c.Kind)
 	work, cancel := context.WithTimeout(ctx, 30*time.Second)
 	var data []byte
 	if c.Kind == "auto" {
@@ -163,5 +166,6 @@ func RunLiveCoverProcessing(ctx context.Context, repo *postgres.RecordingLiveCov
 	if err == nil && finishErr == nil && c.Kind == "custom" {
 		finishErr = objects.DeleteCoverObjects(finish, []string{c.InputKey()})
 	}
+	slog.Info("recording_live_cover_result", "cover_id", c.ID, "capture_id", c.Scope, "claim_id", c.ClaimID, "elapsed_ms", time.Since(started).Milliseconds(), "generated", err == nil, "committed", finishErr == nil)
 	return true, errors.Join(err, finishErr)
 }
