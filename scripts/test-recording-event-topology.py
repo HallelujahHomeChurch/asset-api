@@ -131,6 +131,37 @@ class TopologyTest(unittest.TestCase):
             mod.quiesce(self.path,'alive')
         self.assertEqual(self.payloads(),[])
 
+    def test_partial_pause_failure_retains_rollback_responsibility(self):
+        self.jobs.append(self.job('asset-recording-live', 'Manual'))
+        mod.capture(self.path, 'alive')
+        output = Path(self.temp.name) / 'outputs'
+        def fail_second_patch(*args):
+            if args[:1] == ('rest',) and self.payloads():
+                raise RuntimeError('fixture patch failed')
+            return self.az(*args)
+        mod.az = fail_second_patch
+        with patch.dict(os.environ, {'RECORDING_EVENTS_ENABLED': 'true', 'GITHUB_OUTPUT': str(output)}):
+            with self.assertRaisesRegex(RuntimeError, 'fixture patch failed'):
+                mod.quiesce(self.path, 'alive')
+        self.assertIn('paused=true', output.read_text())
+        self.assertEqual(len(self.payloads()), 1)
+        self.assertEqual(self.payloads()[0][1]['properties']['configuration']['triggerType'], 'Manual')
+
+    def test_execution_racing_with_pause_leaves_triggers_manual(self):
+        mod.capture(self.path, 'alive')
+        output = Path(self.temp.name) / 'outputs'
+        def start_during_pause(*args):
+            result = self.az(*args)
+            if args[:1] == ('rest',):
+                self.active = True
+            return result
+        mod.az = start_during_pause
+        with patch.dict(os.environ, {'RECORDING_EVENTS_ENABLED': 'true', 'GITHUB_OUTPUT': str(output)}):
+            with self.assertRaisesRegex(RuntimeError, 'still active'):
+                mod.quiesce(self.path, 'alive')
+        self.assertIn('paused=true', output.read_text())
+        self.assertTrue(all(p[1]['properties']['configuration']['triggerType'] == 'Manual' for p in self.payloads()))
+
     def test_workflow_coordinates_failure_recovery(self):
         workflow = Path('.github/workflows/release.yml').read_text()
         rollback = workflow[workflow.index('      - name: Roll back failed runtime'):workflow.index('  deploy_media:')]
