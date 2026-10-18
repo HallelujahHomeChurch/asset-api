@@ -22,6 +22,8 @@ func TestLiveCoverRoutesFailClosed(t *testing.T) {
 		{"GET", "/priv/recording-live-covers/defaults/uploads/one", "hhc-web-api", 503},
 		{"GET", "/priv/recording-live-covers/defaults/uploads/one/content", "account-api", 403},
 		{"POST", "/priv/recording-live-covers/capture/auto", "account-api", 403},
+		{"POST", "/priv/recording-live-covers/capture/refresh-auto", "account-api", 403},
+		{"POST", "/priv/recording-live-covers/capture/refresh-auto", "hhc-web-api", 503},
 	} {
 		r := httptest.NewRequest(tc.method, tc.path, nil)
 		r.Header.Set("X-Internal-Caller-App-Id", tc.caller)

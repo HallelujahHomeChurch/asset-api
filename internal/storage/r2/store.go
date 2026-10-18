@@ -182,7 +182,7 @@ func (s *Store) DeletePackageObjects(ctx context.Context, keys []string) error {
 			current = strings.Join(parts[:4], "/") + "/"
 		} else if packageFinalKey.MatchString(key) || packageControlKey.MatchString(key) || packagePreviewKey.MatchString(key) {
 			current = strings.Join(parts[:5], "/") + "/"
-		} else if liveDeleteKey.MatchString(key) {
+		} else if liveDeleteKey.MatchString(key) || livePreviewKey.MatchString(key) {
 			current = strings.Join(parts[:4], "/") + "/"
 		} else {
 			return errors.New("invalid package delete key")

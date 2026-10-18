@@ -32,7 +32,7 @@ checks pass. Ordinary Blob scanning stays unchanged.
 
 The optional VTT and JPEG routes use the exact playback Cookie, scope, expiry,
 CORS, GET/HEAD/Range and cache authorization as HLS, including on cache hits.
-MIME types are `text/vtt` and `image/jpeg`; each object is capped at 1 MiB.
+MIME types are `text/vtt` (at most 2 MiB) and `image/jpeg` (at most 1 MiB).
 The standard WEBVTT cues sample every five seconds. Each 30-second media
 fragment has one 960x90 JPEG with six horizontal 160x90 cells, referenced as
 `seg-000000.jpg#xywh=0,0,160,90` relative to `previews/index.vtt`. Final cues end
@@ -50,6 +50,29 @@ and 5.5-hour deadline. Waiting upload validation and source jobs take priority.
 Migration 031's default pending state includes existing ready packages; three
 attempts total include crashes, with five-minute retry delay and no work after
 media expiry. Failed previews leave `state=ready` untouched.
+
+Live captures use the same five-second cells after complete fragment validation.
+The Job claims at most six verified segments and runs for at most 20 seconds,
+after runnable live/package validation and source work. Preview failure or absence
+never changes readiness or the live waterline. A two-minute fenced lease and
+five-minute failure backoff use the existing two slots.
+
+Live sprites and per-segment receipts live under
+`recordings/captures/{captureId}/final/previews/shared/seg-NNNNNN.{jpg|vtt}`.
+Cumulative indexes use `previews/{segmentCount}/index.vtt`; a conditional monotonic
+`previews/current.json` pointer advances only after all referenced images exist.
+Retries reuse completed receipts, including gaps after interruption. Ready VOD
+fills only missing images, finalizes the index, and points to the same immutable
+capture images. Shared preview bytes remain until package expiry plus grant grace.
+B1 VOD already reads canonical capture media, so its capture media/current pointer/
+playlists remain for that same lifetime; legacy VOD needs only shared previews.
+Staging and temporary live validation attempts still follow the original capture
+expiry/lease/grant fences. Bounded daily sweeps continue after partial cleanup and
+include final VOD preview tails beyond the live waterline. The existing B1 package
+media copy is unchanged; canonical media deduplication is outside this change.
+The Worker authorizes each image before cache, clips and rebases public cues to
+`[startSequence,endSequenceExclusive)`, and keeps all verified public DVR history.
+Internal receipts and pointer paths are never publicly routable.
 
 Storage is server-only under the immutable final prefix:
 `previews/{preview-claim}/{index.vtt|seg-NNNNNN.jpg}`. A bounded private

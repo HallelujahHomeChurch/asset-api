@@ -71,6 +71,15 @@ func (s *Store) AdvanceLivePointer(ctx context.Context, id string, revision int6
 		return errors.New("invalid live pointer")
 	}
 	key := "recordings/captures/" + id + "/final/current.json"
+	return s.advanceLivePointerKey(ctx, key, revision, lastSequence)
+}
+func (s *Store) AdvanceLivePreviewPointer(ctx context.Context, id string, lastSequence int) error {
+	if !sourceAttemptID.MatchString(id) || lastSequence < 0 || lastSequence > 4319 {
+		return errors.New("invalid preview pointer")
+	}
+	return s.advanceLivePointerKey(ctx, "recordings/captures/"+id+"/final/previews/current.json", int64(lastSequence+1), lastSequence)
+}
+func (s *Store) advanceLivePointerKey(ctx context.Context, key string, revision int64, lastSequence int) error {
 	data, _ := json.Marshal(livePointer{revision, lastSequence})
 	for attempt := 0; attempt < 3; attempt++ {
 		current, err := s.client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key)})

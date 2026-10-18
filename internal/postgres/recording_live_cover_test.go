@@ -274,3 +274,77 @@ func TestLiveCoverPromotionSourceReferencesHaveDurableCleanup(t *testing.T) {
 		})
 	}
 }
+
+func TestLiveAutoRefreshImmutableBucketAndLatestPublicMedia(t *testing.T) {
+	ctx := context.Background()
+	db := isolatedIntegrationDB(t)
+	if err := migrations.Run(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	cap := assets.RecordingCapture{ID: strings.Repeat("e", 32), ActorID: "actor", RecordingID: "recording", CreateKey: "refresh", State: "uploading", CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour), Receipts: map[string]assets.RecordingCaptureStoredReceipt{}}
+	if _, err := NewRecordingCaptureStore(db).CreateCapture(ctx, cap); err != nil {
+		t.Fatal(err)
+	}
+	exec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := db.ExecContext(ctx, q, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exec(`UPDATE recording_live SET segments='[{"sequence":0,"renditions":{"480p":{"start":0,"end":30}}},{"sequence":1,"renditions":{"480p":{"start":30,"end":60}}}]',revision=2,published_revision=2,published_sequence=1 WHERE capture_id=$1`, cap.ID)
+	s := NewRecordingLiveCoverStore(db)
+	original, err := s.Create(ctx, cap.ID, cap.RecordingID, "system", "auto", "", "", "auto")
+	if err != nil {
+		t.Fatal(err)
+	}
+	refresh, err := s.RefreshAuto(ctx, cap.ID, cap.RecordingID)
+	if err != nil || refresh.ID == original.ID {
+		t.Fatal("refresh reused original", err)
+	}
+	replay, err := s.RefreshAuto(ctx, cap.ID, cap.RecordingID)
+	if err != nil || replay.ID != refresh.ID {
+		t.Fatal("bucket not idempotent", err)
+	}
+	var sequence int
+	if err = db.QueryRow(`SELECT source_sequence FROM recording_live_covers WHERE id=$1`, refresh.ID).Scan(&sequence); err != nil || sequence != 1 {
+		t.Fatal("not latest verified", sequence, err)
+	}
+	originalAgain, err := s.Create(ctx, cap.ID, cap.RecordingID, "system", "auto", "", "", "auto")
+	if err != nil || originalAgain.ID != original.ID {
+		t.Fatal("legacy changed", err)
+	}
+	if _, err = NewRecordingCaptureStore(db).UpdateCapture(ctx, cap.ID, func(cap *assets.RecordingCapture) error {
+		for _, path := range []string{"480p/init.mp4", "480p/seg-000001.m4s"} {
+			cap.Objects = append(cap.Objects, assets.RecordingCaptureObject{RecordingPackageObject: assets.RecordingPackageObject{Path: path, SizeBytes: 10, SHA256: strings.Repeat("a", 64)}, State: "verified"})
+		}
+		cap.DeclaredObjects = 2
+		cap.DeclaredBytes = 20
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	exec(`UPDATE recording_live_covers SET state='failed' WHERE id=$1`, original.ID)
+	claim, err := s.Claim(ctx)
+	if err != nil || claim.ID != refresh.ID {
+		t.Fatal("refresh claim", err)
+	}
+	duration, media, err := s.AutoMedia(ctx, claim)
+	if err != nil || duration != 30 || len(media) != 2 || media[1].Path != "480p/seg-000001.m4s" {
+		t.Fatal("wrong refreshed media", duration, media, err)
+	}
+	// An end boundary excludes the latest raw segment and denies new refresh work.
+	exec(`INSERT INTO recording_broadcast_ranges(capture_id,recording_id,epoch,range_revision,start_sequence,end_sequence_exclusive,revoked,member_state) VALUES($1,$2,1,1,0,1,false,'live')`, cap.ID, cap.RecordingID)
+	if _, err = s.Create(ctx, cap.ID, cap.RecordingID, "system", "refresh:next", "", "", "auto"); !errors.Is(err, assets.ErrConflict) {
+		t.Fatal("refreshed ended broadcast", err)
+	}
+	if _, _, err = s.AutoMedia(ctx, claim); !errors.Is(err, assets.ErrConflict) {
+		t.Fatal("post-end refresh source remained readable", err)
+	}
+	// A request cannot target a different recording or defaults.
+	if _, err = s.RefreshAuto(ctx, cap.ID, "other"); !errors.Is(err, assets.ErrNotFound) {
+		t.Fatal("owner leak", err)
+	}
+	if _, err = s.RefreshAuto(ctx, "defaults", ""); !errors.Is(err, assets.ErrInvalidInput) {
+		t.Fatal("default auto", err)
+	}
+}
