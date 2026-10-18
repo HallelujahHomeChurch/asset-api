@@ -34,6 +34,8 @@ concurrency:
 
 jobs:
   verify:
+    outputs:
+      image_artifact_id: ${{ steps.images_artifact.outputs.artifact-id }}
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -157,6 +159,18 @@ jobs:
         with:
           path: ${{ env.HHC_BROADCAST_FIXTURE_DIR }}/raw
           key: broadcast-raw-${{ steps.broadcast_fixture.outputs.key }}
+      - name: Seal verified release images
+        run: bash scripts/release-image-artifact.sh pack "$RUNNER_TEMP/release-images" "$GITHUB_SHA" asset-api:verify asset-scan:verify asset-recording:verify
+      # Expired artifacts require a fresh verify run; deploy-only retries never rebuild.
+      - name: Store verified release images
+        id: images_artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-images-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-images
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
 
   deploy:
     needs: [verify, deploy_media]
@@ -239,6 +253,19 @@ jobs:
           fi
       - name: Set image tag
         run: echo "IMAGE_TAG=main-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+      - name: Require immutable image artifact ID
+        env:
+          IMAGE_ARTIFACT_ID: ${{ needs.verify.outputs.image_artifact_id }}
+        run: '[[ "$IMAGE_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]'
+      - name: Download verified release images
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.verify.outputs.image_artifact_id }}
+          path: ${{ runner.temp }}/release-images
+          digest-mismatch: error
+      - name: Verify and load release images
+        id: images
+        run: bash scripts/release-image-artifact.sh load "$RUNNER_TEMP/release-images" "$GITHUB_SHA"
       - name: Sign in to Azure with OIDC
         uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
         with:
@@ -319,12 +346,20 @@ jobs:
             echo "PREVIOUS_READY_REVISION=$revision"
             echo "PREVIOUS_IMAGE_REF=$(resolve_image_ref "$image")"
           } >> "$GITHUB_ENV"
-      - name: Build and push image
+      - name: Publish verified images
+        env:
+          API_IMAGE_ID: ${{ steps.images.outputs.api_image_id }}
+          SCAN_IMAGE_ID: ${{ steps.images.outputs.scan_image_id }}
+          RECORDING_IMAGE_ID: ${{ steps.images.outputs.recording_image_id }}
         run: |
-          az acr build --registry "$ACR_NAME" --image "${IMAGE_REPOSITORY}:${IMAGE_TAG}" --file Dockerfile .
-          az acr build --registry "$ACR_NAME" --image "${SCAN_IMAGE_REPOSITORY}:${IMAGE_TAG}" --file Dockerfile.scan .
+          az acr login --name "$ACR_NAME" --only-show-errors
+          docker tag "$API_IMAGE_ID" "${ACR_LOGIN_SERVER}/${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+          docker push "${ACR_LOGIN_SERVER}/${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+          docker tag "$SCAN_IMAGE_ID" "${ACR_LOGIN_SERVER}/${SCAN_IMAGE_REPOSITORY}:${IMAGE_TAG}"
+          docker push "${ACR_LOGIN_SERVER}/${SCAN_IMAGE_REPOSITORY}:${IMAGE_TAG}"
           if [[ "$MEMBER_VIDEO_ENABLED" == true ]]; then
-            az acr build --registry "$ACR_NAME" --image "${RECORDING_IMAGE_REPOSITORY}:${IMAGE_TAG}" --file Dockerfile.recording .
+            docker tag "$RECORDING_IMAGE_ID" "${ACR_LOGIN_SERVER}/${RECORDING_IMAGE_REPOSITORY}:${IMAGE_TAG}"
+            docker push "${ACR_LOGIN_SERVER}/${RECORDING_IMAGE_REPOSITORY}:${IMAGE_TAG}"
           fi
       - name: Resolve immutable image digest
         run: |
@@ -340,6 +375,20 @@ jobs:
             echo "RECORDING_IMAGE_REF=${ACR_LOGIN_SERVER}/${RECORDING_IMAGE_REPOSITORY}@${recording_digest}" >> "$GITHUB_ENV"
           else
             echo "RECORDING_IMAGE_REF=${ACR_LOGIN_SERVER}/${IMAGE_REPOSITORY}@${digest}" >> "$GITHUB_ENV"
+          fi
+      - name: Verify published image identities
+        env:
+          API_IMAGE_ID: ${{ steps.images.outputs.api_image_id }}
+          SCAN_IMAGE_ID: ${{ steps.images.outputs.scan_image_id }}
+          RECORDING_IMAGE_ID: ${{ steps.images.outputs.recording_image_id }}
+        run: |
+          docker pull "$IMAGE_REF"
+          docker pull "$SCAN_IMAGE_REF"
+          [[ "$(docker image inspect --format '{{.Id}}' "$IMAGE_REF")" == "$API_IMAGE_ID" ]]
+          [[ "$(docker image inspect --format '{{.Id}}' "$SCAN_IMAGE_REF")" == "$SCAN_IMAGE_ID" ]]
+          if [[ "$MEMBER_VIDEO_ENABLED" == true ]]; then
+            docker pull "$RECORDING_IMAGE_REF"
+            [[ "$(docker image inspect --format '{{.Id}}' "$RECORDING_IMAGE_REF")" == "$RECORDING_IMAGE_ID" ]]
           fi
       - name: Scan immutable images
         run: |
