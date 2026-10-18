@@ -77,11 +77,16 @@ func (p PackageMediaProbe) probeFragment(ctx context.Context, path string, r ass
 		}
 	}()
 	defer func() { resultErr = packageStageError(stage, resultErr) }()
-	data, err := ProbeCommand(ctx, p.FFprobe, "-v", "error", "-protocol_whitelist", "file", "-enable_drefs", "0", "-use_absolute_path", "0", "-show_data", "-show_streams", "-show_packets", "-show_entries", "stream=index,codec_type,codec_name,width,height,pix_fmt,sample_rate,channels,profile,r_frame_rate,sample_aspect_ratio,extradata:packet=stream_index,pts_time,duration_time,flags", "-of", "json", path)
+	data, err := ProbeCommand(ctx, p.FFprobe, "-v", "error", "-protocol_whitelist", "file", "-enable_drefs", "0", "-use_absolute_path", "0", "-show_data", "-show_streams", "-show_packets", "-show_entries", "stream=index,id,time_base,codec_type,codec_name,width,height,pix_fmt,sample_rate,channels,profile,r_frame_rate,sample_aspect_ratio,extradata:packet=stream_index,pts_time,duration_time,flags", "-of", "json", path)
 	if err != nil {
 		return segmentProbe{}, err
 	}
-	actual, err := validatePackageSegmentProbe(data, r)
+	actual, err := validatePackageSegmentProbe(data, r, nil)
+	if errors.Is(err, assets.ErrInvalidUpload) {
+		if durations, readErr := fragmentSampleDurations(path); readErr == nil {
+			actual, err = validatePackageSegmentProbe(data, r, durations)
+		}
+	}
 	if err != nil {
 		return segmentProbe{}, fmt.Errorf("segment stream or timeline: %w", err)
 	}
@@ -154,7 +159,7 @@ type segmentProbe struct {
 }
 
 // Only bounded ffprobe output from a local init+fragment is accepted here.
-func validatePackageSegmentProbe(data []byte, r assets.RecordingRendition) (segmentProbe, error) {
+func validatePackageSegmentProbe(data []byte, r assets.RecordingRendition, durations map[uint32][]uint32) (segmentProbe, error) {
 	// A zero expected rate is private live intake: detect only the approved
 	// rates, then prove CFR from packet durations and presentation timestamps.
 	live := r.FrameRate == 0
@@ -165,6 +170,8 @@ func validatePackageSegmentProbe(data []byte, r assets.RecordingRendition) (segm
 	var output struct {
 		Streams []struct {
 			Index       int    `json:"index"`
+			ID          string `json:"id"`
+			TimeBase    string `json:"time_base"`
 			Codec       string `json:"codec_name"`
 			Type        string `json:"codec_type"`
 			Width       int    `json:"width"`
@@ -189,6 +196,8 @@ func validatePackageSegmentProbe(data []byte, r assets.RecordingRendition) (segm
 	}
 	video, audio := -1, -1
 	audioChannels := 0
+	var audioDurations []uint32
+	audioTimeBase := 0.0
 	codecs := ""
 	for _, s := range output.Streams {
 		switch s.Type {
@@ -227,6 +236,23 @@ func validatePackageSegmentProbe(data []byte, r assets.RecordingRendition) (segm
 			}
 			audio = s.Index
 			audioChannels = s.Channels
+			if durations != nil {
+				track, err := strconv.ParseUint(s.ID, 0, 32)
+				parts := strings.Split(s.TimeBase, "/")
+				if err != nil || len(parts) != 2 {
+					return invalid()
+				}
+				n, e1 := strconv.ParseFloat(parts[0], 64)
+				d, e2 := strconv.ParseFloat(parts[1], 64)
+				if e1 != nil || e2 != nil || !finite(n) || !finite(d) || n <= 0 || d <= 0 {
+					return invalid()
+				}
+				audioTimeBase = n / d
+				audioDurations = durations[uint32(track)]
+				if len(audioDurations) == 0 {
+					return invalid()
+				}
+			}
 		default:
 			return invalid()
 		}
@@ -240,10 +266,18 @@ func validatePackageSegmentProbe(data []byte, r assets.RecordingRendition) (segm
 	}
 	stage = "packet fields"
 	tracks := map[int][]packet{video: nil, audio: nil}
+	audioPacket := 0
 	for _, p := range output.Packets {
 		pts, e1 := strconv.ParseFloat(p.PTS, 64)
 		duration, e2 := strconv.ParseFloat(p.Duration, 64)
-		missingDuration := p.Stream == audio && p.Duration == ""
+		if p.Stream == audio && durations != nil {
+			if audioPacket >= len(audioDurations) {
+				return invalid()
+			}
+			duration, e2 = float64(audioDurations[audioPacket])*audioTimeBase, nil
+			audioPacket++
+		}
+		missingDuration := p.Stream == audio && p.Duration == "" && durations == nil
 		if p.Stream == video && p.Duration == "" {
 			// ffprobe 5.1 can omit early fMP4 video durations before detecting
 			// the frame rate. The verified CFR interval is checked against every
@@ -259,6 +293,9 @@ func validatePackageSegmentProbe(data []byte, r assets.RecordingRendition) (segm
 			return invalid()
 		}
 		tracks[p.Stream] = append(tracks[p.Stream], packet{pts, duration, strings.Contains(p.Flags, "K")})
+	}
+	if durations != nil && audioPacket != len(audioDurations) {
+		return invalid()
 	}
 	for stream, packets := range tracks {
 		stage = "packet continuity"

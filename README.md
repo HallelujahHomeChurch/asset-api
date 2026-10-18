@@ -98,6 +98,13 @@ hits. Browser source ingest/encode is independently gated; CMS/player integratio
 and provider acceptance remain subsequent work. Enabling these producers is not
 end-to-end readiness.
 
+When older ffprobe rejects AAC timing, validation retries against the same
+fragment's bounded `trex`/`tfhd`/`trun` sample durations, matched by track ID,
+time base and exact packet count. This preserves declared timing across source
+audio gaps without widening continuity tolerances. Codec, CFR, IDR and complete
+decode checks remain required. Recovered uploads retain their first accepted
+completion timestamp so recovery cannot extend an active retention deadline.
+
 Live intake validates the next three closed rendition fragments with at most
 two workers inside the existing processing claim. Scratch capacity is checked
 for both workers before intake, each decoder retains its two-thread limit, and
