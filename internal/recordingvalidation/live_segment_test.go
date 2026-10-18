@@ -108,7 +108,7 @@ func testLiveSegmentFrameRate(t *testing.T, rate string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = assets.AppendLiveSegment(history, tail, false, profile); duration == "35" && !errors.Is(err, assets.ErrCaptureMissingObjects) {
+	if _, err = assets.AppendLiveSegment(history, tail, false, profile); (duration == "35" || profile == 300) && !errors.Is(err, assets.ErrCaptureMissingObjects) {
 		t.Fatalf("unsealed tail: %v", err)
 	}
 	history, err = assets.AppendLiveSegment(history, tail, true, profile)

@@ -2,7 +2,9 @@ package recordingvalidation
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -258,4 +260,112 @@ func liveWorkerMediaFixture(t testing.TB, pack assets.RecordingPackage, bytes *p
 		}
 	}
 	return db, store, objects, ids
+}
+
+// Exercise actual decode and durable claim snapshots around the producer's seal.
+func TestS10LiveWorkerShortTailBeforeAndDuringSeal(t *testing.T) {
+	if os.Getenv("TEST_DATABASE_URL") == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	probe, pack, media, declarations, _ := liveMovingMediaFixture(t, 166)
+	for _, timing := range []string{"before_seal", "seal_after_claim", "sealed_short_interior"} {
+		t.Run(timing, func(t *testing.T) {
+			ctx := context.Background()
+			inv := assets.RecordingPackageInventory{SchemaVersion: 1, PresetVersion: assets.RecordingTenSecondPreset}
+			inv.Objects = append(inv.Objects, declarations...)
+			count := 1
+			if timing == "sealed_short_interior" {
+				count = 2
+			}
+			for _, r := range assets.LiveRenditions() {
+				r.FrameRate, r.SegmentCount, r.DurationSeconds = 30000.0/1001, count, 5.54+float64(count-1)*10.01
+				inv.Renditions = append(inv.Renditions, r)
+				if count == 2 {
+					for _, o := range declarations {
+						if o.Path == r.Name+"/seg-000000.m4s" {
+							o.Path = r.Name + "/seg-000001.m4s"
+							inv.Objects = append(inv.Objects, o)
+							media.bytes[pack.StagingKey(o.Path)] = media.bytes[pack.StagingKey(r.Name+"/seg-000000.m4s")]
+						}
+					}
+				}
+			}
+			for _, name := range []string{"master.m3u8", "1080p/index.m3u8", "720p/index.m3u8", "480p/index.m3u8"} {
+				data := []byte("#EXTM3U\n")
+				hash := sha256.Sum256(data)
+				inv.Objects = append(inv.Objects, assets.RecordingPackageObject{Path: name, SizeBytes: int64(len(data)), SHA256: hex.EncodeToString(hash[:])})
+				media.bytes[pack.StagingKey(name)] = data
+			}
+			inv.InventoryDigest, _ = assets.RecordingInventoryDigest(inv)
+			db, store, objects, ids := liveWorkerMediaFixture(t, pack, media, inv.Objects)
+			if _, err := db.Exec(`UPDATE recording_captures SET segment_frames=300; UPDATE recording_captures SET state='aborted' WHERE actor_id<>'actor-0'`); err != nil {
+				t.Fatal(err)
+			}
+			objects.passThrough = true
+			probe := probe
+			probe.Objects = objects
+			svc := assets.NewRecordingCaptureService(store, nil, time.Now)
+			seal := func() {
+				t.Helper()
+				if _, err := svc.Seal(ctx, ids[0], "actor-0", "original-seal", true, inv); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if timing == "sealed_short_interior" {
+				seal()
+			}
+			claim, err := store.ClaimLiveValidation(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if timing == "seal_after_claim" {
+				seal()
+			}
+			if timing == "sealed_short_interior" {
+				batch, err := probe.ValidateLiveSegment(ctx, claim.Capture.ID, claim.ClaimID, claim.Sequence, claim.Objects)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := store.CommitLiveBatch(ctx, claim, batch); !errors.Is(err, assets.ErrInvalidUpload) {
+					t.Fatalf("sealed short interior accepted by durable commit: %v", err)
+				}
+			}
+			if err := runLiveClaim(ctx, store, objects, probe, claim); err != nil {
+				t.Fatal(err)
+			}
+			got, err := store.GetCapture(ctx, ids[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if timing == "sealed_short_interior" {
+				if got.State != "failed" || got.Progress.LastSequence != -1 || objects.published.Load() != 0 {
+					t.Fatalf("short interior published: %+v", got)
+				}
+				return
+			}
+			if got.TerminalAt != nil || got.Progress.LastSequence != -1 || objects.published.Load() != 0 {
+				t.Fatalf("unsealed tail failed or published: %+v", got)
+			}
+			if timing == "before_seal" {
+				seal()
+			}
+			if _, err := db.Exec(`UPDATE recording_live SET next_attempt_at=clock_timestamp() WHERE capture_id=$1`, ids[0]); err != nil {
+				t.Fatal(err)
+			}
+			next, err := store.ClaimLiveValidation(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := runLiveClaim(ctx, store, objects, probe, next); err != nil {
+				t.Fatal(err)
+			}
+			got, err = store.GetCapture(ctx, ids[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.TerminalAt != nil || !got.Progress.Ended || got.Progress.LastSequence != 0 || got.Receipts["original-seal"].Receipt.Operation != "seal" {
+				t.Fatalf("sealed tail did not recover: %+v", got)
+			}
+		})
+	}
 }

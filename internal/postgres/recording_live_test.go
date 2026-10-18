@@ -49,8 +49,8 @@ func TestLiveProgressFencesUnpublishedAndStaleClaims(t *testing.T) {
 	if _, err := store.ClaimLiveValidation(ctx); !errors.Is(err, assets.ErrNotFound) {
 		t.Fatalf("double claim: %v", err)
 	}
-	if pending, err := store.LiveInputPending(ctx); err != nil || pending {
-		t.Fatalf("another worker waits on an already claimed input: %v", err)
+	if pending, err := store.LiveInputPending(ctx); err != nil || !pending {
+		t.Fatalf("standby worker must wait for the active claim to release: %v", err)
 	}
 	batch := map[string]assets.RecordingLiveFragment{}
 	for _, r := range assets.LiveRenditions() {

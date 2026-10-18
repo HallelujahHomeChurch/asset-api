@@ -60,6 +60,7 @@ func AppendLiveSegment(history []RecordingLiveSegment, batch map[string]Recordin
 	}
 	var reference *RecordingLiveFragment
 	cloned := make(map[string]RecordingLiveFragment, 3)
+	waitForSeal := false
 	for _, r := range LiveRenditions() {
 		value, ok := batch[r.Name]
 		if !ok {
@@ -68,7 +69,7 @@ func AppendLiveSegment(history []RecordingLiveSegment, batch map[string]Recordin
 		if frames == 300 && value.FrameRate != 30000.0/1001 || value.FrameRate != 30 && value.FrameRate != 30000.0/1001 {
 			return nil, ErrInvalidUpload
 		}
-		if frames == 300 && (value.VideoFrames < 1 || value.VideoFrames > 300 || !normalTail && value.VideoFrames != 300) {
+		if frames == 300 && (value.VideoFrames < 1 || value.VideoFrames > 300) {
 			return nil, ErrInvalidUpload
 		}
 		tolerance := 1/value.FrameRate + 0.001
@@ -103,10 +104,14 @@ func AppendLiveSegment(history []RecordingLiveSegment, batch map[string]Recordin
 			copy := value
 			reference = &copy
 		}
-		if !normalTail && duration < nominal-tolerance {
-			return nil, ErrCaptureMissingObjects
+		if !normalTail && (duration < nominal-tolerance || frames == 300 && value.VideoFrames != 300) {
+			waitForSeal = true
 		}
 		cloned[r.Name] = value
+	}
+	// A valid short fragment may be the final tail; seal determines that, not arrival order.
+	if waitForSeal {
+		return nil, ErrCaptureMissingObjects
 	}
 	return append(history, RecordingLiveSegment{Sequence: len(history), Renditions: cloned}), nil
 }

@@ -97,3 +97,38 @@ func TestTenSecondProfileRejectsOffByOneFrames(t *testing.T) {
 		}
 	}
 }
+
+func TestTenSecondUnsealedTailWaitsWithoutSkippingOtherChecks(t *testing.T) {
+	batch := liveBatch(0, 166*1001.0/30000)
+	for name, f := range batch {
+		f.FrameRate, f.VideoFrames = 30000.0/1001, 166
+		batch[name] = f
+	}
+	if _, err := AppendLiveSegment(nil, batch, false, 300); !errors.Is(err, ErrCaptureMissingObjects) {
+		t.Fatalf("valid unsealed tail must wait, not fail capture: %v", err)
+	}
+	history, err := AppendLiveSegment(nil, batch, true, 300)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RecordingLivePlaylists(history, true, 300); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"1080p", "720p", "480p"} {
+		t.Run(name, func(t *testing.T) {
+			invalid := make(map[string]RecordingLiveFragment, len(batch))
+			for k, v := range batch {
+				invalid[k] = v
+			}
+			f := invalid[name]
+			f.Codecs = "invalid"
+			invalid[name] = f
+			if _, err := AppendLiveSegment(nil, invalid, false, 300); !errors.Is(err, ErrInvalidUpload) {
+				t.Fatalf("waiting tail hid invalid sibling: %v", err)
+			}
+		})
+	}
+	if _, err := AppendLiveSegment(history, batch, true, 300); !errors.Is(err, ErrInvalidUpload) {
+		t.Fatalf("appended after short tail: %v", err)
+	}
+}
