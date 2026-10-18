@@ -211,6 +211,11 @@ jobs:
       MEETING_API_AUDIENCE: ${{ vars.MEETING_API_AUDIENCE }}
       MEMBER_VIDEO_ENABLED: ${{ vars.MEMBER_VIDEO_ENABLED || 'false' }}
       RECORDING_HLS_ENABLED: ${{ vars.RECORDING_HLS_ENABLED || 'false' }}
+      RECORDING_EVENTS_PROVISIONED: ${{ vars.RECORDING_EVENTS_PROVISIONED || 'false' }}
+      RECORDING_EVENTS_ENABLED: ${{ vars.RECORDING_EVENTS_ENABLED || 'false' }}
+      RECORDING_EVENTS_CHANGE_APPROVED: ${{ vars.RECORDING_EVENTS_CHANGE_APPROVED || 'false' }}
+      RECORDING_PROCESSING_CPU: ${{ vars.RECORDING_PROCESSING_CPU || '2' }}
+      RECORDING_PREVIEW_CPU: ${{ vars.RECORDING_PREVIEW_CPU || '1' }}
       RECORDING_SOURCE_ENABLED: ${{ vars.RECORDING_SOURCE_ENABLED || 'false' }}
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       MEDIA_KEY_ID: ${{ vars.ASSET_MEDIA_KEY_ID }}
@@ -273,6 +278,8 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       - run: az extension add --name containerapp --upgrade --yes
+      - name: Validate recording event rollout gate
+        run: bash scripts/validate-recording-event-rollout.sh
       - name: Verify isolated runtime prerequisites
         run: |
           runtime_principal="$(az identity show -g "$RESOURCE_GROUP" -n asset-api-runtime-identity --query principalId -o tsv --only-show-errors)"
@@ -457,10 +464,16 @@ jobs:
           az deployment group what-if \
             --resource-group "$RESOURCE_GROUP" \
             --template-file infra/main.bicep \
-            --parameters recordingHLSEnabled="$RECORDING_HLS_ENABLED" recordingSourceEnabled="$RECORDING_SOURCE_ENABLED" storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" scanWorkerImage="$SCAN_IMAGE_REF" recordingImage="$RECORDING_IMAGE_REF" memberVideoEnabled="$MEMBER_VIDEO_ENABLED" recordingR2AccountId="$CLOUDFLARE_ACCOUNT_ID" mediaKeyId="$MEDIA_KEY_ID" deployRuntime=true deployMigrationJob=true deployScanJob=true deployScanWorker=true deployScanWarmer=true provisionScanWarmInfrastructure=false deploySignatureRefreshJob=true deployDerivativeJob=true deployRetentionJob="$DEPLOY_RETENTION_JOB" retentionScheduleEnabled="$RETENTION_SCHEDULE_ENABLED" retentionApplyEnabled="$RETENTION_APPLY_ENABLED" scanDispatchEnabled="$ACTIVATE_QUEUE_SCANNING" embeddedScanEnabled="$EMBEDDED_SCAN_ENABLED" workloadAuthClientId="$ASSET_WORKLOAD_CLIENT_ID" workloadAuthAudience="$ASSET_WORKLOAD_AUDIENCE" lineAttachmentClientId="$LINE_ATTACHMENT_CLIENT_ID" lineAttachmentObjectId="$LINE_ATTACHMENT_OBJECT_ID" extractorClientId="$ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID" extractorObjectId="$ASSET_EXTRACTOR_WORKLOAD_OBJECT_ID" readerCallerAppId="$ASSET_READER_CALLER_APP_ID" meetingApiBaseUrl="$MEETING_API_BASE_URL" meetingApiAudience="$MEETING_API_AUDIENCE" provisionPermissions=false manageSharedInfrastructure=false \
+            --parameters recordingEventsProvisioned="$RECORDING_EVENTS_PROVISIONED" recordingEventsEnabled="$RECORDING_EVENTS_ENABLED" recordingProcessingCPU="$RECORDING_PROCESSING_CPU" recordingPreviewCPU="$RECORDING_PREVIEW_CPU" recordingHLSEnabled="$RECORDING_HLS_ENABLED" recordingSourceEnabled="$RECORDING_SOURCE_ENABLED" storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" scanWorkerImage="$SCAN_IMAGE_REF" recordingImage="$RECORDING_IMAGE_REF" memberVideoEnabled="$MEMBER_VIDEO_ENABLED" recordingR2AccountId="$CLOUDFLARE_ACCOUNT_ID" mediaKeyId="$MEDIA_KEY_ID" deployRuntime=true deployMigrationJob=true deployScanJob=true deployScanWorker=true deployScanWarmer=true provisionScanWarmInfrastructure=false deploySignatureRefreshJob=true deployDerivativeJob=true deployRetentionJob="$DEPLOY_RETENTION_JOB" retentionScheduleEnabled="$RETENTION_SCHEDULE_ENABLED" retentionApplyEnabled="$RETENTION_APPLY_ENABLED" scanDispatchEnabled="$ACTIVATE_QUEUE_SCANNING" embeddedScanEnabled="$EMBEDDED_SCAN_ENABLED" workloadAuthClientId="$ASSET_WORKLOAD_CLIENT_ID" workloadAuthAudience="$ASSET_WORKLOAD_AUDIENCE" lineAttachmentClientId="$LINE_ATTACHMENT_CLIENT_ID" lineAttachmentObjectId="$LINE_ATTACHMENT_OBJECT_ID" extractorClientId="$ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID" extractorObjectId="$ASSET_EXTRACTOR_WORKLOAD_OBJECT_ID" readerCallerAppId="$ASSET_READER_CALLER_APP_ID" meetingApiBaseUrl="$MEETING_API_BASE_URL" meetingApiAudience="$MEETING_API_AUDIENCE" provisionPermissions=false manageSharedInfrastructure=false \
             --validation-level Provider --result-format FullResourcePayloads --no-pretty-print --only-show-errors \
             --output json > what-if.json
-          ./scripts/check-what-if.sh what-if.json
+          if [[ "$RECORDING_EVENTS_PROVISIONED" == true ]]; then
+            export RECORDING_WORKER_PRINCIPAL_ID="$(az identity show -g "$RESOURCE_GROUP" -n asset-api-runtime-identity --query principalId -o tsv --only-show-errors)"
+            export RECORDING_API_PRINCIPAL_ID="$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_APP_NAME" --query identity.principalId -o tsv --only-show-errors)"
+            bash scripts/check-recording-event-what-if.sh what-if.json
+          else
+            ./scripts/check-what-if.sh what-if.json
+          fi
       - name: Verify existing extractor asset role
         if: env.ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID != '' && env.EXTRACTOR_ROLE_APPROVED != 'true'
         run: bash scripts/ensure-workload-app-role.sh check
@@ -496,7 +509,7 @@ jobs:
           az deployment group create \
             --name "asset-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --resource-group "$RESOURCE_GROUP" --template-file infra/main.bicep \
-            --parameters recordingHLSEnabled="$RECORDING_HLS_ENABLED" recordingSourceEnabled="$RECORDING_SOURCE_ENABLED" storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" scanWorkerImage="$SCAN_IMAGE_REF" recordingImage="$RECORDING_IMAGE_REF" memberVideoEnabled="$MEMBER_VIDEO_ENABLED" recordingR2AccountId="$CLOUDFLARE_ACCOUNT_ID" mediaKeyId="$MEDIA_KEY_ID" deployRuntime=true deployMigrationJob=true deployScanJob=true deployScanWorker=true deployScanWarmer=true provisionScanWarmInfrastructure=false deploySignatureRefreshJob=true deployDerivativeJob=true deployRetentionJob="$DEPLOY_RETENTION_JOB" retentionScheduleEnabled="$RETENTION_SCHEDULE_ENABLED" retentionApplyEnabled="$RETENTION_APPLY_ENABLED" scanDispatchEnabled="$ACTIVATE_QUEUE_SCANNING" embeddedScanEnabled="$EMBEDDED_SCAN_ENABLED" workloadAuthClientId="$ASSET_WORKLOAD_CLIENT_ID" workloadAuthAudience="$ASSET_WORKLOAD_AUDIENCE" lineAttachmentClientId="$LINE_ATTACHMENT_CLIENT_ID" lineAttachmentObjectId="$LINE_ATTACHMENT_OBJECT_ID" extractorClientId="$ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID" extractorObjectId="$ASSET_EXTRACTOR_WORKLOAD_OBJECT_ID" readerCallerAppId="$ASSET_READER_CALLER_APP_ID" meetingApiBaseUrl="$MEETING_API_BASE_URL" meetingApiAudience="$MEETING_API_AUDIENCE" provisionPermissions=false manageSharedInfrastructure=false \
+            --parameters recordingEventsProvisioned="$RECORDING_EVENTS_PROVISIONED" recordingEventsEnabled="$RECORDING_EVENTS_ENABLED" recordingProcessingCPU="$RECORDING_PROCESSING_CPU" recordingPreviewCPU="$RECORDING_PREVIEW_CPU" recordingHLSEnabled="$RECORDING_HLS_ENABLED" recordingSourceEnabled="$RECORDING_SOURCE_ENABLED" storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" scanWorkerImage="$SCAN_IMAGE_REF" recordingImage="$RECORDING_IMAGE_REF" memberVideoEnabled="$MEMBER_VIDEO_ENABLED" recordingR2AccountId="$CLOUDFLARE_ACCOUNT_ID" mediaKeyId="$MEDIA_KEY_ID" deployRuntime=true deployMigrationJob=true deployScanJob=true deployScanWorker=true deployScanWarmer=true provisionScanWarmInfrastructure=false deploySignatureRefreshJob=true deployDerivativeJob=true deployRetentionJob="$DEPLOY_RETENTION_JOB" retentionScheduleEnabled="$RETENTION_SCHEDULE_ENABLED" retentionApplyEnabled="$RETENTION_APPLY_ENABLED" scanDispatchEnabled="$ACTIVATE_QUEUE_SCANNING" embeddedScanEnabled="$EMBEDDED_SCAN_ENABLED" workloadAuthClientId="$ASSET_WORKLOAD_CLIENT_ID" workloadAuthAudience="$ASSET_WORKLOAD_AUDIENCE" lineAttachmentClientId="$LINE_ATTACHMENT_CLIENT_ID" lineAttachmentObjectId="$LINE_ATTACHMENT_OBJECT_ID" extractorClientId="$ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID" extractorObjectId="$ASSET_EXTRACTOR_WORKLOAD_OBJECT_ID" readerCallerAppId="$ASSET_READER_CALLER_APP_ID" meetingApiBaseUrl="$MEETING_API_BASE_URL" meetingApiAudience="$MEETING_API_AUDIENCE" provisionPermissions=false manageSharedInfrastructure=false \
             --only-show-errors --output none
       - name: Verify revision health
         run: |
@@ -541,8 +554,10 @@ jobs:
         if: env.MEMBER_VIDEO_ENABLED == 'true'
         run: |
           [[ "$(az containerapp job show -g "$RESOURCE_GROUP" -n asset-recording-validation --query properties.template.containers[0].image -o tsv --only-show-errors)" == "$RECORDING_IMAGE_REF" ]]
-          [[ "$(az containerapp job show -g "$RESOURCE_GROUP" -n asset-recording-validation --query properties.configuration.triggerType -o tsv --only-show-errors)" == Schedule ]]
-          [[ "$(az containerapp job show -g "$RESOURCE_GROUP" -n asset-recording-validation --query properties.configuration.scheduleTriggerConfig.cronExpression -o tsv --only-show-errors)" == '*/1 * * * *' ]]
+          bash scripts/verify-recording-jobs.sh
+          if [[ "$RECORDING_EVENTS_ENABLED" != true ]]; then
+            [[ "$(az containerapp job show -g "$RESOURCE_GROUP" -n asset-recording-validation --query properties.configuration.scheduleTriggerConfig.cronExpression -o tsv --only-show-errors)" == '*/1 * * * *' ]]
+          fi
       - name: Capture healthy release
         id: release_outputs
         run: |

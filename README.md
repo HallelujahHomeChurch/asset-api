@@ -370,3 +370,36 @@ listing, final publication, real NVENC output and viewer startup. An earlier
 run competing with the full UI test suite is discarded for comparison. The
 new profile still needs Windows/cloud A/B measurements before its latency and
 cost acceptance can be claimed.
+
+## Recording Event Jobs (candidate; production activation is separate)
+
+`ASSET_RECORDING_EVENTS_ENABLED` defaults to false. With it off, the existing
+scheduled recording worker and producer contracts retain their behavior. The
+additive `recording_event_wakes` migration coalesces work changes into three
+operational lane rows; it carries no media bytes or user identifiers.
+
+When enabled, the API's leased dispatcher probes the **same readiness predicates**
+as the existing media claims and sends at most two outstanding lane admissions.
+Queue messages only wake the database-owned work. Repeated/stale messages cannot
+start the same owner twice; Queue pop receipts and DB ownership are renewed during
+long processing. The existing two global processing slots remain authoritative
+across every lane. `maxExecutions` is not a global container concurrency guarantee.
+
+The candidate worker modes are `live`, `processing`, `preview`, and `maintenance`;
+`legacy` remains the default rollback mode and refuses to run when event mode is
+enabled. Media Event Jobs use `minExecutions=0`, visible-message scaling, and one
+execution target per lane. Live stays at 4 CPU/8 GiB; processing is a candidate
+2 CPU/4 GiB; previews are a candidate 1 CPU/2 GiB. Either reduced tier can be reset
+to 4 CPU/8 GiB independently of trigger mode. No validation or image-quality
+parameter changes with the tier. The hourly maintenance candidate is 0.5 CPU/1 GiB,
+bounded to five minutes, and invokes no FFmpeg processing.
+
+Normal retry/lease recovery is handled by the running API dispatcher and Queue
+visibility, not hourly maintenance. Keep API min replicas >=1 while this dispatcher
+is active. If no media is ready the API performs bounded readiness probes; it does
+not start a heavy Job. Cloud execution starts, Queue requests and database load
+still belong in cost accounting.
+
+Provision and activate using the reviewed Bicep/release path only. See
+[the implementation plan](docs/superpowers/plans/2026-10-18-recording-event-jobs.md)
+and [the candidate handoff](docs/reviews/recording-events-candidate-2026-10-18.md).

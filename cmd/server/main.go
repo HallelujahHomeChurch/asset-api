@@ -21,6 +21,7 @@ import (
 	"hhc/asset-api/internal/lifecycle"
 	"hhc/asset-api/internal/logging"
 	"hhc/asset-api/internal/postgres"
+	"hhc/asset-api/internal/recordingqueue"
 	"hhc/asset-api/internal/scanqueue"
 	azurestorage "hhc/asset-api/internal/storage/azure"
 	localstorage "hhc/asset-api/internal/storage/local"
@@ -136,6 +137,27 @@ func run() error {
 		go func() {
 			if err := dispatcher.Run(ctx); err != nil && ctx.Err() == nil {
 				slog.Error("derivative outbox dispatcher stopped", "error", err)
+				stop()
+			}
+		}()
+	}
+
+	events, err := config.RecordingEvents()
+	if err != nil {
+		return err
+	}
+	if events.Enabled {
+		if !cfg.RecordingHLSEnabled {
+			return errors.New("recording events require HLS")
+		}
+		sender, err := recordingqueue.NewAzureSender(events.Queues)
+		if err != nil {
+			return err
+		}
+		dispatcher := recordingqueue.NewDispatcher(postgres.NewRecordingEventStore(db, cfg.RecordingSourceAccountURL != ""), sender)
+		go func() {
+			if err := dispatcher.Run(ctx); err != nil && ctx.Err() == nil {
+				slog.Error("recording dispatcher stopped")
 				stop()
 			}
 		}()

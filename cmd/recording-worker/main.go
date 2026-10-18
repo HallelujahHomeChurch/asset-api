@@ -16,6 +16,7 @@ import (
 	"hhc/asset-api/internal/logging"
 	"hhc/asset-api/internal/postgres"
 	"hhc/asset-api/internal/recordingprocessing"
+	"hhc/asset-api/internal/recordingqueue"
 	"hhc/asset-api/internal/recordingvalidation"
 	azurestorage "hhc/asset-api/internal/storage/azure"
 	"hhc/asset-api/internal/storage/r2"
@@ -38,7 +39,11 @@ func main() {
 	}
 }
 
-func run(ctx context.Context) error {
+func run(ctx context.Context) (result error) {
+	started := time.Now()
+	defer func() {
+		slog.Info("recording_worker_exit", "mode", os.Getenv("ASSET_RECORDING_WORKER_MODE"), "elapsed_ms", time.Since(started).Milliseconds(), "failed", result != nil)
+	}()
 	hlsEnabled, err := config.RecordingHLSFlag()
 	if err != nil {
 		return err
@@ -72,11 +77,50 @@ func run(ctx context.Context) error {
 		slog.Info("recording_health", "package_cleanup_overdue", health.PackageCleanupOverdue,
 			"source_cleanup_overdue", health.SourceCleanupOverdue, "waiting", health.Waiting, "active_slots", health.ActiveSlots)
 	}
-	if hlsEnabled {
-		packages := postgres.NewRecordingPackageStore(db)
-		probe := recordingvalidation.PackageMediaProbe{Objects: objects, FFmpeg: "/usr/bin/ffmpeg", FFprobe: "/usr/bin/ffprobe"}
-		var cleanupErr error
-		liveStore := postgres.NewRecordingCaptureStore(db)
+
+	mode, err := config.RecordingWorkerMode()
+	if err != nil {
+		return err
+	}
+	events, err := config.RecordingEvents()
+	if err != nil {
+		return err
+	}
+	process := func(ctx context.Context, lane string) error {
+		return processRecording(ctx, lane, db, objects, sourceAccount, sourceContainer)
+	}
+	if mode == "legacy" || mode == "maintenance" {
+		if events.Enabled && mode == "legacy" {
+			return errors.New("legacy worker cannot run with recording events enabled")
+		}
+		if mode == "maintenance" {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, 5*time.Minute)
+			defer cancel()
+		}
+		return process(ctx, mode)
+	}
+	if !events.Enabled {
+		return errors.New("event worker requires recording events enabled")
+	}
+	queue, err := recordingqueue.NewAzureQueue(events.Queues[mode], events.Poison[mode])
+	if err != nil {
+		return err
+	}
+	return recordingqueue.NewJob(postgres.NewRecordingEventStore(db, sourceAccount != ""), queue, mode, func(ctx context.Context, lane string) error {
+		if lane != mode {
+			return errors.New("recording queue lane mismatch")
+		}
+		return process(ctx, lane)
+	}).Run(ctx)
+}
+
+func processRecording(ctx context.Context, mode string, db *sql.DB, objects *r2.Store, sourceAccount, sourceContainer string) error {
+	packages := postgres.NewRecordingPackageStore(db)
+	probe := recordingvalidation.PackageMediaProbe{Objects: objects, FFmpeg: "/usr/bin/ffmpeg", FFprobe: "/usr/bin/ffprobe"}
+	var cleanupErr error
+	liveStore := postgres.NewRecordingCaptureStore(db)
+	if mode == "legacy" || mode == "live" {
 		liveClaims := 0
 		liveSession := false
 		acquired, err := liveStore.WithLiveWorker(ctx, func(ctx context.Context, check func(context.Context) error) (result error) {
@@ -91,8 +135,8 @@ func run(ctx context.Context) error {
 					"processing_ms", busy.Milliseconds(), "non_processing_ms", (time.Since(started) - busy).Milliseconds(), "claims", liveClaims, "polls", polls, "failed", result != nil)
 			}()
 			// Stay across cron boundaries without changing claim/slot concurrency.
-			// This execution returns after live work; another scheduled execution
-			// handles cleanup/covers/final validation within its own Job deadline.
+			// Other executions handle non-live work; event mode supplies those
+			// through their own durable lanes rather than a minute cron.
 			return drainLiveValidation(ctx, started.Add(liveWorkerWindow), 5*time.Second,
 				func(ctx context.Context) (bool, error) {
 					if err := check(ctx); err != nil {
@@ -115,25 +159,36 @@ func run(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if acquired && (liveClaims > 0 || liveSession) {
+		if mode == "live" || acquired && (liveClaims > 0 || liveSession) {
 			return nil
 		}
 
+	}
+	if mode == "legacy" || mode == "maintenance" {
 		cleanupErr = errors.Join(packages.ReconcilePackages(ctx, objects.DeletePackageObjects), liveStore.ReconcileCaptures(ctx, objects.DeletePackageObjects), liveStore.ReconcileLive(ctx, objects.DeletePackageObjects))
 		liveCovers := postgres.NewRecordingLiveCoverStore(db)
 		cleanupErr = errors.Join(cleanupErr, liveCovers.Reconcile(ctx, objects.DeleteCoverObjects))
+	}
+	liveCovers := postgres.NewRecordingLiveCoverStore(db)
+	covers := postgres.NewRecordingCoverStore(db)
+	if mode == "legacy" || mode == "preview" {
 		if _, err := recordingvalidation.RunLiveCoverProcessing(ctx, liveCovers, objects, probe); err != nil {
 			slog.Warn("recording_live_cover_processing_failed")
 		}
-		covers := postgres.NewRecordingCoverStore(db)
+	}
+	if mode == "legacy" || mode == "maintenance" {
 		cleanupErr = errors.Join(cleanupErr, covers.Reconcile(ctx, objects.DeleteCoverObjects))
-		if sourceAccount != "" {
-			sources, err := azurestorage.New(sourceAccount, sourceContainer)
-			if err != nil {
-				return errors.Join(cleanupErr, err)
-			}
-			repository := postgres.NewRecordingSourceStore(db)
+	}
+	if sourceAccount != "" && (mode == "legacy" || mode == "processing" || mode == "maintenance") {
+		sources, err := azurestorage.New(sourceAccount, sourceContainer)
+		if err != nil {
+			return errors.Join(cleanupErr, err)
+		}
+		repository := postgres.NewRecordingSourceStore(db)
+		if mode != "processing" {
 			cleanupErr = errors.Join(cleanupErr, repository.ReconcileSources(ctx, sources.DeleteRecordingSource, objects.DeleteSourceAttempt))
+		}
+		if mode != "maintenance" {
 			// One long processing claim per execution keeps the 5.5-hour app
 			// deadline inside the six-hour platform Job timeout.
 			processed, err := recordingprocessing.RunSourceProcessing(ctx, repository, sources, objects, probe)
@@ -141,6 +196,11 @@ func run(ctx context.Context) error {
 				return errors.Join(cleanupErr, err)
 			}
 		}
+	}
+	if mode == "maintenance" {
+		return errors.Join(cleanupErr, postgres.NewRecordingEventStore(db, sourceAccount != "").Sweep(ctx))
+	}
+	if mode == "legacy" || mode == "preview" {
 		// Preview claims defer to waiting validation/source work in SQL and
 		// use the same global slots. Only one long claim runs per execution.
 		if _, err := recordingvalidation.RunLivePreview(ctx, packages, objects, probe); err != nil {
@@ -154,10 +214,12 @@ func run(ctx context.Context) error {
 		if processed || previewErr != nil {
 			return errors.Join(cleanupErr, previewErr)
 		}
-		validationErr := recordingvalidation.RunPackageValidation(ctx, packages, objects, probe)
-		return errors.Join(validationErr, cleanupErr)
 	}
-	return nil
+	if mode == "preview" {
+		return cleanupErr
+	}
+	validationErr := recordingvalidation.RunPackageValidation(ctx, packages, objects, probe)
+	return errors.Join(validationErr, cleanupErr)
 }
 
 // Keep a scheduled execution available while a live input is assembling its

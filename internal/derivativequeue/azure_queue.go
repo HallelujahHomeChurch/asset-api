@@ -97,3 +97,24 @@ func (q *AzureQueue) ForwardPoison(ctx context.Context, message Message, event *
 	_, err = q.poison.EnqueueMessage(ctx, string(payload), &azqueue.EnqueueMessageOptions{TimeToLive: &ttl})
 	return err
 }
+
+// Renew returns the new pop receipt required for subsequent renewal and ack.
+func (q *AzureQueue) Renew(ctx context.Context, message Message, delay time.Duration) (Message, error) {
+	seconds := int32(delay / time.Second)
+	response, err := q.source.UpdateMessage(ctx, message.ID, message.PopReceipt, message.Body, &azqueue.UpdateMessageOptions{VisibilityTimeout: &seconds})
+	if err != nil {
+		return message, err
+	}
+	if response.PopReceipt == nil {
+		return message, errors.New("missing renewed pop receipt")
+	}
+	message.PopReceipt = *response.PopReceipt
+	return message, nil
+}
+
+// ForwardPayload preserves the caller's internal poison schema without exposing raw messages.
+func (q *AzureQueue) ForwardPayload(ctx context.Context, payload string) error {
+	ttl := int32(-1)
+	_, err := q.poison.EnqueueMessage(ctx, payload, &azqueue.EnqueueMessageOptions{TimeToLive: &ttl})
+	return err
+}

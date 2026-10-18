@@ -135,7 +135,7 @@ func (s *RecordingPackageStore) ClaimPackageValidation(ctx context.Context) (Rec
 		return claim, err
 	}
 	var id string
-	err = tx.QueryRowContext(ctx, `SELECT id FROM recording_packages WHERE state IN ('freezing','validating') AND validation_attempts<3 AND next_attempt_at<=clock_timestamp() AND (claimed_until IS NULL OR claimed_until<=clock_timestamp()) ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1`).Scan(&id)
+	err = tx.QueryRowContext(ctx, packageWakeCandidate+` FOR UPDATE SKIP LOCKED LIMIT 1`).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		if err := tx.Commit(); err != nil {
 			return claim, err

@@ -1,6 +1,26 @@
 schema_version: 1
 service: asset-api
 datasets:
+  - id: asset.recording-event-wakes
+    owner: asset-api
+    purpose: Coalesce durable media work wakeups and fence event-driven worker admission without carrying user or media content.
+    necessity: required
+    storage: {kind: postgres, resource: recording_event_wakes, sources: [{path: internal/postgres/recording_event.go, symbol: RecordingEventStore.ClaimDispatch}]}
+    subject_keys: []
+    data_classes: [security, activity]
+    fields:
+      - {name: recording_event_wakes.lane, purpose: Select an allowlisted media work group, necessity: required, data_classes: [activity]}
+      - {name: recording_event_wakes.generation, purpose: Preserve new work across old event completion, necessity: required, data_classes: [security]}
+      - {name: recording_event_wakes.dispatch_generation, purpose: Bind queued work to its dispatch snapshot, necessity: required, data_classes: [security]}
+      - {name: recording_event_wakes.token, purpose: Fence stale and duplicate queue consumers, necessity: required, data_classes: [security]}
+      - {name: recording_event_wakes.state, purpose: Bound queued and running admissions, necessity: required, data_classes: [activity]}
+      - {name: recording_event_wakes.lease_until, purpose: Recover lost workers without hourly maintenance, necessity: required, data_classes: [activity]}
+      - {name: recording_event_wakes.next_check_at, purpose: Schedule bounded dispatch retry and readiness checks, necessity: required, data_classes: [activity]}
+      - {name: recording_event_wakes.last_dispatch_at, purpose: Give non-live lanes fair dispatch order, necessity: required, data_classes: [activity]}
+    attribution: {mode: manual, explanation: Three reusable operational lane rows contain no user identifiers or media content.}
+    legal_basis: {status: pending_legal, reference: null}
+    retention: {status: pending_legal, rule: null, action: none}
+    cleanup: {mode: none, implementation: [], evidence: []}
   - id: asset.recording-broadcast-ranges
     owner: asset-api
     purpose: Persist the CMS-owned public media boundaries and irreversible member revocation independently of raw C1 intake.

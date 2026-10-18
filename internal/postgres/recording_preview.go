@@ -30,7 +30,7 @@ func (s *RecordingPackageStore) ClaimPackagePreview(ctx context.Context) (Record
 		return c, err
 	}
 	var id string
-	err = tx.QueryRowContext(ctx, `SELECT id FROM recording_packages WHERE NOT EXISTS(SELECT 1 FROM recording_live_previews lp WHERE lp.capture_id=recording_packages.id AND lp.claimed_until>now()) AND state='ready' AND media_expires_at>clock_timestamp() AND preview_state IN ('pending','processing') AND preview_attempts<3 AND preview_next_attempt_at<=clock_timestamp() AND (preview_claimed_until IS NULL OR preview_claimed_until<=clock_timestamp()) AND NOT EXISTS(SELECT 1 FROM recording_packages WHERE state IN ('freezing','validating') AND validation_attempts<3 AND next_attempt_at<=clock_timestamp()) AND NOT EXISTS(SELECT 1 FROM recording_sources WHERE state IN ('finalizing','queued','processing') AND processing_attempts<3 AND retry_until>clock_timestamp()) ORDER BY ready_at FOR UPDATE SKIP LOCKED LIMIT 1`).Scan(&id)
+	err = tx.QueryRowContext(ctx, previewWakeCandidate+` FOR UPDATE SKIP LOCKED LIMIT 1`).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return c, assets.ErrNotFound
 	}

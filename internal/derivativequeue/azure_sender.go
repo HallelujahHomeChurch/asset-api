@@ -34,9 +34,11 @@ func (s *AzureSender) Send(ctx context.Context, event Event) error {
 	if err != nil {
 		return fmt.Errorf("encode derivative request: %w", err)
 	}
+	return s.SendPayload(ctx, string(payload))
+}
+
+func (s *AzureSender) SendPayload(ctx context.Context, payload string) error {
 	ttl := int32(-1)
-	if _, err := s.client.EnqueueMessage(ctx, string(payload), &azqueue.EnqueueMessageOptions{TimeToLive: &ttl}); err != nil {
-		return fmt.Errorf("enqueue derivative request: %w", err)
-	}
-	return nil
+	_, err := s.client.EnqueueMessage(ctx, payload, &azqueue.EnqueueMessageOptions{TimeToLive: &ttl})
+	return err
 }
