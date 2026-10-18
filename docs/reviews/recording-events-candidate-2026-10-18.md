@@ -161,8 +161,10 @@ restores prior Job images, environment references and triggers together. Newly
 provisioned Jobs remain Manual if absent from the old topology. A still-active
 execution prevents automatic Schedule restoration and fails the rollback step;
 operator follow-up must complete the safe drain, not forcibly stop media work.
-The snapshot is runner-local, not uploaded; configuration secret values are never
-queried. Seven isolated tests cover first activation failure, prior Event mode,
+Configuration secret values are never queried. On failure, the non-secret
+snapshot is retained for seven days as `recording-rollback-<run>-<attempt>` so a
+long-running drain can be resumed through a separately reviewed CI/CD recovery
+after the runner exits. Eight isolated tests cover first activation failure, prior Event mode,
 active-execution safety, literal-secret rejection, workflow ordering, active-work cutover rejection and
 missing-provisioned-flag rejection. Initial default-off releases retain the
 existing API-only rollback path; they do not pause the legacy media job.

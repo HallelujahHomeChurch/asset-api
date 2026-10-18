@@ -100,6 +100,13 @@ class TopologyTest(unittest.TestCase):
             mod.capture(self.path, 'alive')
         self.assertFalse(self.path.exists())
 
+    def test_failed_drain_snapshot_survives_runner_cleanup(self):
+        workflow = Path('.github/workflows/release.yml').read_text()
+        section = workflow[workflow.index('      - name: Preserve non-secret recording rollback topology'):workflow.index('  deploy_media:')]
+        self.assertIn("failure() && env.RECORDING_EVENTS_PROVISIONED == 'true'", section)
+        self.assertIn('recording-topology.json', section)
+        self.assertIn('retention-days: 7', section)
+
     def test_workflow_coordinates_failure_recovery(self):
         workflow = Path('.github/workflows/release.yml').read_text()
         rollback = workflow[workflow.index('      - name: Roll back failed runtime'):workflow.index('  deploy_media:')]

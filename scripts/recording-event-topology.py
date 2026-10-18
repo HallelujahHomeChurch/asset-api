@@ -64,7 +64,7 @@ def capture(path, group):
                     raise ValueError('unexpected literal environment value; use a secretRef before snapshot')
         snapshots.append({'id': job['id'], 'properties': {
             'configuration': {k: props['configuration'].get(k) for k in CONFIG}, 'template': template}})
-    # Only the CI runner holds this non-secret rollback state; never upload it as an artifact.
+    # Capture only non-secret rollback state; CI retains it on failure for safe recovery.
     with open(path, 'x', opener=lambda p, flags: os.open(p, flags, 0o600)) as out:
         json.dump(snapshots, out)
 
