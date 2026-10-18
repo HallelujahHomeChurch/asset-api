@@ -483,3 +483,23 @@ if grep -Eiq 'migrate[[:space:]_-]*down|migration[[:space:]_-]*rollback' "$workf
   echo 'release workflow must not roll back database migrations automatically' >&2
   exit 1
 fi
+
+# Keep the tested image handoff before production publication, with no rebuild fallback.
+python3 - <<'PY'
+from pathlib import Path
+release = Path('.github/workflows/release.yml').read_text()
+ci = Path('.github/workflows/ci.yml').read_text()
+assert 'az acr build' not in release, 'release must publish the verified images without rebuilding'
+for text in (release, ci):
+    assert 'artifact-ids: ${{ needs.verify.outputs.image_artifact_id }}' in text
+    assert 'digest-mismatch: error' in text
+    assert 'retention-days: 1' in text
+    assert 'compression-level: 0' in text
+    assert '[[ "$IMAGE_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]' in text
+assert release.index('run: bash scripts/release-image-artifact.sh load') < release.index('- name: Publish verified images')
+assert release.index('- name: Verify published image identities') < release.index('- name: Scan immutable images') < release.index('- name: Reject destructive infrastructure changes')
+assert 'needs: [verify, deploy_media]' in release
+assert 'group: asset-api-production\n  cancel-in-progress: false' in release
+assert 'bash scripts/test-release-image-artifact.sh' in ci
+assert 'image-transport:' in ci
+PY
