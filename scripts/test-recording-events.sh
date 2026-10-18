@@ -30,3 +30,5 @@ printf '%s' '{"changes":[{"resourceId":"/subscriptions/test/resourceGroups/alive
 if RECORDING_EVENTS_CHANGE_APPROVED=true RECORDING_WORKER_PRINCIPAL_ID=worker RECORDING_API_PRINCIPAL_ID=api bash scripts/check-recording-event-what-if.sh "$tmp" >/dev/null 2>&1; then echo 'event job deletion accepted' >&2; exit 1; fi
 printf '%s' '{"changes":[{"resourceId":"/subscriptions/test/resourceGroups/alive/providers/Microsoft.Storage/storageAccounts/alive/queueServices/default/queues/asset-recording-live/providers/Microsoft.Authorization/roleAssignments/bad","changeType":"Create","after":{"properties":{"principalId":"attacker","roleDefinitionId":"/roles/Contributor"}},"delta":[]}]}' > "$tmp"
 if RECORDING_EVENTS_CHANGE_APPROVED=true RECORDING_WORKER_PRINCIPAL_ID=worker RECORDING_API_PRINCIPAL_ID=api bash scripts/check-recording-event-what-if.sh "$tmp" >/dev/null 2>&1; then echo 'broad event role accepted' >&2; exit 1; fi
+
+python3 scripts/test-recording-event-topology.py

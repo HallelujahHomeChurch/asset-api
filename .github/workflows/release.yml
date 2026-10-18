@@ -353,6 +353,9 @@ jobs:
             echo "PREVIOUS_READY_REVISION=$revision"
             echo "PREVIOUS_IMAGE_REF=$(resolve_image_ref "$image")"
           } >> "$GITHUB_ENV"
+      - name: Capture recording trigger rollback
+        if: env.MEMBER_VIDEO_ENABLED == 'true'
+        run: python3 scripts/recording-event-topology.py capture "$RUNNER_TEMP/recording-topology.json"
       - name: Publish verified images
         env:
           API_IMAGE_ID: ${{ steps.images.outputs.api_image_id }}
@@ -566,6 +569,9 @@ jobs:
       - name: Roll back failed runtime
         if: ${{ failure() && steps.deploy_runtime.outcome != 'skipped' }}
         run: |
+          if [[ "$MEMBER_VIDEO_ENABLED" == true ]]; then
+            python3 scripts/recording-event-topology.py pause "$RUNNER_TEMP/recording-topology.json"
+          fi
           az containerapp revision copy -g "$RESOURCE_GROUP" -n "$API_APP_NAME" \
             --from-revision "$PREVIOUS_READY_REVISION" --image "$PREVIOUS_IMAGE_REF" \
             --revision-suffix "rollback-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
@@ -575,7 +581,12 @@ jobs:
             ready="$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_APP_NAME" --query properties.latestReadyRevisionName -o tsv --only-show-errors)"
             if [[ -n "$latest" && "$latest" == "$ready" ]]; then
               image="$(az containerapp revision show -g "$RESOURCE_GROUP" -n "$API_APP_NAME" --revision "$ready" --query properties.template.containers[0].image -o tsv --only-show-errors)"
-              [[ "$image" == "$PREVIOUS_IMAGE_REF" ]] && exit 0
+              if [[ "$image" == "$PREVIOUS_IMAGE_REF" ]]; then
+                if [[ "$MEMBER_VIDEO_ENABLED" == true ]]; then
+                  python3 scripts/recording-event-topology.py restore "$RUNNER_TEMP/recording-topology.json"
+                fi
+                exit 0
+              fi
             fi
             sleep 10
           done

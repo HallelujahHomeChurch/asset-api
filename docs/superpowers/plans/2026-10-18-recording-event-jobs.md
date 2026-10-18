@@ -39,6 +39,13 @@
 
 新增隔離的 recording queues／poison queues，復用現有 queue transport 模式，不與圖片 derivative 的工作消息混用。不新增 Service Bus。
 
+## 實作裁定（2026-10-19）
+
+- 既有持久化工作表就是 outbox，工作與可領取狀態在原交易提交後才會被 dispatcher 看見。三列 lane 記錄只作 admission／generation fence；不另加 producer trigger，避免既有 slot→work 與 work→slot 交易鎖順序反轉。下文「同交易寫入 outbox」以既有工作表實現，不新增逐物件 dirty 列。
+- dispatcher 在既有 minReplicas=1 API 每 5 秒迴圈，以每 lane 10 秒 readiness 檢查處理新工作、到期重試與失聯恢復；不是每小時 cron 供給。停用／舊版 API 不累積第二份 outbox，啟用後掃描既有 eligible 工作即可復原。
+- 實作事件為 type/version/lane/generation/token，不含任意工作參數。media claim 表保持單件工作權威，lane token 只控制喚醒。
+- 發布失敗必須協調恢復 API 與 Job topology；先停觸發、恢復舊 API、等待在途 execution 安全收尾，才恢復舊 image/env/trigger。五分鐘內未排空則停止自動恢復並明列人工接續，不強殺。
+
 ## 2. Durable event 與喚醒協定
 
 - API 或 worker 建立可處理工作時，在同一交易寫入工作與 outbox。入口涵蓋 confirm 可驗證批次、seal／完整驗證、source complete、封面／preview 建立、五分鐘封面到期、下一階段工作與重試。

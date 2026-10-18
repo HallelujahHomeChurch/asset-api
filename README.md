@@ -375,8 +375,9 @@ cost acceptance can be claimed.
 
 `ASSET_RECORDING_EVENTS_ENABLED` defaults to false. With it off, the existing
 scheduled recording worker and producer contracts retain their behavior. The
-additive `recording_event_wakes` migration coalesces work changes into three
-operational lane rows; it carries no media bytes or user identifiers.
+additive `recording_event_wakes` migration adds three operational dispatch rows;
+it carries no media bytes or user identifiers. Existing durable work tables are
+the outbox: producers never lock dispatch rows or emit one event per fragment.
 
 When enabled, the API's leased dispatcher probes the **same readiness predicates**
 as the existing media claims and sends at most two outstanding lane admissions.

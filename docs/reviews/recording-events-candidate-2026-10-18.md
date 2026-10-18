@@ -13,8 +13,12 @@ candidate 0.5/1. Processing/preview fallback is 4/8 independently of event mode.
 
 ## Flow and changes
 
-- Three durable PostgreSQL wake rows aggregate transactional work changes. Existing
-  media tables, attempts, receipts and processing slots remain authoritative.
+- Existing durable media work tables serve as the outbox; three PostgreSQL rows
+  coalesce/fence lane dispatch. The dispatcher probes committed readiness every
+  10 seconds (5-second loop). No producer trigger locks shared dispatch rows.
+  Transaction rollback is invisible to dispatch; feature-off/old API versions do
+  not accumulate an unbounded second outbox. Attempts, receipts and media slots
+  remain authoritative.
 - API minReplicas=1 was read back before implementation. The dispatcher is enabled
   only by `ASSET_RECORDING_EVENTS_ENABLED`; it caps outstanding admissions at two,
   coalesces per lane, fences generations/tokens and retries failed/lost sends.
@@ -75,13 +79,19 @@ There must be no active formal recording/live or legacy long execution at switch
 The API is deployed through the same CI/CD path with the event flag and queue URLs.
 Existing API receipt acceptance must survive delayed provisioning/send failures.
 
-Release scripts verify trigger/image/scaler settings. The what-if extension only
+Release scripts verify trigger/image/scaler/CPU/memory settings. The what-if extension only
 covers the four named recording jobs, named recording queues and queue-scoped
 roles with known principals/role IDs; unrelated changes still pass the old policy.
 
 ## Tests, measurements and evidence boundaries
 
-See the PR for final local/CI results. Tests cover DB admission, transaction rollback,
+Local full `go test -race -json ./... -count=1 -p=1` passed (1,132 test
+cases); final modified PostgreSQL package race run passed separately (115s), as
+did queue/config/transport/worker/server race tests. Release/activation/rollback
+policy tests, migration policy, `go vet ./...`, and Bicep compilation passed.
+The governance export is run separately with the recorded test event stream.
+The deliberate low-disk fixture is opt-in and was not run locally; CI and cloud
+acceptance status are reported on the PR. Tests cover DB admission, transaction rollback,
 multiple API replicas, stale generation/token, duplicate start, late send ack,
 worker visibility/DB lease loss, timeout recovery, exhausted-attempt settlement,
 readiness priority, strict event/config validation and deployment safety gates.
@@ -93,6 +103,27 @@ wall time, and keeps outputs. The source encoding fixture is one rendition, not 
 full long source-to-HLS pipeline. Short synthetic results are not Azure throughput,
 long-film memory acceptance, CPU utilization, billing, or a savings percentage.
 Earlier exploratory 2/8 measurements are superseded by the user-confirmed 2/4 run.
+
+Local Linux/arm64 Docker fixture observations (3 runs each, same runtime image;
+wall includes container startup and fixture generation; concurrent host tests were
+not controlled, so these are smoke measurements, not controlled cost comparisons):
+
+| Fixture | CPU/GiB | median wall s | max wall s | cgroup peak MiB | failures/OOM |
+| --- | --- | ---: | ---: | ---: | ---: |
+| cover | 4/8 | 8.546 | 14.998 | 48.8 | 0 |
+| cover | 1/2 | 25.787 | 63.457 | 48.4 | 0 |
+| encoding-fixture | 4/8 | 2.695 | 2.857 | 66.8 | 0 |
+| encoding-fixture | 2/4 | 1.17 | 4.379 | 67.1 | 0 |
+| timeline | 4/8 | 5.212 | 5.822 | 31.5 | 0 |
+| timeline | 1/2 | 4.805 | 4.999 | 30.9 | 0 |
+| validation | 4/8 | 7.001 | 7.003 | 250.4 | 0 |
+| validation | 2/4 | 6.579 | 10.581 | 250.3 | 0 |
+
+The 1CPU cover result is variable and slower; do not accept that tier from these
+samples or extrapolate a savings percentage. Actual Azure and representative long
+media remain gating. 2CPU validation and encoding also require their complete
+workloads, not just these short fixtures. Candidate tier configuration is not
+production tier approval.
 
 Not yet accepted: 24h zero-work cloud execution count, representative 2.5h input
 resource tiers, live + background-work fairness on Azure, real cold starts/recovery,
@@ -119,6 +150,22 @@ Event mechanism failure: disable dispatch and Event scaling, stop new admission,
 let in-flight fenced work settle, restore the known compatible legacy image and
 minute Schedule. Keep additive tables and queue/outbox messages. Do not run both
 consumer strategies freely at once; the media slots stay two through rollback.
+
+The release captures only non-secret prior Job trigger/template configuration
+before deploying. On failure it pauses all five recording triggers, restores the
+previous API, waits up to five minutes for existing executions to drain, then
+restores prior Job images, environment references and triggers together. Newly
+provisioned Jobs remain Manual if absent from the old topology. A still-active
+execution prevents automatic Schedule restoration and fails the rollback step;
+operator follow-up must complete the safe drain, not forcibly stop media work.
+The snapshot is runner-local, not uploaded; configuration secret values are never
+queried. Five isolated tests cover first activation failure, prior Event mode,
+active-execution safety, literal-secret rejection and workflow ordering.
+
+Independent review found and corrected: shared producer-trigger lock inversion
+(removed triggers; durable readiness is the outbox), incomplete API-only rollback
+(coordinated topology snapshot/restore), and VOD preview starvation beside an
+already claimed validation (actual readiness and claim regression).
 
 ## Windows handoff — NOT ready for production Event acceptance
 

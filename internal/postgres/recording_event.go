@@ -88,8 +88,8 @@ func (s *RecordingEventStore) ClaimDispatch(ctx context.Context) (recordingqueue
 		e.Type = "asset.recording.wake.v1"
 		e.Version = 1
 		e.Token = newStoreID()
-		// A transaction that changed the generation since the probe wins; retry the scan.
-		r, err := tx.ExecContext(ctx, `UPDATE recording_event_wakes SET state='dispatching',token=$3,dispatch_generation=$2,lease_until=now()+interval '2 minutes',last_dispatch_at=now() WHERE lane=$1 AND generation=$2 AND (state='idle' OR lease_until<=now())`, e.Lane, e.Generation, e.Token)
+		// Each dispatch gets a new generation; committed work remains in its authority table.
+		r, err := tx.ExecContext(ctx, `UPDATE recording_event_wakes SET state='dispatching',token=$3,generation=generation+1,dispatch_generation=generation+1,lease_until=now()+interval '2 minutes',last_dispatch_at=now() WHERE lane=$1 AND generation=$2 AND (state='idle' OR lease_until<=now())`, e.Lane, e.Generation, e.Token)
 		if err != nil {
 			return event, false, err
 		}
@@ -100,6 +100,7 @@ func (s *RecordingEventStore) ClaimDispatch(ctx context.Context) (recordingqueue
 		if err = tx.Commit(); err != nil {
 			return event, false, err
 		}
+		e.Generation++
 		return e, true, nil
 	}
 	return event, false, tx.Commit()

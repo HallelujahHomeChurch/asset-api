@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"hhc/asset-api/internal/derivativequeue"
+	"sync"
 	"testing"
 	"time"
 )
@@ -21,6 +22,8 @@ type testQueue struct {
 	message        derivativequeue.Message
 	acked, renewed bool
 	renewErr       error
+	renewedSignal  chan struct{}
+	signalOnce     sync.Once
 }
 
 func (q *testQueue) Receive(context.Context, time.Duration) (derivativequeue.Message, bool, error) {
@@ -35,6 +38,9 @@ func (q *testQueue) Ack(_ context.Context, m derivativequeue.Message) error {
 }
 func (q *testQueue) Renew(_ context.Context, m derivativequeue.Message, _ time.Duration) (derivativequeue.Message, error) {
 	q.renewed = true
+	if q.renewedSignal != nil {
+		q.signalOnce.Do(func() { close(q.renewedSignal) })
+	}
 	m.PopReceipt = "new"
 	return m, q.renewErr
 }
@@ -42,13 +48,13 @@ func (q *testQueue) Poison(context.Context, derivativequeue.Message) error { ret
 
 func TestJobRenewsLongWorkAndAcknowledgesLatestReceipt(t *testing.T) {
 	r := &testRepo{}
-	q := &testQueue{message: derivativequeue.Message{Body: `{"type":"asset.recording.wake.v1","version":1,"lane":"live","generation":1,"token":"t"}`, PopReceipt: "old"}}
+	q := &testQueue{message: derivativequeue.Message{Body: `{"type":"asset.recording.wake.v1","version":1,"lane":"live","generation":1,"token":"t"}`, PopReceipt: "old"}, renewedSignal: make(chan struct{})}
 	j := NewJob(r, q, "live", func(ctx context.Context, lane string) error {
 		if lane != "live" {
 			t.Fatal(lane)
 		}
 		select {
-		case <-time.After(12 * time.Millisecond):
+		case <-q.renewedSignal:
 			return nil
 		case <-ctx.Done():
 			return ctx.Err()
