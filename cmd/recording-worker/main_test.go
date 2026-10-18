@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -50,4 +51,29 @@ func TestDrainLiveStandbyHonorsDeadline(t *testing.T) {
 	if err != nil || calls < 1 || time.Since(started) < 20*time.Millisecond || time.Since(started) > time.Second {
 		t.Fatalf("standby escaped its bounded window: calls=%d elapsed=%s err=%v", calls, time.Since(started), err)
 	}
+}
+
+func TestLiveOwnerBridgesCronBoundariesWithoutCancellingClaims(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		start := time.Now()
+		next := start.Add(10 * time.Second)
+		claims := 0
+		deadline := start.Add(liveWorkerWindow)
+		err := drainLiveValidation(context.Background(), deadline, 5*time.Second, func(context.Context) (bool, error) {
+			if claims == 17 || time.Now().Before(next) {
+				return false, nil
+			}
+			if wait := time.Since(next); wait > 5*time.Second {
+				t.Fatalf("fragment waited %s across cron boundary", wait)
+			}
+			time.Sleep(8 * time.Second)
+			claims++
+			next = next.Add(10 * time.Second)
+			return true, nil
+		}, func(context.Context) (bool, error) { return time.Since(start) < 3*time.Minute, nil })
+		if err != nil || claims != 17 {
+			t.Fatalf("continuous service: claims=%d err=%v", claims, err)
+		}
+		t.Logf("simulated live interval=%s claims=%d processing=%s", time.Since(start), claims, time.Duration(claims)*8*time.Second)
+	})
 }
