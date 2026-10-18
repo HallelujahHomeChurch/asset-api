@@ -39,7 +39,7 @@ func (s *RecordingPackageStore) ClaimLivePreview(ctx context.Context) (Recording
 		return c, err
 	}
 	var raw []byte
-	err = tx.QueryRowContext(ctx, `SELECT p.capture_id,p.completed_sequence,p.vtt,LEAST(l.published_sequence,p.completed_sequence+6),l.segments FROM recording_live_previews p JOIN recording_live l ON l.capture_id=p.capture_id JOIN recording_captures cap ON cap.id=p.capture_id WHERE cap.state='uploading' AND p.completed_sequence<l.published_sequence AND p.next_attempt_at<=now() AND (p.claimed_until IS NULL OR p.claimed_until<=now()) AND `+livePreviewAlive+` AND `+previewWorkWaiting+` ORDER BY p.next_attempt_at FOR UPDATE OF p SKIP LOCKED LIMIT 1`).Scan(&c.CaptureID, &c.Completed, &c.VTT, &c.Last, &raw)
+	err = tx.QueryRowContext(ctx, livePreviewWakeCandidate+` FOR UPDATE OF p SKIP LOCKED LIMIT 1`).Scan(&c.CaptureID, &c.Completed, &c.VTT, &c.Last, &raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return c, assets.ErrNotFound
 	}

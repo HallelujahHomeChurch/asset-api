@@ -69,6 +69,7 @@ func TestDataGovernanceManifest(t *testing.T) {
 	require.Contains(t, string(raw), "Only account.avatar uses assets.owner_id as the Account subject.")
 	require.NotContains(t, string(raw), "historical DSR")
 	ids := []string{
+		"asset.recording-event-wakes",
 		"asset.recording-broadcast-ranges", "asset.recording-broadcast-authority",
 		"asset.recording-live-cover-attempts", "asset.recording-live-cover-references", "asset.recording-live-covers",
 		"asset.recording-retention-policy", "asset.recording-retention-previews",

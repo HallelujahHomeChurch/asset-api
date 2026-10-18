@@ -503,3 +503,5 @@ assert 'group: asset-api-production\n  cancel-in-progress: false' in release
 assert 'bash scripts/test-release-image-artifact.sh' in ci
 assert 'image-transport:' in ci
 PY
+
+bash scripts/test-recording-events.sh

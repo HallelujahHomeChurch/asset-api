@@ -30,6 +30,12 @@ param scanWorkerImage string = runtimeImage
 param memberVideoEnabled bool = false
 param recordingHLSEnabled bool = false
 param recordingSourceEnabled bool = false
+param recordingEventsProvisioned bool = false
+param recordingEventsEnabled bool = false
+@allowed([2, 4])
+param recordingProcessingCPU int = 2
+@allowed([1, 4])
+param recordingPreviewCPU int = 1
 param recordingImage string = runtimeImage
 param recordingR2AccountId string = ''
 param mediaKeyId string = ''
@@ -54,12 +60,19 @@ var workloadAuthEnabled = workloadAuthClientId != '' && workloadAuthAudience != 
 var extractorAuthEnabled = workloadAuthEnabled && extractorClientId != '' && extractorObjectId != ''
 var workloadAuthIssuer = 'https://sts.windows.net/${subscription().tenantId}/'
 var recordingBucket = 'hhc-member-recordings-prod'
-var recordingProcessingEnv = [
+var recordingEventQueueGroups = [for lane in ['live','processing','preview']: [
+ {name:'ASSET_RECORDING_${toUpper(lane)}_QUEUE_URL',value:'https://${storageAccountName}.queue.${az.environment().suffixes.storage}/asset-recording-${lane}'}
+ {name:'ASSET_RECORDING_${toUpper(lane)}_POISON_URL',value:'https://${storageAccountName}.queue.${az.environment().suffixes.storage}/asset-recording-${lane}-poison'}
+]]
+var recordingEventQueueEnv = recordingEventsEnabled ? flatten(recordingEventQueueGroups) : []
+var recordingProcessingFlags = [
+ {name:'ASSET_RECORDING_EVENTS_ENABLED',value:string(recordingEventsEnabled)}
   { name: 'ASSET_RECORDING_HLS_ENABLED', value: string(recordingHLSEnabled) }
   { name: 'ASSET_RECORDING_SOURCE_ENABLED', value: string(recordingSourceEnabled) }
   { name: 'ASSET_RECORDING_SOURCE_ACCOUNT_URL', value: 'https://aliverecordingsprod.blob.${az.environment().suffixes.storage}' }
   { name: 'ASSET_RECORDING_SOURCE_CONTAINER', value: 'recording-sources' }
 ]
+var recordingProcessingEnv = concat(recordingEventQueueEnv,recordingProcessingFlags)
 var mediaIssuer = 'hhc-media-prod'
 var recordingSecrets = [
   { name: 'r2-access-key-id', keyVaultUrl: '${runtimeVault.properties.vaultUri}secrets/member-video-r2-access-key-id', identity: runtimeIdentity.id }
@@ -1083,11 +1096,12 @@ resource recordingJob 'Microsoft.App/jobs@2025-07-01' = if (memberVideoEnabled) 
     configuration: {
       replicaTimeout: recordingHLSEnabled ? 21600 : 1200
       replicaRetryLimit: recordingHLSEnabled ? 0 : 1
-      triggerType: 'Schedule'
+      triggerType: recordingEventsEnabled ? 'Manual' : 'Schedule'
+      manualTriggerConfig: recordingEventsEnabled ? { parallelism: 1, replicaCompletionCount: 1 } : null
       // HLS executions share exactly two fenced DB processing slots. Extra
       // scheduled executions exit without encoding; platform parallelism is
       // per execution, not the global concurrency limit.
-      scheduleTriggerConfig: {
+      scheduleTriggerConfig: recordingEventsEnabled ? null : {
         cronExpression: '*/1 * * * *'
         parallelism: 1
         replicaCompletionCount: 1
@@ -1190,3 +1204,27 @@ output scanWarmerObjectId string = scanWarmerIdentity.properties.principalId
 output signatureRefreshJobName string = 'asset-clamav-signature-refresh'
 output retentionJobName string = 'asset-retention'
 output derivativeJobName string = 'asset-derivative'
+
+// Provisioning and activation are separate reviewed production changes.
+module recordingEvents './recording-events.bicep' = if (recordingEventsProvisioned && memberVideoEnabled && recordingHLSEnabled) {
+ name:'recording-events'
+ params:{
+  location:location
+  environmentId:environment.id
+  storageAccountName:storageAccountName
+  registryServer:registry.properties.loginServer
+  image:recordingImage
+  pullIdentityId:pullIdentity.id
+  workerIdentityId:runtimeIdentity.id
+  workerClientId:runtimeIdentity.properties.clientId
+  workerPrincipalId:runtimeIdentity.properties.principalId
+  senderPrincipalId:deployRuntime ? app!.identity.principalId : existingApp!.identity.principalId
+  databaseSecretUrl:'${runtimeVault.properties.vaultUri}secrets/database-url'
+  secrets:recordingSecrets
+  r2Env:recordingR2Env
+  processingEnv:recordingProcessingFlags
+  enabled:recordingEventsEnabled
+  processingCPU:recordingProcessingCPU
+  previewCPU:recordingPreviewCPU
+ }
+}

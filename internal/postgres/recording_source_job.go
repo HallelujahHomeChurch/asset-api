@@ -35,7 +35,7 @@ func (s *RecordingSourceStore) ClaimSourceProcessing(ctx context.Context) (Recor
 		return claim, err
 	}
 	var id string
-	err = tx.QueryRowContext(ctx, `SELECT id FROM recording_sources WHERE state IN ('finalizing','queued','processing') AND processing_attempts<3 AND retry_until>clock_timestamp() AND (claimed_until IS NULL OR claimed_until<=clock_timestamp()) ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1`).Scan(&id)
+	err = tx.QueryRowContext(ctx, sourceWakeCandidate+` FOR UPDATE SKIP LOCKED LIMIT 1`).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return claim, assets.ErrNotFound
 	}

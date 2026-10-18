@@ -140,13 +140,7 @@ func (s *RecordingCoverStore) Claim(ctx context.Context) (RecordingCover, error)
 		return empty, err
 	}
 	// A final public timeline is a dependency, not a failed media attempt.
-	c, err := scanCover(tx.QueryRowContext(ctx, `SELECT `+coverColumns+` FROM recording_covers c JOIN recording_packages p ON p.id=c.package_id WHERE c.state IN ('pending','processing') AND c.attempts<3 AND c.next_attempt_at<=now() AND (c.claimed_until IS NULL OR c.claimed_until<=now()) AND c.expires_at>now() AND p.state='ready' AND p.media_expires_at>now()
-AND (c.kind NOT IN ('auto','live-auto') OR p.broadcast_epoch=0 OR EXISTS (
- SELECT 1 FROM recording_broadcast_ranges b JOIN recording_live l ON l.capture_id=b.capture_id
- WHERE b.capture_id=p.id AND b.recording_id=p.recording_id AND b.epoch=p.broadcast_epoch
- AND NOT b.revoked AND b.end_sequence_exclusive>b.start_sequence
- AND l.published_sequence>=b.end_sequence_exclusive-1 AND jsonb_array_length(l.segments)>=b.end_sequence_exclusive))
-AND NOT EXISTS(SELECT 1 FROM recording_deletions d WHERE d.recording_id=c.recording_id) AND NOT EXISTS(SELECT 1 FROM recording_packages WHERE state IN ('freezing','validating') AND validation_attempts<3 AND next_attempt_at<=now()) AND NOT EXISTS(SELECT 1 FROM recording_sources WHERE state IN ('finalizing','queued','processing') AND processing_attempts<3 AND retry_until>now()) ORDER BY c.created_at FOR UPDATE OF c SKIP LOCKED LIMIT 1`))
+	c, err := scanCover(tx.QueryRowContext(ctx, coverWakeCandidate+` FOR UPDATE OF c SKIP LOCKED LIMIT 1`))
 	if errors.Is(err, assets.ErrNotFound) {
 		if commitErr := tx.Commit(); commitErr != nil {
 			return empty, commitErr
