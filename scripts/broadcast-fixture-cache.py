@@ -11,6 +11,8 @@ import sys
 
 
 def fingerprint():
+    if platform.system() != "Linux":
+        raise ValueError("fixture caching requires Linux shared-library resolution")
     digest = hashlib.sha256()
     for source in (
         "internal/recordingvalidation/broadcast_media_test.go",
@@ -19,12 +21,30 @@ def fingerprint():
     ):
         digest.update(source.encode() + b"\0" + Path(source).read_bytes())
     digest.update(f"{platform.system()}/{platform.machine()}".encode())
+    libraries = set()
     for tool in ("ffmpeg", "ffprobe"):
         binary = shutil.which(tool)
         if binary is None:
             raise ValueError(f"missing {tool}")
         digest.update(subprocess.check_output([binary, "-version"]))
         digest.update(Path(binary).read_bytes())
+        resolved_count = 0
+        for line in subprocess.check_output(["ldd", binary], text=True).splitlines():
+            fields = line.split()
+            if not fields or fields[0] in ("linux-vdso.so.1", "linux-gate.so.1"):
+                continue
+            resolved = fields[2] if len(fields) >= 3 and fields[1] == "=>" else fields[0]
+            if not resolved.startswith("/"):
+                raise ValueError(f"unresolved {tool} shared-library dependency: {line}")
+            library = Path(resolved).resolve(strict=True)
+            if not library.is_file():
+                raise ValueError("shared-library dependency must be a file")
+            libraries.add(library)
+            resolved_count += 1
+        if not resolved_count:
+            raise ValueError(f"no resolved {tool} shared libraries")
+    for library in sorted(libraries):
+        digest.update(str(library).encode() + b"\0" + library.read_bytes())
     return digest.hexdigest()
 
 

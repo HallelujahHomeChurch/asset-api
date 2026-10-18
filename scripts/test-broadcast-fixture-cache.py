@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import platform
 import subprocess
 import sys
 import tempfile
@@ -89,7 +90,8 @@ class FixtureCacheTest(unittest.TestCase):
         (self.raw / "720p/seg-000010.m4s").unlink()
         self.assertNotEqual(self.run_cache("seal").returncode, 0)
 
-    def test_key_changes_with_generation_source_tool_version_or_binary(self):
+    @unittest.skipUnless(platform.system() == "Linux", "fingerprinting requires Linux ldd")
+    def test_key_changes_with_generation_source_tool_version_binary_or_library(self):
         root = Path(self.temp.name)
         for source in ("internal/recordingvalidation/broadcast_media_test.go", "internal/assets/recording_live.go", "scripts/broadcast-fixture-cache.py"):
             path = root / source
@@ -97,6 +99,13 @@ class FixtureCacheTest(unittest.TestCase):
             path.write_text("generation input")
         tools = root / "bin"
         tools.mkdir()
+        library = root / "libx264.so.164"
+        library.write_bytes(b"encoder-v1")
+        loader = root / "ld-linux.so"
+        loader.write_bytes(b"loader-v1")
+        ldd = tools / "ldd"
+        ldd.write_text(f'#!/bin/sh\necho "linux-vdso.so.1 (0x0000)"\necho "libx264.so.164 => {library} (0x0000)"\necho "{loader} (0x0000)"\n')
+        ldd.chmod(0o700)
         for name in ("ffmpeg", "ffprobe"):
             tool = tools / name
             tool.write_text('#!/bin/sh\necho "${VERSION:-version-1}"\n')
@@ -115,6 +124,19 @@ class FixtureCacheTest(unittest.TestCase):
             previous = current
         env["VERSION"] = "version-2"
         self.assertNotEqual(previous, key())
+        previous = key()
+        library.write_bytes(b"encoder-v2")
+        self.assertNotEqual(previous, key(), "library-only changes must invalidate raw fixtures")
+        for output in ('echo "libx264.so.164 => not found"', 'exit 0'):
+            ldd.write_text(f"#!/bin/sh\n{output}\n")
+            result = subprocess.run([sys.executable, str(SCRIPT), "key"], cwd=root, env=env, capture_output=True)
+            self.assertNotEqual(result.returncode, 0, "incomplete library resolution must refuse caching")
+
+    @unittest.skipIf(platform.system() == "Linux", "Linux dependency resolution is supported")
+    def test_unsupported_platform_refuses_cache_fingerprinting(self):
+        result = subprocess.run([sys.executable, str(SCRIPT), "key"], capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"requires Linux shared-library resolution", result.stderr)
 
 
 if __name__ == "__main__":
