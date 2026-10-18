@@ -80,6 +80,7 @@ datasets:
     subject_keys: []
     data_classes: [identity, security, content, activity]
     fields:
+      - {name: recording_live_covers.source_sequence, purpose: Pin the verified public segment used by an immutable refresh, necessity: required, data_classes: [activity]}
       - {name: recording_live_covers.id, purpose: Identify the immutable image job, necessity: required, data_classes: [security, activity]}
       - {name: recording_live_covers.scope, purpose: Bind a default or capture owner, necessity: required, data_classes: [security, activity]}
       - {name: recording_live_covers.recording_id, purpose: Prevent cross-recording access, necessity: required, data_classes: [security, activity]}
@@ -435,6 +436,24 @@ datasets:
       - {name: recording_package_attempts.finished_at, purpose: Record attempt completion or abandonment, necessity: required, data_classes: [activity]}
       - {name: recording_package_attempts.diagnostics, purpose: Preserve bounded stage timing and sanitized failure categories per processing attempt, necessity: required, data_classes: [activity]}
     attribution: {mode: manual, explanation: The package carries upstream actor provenance; attempts do not identify video participants.}
+    legal_basis: {status: pending_legal, reference: null}
+    retention: {status: pending_legal, rule: null, action: none}
+    cleanup: {mode: none, implementation: [], evidence: []}
+  - id: asset.recording-live-previews
+    owner: asset-api
+    purpose: Resume optional incremental seek previews and retain immutable images across VOD promotion.
+    necessity: required
+    storage: {kind: postgres, resource: recording_live_previews, sources: [{path: internal/postgres/recording_live_preview.go, symbol: RecordingPackageStore.ClaimLivePreview}]}
+    subject_keys: []
+    data_classes: [security, activity]
+    fields:
+      - {name: recording_live_previews.capture_id, purpose: Bind previews to capture authorization and retention, necessity: required, data_classes: [activity]}
+      - {name: recording_live_previews.completed_sequence, purpose: Resume verified derivative generation without decoding old media, necessity: required, data_classes: [activity]}
+      - {name: recording_live_previews.vtt, purpose: Rebuild the cumulative full DVR index from immutable image receipts, necessity: required, data_classes: [activity]}
+      - {name: recording_live_previews.claim_id, purpose: Fence stale preview workers, necessity: required, data_classes: [security]}
+      - {name: recording_live_previews.claimed_until, purpose: Recover abandoned optional work, necessity: required, data_classes: [security]}
+      - {name: recording_live_previews.next_attempt_at, purpose: Back off failed optional work, necessity: required, data_classes: [activity]}
+    attribution: {mode: manual, explanation: Capture provenance does not identify video participants; this index contains only timing and relative server-owned image names.}
     legal_basis: {status: pending_legal, reference: null}
     retention: {status: pending_legal, rule: null, action: none}
     cleanup: {mode: none, implementation: [], evidence: []}

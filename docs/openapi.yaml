@@ -1415,7 +1415,7 @@ paths:
     post:
       operationId: issueRecordingPackageGrant
       summary: Issue an immutable package-prefix playback exchange after CMS entitlement checks.
-      description: Requires a ready CMS-owned package matching recordingId. The owning CMS must check the current viewer entitlement and publication before calling. Media retention and the supplied publication expiry clamp the one-hour playback credential; no mutable staging path is signed. The authenticated playback base optionally serves previews/index.vtt (text/vtt) and previews/seg-NNNNNN.jpg (image/jpeg), each bounded to 1 MiB and authorized identically to HLS including cache hits. WEBVTT cues reference five-second 160x90 sprite cells relative to the index; absent previews return 404 without affecting video readiness. Derived paths are server-only and excluded from producer inventories and PUT signing. See docs/member-video-operations.md for the canonical preview contract.
+      description: Requires a ready CMS-owned package matching recordingId. The owning CMS must check the current viewer entitlement and publication before calling. Media retention and the supplied publication expiry clamp the one-hour playback credential; no mutable staging path is signed. The authenticated playback base optionally serves previews/index.vtt (text/vtt) and previews/seg-NNNNNN.jpg (image/jpeg), bounded to 2 MiB for VTT and 1 MiB for JPEG and authorized identically to HLS including cache hits. WEBVTT cues reference five-second 160x90 sprite cells relative to the index; absent previews return 404 without affecting video readiness. Derived paths are server-only and excluded from producer inventories and PUT signing. See docs/member-video-operations.md for the canonical preview contract.
       tags: [Private]
       x-hhc-visibility: private
       x-hhc-callers: [hhc-web-api]
@@ -2434,6 +2434,26 @@ paths:
     post:
       summary: Owner-bound immutable live cover auto
       operationId: liveCoverPostauto
+      x-hhc-callers: [hhc-web-api]
+      security: [{daprCaller: []}]
+      parameters:
+        - {name: scope, in: path, required: true, schema: {type: string, pattern: '^(defaults|[a-f0-9]{32}|broadcast-[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})$'}}
+        - {name: recordingId, in: query, schema: {type: string}, description: Empty for defaults; exact capture recording owner otherwise.}
+      responses:
+        '403': {description: Only the CMS owner may manage images.}
+        '404': {description: Unknown upload or invalid recording/capture binding.}
+        '409': {description: "Changed idempotency content, pending media, or a released reference."}
+        '503': {description: Dependency or runtime unavailable.}
+        '202':
+          description: Scoped result; bytes are private, no-store and metadata stripped.
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: false, required: [uploadId, kind, state], properties: {uploadId: {type: string}, kind: {type: string, enum: [auto, custom]}, state: {type: string, enum: [uploading, pending, processing, ready, failed, expired]}}}
+
+  /priv/recording-live-covers/{scope}/refresh-auto:
+    post:
+      summary: Refresh immutable automatic cover at most once per five minutes
+      operationId: liveCoverRefreshAuto
       x-hhc-callers: [hhc-web-api]
       security: [{daprCaller: []}]
       parameters:

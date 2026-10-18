@@ -20,7 +20,7 @@ func NewRecordingLiveCoverStore(db *sql.DB) *RecordingLiveCoverStore {
 
 func (s *RecordingLiveCoverStore) AutoMedia(ctx context.Context, c assets.RecordingLiveCover) (float64, []assets.RecordingPackageObject, error) {
 	var raw []byte
-	err := s.db.QueryRowContext(ctx, `SELECT l.segments->COALESCE(b.start_sequence,0) FROM recording_live l LEFT JOIN recording_broadcast_ranges b ON b.capture_id=l.capture_id JOIN recording_live_covers c ON c.scope=l.capture_id WHERE c.id=$1 AND c.claim_id=$2 AND c.state='processing' AND c.claimed_until>now() AND l.published_sequence>=COALESCE(b.start_sequence,0) AND (b.capture_id IS NULL OR b.start_sequence IS NOT NULL AND NOT b.revoked) AND `+liveCoverAlive, c.ID, c.ClaimID).Scan(&raw)
+	err := s.db.QueryRowContext(ctx, `SELECT l.segments->COALESCE(c.source_sequence,b.start_sequence,0) FROM recording_live l LEFT JOIN recording_broadcast_ranges b ON b.capture_id=l.capture_id JOIN recording_live_covers c ON c.scope=l.capture_id WHERE c.id=$1 AND c.claim_id=$2 AND c.state='processing' AND c.claimed_until>now() AND l.published_sequence>=COALESCE(c.source_sequence,b.start_sequence,0) AND (b.capture_id IS NULL OR b.start_sequence IS NOT NULL AND NOT b.revoked AND COALESCE(c.source_sequence,b.start_sequence)>=b.start_sequence AND (b.end_sequence_exclusive IS NULL OR COALESCE(c.source_sequence,b.start_sequence)<b.end_sequence_exclusive)) AND `+liveCoverAlive, c.ID, c.ClaimID).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, nil, assets.ErrConflict
 	}
@@ -183,8 +183,8 @@ func (s *RecordingLiveCoverStore) Create(ctx context.Context, scope, recording, 
 	if !errors.Is(err, assets.ErrNotFound) {
 		return empty, err
 	}
-	if kind == "auto" {
-		c, err = scanLiveCover(tx.QueryRowContext(ctx, `SELECT `+liveCoverColumns+` FROM recording_live_covers c WHERE scope=$1 AND kind='auto'`, scope))
+	if kind == "auto" && key == "auto" {
+		c, err = scanLiveCover(tx.QueryRowContext(ctx, `SELECT `+liveCoverColumns+` FROM recording_live_covers c WHERE scope=$1 AND kind='auto' AND idempotency_key='auto'`, scope))
 		if err == nil {
 			return c, tx.Commit()
 		}
@@ -206,6 +206,12 @@ func (s *RecordingLiveCoverStore) Create(ctx context.Context, scope, recording, 
 	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO recording_live_covers(id,scope,recording_id,actor_id,idempotency_key,kind,mime,digest,state) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, id, scope, recording, actor, key, kind, mime, digest, state); err != nil {
 		return empty, err
+	}
+	if kind == "auto" && strings.HasPrefix(key, "refresh:") {
+		r, e := tx.ExecContext(ctx, `UPDATE recording_live_covers c SET source_sequence=LEAST(l.published_sequence,COALESCE(b.end_sequence_exclusive-1,l.published_sequence)) FROM recording_live l JOIN recording_captures cap ON cap.id=l.capture_id LEFT JOIN recording_broadcast_ranges b ON b.capture_id=l.capture_id WHERE c.id=$1 AND l.capture_id=c.scope AND cap.state='uploading' AND l.published_sequence>=COALESCE(b.start_sequence,0) AND (b.capture_id IS NULL OR b.start_sequence IS NOT NULL AND NOT b.revoked AND b.member_state='live' AND b.end_sequence_exclusive IS NULL)`, id)
+		if e = recordingTransitionResult(r, e); e != nil {
+			return empty, e
+		}
 	}
 	c, err = scanLiveCover(tx.QueryRowContext(ctx, `SELECT `+liveCoverColumns+` FROM recording_live_covers c WHERE id=$1`, id))
 	if err != nil {
@@ -307,7 +313,7 @@ func (s *RecordingLiveCoverStore) Claim(ctx context.Context) (assets.RecordingLi
 	if _, err = tx.ExecContext(ctx, `UPDATE recording_live_covers SET state='failed',claim_id=NULL,claimed_until=NULL WHERE state='processing' AND attempts=3 AND claimed_until<=now()`); err != nil {
 		return empty, err
 	}
-	c, err := scanLiveCover(tx.QueryRowContext(ctx, `SELECT `+liveCoverColumns+` FROM recording_live_covers c WHERE state IN ('pending','processing') AND attempts<3 AND next_attempt_at<=now() AND (claimed_until IS NULL OR claimed_until<=now()) AND created_at>now()-interval '24 hours' AND `+liveCoverAlive+` AND (kind='custom' OR EXISTS(SELECT 1 FROM recording_live l LEFT JOIN recording_broadcast_ranges b ON b.capture_id=l.capture_id WHERE l.capture_id=c.scope AND l.published_sequence>=COALESCE(b.start_sequence,0) AND (b.capture_id IS NULL OR b.start_sequence IS NOT NULL AND NOT b.revoked))) ORDER BY created_at FOR UPDATE OF c SKIP LOCKED LIMIT 1`))
+	c, err := scanLiveCover(tx.QueryRowContext(ctx, `SELECT `+liveCoverColumns+` FROM recording_live_covers c WHERE `+previewWorkWaiting+` AND state IN ('pending','processing') AND attempts<3 AND next_attempt_at<=now() AND (claimed_until IS NULL OR claimed_until<=now()) AND created_at>now()-interval '24 hours' AND `+liveCoverAlive+` AND (kind='custom' OR EXISTS(SELECT 1 FROM recording_live l LEFT JOIN recording_broadcast_ranges b ON b.capture_id=l.capture_id WHERE l.capture_id=c.scope AND l.published_sequence>=COALESCE(b.start_sequence,0) AND (b.capture_id IS NULL OR b.start_sequence IS NOT NULL AND NOT b.revoked))) ORDER BY created_at FOR UPDATE OF c SKIP LOCKED LIMIT 1`))
 	if errors.Is(err, assets.ErrNotFound) {
 		if err = tx.Commit(); err != nil {
 			return empty, err
@@ -419,4 +425,13 @@ func (s *RecordingLiveCoverStore) PromoteTo(ctx context.Context, id, scope, sour
 		return assets.RecordingCover{}, assets.ErrConflict
 	}
 	return s.promoteSource(ctx, source, capture, recording)
+}
+
+// Refresh generations are immutable and rate bounded by server time.
+func (s *RecordingLiveCoverStore) RefreshAuto(ctx context.Context, scope, recording string) (assets.RecordingLiveCover, error) {
+	var bucket int64
+	if err := s.db.QueryRowContext(ctx, `SELECT floor(extract(epoch FROM now())/300)::bigint`).Scan(&bucket); err != nil {
+		return assets.RecordingLiveCover{}, err
+	}
+	return s.Create(ctx, scope, recording, "system", fmt.Sprintf("refresh:%d", bucket), "", "", "auto")
 }

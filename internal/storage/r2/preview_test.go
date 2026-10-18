@@ -3,6 +3,7 @@ package r2
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -59,5 +60,56 @@ func TestPreviewWritesBoundedImmutableAndNotClientSignable(t *testing.T) {
 	}
 	if err := store.PutPackagePreview(context.Background(), prefix+"current.json", []byte(`{"attempt":"`+strings.Repeat("x", 81)+`"}`)); err == nil {
 		t.Fatal("oversize attempt allowed")
+	}
+}
+
+func TestSharedPreviewReplayAndBounds(t *testing.T) {
+	const id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	stored := map[string][]byte{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			w.Write(stored[r.URL.Path])
+			return
+		}
+		if r.Method != "PUT" || r.Header.Get("If-None-Match") != "*" {
+			t.Error("mutable derivative write")
+		}
+		if _, ok := stored[r.URL.Path]; ok {
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(412)
+			fmt.Fprint(w, `<Error><Code>PreconditionFailed</Code></Error>`)
+			return
+		}
+		stored[r.URL.Path], _ = io.ReadAll(r.Body)
+	}))
+	defer server.Close()
+	store := packageListStore(server)
+	prefix := "recordings/captures/" + id + "/final/previews/"
+	for _, suffix := range []string{"shared/seg-000000.jpg", "shared/seg-000000.vtt", "1/index.vtt"} {
+		data := []byte("jpeg")
+		if strings.HasSuffix(suffix, ".vtt") {
+			data = []byte("WEBVTT\n\n")
+		}
+		for range 2 {
+			if err := store.PutPackagePreview(context.Background(), prefix+suffix, data); err != nil {
+				t.Fatal("replay failed", err)
+			}
+		}
+		if err := store.PutPackagePreview(context.Background(), prefix+suffix, append(data, 'x')); err != ErrLiveConflict {
+			t.Fatal("changed immutable bytes accepted", err)
+		}
+		if _, err := store.PresignPackageObject(context.Background(), prefix+suffix, 10, "video/mp4", time.Minute); err == nil {
+			t.Fatal("client signing accepted")
+		}
+	}
+	large := append([]byte("WEBVTT\n\n"), make([]byte, 1<<20)...)
+	if err := store.PutPackagePreview(context.Background(), prefix+"2/index.vtt", large); err != nil {
+		t.Fatal("long DVR rejected", err)
+	}
+	if err := store.PutPackagePreview(context.Background(), prefix+"shared/seg-000001.jpg", large); err == nil {
+		t.Fatal("oversized sprite accepted")
+	}
+	if err := store.PutPackagePreview(context.Background(), prefix+"3/index.vtt", append(large, make([]byte, 1<<20)...)); err == nil {
+		t.Fatal("unbounded VTT accepted")
 	}
 }

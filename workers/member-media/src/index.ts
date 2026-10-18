@@ -38,7 +38,7 @@ type Claims = {
 const cookieName = 'hhc_media';
 const packageRoute = /^\/videos\/([a-zA-Z0-9-]{1,80})\/packages\/([a-f0-9]{32})\/sessions\/([a-zA-Z0-9-]{1,80})\/(cookie|master\.m3u8|previews\/(?:index\.vtt|seg-\d{6}\.jpg)|(?:480p|720p|1080p)\/(?:index\.m3u8|init\.mp4|seg-\d{6}\.m4s))$/;
 const finalPrefix = /^recordings\/packages\/([a-f0-9]{32})\/final\/[a-zA-Z0-9-]{1,80}\/$/;
-const liveRoute = /^\/videos\/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\/captures\/([a-f0-9]{32})\/sessions\/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\/(cookie|master\.m3u8|(?:480p|720p|1080p)\/(?:index\.m3u8|init\.mp4|seg-\d{6}\.m4s))$/;
+const liveRoute = /^\/videos\/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\/captures\/([a-f0-9]{32})\/sessions\/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\/(cookie|master\.m3u8|previews\/(?:index\.vtt|seg-\d{6}\.jpg)|(?:480p|720p|1080p)\/(?:index\.m3u8|init\.mp4|seg-\d{6}\.m4s))$/;
 const previewRoute = new RegExp(liveRoute.source.replace('sessions', 'previews'));
 const livePrefix = /^recordings\/captures\/([a-f0-9]{32})\/final\/$/;
 const encoder = new TextEncoder();
@@ -94,14 +94,16 @@ function projectPlaylist(raw: string, policy: BroadcastPolicy): string {
 
 function projectVtt(raw: string, playlist: string, policy: BroadcastPolicy): string {
   if (!raw.startsWith('WEBVTT\n')) throw new Error('Invalid preview');
-  const origin = playlistSegments(playlist).slice(0,policy.startSequence!).reduce((sum,s) => sum+s.duration,0);
+  const segments = playlistSegments(playlist);
+  const origin = segments.slice(0,policy.startSequence!).reduce((sum,s) => sum+s.duration,0);
+  const limit = segments.slice(policy.startSequence!,policy.endSequenceExclusive ?? segments.length).reduce((sum,s) => sum+s.duration,0);
   const seconds = (s: string) => s.split(':').reduce((sum,n) => sum*60+Number(n),0);
   const timestamp = (s: number) => {const ms=Math.max(0,Math.round(s*1000));return `${String(Math.floor(ms/3600000)).padStart(2,'0')}:${String(Math.floor(ms/60000)%60).padStart(2,'0')}:${String(Math.floor(ms/1000)%60).padStart(2,'0')}.${String(ms%1000).padStart(3,'0')}`;};
   let out = 'WEBVTT\n\n';
   for (const m of raw.matchAll(/(\d{2}:\d{2}:\d{2}\.\d{3}) --> (\d{2}:\d{2}:\d{2}\.\d{3})\n(seg-(\d{6})\.jpg#xywh=\d+,0,160,90)\n/g)) {
     const sequence=Number(m[4]);if (sequence < policy.startSequence! || policy.endSequenceExclusive !== null && sequence >= policy.endSequenceExclusive) continue;
-    const start=seconds(m[1])-origin,end=seconds(m[2])-origin;
-    if (start < -0.001 || end <= start) throw new Error('Invalid preview timeline');
+    const start=Math.max(0,seconds(m[1])-origin),end=Math.min(limit,seconds(m[2])-origin);
+    if (end <= start) continue;
     out += `${timestamp(start)} --> ${timestamp(end)}\n${m[3]}\n\n`;
   }
   return out;
@@ -267,11 +269,13 @@ async function handle(request: Request, env: Env, ctx?: ExecutionContext): Promi
     if (!preview && segment && (Number(segment[1]) < policy.startSequence! || policy.endSequenceExclusive !== null && Number(segment[1]) >= policy.endSequenceExclusive)) return failure(404);
   }
   let objectKey = playback.prefix! + match[4];
+  let publishedSequence: number | undefined;
   if (live || policy) {
     const rawPrefix = policy ? `recordings/captures/${ids[1]}/final/` : playback.prefix!;
     const pointer = await livePointer(env, rawPrefix);
     if (!pointer) return failure(404);
-    const sequence = /seg-(\d{6})\.m4s$/.exec(match[4]);
+    publishedSequence = pointer.lastSequence;
+    const sequence = /seg-(\d{6})\.(?:m4s|jpg)$/.exec(match[4]);
     if (sequence && Number(sequence[1]) > pointer.lastSequence) return failure(404);
     if (policy && !preview && policy.startSequence! > pointer.lastSequence) return failure(503);
     if (!match[4].startsWith('previews/')) objectKey = rawPrefix + match[4];
@@ -287,31 +291,30 @@ async function handle(request: Request, env: Env, ctx?: ExecutionContext): Promi
     }
   }
   if (match[4].startsWith('previews/')) {
-    const pointer = await env.MEDIA_BUCKET.get(playback.prefix! + 'previews/current.json');
-    if (!pointer) return failure(404);
-    if (!pointer.body || !Number.isSafeInteger(pointer.size) || pointer.size <= 0 || pointer.size > 128) return failure(503);
-    const reader = pointer.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let size = 0;
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > 128) { await reader.cancel(); return failure(503); }
-      chunks.push(value);
+    let shared = live;
+    if (!shared) {
+      const raw = await boundedText(env, playback.prefix! + 'previews/current.json', 128);
+      if (raw === null) return failure(404);
+      const attempt = /^\{"attempt":"([a-zA-Z0-9-]{1,80})"\}$/.exec(raw)?.[1];
+      if (!attempt) return failure(503);
+      shared = attempt === 'capture';
+      if (!shared) objectKey = playback.prefix! + `previews/${attempt}/` + match[4].slice('previews/'.length);
     }
-    const bytes = new Uint8Array(size);
-    let offset = 0;
-    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-    const attempt = /^\{"attempt":"([a-zA-Z0-9-]{1,80})"\}$/.exec(new TextDecoder().decode(bytes))?.[1];
-    if (!attempt) return failure(503);
-    objectKey = playback.prefix! + `previews/${attempt}/` + match[4].slice('previews/'.length);
+    if (shared) {
+      const prefix = `recordings/captures/${ids[1]}/final/previews/`;
+      const pointer = await livePointer(env, prefix);
+      if (!pointer) return failure(404);
+      if (pointer.revision !== pointer.lastSequence + 1 || publishedSequence !== undefined && pointer.lastSequence > publishedSequence) return failure(503);
+      const sprite = /seg-(\d{6})\.jpg$/.exec(match[4]);
+      if (sprite && Number(sprite[1]) > pointer.lastSequence) return failure(404);
+      objectKey = prefix + (sprite ? `shared/${match[4].slice('previews/'.length)}` : `${pointer.revision}/index.vtt`);
+    }
   }
-  if (policy && match[4] === 'previews/index.vtt') {
+  if (policy && !preview && match[4] === 'previews/index.vtt') {
     const rawPrefix = `recordings/captures/${ids[1]}/final/`;
     const pointer = await livePointer(env, rawPrefix);if (!pointer) return failure(503);
     const playlist = await boundedText(env, rawPrefix + `playlists/${pointer.revision}/480p/index.m3u8`, 1 << 20);
-    const raw = await boundedText(env, objectKey, 1 << 20);if (playlist === null || raw === null) return failure(404);
+    const raw = await boundedText(env, objectKey, 2 << 20);if (playlist === null || raw === null) return failure(404);
     const body = projectVtt(raw, playlist, policy);
     const response = new Response(request.method === 'HEAD' ? null : body, {headers:{'Cache-Control':'private, no-store','Content-Type':'text/vtt','X-Content-Type-Options':'nosniff'}});
     return origin ? withCors(response, origin) : response;
@@ -333,7 +336,7 @@ async function handle(request: Request, env: Env, ctx?: ExecutionContext): Promi
   }
   const object = await env.MEDIA_BUCKET.head(objectKey);
   if (!object) return failure(404);
-  if (!Number.isSafeInteger(object.size) || object.size <= 0 || object.size > (match[4].endsWith('.m3u8') || match[4].startsWith('previews/') ? 1 << 20 : 128 << 20)) return failure(503);
+  if (!Number.isSafeInteger(object.size) || object.size <= 0 || object.size > (match[4].endsWith('.vtt') ? 2 << 20 : match[4].endsWith('.m3u8') || match[4].startsWith('previews/') ? 1 << 20 : 128 << 20)) return failure(503);
   const mime = match[4].endsWith('.vtt') ? 'text/vtt' : match[4].endsWith('.jpg') ? 'image/jpeg' : match[4].endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : match[4].endsWith('.m4s') ? 'video/iso.segment' : 'video/mp4';
   const headers = new Headers({ 'Cache-Control': 'private, no-store', 'Content-Type': mime, 'X-Content-Type-Options': 'nosniff', 'Accept-Ranges': 'bytes', ETag: object.httpEtag });
   if (request.headers.get('If-None-Match') === object.httpEtag) {

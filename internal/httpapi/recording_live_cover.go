@@ -206,3 +206,22 @@ func (h *Handler) promoteLiveCover(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 202, map[string]string{"coverId": fmt.Sprintf("%s-%d", c.ID, index), "state": c.State})
 }
+
+func (h *Handler) refreshLiveCover(w http.ResponseWriter, r *http.Request) {
+	if !h.liveCoverAllowed(w, r) {
+		return
+	}
+	store, ok := h.recordingLiveCovers.(interface {
+		RefreshAuto(context.Context, string, string) (assets.RecordingLiveCover, error)
+	})
+	if !ok {
+		writeError(w, 503, "AST_UNAVAILABLE", "live cover refresh unavailable")
+		return
+	}
+	c, err := store.RefreshAuto(r.Context(), r.PathValue("scope"), r.URL.Query().Get("recordingId"))
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+	writeJSON(w, 202, c)
+}

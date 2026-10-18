@@ -128,3 +128,40 @@ func TestLivePlaylistReplayRequiresIdenticalBytes(t *testing.T) {
 		t.Fatalf("changed revision: %v", err)
 	}
 }
+
+func TestLivePreviewPointerNeverRegressesOrTouchesMediaPointer(t *testing.T) {
+	id := strings.Repeat("a", 32)
+	current := `{"revision":2,"lastSequence":1}`
+	puts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/final/previews/current.json") {
+			t.Fatal("touched media pointer", r.URL.Path)
+		}
+		w.Header().Set("ETag", `"etag"`)
+		if r.Method == "GET" {
+			io.WriteString(w, current)
+			return
+		}
+		if r.Header.Get("If-Match") != `"etag"` {
+			t.Error("missing conditional fence")
+		}
+		puts++
+		data, _ := io.ReadAll(r.Body)
+		current = string(data)
+	}))
+	defer server.Close()
+	store := packageListStore(server)
+	for _, last := range []int{5, 1, 5} {
+		if err := store.AdvanceLivePreviewPointer(context.Background(), id, last); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if puts != 1 || current != `{"revision":6,"lastSequence":5}` {
+		t.Fatal(puts, current)
+	}
+	for _, last := range []int{-1, 4320} {
+		if err := store.AdvanceLivePreviewPointer(context.Background(), id, last); err == nil {
+			t.Fatal("bad boundary accepted")
+		}
+	}
+}

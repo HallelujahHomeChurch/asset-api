@@ -149,6 +149,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.Handle("PUT /priv/recordings/retention-policy", h.internal(http.HandlerFunc(h.updateRecordingRetention)))
 	mux.Handle("POST /priv/recording-live-covers/{scope}/uploads", h.internal(http.HandlerFunc(h.uploadLiveCover)))
 	mux.Handle("POST /priv/recording-live-covers/{scope}/auto", h.internal(http.HandlerFunc(h.generateLiveCover)))
+	mux.Handle("POST /priv/recording-live-covers/{scope}/refresh-auto", h.internal(http.HandlerFunc(h.refreshLiveCover)))
 	mux.Handle("POST /priv/recording-live-covers/{scope}/uploads/{uploadID}/promote", h.internal(http.HandlerFunc(h.promoteLiveCover)))
 	mux.Handle("GET /priv/recording-live-covers/{scope}/uploads/{uploadID}", h.internal(http.HandlerFunc(h.getLiveCover)))
 	mux.Handle("GET /priv/recording-live-covers/{scope}/uploads/{uploadID}/content", h.internal(http.HandlerFunc(h.readLiveCover)))
