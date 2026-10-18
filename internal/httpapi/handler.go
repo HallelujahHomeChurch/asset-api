@@ -24,6 +24,7 @@ import (
 )
 
 type Handler struct {
+	websiteReadiness     WebsiteContentReadinessStore
 	service              *assets.Service
 	db                   *sql.DB
 	allowedCallers       map[string]bool
@@ -100,6 +101,7 @@ func (h *Handler) Routes() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "healthy"})
 	})
 	mux.HandleFunc("GET /ready", h.ready)
+	mux.HandleFunc("POST /priv/website/content-readiness", h.websiteContentReadiness)
 	mux.HandleFunc("GET /api/assets/public/{assetID}", h.publicDownload)
 	mux.HandleFunc("GET /api/assets/public/{assetID}/{variant}", h.publicDerivativeDownload)
 	mux.Handle("POST /api/assets/personal-space/uploads", h.personalReader(http.HandlerFunc(h.createPersonalUpload)))

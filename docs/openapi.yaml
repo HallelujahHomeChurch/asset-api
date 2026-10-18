@@ -18,6 +18,55 @@ tags:
   - name: Private
     description: Dapr-authenticated service operations.
 paths:
+  /priv/website/content-readiness:
+    post:
+      operationId: getWebsiteContentReadiness
+      summary: Read bounded owner-bound current PDF and live readiness
+      description: Exact hhc-web-api Dapr identity and app-channel token only. No development or workload fallback. Missing, mismatched and unready media returns ready false without live projection. Dependency failures return unavailable. No objects, uploader identities, bytes or grants are returned. Existing recording lifecycle batches remain the package readiness contract.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [{daprCaller: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  uniqueItems: true
+                  items: {$ref: '#/components/schemas/WebsiteContentRef'}
+      responses:
+        '200':
+          description: One no-store decision per input, in input order.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    minItems: 1
+                    maxItems: 100
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [ref, ready]
+                      properties:
+                        ref: {$ref: '#/components/schemas/WebsiteContentRef'}
+                        ready: {type: boolean}
+                        live: {$ref: '#/components/schemas/WebsiteLiveReadiness'}
+        '400': {description: 'Closed JSON, invalid or oversized reference batch.'}
+        '403': {description: Exact authenticated Website caller required.}
+        '503': {description: Readiness dependency or live feature unavailable.}
   /priv/recordings/lifecycle:
     post:
       operationId: getRecordingLifecycleSnapshot
@@ -2888,6 +2937,33 @@ components:
     CollectionACLMutation: { description: Collection ACL mutation., content: { application/json: { schema: { $ref: '#/components/schemas/CollectionACLMutation' } } } }
     DeleteCollectionItems: { description: Collection deletion result., content: { application/json: { schema: { $ref: '#/components/schemas/DeleteCollectionItemsResult' } } } }
   schemas:
+    WebsiteContentRef:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [type, id, resourceId, locale]
+          properties:
+            type: {type: string, const: bulletin_pdf}
+            id: {type: string, pattern: '^[a-zA-Z0-9_-]{1,128}$'}
+            resourceId: {type: string, pattern: '^[a-zA-Z0-9_-]{1,128}$'}
+            locale: {type: string, enum: [zh-Hant, zh-Hans, en]}
+        - type: object
+          additionalProperties: false
+          required: [type, id, resourceId]
+          properties:
+            type: {type: string, const: recording_live}
+            id: {type: string, pattern: '^[a-zA-Z0-9_-]{1,128}$'}
+            resourceId: {type: string, pattern: '^[a-zA-Z0-9_-]{1,128}$'}
+    WebsiteLiveReadiness:
+      type: object
+      additionalProperties: false
+      required: [state, createdAt, expiresAt, terminalAt, progress]
+      properties:
+        state: {type: string, enum: [uploading, freezing, validating, ready]}
+        createdAt: {type: string, format: date-time}
+        expiresAt: {type: string, format: date-time}
+        terminalAt: {type: [string, 'null'], format: date-time}
+        progress: {$ref: '#/components/schemas/RecordingLiveProgress'}
     BroadcastRangeInput:
       type: object
       additionalProperties: false

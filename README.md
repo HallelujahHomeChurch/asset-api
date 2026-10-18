@@ -404,3 +404,21 @@ still belong in cost accounting.
 Provision and activate using the reviewed Bicep/release path only. See
 [the implementation plan](docs/superpowers/plans/2026-10-18-recording-event-jobs.md)
 and [the candidate handoff](docs/reviews/recording-events-candidate-2026-10-18.md).
+
+## Website current-content readiness
+
+`POST /priv/website/content-readiness` accepts 1–100 closed `bulletin_pdf`
+(asset ID, issue ID, exact locale) or `recording_live` (capture ID, recording ID)
+references. Only the exact `hhc-web-api` Dapr caller and app-channel token are
+accepted, even with development fallback enabled. It returns an ordered
+`{items:[{ref,ready,live?}]}` snapshot. PDF readiness reuses the existing private,
+completed, clean, ready/not-required owner predicate. Live readiness carries only
+current state, capture timestamps and the already-published common waterline;
+Website still enforces its member/publication/broadcast authority. Missing,
+mismatched and terminal resources deny without a live projection; dependency
+errors are 503. Live refs require the existing HLS feature wiring. No object
+paths, uploader identity, bytes, credentials or grants are exposed.
+
+Deploy this additive producer before the Website inbox consumer. Existing
+`/priv/recordings/lifecycle` remains the package expiry/readiness batch; no
+provider, storage, IAM or feature flag is activated by this change.
