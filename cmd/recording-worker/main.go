@@ -23,6 +23,8 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
+const liveWorkerWindow = 5 * time.Hour
+
 func main() {
 	if err := logging.Init(); err != nil {
 		slog.Error("invalid logging configuration", "error", err)
@@ -81,7 +83,7 @@ func run(ctx context.Context) error {
 			started := time.Now()
 			var busy time.Duration
 			polls := 0
-			slog.Info("recording_live_worker_start", "max_seconds", 18000)
+			slog.Info("recording_live_worker_start", "max_seconds", int(liveWorkerWindow.Seconds()))
 			defer func() {
 				slog.Info("recording_live_worker_exit", "elapsed_ms", time.Since(started).Milliseconds(),
 					"processing_ms", busy.Milliseconds(), "non_processing_ms", (time.Since(started) - busy).Milliseconds(), "claims", liveClaims, "polls", polls, "failed", result != nil)
@@ -89,7 +91,7 @@ func run(ctx context.Context) error {
 			// Stay across cron boundaries without changing claim/slot concurrency.
 			// This execution returns after live work; another scheduled execution
 			// handles cleanup/covers/final validation within its own Job deadline.
-			return drainLiveValidation(ctx, started.Add(5*time.Hour), 5*time.Second,
+			return drainLiveValidation(ctx, started.Add(liveWorkerWindow), 5*time.Second,
 				func(ctx context.Context) (bool, error) {
 					if err := check(ctx); err != nil {
 						return false, err

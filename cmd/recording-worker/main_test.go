@@ -58,9 +58,9 @@ func TestLiveOwnerBridgesCronBoundariesWithoutCancellingClaims(t *testing.T) {
 		start := time.Now()
 		next := start.Add(10 * time.Second)
 		claims := 0
-		deadline := start.Add(3 * time.Minute)
+		deadline := start.Add(liveWorkerWindow)
 		err := drainLiveValidation(context.Background(), deadline, 5*time.Second, func(context.Context) (bool, error) {
-			if time.Now().Before(next) {
+			if claims == 17 || time.Now().Before(next) {
 				return false, nil
 			}
 			if wait := time.Since(next); wait > 5*time.Second {
@@ -70,7 +70,7 @@ func TestLiveOwnerBridgesCronBoundariesWithoutCancellingClaims(t *testing.T) {
 			claims++
 			next = next.Add(10 * time.Second)
 			return true, nil
-		}, func(context.Context) (bool, error) { return true, nil })
+		}, func(context.Context) (bool, error) { return time.Since(start) < 3*time.Minute, nil })
 		if err != nil || claims != 17 {
 			t.Fatalf("continuous service: claims=%d err=%v", claims, err)
 		}

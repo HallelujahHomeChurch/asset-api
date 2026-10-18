@@ -34,5 +34,9 @@ func (s *RecordingCaptureStore) WithLiveWorker(ctx context.Context, run func(con
 	}()
 	// Check the same session before every claim so a lost lock connection stops
 	// admission; in-flight media remains protected by its existing fenced lease.
-	return true, run(ctx, conn.PingContext)
+	return true, run(ctx, func(ctx context.Context) error {
+		checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		return conn.PingContext(checkCtx)
+	})
 }
