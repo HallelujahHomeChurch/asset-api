@@ -1,6 +1,8 @@
 import importlib.util
 from pathlib import Path
 import tempfile
+import os
+from unittest.mock import patch
 import unittest
 
 spec = importlib.util.spec_from_file_location('topology', Path(__file__).with_name('recording-event-topology.py'))
@@ -10,6 +12,8 @@ spec.loader.exec_module(mod)
 
 class TopologyTest(unittest.TestCase):
     def setUp(self):
+        self.env = patch.dict(os.environ, {'RECORDING_EVENTS_PROVISIONED':'true', 'RECORDING_EVENTS_ENABLED':'false'})
+        self.env.start()
         self.calls = []
         self.temp = tempfile.TemporaryDirectory()
         self.path = Path(self.temp.name) / 'topology.json'
@@ -22,6 +26,7 @@ class TopologyTest(unittest.TestCase):
 
     def tearDown(self):
         self.temp.cleanup()
+        self.env.stop()
 
     def now(self):
         self.clock += 100
@@ -80,6 +85,20 @@ class TopologyTest(unittest.TestCase):
         self.jobs = [self.job('unrelated', 'Schedule')]
         mod.pause('alive')
         self.assertEqual(self.payloads(), [])
+
+    def test_switch_refuses_active_work(self):
+        self.active = True
+        os.environ['RECORDING_EVENTS_ENABLED'] = 'true'
+        with self.assertRaisesRegex(RuntimeError, 'drain before'):
+            mod.capture(self.path, 'alive')
+        self.assertFalse(self.path.exists())
+
+    def test_missing_provisioned_flag_cannot_orphan_existing_triggers(self):
+        self.jobs.append(self.job('asset-recording-live', 'Event'))
+        os.environ['RECORDING_EVENTS_PROVISIONED'] = 'false'
+        with self.assertRaisesRegex(ValueError, 'orphan'):
+            mod.capture(self.path, 'alive')
+        self.assertFalse(self.path.exists())
 
     def test_workflow_coordinates_failure_recovery(self):
         workflow = Path('.github/workflows/release.yml').read_text()

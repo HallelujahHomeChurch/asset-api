@@ -569,7 +569,7 @@ jobs:
       - name: Roll back failed runtime
         if: ${{ failure() && steps.deploy_runtime.outcome != 'skipped' }}
         run: |
-          if [[ "$MEMBER_VIDEO_ENABLED" == true ]]; then
+          if [[ "$MEMBER_VIDEO_ENABLED" == true && "$RECORDING_EVENTS_PROVISIONED" == true ]]; then
             python3 scripts/recording-event-topology.py pause "$RUNNER_TEMP/recording-topology.json"
           fi
           az containerapp revision copy -g "$RESOURCE_GROUP" -n "$API_APP_NAME" \
@@ -582,7 +582,7 @@ jobs:
             if [[ -n "$latest" && "$latest" == "$ready" ]]; then
               image="$(az containerapp revision show -g "$RESOURCE_GROUP" -n "$API_APP_NAME" --revision "$ready" --query properties.template.containers[0].image -o tsv --only-show-errors)"
               if [[ "$image" == "$PREVIOUS_IMAGE_REF" ]]; then
-                if [[ "$MEMBER_VIDEO_ENABLED" == true ]]; then
+                if [[ "$MEMBER_VIDEO_ENABLED" == true && "$RECORDING_EVENTS_PROVISIONED" == true ]]; then
                   python3 scripts/recording-event-topology.py restore "$RUNNER_TEMP/recording-topology.json"
                 fi
                 exit 0

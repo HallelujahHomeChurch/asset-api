@@ -75,7 +75,10 @@ Provisioning=true deploys the new module with Manual triggers while enabled=fals
 Activation requires provisioned=true, HLS/member video enabled, fresh reviewed
 what-if and explicit production change approval. The release changes the legacy
 job to Manual and starts the three Event triggers plus hourly maintenance.
-There must be no active formal recording/live or legacy long execution at switch.
+There must be no active formal recording/live or legacy long execution at switch;
+the pre-deploy snapshot rejects a trigger switch with active executions. Once
+Event resources exist, provisioned=true must remain set so CI cannot orphan their
+triggers while enabling the legacy Schedule.
 The API is deployed through the same CI/CD path with the event flag and queue URLs.
 Existing API receipt acceptance must survive delayed provisioning/send failures.
 
@@ -152,15 +155,17 @@ minute Schedule. Keep additive tables and queue/outbox messages. Do not run both
 consumer strategies freely at once; the media slots stay two through rollback.
 
 The release captures only non-secret prior Job trigger/template configuration
-before deploying. On failure it pauses all five recording triggers, restores the
+before deploying. For a provisioned Event topology, failure pauses all five recording triggers, restores the
 previous API, waits up to five minutes for existing executions to drain, then
 restores prior Job images, environment references and triggers together. Newly
 provisioned Jobs remain Manual if absent from the old topology. A still-active
 execution prevents automatic Schedule restoration and fails the rollback step;
 operator follow-up must complete the safe drain, not forcibly stop media work.
 The snapshot is runner-local, not uploaded; configuration secret values are never
-queried. Five isolated tests cover first activation failure, prior Event mode,
-active-execution safety, literal-secret rejection and workflow ordering.
+queried. Seven isolated tests cover first activation failure, prior Event mode,
+active-execution safety, literal-secret rejection, workflow ordering, active-work cutover rejection and
+missing-provisioned-flag rejection. Initial default-off releases retain the
+existing API-only rollback path; they do not pause the legacy media job.
 
 Independent review found and corrected: shared producer-trigger lock inversion
 (removed triggers; durable readiness is the outbox), incomplete API-only rollback

@@ -32,9 +32,26 @@ def jobs(group):
     return [j for j in az('containerapp', 'job', 'list', '-g', group, '--query', QUERY) if j['name'] in NAMES]
 
 
+def active_executions(group, current):
+    for job in current:
+        executions = az('containerapp', 'job', 'execution', 'list', '-g', group, '-n', job['name'])
+        if any(e['properties']['status'] not in ('Succeeded', 'Failed', 'Canceled', 'Cancelled', 'Stopped') for e in executions):
+            return True
+    return False
+
+
 def capture(path, group):
+    current = jobs(group)
+    provisioned = os.environ.get('RECORDING_EVENTS_PROVISIONED', 'false') == 'true'
+    enabled = os.environ.get('RECORDING_EVENTS_ENABLED', 'false') == 'true'
+    if not provisioned and any(j['name'] != 'asset-recording-validation' for j in current):
+        raise ValueError('existing recording Event topology requires provisioned=true; do not orphan active triggers')
+    legacy = next((j for j in current if j['name'] == 'asset-recording-validation'), None)
+    changing = legacy and legacy['properties']['configuration']['triggerType'] != ('Manual' if enabled else 'Schedule')
+    if changing and active_executions(group, current):
+        raise RuntimeError('recording trigger switch requires all executions to drain before deployment')
     snapshots = []
-    for job in jobs(group):
+    for job in current:
         props = job['properties']
         template = props['template']
         for container in template['containers']:
@@ -68,10 +85,7 @@ def restore(path, group):
     # Do not forcibly stop valid work or activate the old cron alongside running Event jobs.
     deadline = time.monotonic()+300
     while True:
-        active = False
-        for job in jobs(group):
-            executions = az('containerapp', 'job', 'execution', 'list', '-g', group, '-n', job['name'])
-            active |= any(e['properties']['status'] in ('Running', 'Processing', 'Pending', 'Unknown') for e in executions)
+        active = active_executions(group, jobs(group))
         if not active:
             break
         if time.monotonic() >= deadline:
