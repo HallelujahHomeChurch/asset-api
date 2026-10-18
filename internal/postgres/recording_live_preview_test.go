@@ -128,44 +128,100 @@ func TestLivePreviewFencingFailurePriorityAndCleanup(t *testing.T) {
 }
 
 func TestLivePreviewRetentionFollowsVODWithoutHoldingStaging(t *testing.T) {
-	ctx := context.Background()
-	db := isolatedIntegrationDB(t)
-	if err := migrations.Run(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-	captures := NewRecordingCaptureStore(db)
-	cap := assets.RecordingCapture{ID: sealedLiveCapture(t, captures, 1)}
-	packages := NewRecordingPackageStore(db)
-	exec := func(q string, args ...any) {
-		t.Helper()
-		if _, err := db.ExecContext(ctx, q, args...); err != nil {
-			t.Fatal(err)
+	for _, policy := range []bool{false, true} {
+		name := "legacy"
+		if policy {
+			name = "B1"
 		}
-	}
-	exec(`UPDATE recording_packages SET state='ready',final_prefix='recordings/packages/'||id||'/final/ready/',ready_at=now(),media_expires_at=now()+interval '30 days' WHERE id=$1`, cap.ID)
-	exec(`UPDATE recording_captures SET state='ready',package_id=$1,created_at=now()-interval '2 days',expires_at=now()-interval '1 day' WHERE id=$1`, cap.ID)
-	exec(`UPDATE recording_live SET segments='[{"sequence":0,"renditions":{"480p":{"start":0,"end":30}}}]',revision=1,published_revision=1,published_sequence=0 WHERE capture_id=$1`, cap.ID)
-	exec(`INSERT INTO recording_live_previews(capture_id,completed_sequence) VALUES($1,0)`, cap.ID)
-	var keys []string
-	remove := func(_ context.Context, batch []string) error { keys = append(keys, batch...); return nil }
-	if err := captures.ReconcileLive(ctx, remove); err != nil || len(keys) > 0 {
-		t.Fatal("deleted live sprites still used by VOD", err)
-	}
-	if err := packages.ReconcilePackages(ctx, remove); err != nil || len(keys) == 0 {
-		t.Fatal("retention unnecessarily held staging", err)
-	}
-	keys = nil
-	exec(`UPDATE recording_packages SET media_expires_at=now()-interval '2 hours' WHERE id=$1`, cap.ID)
-	if err := captures.ReconcileLive(ctx, remove); err != nil {
-		t.Fatal(err)
-	}
-	found := false
-	for _, key := range keys {
-		if strings.HasSuffix(key, "previews/shared/seg-000000.jpg") {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("expired shared image not reclaimed", keys)
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			db := isolatedIntegrationDB(t)
+			if err := migrations.Run(ctx, db); err != nil {
+				t.Fatal(err)
+			}
+			captures := NewRecordingCaptureStore(db)
+			id := sealedLiveCapture(t, captures, 1)
+			exec := func(q string, args ...any) {
+				t.Helper()
+				if _, err := db.ExecContext(ctx, q, args...); err != nil {
+					t.Fatal(err)
+				}
+			}
+			exec(`UPDATE recording_packages SET state='ready',final_prefix='recordings/packages/'||id||'/final/ready/',ready_at=now(),media_expires_at=now()+interval '30 days' WHERE id=$1`, id)
+			exec(`UPDATE recording_captures SET state='ready',package_id=$1,created_at=now()-interval '2 days',expires_at=now()-interval '1 day' WHERE id=$1`, id)
+			exec(`UPDATE recording_live SET segments='[{"sequence":0,"renditions":{"480p":{"start":0,"end":30}}}]',revision=1,published_revision=1,published_sequence=0 WHERE capture_id=$1`, id)
+			exec(`INSERT INTO recording_live_previews(capture_id,completed_sequence) VALUES($1,0)`, id)
+			exec(`INSERT INTO recording_live_attempts(claim_id,capture_id,sequence) VALUES('temporary-live-claim',$1,0)`, id)
+			// A final short segment can produce a VOD sprite beyond the live waterline.
+			exec(`INSERT INTO recording_capture_objects(capture_id,path,size_bytes,sha256,state) SELECT capture_id,'480p/seg-000001.m4s',size_bytes,sha256,state FROM recording_capture_objects WHERE capture_id=$1 AND path='480p/seg-000000.m4s'`, id)
+			if policy {
+				exec(`INSERT INTO recording_broadcast_ranges(capture_id,recording_id,epoch,range_revision,start_sequence,end_sequence_exclusive,revoked,member_state) SELECT id,recording_id,1,1,0,1,false,'vod' FROM recording_captures WHERE id=$1`, id)
+			}
+			var keys []string
+			remove := func(_ context.Context, batch []string) error { keys = append(keys, batch...); return nil }
+			contains := func(key string) bool {
+				for _, got := range keys {
+					if got == key {
+						return true
+					}
+				}
+				return false
+			}
+			prefix := "recordings/captures/" + id + "/final/"
+			// Failed deletion must remain retryable, without marking attempts purged.
+			if err := captures.ReconcileLive(ctx, func(context.Context, []string) error { return errors.New("provider unavailable") }); err == nil {
+				t.Fatal("cleanup failure lost")
+			}
+			var purged bool
+			if err := db.QueryRowContext(ctx, `SELECT purged FROM recording_live_attempts WHERE capture_id=$1`, id).Scan(&purged); err != nil || purged {
+				t.Fatal("failed cleanup marked purged", err)
+			}
+			exec(`UPDATE recording_live SET cleanup_after=now() WHERE capture_id=$1`, id)
+			if err := captures.ReconcileLive(ctx, remove); err != nil {
+				t.Fatal(err)
+			}
+			if !contains((assets.RecordingPackage{ID: id}).StagingKey("480p/seg-000000.m4s")) || !contains("recordings/packages/"+id+"/final/temporary-live-claim/480p/seg-000000.m4s") {
+				t.Fatal("temporary media retained", keys)
+			}
+			for _, path := range []string{"480p/seg-000000.m4s", "480p/init.mp4", "current.json", "playlists/1/480p/index.m3u8"} {
+				if contains(prefix+path) == policy {
+					t.Fatal("canonical media retention differs from routing", path, keys)
+				}
+			}
+			for _, key := range keys {
+				if strings.Contains(key, "/previews/") {
+					t.Fatal("deleted shared VOD preview", key)
+				}
+			}
+			if err := db.QueryRowContext(ctx, `SELECT purged FROM recording_live_attempts WHERE capture_id=$1`, id).Scan(&purged); err != nil || !purged {
+				t.Fatal("attempt not reclaimed", err)
+			}
+			var next time.Time
+			if err := db.QueryRowContext(ctx, `SELECT cleanup_after FROM recording_live WHERE capture_id=$1`, id).Scan(&next); err != nil || !next.After(time.Now()) || next.After(time.Now().Add(25*time.Hour)) {
+				t.Fatal("later cleanup not scheduled", next, err)
+			}
+			// An outstanding package grant extends retention beyond media expiry.
+			exec(`UPDATE recording_packages SET media_expires_at=now()-interval '2 hours',grant_cleanup_after=now()+interval '1 hour' WHERE id=$1`, id)
+			exec(`UPDATE recording_live SET cleanup_after=now() WHERE capture_id=$1`, id)
+			keys = nil
+			if err := captures.ReconcileLive(ctx, remove); err != nil {
+				t.Fatal(err)
+			}
+			if contains(prefix+"previews/shared/seg-000000.jpg") || policy && contains(prefix+"current.json") {
+				t.Fatal("active package grant lost media", keys)
+			}
+			// The subsequent scheduled sweep still deletes all retained objects.
+			exec(`UPDATE recording_packages SET grant_cleanup_after=now()-interval '1 hour' WHERE id=$1`, id)
+			exec(`UPDATE recording_live SET cleanup_after=now() WHERE capture_id=$1`, id)
+			keys = nil
+			if err := captures.ReconcileLive(ctx, remove); err != nil {
+				t.Fatal(err)
+			}
+			for _, path := range []string{"480p/seg-000000.m4s", "current.json", "playlists/1/480p/index.m3u8", "previews/current.json", "previews/shared/seg-000000.jpg", "previews/shared/seg-000001.jpg", "previews/shared/seg-000001.vtt", "previews/2/index.vtt"} {
+				if !contains(prefix + path) {
+					t.Fatal("expired capture object leaked", path, keys)
+				}
+			}
+		})
 	}
 }

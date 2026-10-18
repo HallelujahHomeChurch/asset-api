@@ -15,8 +15,9 @@ const captureCleanupSafe = `GREATEST(c.expires_at+interval '6 hours',
  l.read_grant_until,l.claimed_until)<=clock_timestamp()
  AND NOT EXISTS(SELECT 1 FROM recording_processing_slots s WHERE s.job_id IN (c.id,'live:'||c.id,'preview:'||c.id) AND s.leased_until>clock_timestamp())`
 
-// Shared capture sprites also serve VOD; package staging can still be reclaimed.
-const liveDerivativeCleanupSafe = captureCleanupSafe + ` AND NOT EXISTS(SELECT 1 FROM recording_packages p WHERE p.id=c.package_id AND p.state='ready' AND p.media_expires_at+interval '1 hour'>clock_timestamp())`
+// Shared sprites serve all capture-backed VOD. B1 playback also reads the
+// canonical capture media; temporary validation attempts are never VOD inputs.
+const captureVODRetained = `EXISTS(SELECT 1 FROM recording_packages p WHERE p.id=c.package_id AND p.state='ready' AND GREATEST(p.media_expires_at+interval '1 hour',p.grant_cleanup_after)>clock_timestamp())`
 
 // The package is authoritative even when no client has polled capture status.
 const capturePackageTerminal = `EXISTS(SELECT 1 FROM recording_packages cp WHERE cp.id=c.package_id AND cp.state IN ('failed','expired'))`
@@ -57,7 +58,7 @@ func (s *RecordingCaptureStore) ReconcileLive(ctx context.Context, deleteObjects
 	if err := s.reconcileTerminalPackages(ctx); err != nil {
 		return err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT c.id FROM recording_captures c JOIN recording_live l ON l.capture_id=c.id WHERE l.cleanup_after<=clock_timestamp() AND `+liveDerivativeCleanupSafe+` ORDER BY l.cleanup_after LIMIT 10`)
+	rows, err := s.db.QueryContext(ctx, `SELECT c.id FROM recording_captures c JOIN recording_live l ON l.capture_id=c.id WHERE l.cleanup_after<=clock_timestamp() AND `+captureCleanupSafe+` ORDER BY l.cleanup_after LIMIT 10`)
 	if err != nil {
 		return err
 	}
@@ -86,8 +87,8 @@ func (s *RecordingCaptureStore) cleanupLive(ctx context.Context, id string, dele
 	// No new writer or grant can pass capture expiry. Rechecking the deadline and
 	// lease fences immediately before remote work avoids reviving an active scope.
 	var revision int64
-	var safe bool
-	err := s.db.QueryRowContext(ctx, `SELECT l.revision,`+liveDerivativeCleanupSafe+` FROM recording_captures c JOIN recording_live l ON l.capture_id=c.id WHERE c.id=$1`, id).Scan(&revision, &safe)
+	var safe, retainPreviews, hasBroadcastPolicy bool
+	err := s.db.QueryRowContext(ctx, `SELECT l.revision,`+captureCleanupSafe+`,`+captureVODRetained+`,EXISTS(SELECT 1 FROM recording_broadcast_ranges b WHERE b.capture_id=c.id) FROM recording_captures c JOIN recording_live l ON l.capture_id=c.id WHERE c.id=$1`, id).Scan(&revision, &safe, &retainPreviews, &hasBroadcastPolicy)
 	if err != nil || !safe {
 		return err
 	}
@@ -126,29 +127,32 @@ func (s *RecordingCaptureStore) cleanupLive(ctx context.Context, id string, dele
 		}
 		return nil
 	}
+	retainMedia := retainPreviews && hasBroadcastPolicy
 	staging, live := []string{}, []string{}
 	prefix := "recordings/captures/" + id + "/final/"
 	for _, path := range paths {
 		staging = append(staging, (assets.RecordingPackage{ID: id}).StagingKey(path))
-		if path != "master.m3u8" && path != "1080p/index.m3u8" && path != "720p/index.m3u8" && path != "480p/index.m3u8" {
+		if !retainMedia && path != "master.m3u8" && path != "1080p/index.m3u8" && path != "720p/index.m3u8" && path != "480p/index.m3u8" {
 			live = append(live, prefix+path)
 		}
 	}
 	var previewCount int
-	if err = s.db.QueryRowContext(ctx, `SELECT CASE WHEN EXISTS(SELECT 1 FROM recording_live_previews WHERE capture_id=$1) OR EXISTS(SELECT 1 FROM recording_preview_attempts WHERE package_id=$1) THEN published_sequence+1 ELSE 0 END FROM recording_live WHERE capture_id=$1`, id).Scan(&previewCount); err != nil {
+	if err = s.db.QueryRowContext(ctx, `SELECT CASE WHEN EXISTS(SELECT 1 FROM recording_live_previews WHERE capture_id=$1) OR EXISTS(SELECT 1 FROM recording_preview_attempts WHERE package_id=$1) THEN GREATEST(published_sequence+1,(SELECT count(*) FROM recording_capture_objects WHERE capture_id=$1 AND path LIKE '480p/seg-%.m4s')) ELSE 0 END FROM recording_live WHERE capture_id=$1`, id).Scan(&previewCount); err != nil {
 		return err
 	}
-	if previewCount > 0 {
+	if !retainPreviews && previewCount > 0 {
 		live = append(live, prefix+"previews/current.json")
-		// Include interrupted writes up to the verified waterline.
+		// Include interrupted live writes and final VOD sprites beyond the live waterline.
 		for seq := 0; seq < previewCount; seq++ {
 			live = append(live, fmt.Sprintf("%spreviews/shared/seg-%06d.jpg", prefix, seq), fmt.Sprintf("%spreviews/shared/seg-%06d.vtt", prefix, seq), fmt.Sprintf("%spreviews/%d/index.vtt", prefix, seq+1))
 		}
 	}
-	live = append(live, prefix+"current.json")
-	for rev := int64(1); rev <= revision; rev++ {
-		for _, name := range []string{"master.m3u8", "1080p/index.m3u8", "720p/index.m3u8", "480p/index.m3u8"} {
-			live = append(live, fmt.Sprintf("%splaylists/%d/%s", prefix, rev, name))
+	if !retainMedia {
+		live = append(live, prefix+"current.json")
+		for rev := int64(1); rev <= revision; rev++ {
+			for _, name := range []string{"master.m3u8", "1080p/index.m3u8", "720p/index.m3u8", "480p/index.m3u8"} {
+				live = append(live, fmt.Sprintf("%splaylists/%d/%s", prefix, rev, name))
+			}
 		}
 	}
 	if err = remove(staging); err != nil {

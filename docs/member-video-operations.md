@@ -63,8 +63,13 @@ Cumulative indexes use `previews/{segmentCount}/index.vtt`; a conditional monoto
 `previews/current.json` pointer advances only after all referenced images exist.
 Retries reuse completed receipts, including gaps after interruption. Ready VOD
 fills only missing images, finalizes the index, and points to the same immutable
-capture images. Shared capture bytes remain until package expiry plus grant grace;
-existing bounded daily cleanup also enumerates interrupted preview writes.
+capture images. Shared preview bytes remain until package expiry plus grant grace.
+B1 VOD already reads canonical capture media, so its capture media/current pointer/
+playlists remain for that same lifetime; legacy VOD needs only shared previews.
+Staging and temporary live validation attempts still follow the original capture
+expiry/lease/grant fences. Bounded daily sweeps continue after partial cleanup and
+include final VOD preview tails beyond the live waterline. The existing B1 package
+media copy is unchanged; canonical media deduplication is outside this change.
 The Worker authorizes each image before cache, clips and rebases public cues to
 `[startSequence,endSequenceExclusive)`, and keeps all verified public DVR history.
 Internal receipts and pointer paths are never publicly routable.
