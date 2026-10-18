@@ -68,6 +68,26 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y ffmpeg
           fi
+      - name: Fingerprint synthetic broadcast inputs
+        id: broadcast_fixture
+        run: |
+          python3 scripts/test-broadcast-fixture-cache.py
+          echo "HHC_BROADCAST_FIXTURE_DIR=$RUNNER_TEMP/broadcast-fixture" >> "$GITHUB_ENV"
+          fingerprint="$(python3 scripts/broadcast-fixture-cache.py key)"
+          echo "key=$fingerprint" >> "$GITHUB_OUTPUT"
+      - name: Restore synthetic broadcast raw media
+        id: broadcast_restore
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ env.HHC_BROADCAST_FIXTURE_DIR }}/raw
+          key: broadcast-raw-${{ steps.broadcast_fixture.outputs.key }}
+      - name: Validate restored raw media before reuse
+        env:
+          FIXTURE_KEY: ${{ steps.broadcast_fixture.outputs.key }}
+        run: |
+          if ! python3 scripts/broadcast-fixture-cache.py validate "$HHC_BROADCAST_FIXTURE_DIR/raw" "$FIXTURE_KEY"; then
+            rm -rf -- "$HHC_BROADCAST_FIXTURE_DIR/raw"
+          fi
       - run: |
           ./scripts/bootstrap-migration-role.test.sh
           ./scripts/test-line-media-acl-inventory.sh
@@ -117,3 +137,13 @@ jobs:
           path: |
             .artifacts/data-governance/export/data-governance.yaml
             .artifacts/data-governance/export/data-governance.json
+      - name: Seal verified synthetic broadcast raw media
+        env:
+          FIXTURE_KEY: ${{ steps.broadcast_fixture.outputs.key }}
+        run: python3 scripts/broadcast-fixture-cache.py seal "$HHC_BROADCAST_FIXTURE_DIR/raw" "$FIXTURE_KEY"
+      - name: Cache verified synthetic broadcast raw media
+        if: steps.broadcast_restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ env.HHC_BROADCAST_FIXTURE_DIR }}/raw
+          key: broadcast-raw-${{ steps.broadcast_fixture.outputs.key }}
