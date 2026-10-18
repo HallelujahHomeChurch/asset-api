@@ -7,8 +7,6 @@ param image string
 param pullIdentityId string
 param workerIdentityId string
 param workerClientId string
-param workerPrincipalId string
-param senderPrincipalId string
 param databaseSecretUrl string
 param secrets array
 param processingEnv array
@@ -29,26 +27,6 @@ resource queues 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-
 resource poison 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' = [for lane in lanes: {
  parent: service
  name: 'asset-recording-${lane}-poison'
-}]
-resource sender 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for (lane,i) in lanes: {
- name: guid(queues[i].id,senderPrincipalId,'sender')
- scope: queues[i]
- properties: { principalId: senderPrincipalId, principalType: 'ServicePrincipal', roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions','c6a89b2d-59bc-44d0-9896-0f6e12d7b80a') }
-}]
-resource processor 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for (lane,i) in lanes: {
- name: guid(queues[i].id,workerPrincipalId,'processor')
- scope: queues[i]
- properties: { principalId: workerPrincipalId, principalType: 'ServicePrincipal', roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions','8a0f0c08-91a1-4084-bc3d-661d67233fed') }
-}]
-resource reader 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for (lane,i) in lanes: {
- name: guid(queues[i].id,workerPrincipalId,'reader')
- scope: queues[i]
- properties: { principalId: workerPrincipalId, principalType: 'ServicePrincipal', roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions','19e7f393-937e-4f77-808e-94535e297925') }
-}]
-resource poisonSender 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for (lane,i) in lanes: {
- name: guid(poison[i].id,workerPrincipalId,'sender')
- scope: poison[i]
- properties: { principalId: workerPrincipalId, principalType: 'ServicePrincipal', roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions','c6a89b2d-59bc-44d0-9896-0f6e12d7b80a') }
 }]
 var queueEnvGroups = [for lane in lanes: [
  { name: 'ASSET_RECORDING_${toUpper(lane)}_QUEUE_URL', value: 'https://${storageAccountName}.queue.${az.environment().suffixes.storage}/asset-recording-${lane}' }
@@ -96,7 +74,7 @@ resource jobs 'Microsoft.App/jobs@2025-07-01' = [for lane in lanes: {
    }]
   }
  }
- dependsOn: [processor,reader,poisonSender,sender]
+ dependsOn: [queues,poison]
 }]
 resource maintenance 'Microsoft.App/jobs@2025-07-01' = {
  name: 'asset-recording-maintenance'

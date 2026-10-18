@@ -1217,8 +1217,6 @@ module recordingEvents './recording-events.bicep' = if (recordingEventsProvision
   pullIdentityId:pullIdentity.id
   workerIdentityId:runtimeIdentity.id
   workerClientId:runtimeIdentity.properties.clientId
-  workerPrincipalId:runtimeIdentity.properties.principalId
-  senderPrincipalId:deployRuntime ? app!.identity.principalId : existingApp!.identity.principalId
   databaseSecretUrl:'${runtimeVault.properties.vaultUri}secrets/database-url'
   secrets:recordingSecrets
   r2Env:recordingR2Env

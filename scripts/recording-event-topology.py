@@ -81,8 +81,8 @@ def pause(group):
               'scheduleTriggerConfig': None, 'eventTriggerConfig': None}})
 
 
-def restore(path, group):
-    # Do not forcibly stop valid work or activate the old cron alongside running Event jobs.
+def wait_idle(group):
+    # Do not forcibly stop valid work or activate competing workers.
     deadline = time.monotonic()+300
     while True:
         active = active_executions(group, jobs(group))
@@ -91,6 +91,23 @@ def restore(path, group):
         if time.monotonic() >= deadline:
             raise RuntimeError('recording executions still active; triggers remain Manual, operator must resume rollback after safe drain')
         time.sleep(10)
+def quiesce(path, group):
+    if os.environ.get('RECORDING_EVENTS_ENABLED', 'false') != 'true':
+        return
+    prior = json.loads(path.read_text())
+    if not any(j['id'].endswith('/asset-recording-validation') and j['properties']['configuration']['triggerType']=='Schedule' for j in prior):
+        return
+    if active_executions(group, jobs(group)):
+        raise RuntimeError('recording work active; leave the legacy schedule unchanged and retry in a quiet window')
+    # Signal rollback responsibility before the first mutation, including partial failures.
+    with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+        out.write('paused=true\n')
+    pause(group)
+    wait_idle(group)
+
+
+def restore(path, group):
+    wait_idle(group)
     current_ids = {j['id'] for j in jobs(group)}
     for job in json.loads(path.read_text()):
         if job['id'] not in current_ids:
@@ -100,7 +117,7 @@ def restore(path, group):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=('capture', 'pause', 'restore'))
+    parser.add_argument('action', choices=('capture', 'pause', 'quiesce', 'restore'))
     parser.add_argument('path', type=Path)
     args = parser.parse_args()
     group = os.environ['RESOURCE_GROUP']

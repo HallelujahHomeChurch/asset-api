@@ -335,6 +335,9 @@ jobs:
               [[ "$(az role assignment list --scope "$source_storage_id" --assignee-object-id "$source_principal" --query "[?roleDefinitionName=='Storage Blob Delegator'] | length(@)" -o tsv --only-show-errors)" == 1 ]]
             done
           fi
+      - name: Verify recording event permission prerequisites
+        if: env.RECORDING_EVENTS_ENABLED == 'true'
+        run: bash scripts/verify-recording-event-permissions.sh
       - name: Capture rollback revision
         run: |
           resolve_image_ref() {
@@ -506,6 +509,10 @@ jobs:
           done
           echo "Migration timed out" >&2
           exit 1
+      - name: Quiesce legacy recording schedule before activation
+        id: quiesce_recording
+        if: env.MEMBER_VIDEO_ENABLED == 'true'
+        run: python3 scripts/recording-event-topology.py quiesce "$RUNNER_TEMP/recording-topology.json"
       - name: Deploy API
         id: deploy_runtime
         run: |
@@ -567,7 +574,7 @@ jobs:
           echo "commit=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
           echo "image=$IMAGE_REF" >> "$GITHUB_OUTPUT"
       - name: Roll back failed runtime
-        if: ${{ failure() && steps.deploy_runtime.outcome != 'skipped' }}
+        if: ${{ failure() && (steps.deploy_runtime.outcome != 'skipped' || steps.quiesce_recording.outputs.paused == 'true') }}
         run: |
           if [[ "$MEMBER_VIDEO_ENABLED" == true && "$RECORDING_EVENTS_PROVISIONED" == true ]]; then
             python3 scripts/recording-event-topology.py pause "$RUNNER_TEMP/recording-topology.json"

@@ -244,3 +244,13 @@ Do not change the storage firewall to default-deny until a private endpoint or
 equivalent ACA subnet path has been deployed and verified.
 The live account currently reports `minimumTlsVersion=TLS1_0`; raise it to
 `TLS1_2` only after the shared-account consumer audit confirms compatibility.
+
+## Recording Event Jobs: bootstrap and activation
+
+Ordinary Contributor releases deploy `recording-events.bicep` without IAM writes.
+The separate `recording-event-permissions.bicep` contains only twelve queue-scoped
+assignments for existing API/worker identities; no Job or application deployment.
+Its one-time operator bootstrap from merged code requires an exact reviewed
+what-if and explicit approval, following the source-storage policy above.
+`verify-recording-event-permissions.sh` gates activation on the actual grants.
+See [the ordered cutover and rollback](../docs/reviews/recording-event-cutover-2026-10-19.md).

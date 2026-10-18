@@ -107,12 +107,39 @@ class TopologyTest(unittest.TestCase):
         self.assertIn('recording-topology.json', section)
         self.assertIn('retention-days: 7', section)
 
+    def test_default_off_quiesce_does_not_touch_jobs(self):
+        mod.quiesce(self.path, 'alive')
+        self.assertEqual(self.calls, [])
+
+    def test_switch_quiesces_before_runtime_activation(self):
+        mod.capture(self.path,'alive')
+        os.environ['RECORDING_EVENTS_ENABLED']='true'
+        output=Path(self.temp.name)/'outputs'
+        os.environ['GITHUB_OUTPUT']=str(output)
+        try:
+            mod.quiesce(self.path,'alive')
+            self.assertIn('paused=true',output.read_text())
+            self.assertTrue(all(p[1]['properties']['configuration']['triggerType']=='Manual' for p in self.payloads()))
+        finally:
+            os.environ.pop('GITHUB_OUTPUT',None)
+
+    def test_quiesce_rejects_active_work_before_mutation(self):
+        mod.capture(self.path,'alive')
+        os.environ['RECORDING_EVENTS_ENABLED']='true'
+        self.active=True
+        with self.assertRaisesRegex(RuntimeError,'active'):
+            mod.quiesce(self.path,'alive')
+        self.assertEqual(self.payloads(),[])
+
     def test_workflow_coordinates_failure_recovery(self):
         workflow = Path('.github/workflows/release.yml').read_text()
         rollback = workflow[workflow.index('      - name: Roll back failed runtime'):workflow.index('  deploy_media:')]
         self.assertLess(rollback.index('recording-event-topology.py pause'), rollback.index('az containerapp revision copy'))
         self.assertLess(rollback.index('az containerapp revision copy'), rollback.index('recording-event-topology.py restore'))
         self.assertLess(workflow.index('recording-event-topology.py capture'), workflow.index('      - name: Deploy API'))
+        self.assertLess(workflow.index('      - name: Run migrations'), workflow.index('recording-event-topology.py quiesce'))
+        self.assertLess(workflow.index('recording-event-topology.py quiesce'), workflow.index('      - name: Deploy API'))
+        self.assertIn("steps.quiesce_recording.outputs.paused == 'true'",rollback)
 
 
 if __name__ == '__main__':
