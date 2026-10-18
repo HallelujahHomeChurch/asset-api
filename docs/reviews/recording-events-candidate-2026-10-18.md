@@ -1,5 +1,12 @@
 # Recording Event Jobs — candidate handoff
 
+**Follow-up:** the original 22-resource combined preview is superseded by the
+[ordered cutover review](recording-event-cutover-2026-10-19.md): normal Contributor
+provisioning creates 10 resources, and a separately approved operator bootstrap
+manages the 12 exact queue-scoped grants. Activation now drains the old scheduler
+immediately before runtime deployment. Keep all production flags off until the
+reviewed cutover is approved.
+
 Status: candidate implementation and isolated verification. **No merge, production
 resource creation, trigger switch, key change, OBS operation, or recording mutation
 is authorized by this document.** The source chat continues live feature closeout.

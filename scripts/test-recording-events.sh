@@ -32,3 +32,5 @@ printf '%s' '{"changes":[{"resourceId":"/subscriptions/test/resourceGroups/alive
 if RECORDING_EVENTS_CHANGE_APPROVED=true RECORDING_WORKER_PRINCIPAL_ID=worker RECORDING_API_PRINCIPAL_ID=api bash scripts/check-recording-event-what-if.sh "$tmp" >/dev/null 2>&1; then echo 'broad event role accepted' >&2; exit 1; fi
 
 python3 scripts/test-recording-event-topology.py
+
+python3 scripts/test-recording-event-permissions.py

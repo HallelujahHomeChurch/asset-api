@@ -8,3 +8,11 @@ condition = "AND"
 regexTarget = "line"
 regexes = ['''\bRELEASE_COMMIT=[0-9a-f]{40}\b''']
 paths = ['''^scripts/test-release-workflow\.sh$''']
+
+[[allowlists]]
+description = "Public Azure Queue role IDs in the recording permissions fixture"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "line"
+regexes = ['''roles=\[\('worker','c6a89b2d-59bc-44d0-9896-0f6e12d7b80a'\)\] if scope\.endswith\('-poison'\)''']
+paths = ['''^scripts/test-recording-event-permissions\.py$''']
