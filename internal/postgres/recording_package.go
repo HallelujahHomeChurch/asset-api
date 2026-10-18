@@ -101,7 +101,7 @@ func (s *RecordingPackageStore) Create(ctx context.Context, p assets.RecordingPa
 // This row is the durable job receipt. The worker, not this request, freezes
 // and verifies the object graph before committing a ready package.
 func (s *RecordingPackageStore) Freeze(ctx context.Context, id string, at time.Time) error {
-	result, err := s.locks.statements(ctx).ExecContext(ctx, `UPDATE recording_packages SET state='freezing',completed_at=$2 WHERE id=$1 AND state='uploading' AND expires_at > $2`, id, at)
+	result, err := s.locks.statements(ctx).ExecContext(ctx, `UPDATE recording_packages SET state='freezing',completed_at=COALESCE(completed_at,$2) WHERE id=$1 AND state='uploading' AND expires_at > $2`, id, at)
 	return recordingTransitionResult(result, err)
 }
 

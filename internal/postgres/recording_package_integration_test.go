@@ -68,6 +68,30 @@ func TestRecordingPackagePersistenceAndDurableFreeze(t *testing.T) {
 	}
 }
 
+func TestRecoveredPackageFreezePreservesOriginalAcceptedTime(t *testing.T) {
+	ctx := context.Background()
+	db := isolatedIntegrationDB(t)
+	if err := migrations.Run(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	store := NewRecordingPackageStore(db)
+	p := testRecordingPackage(t, "recovered-package", "actor-a", "recording-a")
+	if err := store.Create(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	accepted := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+	if _, err := db.ExecContext(ctx, `UPDATE recording_packages SET completed_at=$2 WHERE id=$1`, p.ID, accepted); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Freeze(ctx, p.ID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Get(ctx, p.ID)
+	if err != nil || got.UploadedAt == nil || !got.UploadedAt.Equal(accepted) {
+		t.Fatalf("original accepted time changed: %+v %v", got.UploadedAt, err)
+	}
+}
+
 func TestRecordingPackageCapsAndExpiryAreAtomic(t *testing.T) {
 	ctx := context.Background()
 	db := isolatedIntegrationDB(t)
