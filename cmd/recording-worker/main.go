@@ -109,6 +109,9 @@ func run(ctx context.Context) error {
 		}
 		// Preview claims defer to waiting validation/source work in SQL and
 		// use the same global slots. Only one long claim runs per execution.
+		if _, err := recordingvalidation.RunLivePreview(ctx, packages, objects, probe); err != nil {
+			slog.Warn("recording_live_preview_processing_failed")
+		}
 		processed, coverErr := recordingvalidation.RunCoverProcessing(ctx, covers, packages, liveCovers, objects, probe)
 		if processed || coverErr != nil {
 			return errors.Join(cleanupErr, coverErr)

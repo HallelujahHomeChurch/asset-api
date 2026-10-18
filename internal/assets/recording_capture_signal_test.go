@@ -90,3 +90,31 @@ func TestDuplicateConfirmationDoesNotRenewSignalClock(t *testing.T) {
 		t.Fatal("duplicate renewed clock")
 	}
 }
+
+func TestCaptureSignalToleratesArrivalJitterWithoutExtendingIdleDeadline(t *testing.T) {
+	for _, frames := range []int{300, 900} {
+		t.Run(fmt.Sprint(frames), func(t *testing.T) {
+			s, repo, _, now, c := captureTest(t)
+			c.BroadcastEpoch = 1
+			c.SegmentFrames = frames
+			received := *now
+			c.LastMediaConfirmedAt = &received
+			repo.captures[c.ID] = c
+			expected := received.Add(time.Duration(frames) * 1001 * time.Second / 30000)
+			for _, tc := range []struct {
+				delay time.Duration
+				state string
+			}{
+				{0, "healthy"}, {5030 * time.Millisecond, "healthy"},
+				{10*time.Second - time.Nanosecond, "healthy"}, {10 * time.Second, "interrupted"},
+				{59 * time.Second, "interrupted"},
+			} {
+				*now = expected.Add(tc.delay)
+				got, err := s.BroadcastSignal(context.Background(), c.ID, c.ActorID, false)
+				if err != nil || got.State != tc.state || got.Deadline == nil || !got.Deadline.Equal(expected.Add(time.Minute)) || got.EndSequenceExclusive != nil {
+					t.Fatalf("delay %v: %+v %v", tc.delay, got, err)
+				}
+			}
+		})
+	}
+}

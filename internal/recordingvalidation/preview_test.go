@@ -91,6 +91,37 @@ func TestPreviewRealNonzeroTimestampAndPartialTail(t *testing.T) {
 	if len(files) != 0 {
 		t.Fatal("scratch retained")
 	}
+	// Live and VOD use identical immutable sprites, including partial-tail cells.
+	capture := strings.Repeat("a", 32)
+	shared := &previewMemoryObjects{packageMemoryObjects: objects}
+	timeline := []assets.RecordingLiveSegment{{Sequence: 0, Renditions: map[string]assets.RecordingLiveFragment{"720p": {Start: 0, End: 30}}}, {Sequence: 1, Renditions: map[string]assets.RecordingLiveFragment{"720p": {Start: 30, End: 36.2}}}}
+	vtt, err = probe.generateSharedPreviews(context.Background(), capture, p.FinalPrefix, p.Inventory.Objects, p.Inventory.Renditions[0], timeline, 0, "WEBVTT\n\n", shared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(vtt, " --> ") != 8 {
+		t.Fatal(vtt)
+	}
+	sharedPrefix := "recordings/captures/" + capture + "/final/previews/shared/"
+	original := bytes.Clone(objects.bytes[sharedPrefix+"seg-000000.jpg"])
+	// A crash can leave completed later receipts while an earlier image is missing.
+	delete(objects.bytes, sharedPrefix+"seg-000000.jpg")
+	delete(objects.bytes, sharedPrefix+"seg-000000.vtt")
+	shared.images = 0
+	if _, err = probe.generateSharedPreviews(context.Background(), capture, p.FinalPrefix, p.Inventory.Objects, p.Inventory.Renditions[0], timeline, 0, "WEBVTT\n\n", shared); err != nil {
+		t.Fatal(err)
+	}
+	if shared.images != 1 || !bytes.Equal(original, objects.bytes[sharedPrefix+"seg-000000.jpg"]) {
+		t.Fatal("gap recovery reencoded completed image")
+	}
+	probe.FFmpeg = "/missing/ffmpeg"
+	shared.images = 0
+	if _, err = probe.generateSharedPreviews(context.Background(), capture, p.FinalPrefix, p.Inventory.Objects, p.Inventory.Renditions[0], timeline, 0, "WEBVTT\n\n", shared); err != nil {
+		t.Fatal("VOD failed to reuse receipts", err)
+	}
+	if shared.images != 0 {
+		t.Fatal("VOD reencoded live images")
+	}
 	p.FinalPrefix = "recordings/packages/other/final/validated/"
 	if err := probe.GeneratePreviews(context.Background(), p, "preview-one", put); err == nil {
 		t.Fatal("cross-package read accepted")
@@ -112,4 +143,20 @@ func TestPreviewCellsDoNotExposeDurationRoundingPadding(t *testing.T) {
 			t.Fatalf("cells %d want %d: %v", got, tc.want, err)
 		}
 	}
+}
+
+type previewMemoryObjects struct {
+	*packageMemoryObjects
+	images int
+}
+
+func (s *previewMemoryObjects) PutPackagePreview(_ context.Context, key string, data []byte) error {
+	if strings.HasSuffix(key, ".jpg") {
+		s.images++
+	}
+	s.bytes[key] = bytes.Clone(data)
+	return nil
+}
+func (s *previewMemoryObjects) AdvanceLivePreviewPointer(context.Context, string, int) error {
+	return nil
 }

@@ -55,3 +55,70 @@ test('ten-second member projection preserves target duration and public boundari
  assert.equal((body.match(/#EXTINF:10.010000,/g)||[]).length,12);
  assert.ok(!body.includes('seg-000007'));assert.ok(!body.includes('seg-000020'));
 });
+
+test('live and promoted VOD reuse shared sprites with rebased full DVR and current authorization',async()=>{
+ const f=await fixture();const original=f.env.MEDIA_BUCKET.get;
+ const stamp=s=>`${String(Math.floor(s/3600)).padStart(2,'0')}:${String(Math.floor(s/60)%60).padStart(2,'0')}:${(s%60).toFixed(3).padStart(6,'0')}`;
+ const vtt='WEBVTT\n\n'+Array.from({length:24},(_,i)=>`${stamp(i*30.03)} --> ${stamp((i+1)*30.03)}\nseg-${String(i).padStart(6,'0')}.jpg#xywh=0,0,160,90\n\n`).join('');
+ f.env.MEDIA_BUCKET.get=async key=>{
+  let value;
+  if(key===prefix+'previews/current.json')value=JSON.stringify({revision:24,lastSequence:23});
+  else if(key.endsWith('/previews/24/index.vtt'))value=vtt;
+  else if(key.startsWith(`recordings/packages/${capture}/`)&&key.endsWith('previews/current.json'))value='{"attempt":"capture"}';
+  else return original(key);
+  f.calls.push(key);return {size:Buffer.byteLength(value),httpEtag:'"preview"',body:new Response(value).body};
+ };
+ const index=await f.get('previews/index.vtt');assert.equal(index.status,200);
+ const text=await index.text();assert.match(text,/00:00:00.000 --> 00:00:30.030/);assert.equal((text.match(/ --> /g)||[]).length,12);assert.ok(!text.includes('seg-000007'));assert.ok(!text.includes('seg-000020'));
+ for(const n of [0,7,20,24])assert.equal((await f.get(`previews/seg-${String(n).padStart(6,'0')}.jpg`)).status,404);
+ assert.equal((await f.get('previews/seg-000008.jpg')).status,200);assert.ok(f.calls.includes(prefix+'previews/shared/seg-000008.jpg'));
+ f.setPolicy({...f.policy,memberState:'vod'});
+ const token=await f.sign({...f.claims,captureId:undefined,packageId:capture,prefix:`recordings/packages/${capture}/final/attempt/`});
+ const vod=resource=>worker.fetch(new Request(`https://media.alive.org.tw/videos/${recording}/packages/${capture}/sessions/${scope}/${resource}`,{headers:{Cookie:`hhc_media=${token}`}}),f.env);
+ assert.equal(await (await vod('previews/index.vtt')).text(),text);
+ assert.equal((await vod('previews/seg-000008.jpg')).status,200);
+ const old=globalThis.caches;let hits=0;globalThis.caches={default:{async match(){hits++;return new Response('cached');}}};
+ try {
+  assert.equal((await vod('previews/seg-000008.jpg')).status,200);assert.equal(hits,1);
+  f.setPolicy({...f.policy,memberState:'vod',revoked:true});
+  assert.equal((await vod('previews/seg-000008.jpg')).status,403);assert.equal(hits,1);
+ }finally{globalThis.caches=old;}
+});
+
+test('live preview absence and lag never exposes unpublished sprites',async()=>{
+ const f=await fixture();const original=f.env.MEDIA_BUCKET.get;let pointer=null;
+ f.setPolicy({...f.policy,endSequenceExclusive:null});f.setLastSequence(14);
+ f.env.MEDIA_BUCKET.get=async key=>key===prefix+'previews/current.json'?pointer===null?null:{size:Buffer.byteLength(pointer),httpEtag:'"preview"',body:new Response(pointer).body}:original(key);
+ assert.equal((await f.get('previews/index.vtt')).status,404);
+ assert.equal((await f.get('720p/seg-000014.m4s')).status,200);
+ pointer=JSON.stringify({revision:12,lastSequence:11});
+ assert.equal((await f.get('previews/seg-000012.jpg')).status,404);
+ assert.equal((await f.get('previews/seg-000011.jpg')).status,200);
+ pointer=JSON.stringify({revision:17,lastSequence:16});
+ assert.equal((await f.get('previews/seg-000015.jpg')).status,404);
+});
+
+test('a completed VOD preview index beyond the live waterline still serves the full authorized range',async()=>{
+ const f=await fixture();f.setPolicy({...f.policy,endSequenceExclusive:61});
+ const original=f.env.MEDIA_BUCKET.get;
+ const stamp=s=>`${String(Math.floor(s/3600)).padStart(2,'0')}:${String(Math.floor(s/60)%60).padStart(2,'0')}:${(s%60).toFixed(3).padStart(6,'0')}`;
+ const vtt='WEBVTT\n\n'+Array.from({length:62},(_,i)=>`${stamp(i*30)} --> ${stamp((i+1)*30)}\nseg-${String(i).padStart(6,'0')}.jpg#xywh=0,0,160,90\n\n`).join('');
+ const playlist='#EXTM3U\n'+Array.from({length:61},(_,i)=>`#EXTINF:30.000000,\nseg-${String(i).padStart(6,'0')}.m4s\n`).join('');
+ f.env.MEDIA_BUCKET.get=async key=>{
+  let value;
+  if(key===prefix+'current.json')value=JSON.stringify({revision:61,lastSequence:60});
+  else if(key===prefix+'previews/current.json')value=JSON.stringify({revision:62,lastSequence:61});
+  else if(key.endsWith('/previews/62/index.vtt'))value=vtt;
+  else if(key.endsWith('480p/index.m3u8'))value=playlist;
+  else if(key.startsWith(`recordings/packages/${capture}/`)&&key.endsWith('previews/current.json'))value='{"attempt":"capture"}';
+  else return original(key);
+  return {size:Buffer.byteLength(value),httpEtag:'"preview"',body:new Response(value).body};
+ };
+ const live=await f.get('previews/index.vtt');assert.equal(live.status,200);const body=await live.text();
+ assert.equal((body.match(/ --> /g)||[]).length,53);assert.ok(body.includes('seg-000060'));assert.ok(!body.includes('seg-000061'));
+ assert.equal((await f.get('previews/seg-000061.jpg')).status,404);
+ f.setPolicy({...f.policy,memberState:'vod',endSequenceExclusive:61});
+ const token=await f.sign({...f.claims,captureId:undefined,packageId:capture,prefix:`recordings/packages/${capture}/final/attempt/`});
+ const vod=await worker.fetch(new Request(`https://media.alive.org.tw/videos/${recording}/packages/${capture}/sessions/${scope}/previews/index.vtt`,{headers:{Cookie:`hhc_media=${token}`}}),f.env);
+ assert.equal(vod.status,200);assert.equal(await vod.text(),body);
+});

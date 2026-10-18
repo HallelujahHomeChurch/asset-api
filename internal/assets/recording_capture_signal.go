@@ -44,7 +44,8 @@ func (s *RecordingCaptureService) BroadcastSignal(ctx context.Context, id, actor
 		deadline := expected.Add(time.Minute)
 		out.Deadline = &deadline
 		out.State = "healthy"
-		if s.now().Before(expected) {
+		// Arrival includes encoding/upload jitter; this tolerance does not move the idle cutoff.
+		if s.now().Before(expected.Add(10 * time.Second)) {
 			return nil
 		}
 		out.State = "interrupted"

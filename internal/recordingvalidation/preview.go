@@ -19,6 +19,7 @@ import (
 
 	"hhc/asset-api/internal/assets"
 	"hhc/asset-api/internal/postgres"
+	"hhc/asset-api/internal/storage/r2"
 )
 
 type PreviewObjects interface {
@@ -34,15 +35,44 @@ func RunPackagePreview(ctx context.Context, repo *postgres.RecordingPackageStore
 	if err != nil {
 		return false, err
 	}
+	shared := false
+	sharedLast := 0
 	return true, RunProcessingClaim(ctx, func(ctx context.Context) error { return repo.HeartbeatPackagePreview(ctx, c.Package.ID, c.ClaimID) }, func(ctx context.Context) error {
 		timeline, err := repo.PreviewTimeline(ctx, c.Package.ID)
 		if err != nil {
 			return err
 		}
+		if len(timeline) > 0 {
+			liveObjects, ok := objects.(LivePreviewObjects)
+			if !ok {
+				return assets.ErrInvalidInput
+			}
+			last, vtt, e := repo.LivePreviewProgress(ctx, c.Package.ID)
+			if e != nil {
+				return e
+			}
+			r := c.Package.Inventory.Renditions[0]
+			for _, candidate := range c.Package.Inventory.Renditions {
+				if candidate.Width < r.Width {
+					r = candidate
+				}
+			}
+			_, e = probe.generateSharedPreviews(ctx, c.Package.ID, c.Package.FinalPrefix, c.Package.Inventory.Objects, r, timeline, last+1, vtt, liveObjects)
+			shared = e == nil
+			sharedLast = r.SegmentCount - 1
+			return e
+		}
 		return probe.GeneratePreviewsWithTimeline(ctx, c.Package, c.ClaimID, timeline, objects.PutPackagePreview)
 	}, func(ctx context.Context, ready bool, _ string) error {
 		return repo.FinishPackagePreview(ctx, c.Package.ID, c.ClaimID, ready, func(ctx context.Context) error {
-			return objects.PutPackagePreview(ctx, c.Package.FinalPrefix+"previews/current.json", []byte(fmt.Sprintf(`{"attempt":"%s"}`, c.ClaimID)))
+			attempt := c.ClaimID
+			if shared {
+				if err := objects.(LivePreviewObjects).AdvanceLivePreviewPointer(ctx, c.Package.ID, sharedLast); err != nil {
+					return err
+				}
+				attempt = "capture"
+			}
+			return objects.PutPackagePreview(ctx, c.Package.FinalPrefix+"previews/current.json", []byte(fmt.Sprintf(`{"attempt":"%s"}`, attempt)))
 		})
 	}, 30*time.Second)
 }
@@ -73,21 +103,55 @@ func (p PackageMediaProbe) GeneratePreviewsWithTimeline(ctx context.Context, pkg
 			r = candidate
 		}
 	}
+	return p.generatePreviewRange(ctx, pkg.FinalPrefix, pkg.FinalPrefix+"previews/"+attempt+"/", pkg.Inventory.Objects, r, timeline, 0, "WEBVTT\n\n", put)
+}
+
+func (p PackageMediaProbe) generatePreviewRange(ctx context.Context, mediaPrefix, outPrefix string, inventory []assets.RecordingPackageObject, r assets.RecordingRendition, timeline []assets.RecordingLiveSegment, first int, previous string, put func(context.Context, string, []byte) error) (result error) {
 	dir, err := os.MkdirTemp(p.ScratchRoot, "hhc-preview-")
 	if err != nil {
 		return err
 	}
 	defer func() { result = errors.Join(result, os.RemoveAll(dir)) }()
 	sizes := map[string]int64{}
-	for _, o := range pkg.Inventory.Objects {
+	for _, o := range inventory {
 		sizes[o.Path] = o.SizeBytes
 	}
-	outPrefix := pkg.FinalPrefix + "previews/" + attempt + "/"
 	var vtt strings.Builder
-	vtt.WriteString("WEBVTT\n\n")
-	for i := 0; i < r.SegmentCount; i++ {
+	vtt.WriteString(previous)
+	for i := first; i < r.SegmentCount; i++ {
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		// A per-segment receipt lets retries fill gaps without decoding completed sprites.
+		receipt := fmt.Sprintf("%sseg-%06d.vtt", outPrefix, i)
+		shared := strings.Contains(outPrefix, "/captures/")
+		if shared {
+			size, _, e := p.Objects.Head(ctx, receipt)
+			if e == nil {
+				if size <= 0 || size > 2048 {
+					return assets.ErrInvalidUpload
+				}
+				body, e := p.Objects.Open(ctx, receipt)
+				if e != nil {
+					return e
+				}
+				data, e := io.ReadAll(io.LimitReader(body, 2049))
+				e = errors.Join(e, body.Close())
+				if e != nil {
+					return e
+				}
+				if int64(len(data)) != size || !bytes.HasPrefix(data, []byte("WEBVTT\n\n")) {
+					return assets.ErrInvalidUpload
+				}
+				if _, _, e = p.Objects.Head(ctx, fmt.Sprintf("%sseg-%06d.jpg", outPrefix, i)); e != nil {
+					return e
+				}
+				vtt.Write(data[len("WEBVTT\n\n"):])
+				continue
+			}
+			if !errors.Is(e, assets.ErrNotFound) && !errors.Is(e, r2.ErrNotFound) {
+				return e
+			}
 		}
 		input := filepath.Join(dir, "fragment.mp4")
 		output := filepath.Join(dir, "sprite.jpg")
@@ -109,7 +173,7 @@ func (p PackageMediaProbe) GeneratePreviewsWithTimeline(ctx context.Context, pkg
 				if size <= 0 || size > assets.RecordingObjectMaxBytes {
 					return assets.ErrInvalidUpload
 				}
-				body, err := p.Objects.Open(ctx, pkg.FinalPrefix+name)
+				body, err := p.Objects.Open(ctx, mediaPrefix+name)
 				if err != nil {
 					return err
 				}
@@ -174,16 +238,26 @@ func (p PackageMediaProbe) GeneratePreviewsWithTimeline(ctx context.Context, pkg
 		if err := put(ctx, outPrefix+fmt.Sprintf("seg-%06d.jpg", i), data); err != nil {
 			return err
 		}
+		var cue strings.Builder
 		for cell := 0; cell < cells; cell++ {
 			start := startSeconds + float64(cell*5)
-			fmt.Fprintf(&vtt, "%s --> %s\nseg-%06d.jpg#xywh=%d,0,160,90\n\n", previewTimestamp(start), previewTimestamp(math.Min(start+5, end)), i, cell*160)
+			fmt.Fprintf(&cue, "%s --> %s\nseg-%06d.jpg#xywh=%d,0,160,90\n\n", previewTimestamp(start), previewTimestamp(math.Min(start+5, end)), i, cell*160)
 		}
-		if vtt.Len() > 1<<20 {
+		vtt.WriteString(cue.String())
+		if shared {
+			if err := put(ctx, receipt, []byte("WEBVTT\n\n"+cue.String())); err != nil {
+				return err
+			}
+		}
+		if vtt.Len() > 2<<20 {
 			return assets.ErrInvalidUpload
 		}
 		if err := errors.Join(os.Remove(input), os.Remove(output)); err != nil {
 			return err
 		}
+	}
+	if vtt.Len() > 2<<20 {
+		return assets.ErrInvalidUpload
 	}
 	return put(ctx, outPrefix+"index.vtt", []byte(vtt.String()))
 }

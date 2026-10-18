@@ -17,7 +17,9 @@ async function fixture(){
  const token=await sign(claims);
  return {env,token,calls,claims,now,sign,setPointer:value=>{pointer=value;},get:(resource,credential=token)=>worker.fetch(new Request(`https://media.alive.org.tw${path}${resource}`,{headers:{Cookie:`hhc_media=${credential}`}}),env)};
 }
-test('live objects require capture-bound short grants before R2 access',async()=>{
+test('live objects require capture-bound short grants before R2 access',async(t)=>{
+ const now=Date.now();
+ t.mock.method(Date,'now',()=>now); // Keep the 301-second rejection above the exact five-minute limit.
  const f=await fixture();
  for(const claims of [{...f.claims,exp:f.now+301},{...f.claims,captureId:'b'.repeat(32)},{...f.claims,packageId:capture},{...f.claims,prefix:`recordings/packages/${capture}/staging/`},{...f.claims,exp:f.now-1}]) assert.equal((await f.get('720p/seg-000000.m4s',await f.sign(claims))).status,401);
  assert.equal(f.calls.length,0);
