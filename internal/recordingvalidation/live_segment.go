@@ -110,7 +110,8 @@ func (p PackageMediaProbe) validateLiveRendition(ctx context.Context, pack asset
 	defer func() {
 		slog.Info("recording_live_rendition", "capture_id", pack.ID, "claim_id", attempt, "sequence", sequence, "rendition", r.Name,
 			"freeze_ms", freezeTime.Milliseconds(), "probe_decode_ms", probeTime.Milliseconds(),
-			"elapsed_ms", time.Since(started).Milliseconds(), "validated", err == nil)
+			"elapsed_ms", time.Since(started).Milliseconds(), "validated", err == nil,
+			"video_frames", actual.VideoFrames, "start_seconds", actual.Start, "end_seconds", actual.End)
 	}()
 	init := selected[r.Name+"/init.mp4"]
 	segment := selected[fmt.Sprintf("%s/seg-%06d.m4s", r.Name, sequence)]

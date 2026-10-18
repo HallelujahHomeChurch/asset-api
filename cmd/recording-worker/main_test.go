@@ -42,3 +42,12 @@ func TestDrainLiveIdleAndCancellation(t *testing.T) {
 		})
 	}
 }
+
+func TestDrainLiveStandbyHonorsDeadline(t *testing.T) {
+	started := time.Now()
+	calls := 0
+	err := drainLiveValidation(context.Background(), started.Add(20*time.Millisecond), time.Millisecond, func(context.Context) (bool, error) { calls++; return false, nil }, func(context.Context) (bool, error) { return true, nil })
+	if err != nil || calls < 1 || time.Since(started) < 20*time.Millisecond || time.Since(started) > time.Second {
+		t.Fatalf("standby escaped its bounded window: calls=%d elapsed=%s err=%v", calls, time.Since(started), err)
+	}
+}

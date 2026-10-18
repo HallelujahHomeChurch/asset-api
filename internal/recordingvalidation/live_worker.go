@@ -75,6 +75,11 @@ func runLiveClaim(ctx context.Context, store *postgres.RecordingCaptureStore, ob
 					}
 				}
 				if _, err = assets.AppendLiveSegment(snapshot.Segments, batch, normalTail, claim.Capture.SegmentFrames); err != nil {
+					slog.Info("recording_live_boundary", "capture_id", claim.Capture.ID, "claim_id", claim.ClaimID, "sequence", claim.Sequence,
+						"sealed_snapshot", claim.Capture.Inventory != nil, "normal_tail", normalTail, "waiting_for_seal", errors.Is(err, assets.ErrCaptureMissingObjects))
+					if claim.Capture.Inventory != nil && errors.Is(err, assets.ErrCaptureMissingObjects) {
+						return assets.ErrInvalidUpload
+					}
 					return err
 				}
 				logStage(true)
