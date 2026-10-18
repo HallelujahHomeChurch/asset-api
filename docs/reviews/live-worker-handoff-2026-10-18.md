@@ -13,7 +13,9 @@ Historical worker image: `sha256:ad2e99cf1d2a8ad2acf4d554dc7e8b30b74fc585dfd2dce
 
 Elect one live standby execution using a session-scoped PostgreSQL advisory lock,
 following the existing recording session-lock pattern. It drains across minute
-boundaries for at most five hours, checking the lock connection before each claim.
+boundaries for at most five hours of claim admission, checking the lock connection
+before each claim. A 5.5-hour context leaves a bounded completion margin under the
+six-hour Job limit; cancellation retains the existing lease recovery semantics.
 Idle input still exits using the existing recent-input predicate (two minutes);
 no active input exits immediately. Database-session loss stops further admission;
 the existing fenced leases remain authoritative for in-flight media.

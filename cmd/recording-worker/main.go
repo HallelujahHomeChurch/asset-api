@@ -80,6 +80,8 @@ func run(ctx context.Context) error {
 		liveClaims := 0
 		liveSession := false
 		acquired, err := liveStore.WithLiveWorker(ctx, func(ctx context.Context, check func(context.Context) error) (result error) {
+			ctx, cancel := context.WithTimeout(ctx, liveWorkerWindow+30*time.Minute)
+			defer cancel()
 			started := time.Now()
 			var busy time.Duration
 			polls := 0
