@@ -269,12 +269,10 @@ async function handle(request: Request, env: Env, ctx?: ExecutionContext): Promi
     if (!preview && segment && (Number(segment[1]) < policy.startSequence! || policy.endSequenceExclusive !== null && Number(segment[1]) >= policy.endSequenceExclusive)) return failure(404);
   }
   let objectKey = playback.prefix! + match[4];
-  let publishedSequence: number | undefined;
   if (live || policy) {
     const rawPrefix = policy ? `recordings/captures/${ids[1]}/final/` : playback.prefix!;
     const pointer = await livePointer(env, rawPrefix);
     if (!pointer) return failure(404);
-    publishedSequence = pointer.lastSequence;
     const sequence = /seg-(\d{6})\.(?:m4s|jpg)$/.exec(match[4]);
     if (sequence && Number(sequence[1]) > pointer.lastSequence) return failure(404);
     if (policy && !preview && policy.startSequence! > pointer.lastSequence) return failure(503);
@@ -304,18 +302,19 @@ async function handle(request: Request, env: Env, ctx?: ExecutionContext): Promi
       const prefix = `recordings/captures/${ids[1]}/final/previews/`;
       const pointer = await livePointer(env, prefix);
       if (!pointer) return failure(404);
-      if (pointer.revision !== pointer.lastSequence + 1 || publishedSequence !== undefined && pointer.lastSequence > publishedSequence) return failure(503);
+      if (pointer.revision !== pointer.lastSequence + 1) return failure(503);
       const sprite = /seg-(\d{6})\.jpg$/.exec(match[4]);
       if (sprite && Number(sprite[1]) > pointer.lastSequence) return failure(404);
       objectKey = prefix + (sprite ? `shared/${match[4].slice('previews/'.length)}` : `${pointer.revision}/index.vtt`);
     }
   }
-  if (policy && !preview && match[4] === 'previews/index.vtt') {
+  if ((policy && !preview || live) && match[4] === 'previews/index.vtt') {
     const rawPrefix = `recordings/captures/${ids[1]}/final/`;
     const pointer = await livePointer(env, rawPrefix);if (!pointer) return failure(503);
     const playlist = await boundedText(env, rawPrefix + `playlists/${pointer.revision}/480p/index.m3u8`, 1 << 20);
     const raw = await boundedText(env, objectKey, 2 << 20);if (playlist === null || raw === null) return failure(404);
-    const body = projectVtt(raw, playlist, policy);
+    const range = policy && !preview ? policy : {recordingId:ids[0],epoch:1,rangeRevision:1,startSequence:0,endSequenceExclusive:pointer.lastSequence+1,revoked:false};
+    const body = projectVtt(raw, playlist, range);
     const response = new Response(request.method === 'HEAD' ? null : body, {headers:{'Cache-Control':'private, no-store','Content-Type':'text/vtt','X-Content-Type-Options':'nosniff'}});
     return origin ? withCors(response, origin) : response;
   }

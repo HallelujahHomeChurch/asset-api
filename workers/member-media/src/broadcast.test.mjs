@@ -95,6 +95,30 @@ test('live preview absence and lag never exposes unpublished sprites',async()=>{
  assert.equal((await f.get('previews/seg-000012.jpg')).status,404);
  assert.equal((await f.get('previews/seg-000011.jpg')).status,200);
  pointer=JSON.stringify({revision:17,lastSequence:16});
- assert.equal((await f.get('previews/index.vtt')).status,503);
  assert.equal((await f.get('previews/seg-000015.jpg')).status,404);
+});
+
+test('a completed VOD preview index beyond the live waterline still serves the full authorized range',async()=>{
+ const f=await fixture();f.setPolicy({...f.policy,endSequenceExclusive:61});
+ const original=f.env.MEDIA_BUCKET.get;
+ const stamp=s=>`${String(Math.floor(s/3600)).padStart(2,'0')}:${String(Math.floor(s/60)%60).padStart(2,'0')}:${(s%60).toFixed(3).padStart(6,'0')}`;
+ const vtt='WEBVTT\n\n'+Array.from({length:62},(_,i)=>`${stamp(i*30)} --> ${stamp((i+1)*30)}\nseg-${String(i).padStart(6,'0')}.jpg#xywh=0,0,160,90\n\n`).join('');
+ const playlist='#EXTM3U\n'+Array.from({length:61},(_,i)=>`#EXTINF:30.000000,\nseg-${String(i).padStart(6,'0')}.m4s\n`).join('');
+ f.env.MEDIA_BUCKET.get=async key=>{
+  let value;
+  if(key===prefix+'current.json')value=JSON.stringify({revision:61,lastSequence:60});
+  else if(key===prefix+'previews/current.json')value=JSON.stringify({revision:62,lastSequence:61});
+  else if(key.endsWith('/previews/62/index.vtt'))value=vtt;
+  else if(key.endsWith('480p/index.m3u8'))value=playlist;
+  else if(key.startsWith(`recordings/packages/${capture}/`)&&key.endsWith('previews/current.json'))value='{"attempt":"capture"}';
+  else return original(key);
+  return {size:Buffer.byteLength(value),httpEtag:'"preview"',body:new Response(value).body};
+ };
+ const live=await f.get('previews/index.vtt');assert.equal(live.status,200);const body=await live.text();
+ assert.equal((body.match(/ --> /g)||[]).length,53);assert.ok(body.includes('seg-000060'));assert.ok(!body.includes('seg-000061'));
+ assert.equal((await f.get('previews/seg-000061.jpg')).status,404);
+ f.setPolicy({...f.policy,memberState:'vod',endSequenceExclusive:61});
+ const token=await f.sign({...f.claims,captureId:undefined,packageId:capture,prefix:`recordings/packages/${capture}/final/attempt/`});
+ const vod=await worker.fetch(new Request(`https://media.alive.org.tw/videos/${recording}/packages/${capture}/sessions/${scope}/previews/index.vtt`,{headers:{Cookie:`hhc_media=${token}`}}),f.env);
+ assert.equal(vod.status,200);assert.equal(await vod.text(),body);
 });

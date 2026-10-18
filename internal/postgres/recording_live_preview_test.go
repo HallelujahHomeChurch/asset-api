@@ -63,6 +63,37 @@ func TestLivePreviewFencingFailurePriorityAndCleanup(t *testing.T) {
 		t.Fatal(last, err)
 	}
 	exec(`UPDATE recording_live_previews SET completed_sequence=-1 WHERE capture_id=$1`, cap.ID)
+	// One uploaded rendition is not runnable validation and must not starve the existing DVR.
+	if _, err = captures.UpdateCapture(ctx, cap.ID, func(c *assets.RecordingCapture) error {
+		c.Objects = []assets.RecordingCaptureObject{{RecordingPackageObject: assets.RecordingPackageObject{Path: "480p/seg-000001.m4s", SizeBytes: 10, SHA256: strings.Repeat("a", 64)}, State: "queued"}}
+		c.DeclaredObjects = 1
+		c.DeclaredBytes = 10
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	partial, err := repo.ClaimLivePreview(ctx)
+	if err != nil {
+		t.Fatal("partial intake starved previews", err)
+	}
+	if err = repo.FinishLivePreview(ctx, partial, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	exec(`UPDATE recording_live_previews SET next_attempt_at=now() WHERE capture_id=$1`, cap.ID)
+	if _, err = captures.UpdateCapture(ctx, cap.ID, func(c *assets.RecordingCapture) error {
+		for _, path := range []string{"480p/init.mp4", "720p/init.mp4", "1080p/init.mp4", "720p/seg-000001.m4s", "1080p/seg-000001.m4s"} {
+			c.Objects = append(c.Objects, assets.RecordingCaptureObject{RecordingPackageObject: assets.RecordingPackageObject{Path: path, SizeBytes: 10, SHA256: strings.Repeat("a", 64)}, State: "queued"})
+		}
+		c.DeclaredObjects = 6
+		c.DeclaredBytes = 60
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = repo.ClaimLivePreview(ctx); !errors.Is(err, assets.ErrNotFound) {
+		t.Fatal("complete live intake lost priority", err)
+	}
+	exec(`UPDATE recording_capture_objects SET state='declared' WHERE capture_id=$1`, cap.ID)
 	p := testRecordingPackage(t, "waiting", "waiting", "waiting")
 	if err = repo.Create(ctx, p); err != nil {
 		t.Fatal(err)
