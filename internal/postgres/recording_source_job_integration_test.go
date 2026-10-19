@@ -117,6 +117,17 @@ func TestSourceJobsShareGlobalSlotsAndFenceStaleWorkers(t *testing.T) {
 	if err != nil || ready.State != "ready" || ready.ReadyAt == nil || ready.MediaExpiresAt == nil || !ready.MediaExpiresAt.Equal(ready.ReadyAt.Add(30*24*time.Hour)) {
 		t.Fatalf("ready package: %+v %v", ready, err)
 	}
+	covers, err := NewRecordingCoverStore(db).List(ctx, ready.ID, again.Source.RecordingID)
+	if err != nil || len(covers) != 1 {
+		t.Fatalf("source ready without automatic cover work: covers=%d err=%v", len(covers), err)
+	}
+	if c := covers[0]; c.Kind != "auto" || c.State != "pending" || !c.ExpiresAt.Equal(*ready.MediaExpiresAt) {
+		t.Fatalf("source automatic cover ownership/expiry: %+v", c)
+	}
+	var coverActor string
+	if err := db.QueryRowContext(ctx, "SELECT actor_id FROM recording_covers WHERE id=$1", covers[0].ID).Scan(&coverActor); err != nil || coverActor != again.Source.ActorID {
+		t.Fatalf("source cover actor: %q %v", coverActor, err)
+	}
 	done, err := store.Get(ctx, again.Source.ID)
 	if err != nil || done.State != "ready" || done.PackageID != ready.ID {
 		t.Fatalf("source projection: %+v %v", done, err)
