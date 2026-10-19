@@ -3,6 +3,7 @@ set -euo pipefail
 # Default-off rollout must not silently change the existing production trigger.
 grep -Fq 'param recordingEventsProvisioned bool = false' infra/main.bicep
 grep -Fq 'param recordingEventsEnabled bool = false' infra/main.bicep
+grep -Fq 'var recordingEventQueueEnv = recordingEventsProvisioned ? flatten(recordingEventQueueGroups) : []' infra/main.bicep
 grep -Fq "triggerType: enabled ? 'Event' : 'Manual'" infra/recording-events.bicep
 grep -Fq "queueLengthStrategy: 'visibleonly'" infra/recording-events.bicep
 grep -Fq 'maxExecutions: 1' infra/recording-events.bicep

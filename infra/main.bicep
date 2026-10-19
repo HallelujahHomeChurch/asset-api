@@ -64,7 +64,8 @@ var recordingEventQueueGroups = [for lane in ['live','processing','preview']: [
  {name:'ASSET_RECORDING_${toUpper(lane)}_QUEUE_URL',value:'https://${storageAccountName}.queue.${az.environment().suffixes.storage}/asset-recording-${lane}'}
  {name:'ASSET_RECORDING_${toUpper(lane)}_POISON_URL',value:'https://${storageAccountName}.queue.${az.environment().suffixes.storage}/asset-recording-${lane}-poison'}
 ]]
-var recordingEventQueueEnv = recordingEventsEnabled ? flatten(recordingEventQueueGroups) : []
+// Preserve queue references during rollback; the enabled flag alone gates dispatch.
+var recordingEventQueueEnv = recordingEventsProvisioned ? flatten(recordingEventQueueGroups) : []
 var recordingProcessingFlags = [
  {name:'ASSET_RECORDING_EVENTS_ENABLED',value:string(recordingEventsEnabled)}
   { name: 'ASSET_RECORDING_HLS_ENABLED', value: string(recordingHLSEnabled) }
