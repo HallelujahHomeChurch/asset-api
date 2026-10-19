@@ -192,6 +192,9 @@ func (s *RecordingSourceStore) FinishSourceProcessing(ctx context.Context, id, c
 		if err != nil {
 			return mapCollectionError(err)
 		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO recording_covers(id,package_id,recording_id,actor_id,idempotency_key,kind,state,expires_at) SELECT $2,id,recording_id,actor_id,'auto','auto','pending',media_expires_at FROM recording_packages WHERE id=$1 ON CONFLICT DO NOTHING`, claim, newStoreID()); err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO recording_package_attempts(claim_id,package_id,state,finished_at) VALUES($1,$1,'ready',clock_timestamp())`, claim); err != nil {
 			return err
 		}
