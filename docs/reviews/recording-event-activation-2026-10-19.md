@@ -25,6 +25,12 @@ for another configuration rollout; use a fresh reviewed checkpoint. Ordinary
 runtime deployment stays in CI/CD; the approved IAM bootstrap alone is an operator
 procedure from merged code.
 
+The first real permission readback exposed an exact-comparison defect: ARM
+returned `resourcegroups` while the Storage account ID used `resourceGroups`.
+Compare the complete scope IDs case-insensitively, preserving the exact queue
+path, principal and role requirements. A regression reproduces the mixed-case
+response; a sibling scope, missing role and query failure still fail closed.
+
 ## Activation gate
 
 - Fresh full Provider preview and existing difference-policy guard must pass.

@@ -19,19 +19,21 @@ import json,os,sys
 args=sys.argv[1:]
 if args[:2]==['containerapp','show']:print('api')
 elif args[:2]==['identity','show']:print('worker')
-elif args[:3]==['storage','account','show']:print('/account')
+elif args[:3]==['storage','account','show']:print('/subscriptions/sub/resourceGroups/alive/providers/Microsoft.Storage/storageAccounts/storage')
 elif args[:2]==['resource','show']:pass
 elif args[:3]==['role','assignment','list']:
  if os.environ.get('FAIL_ROLE_QUERY'):sys.exit(1)
  scope=args[args.index('--scope')+1]
  roles=[('worker','c6a89b2d-59bc-44d0-9896-0f6e12d7b80a')] if scope.endswith('-poison') else [('api','c6a89b2d-59bc-44d0-9896-0f6e12d7b80a'),('worker','8a0f0c08-91a1-4084-bc3d-661d67233fed'),('worker','19e7f393-937e-4f77-808e-94535e297925')]
  if os.environ.get('MISSING_ROLE'):roles=roles[:-1]
+ if os.environ.get('NORMALIZED_SCOPE'):scope=scope.replace('/resourceGroups/','/resourcegroups/')
+ if os.environ.get('WRONG_SCOPE'):scope=scope+'-sibling'
  print(json.dumps([{'scope':scope,'principalId':p,'roleDefinitionId':'/roles/'+r} for p,r in roles]))
 else:sys.exit(2)
 ''')
     fake.chmod(0o755)
     env={**os.environ,'PATH':temp+os.pathsep+os.environ['PATH'],'RESOURCE_GROUP':'alive','STORAGE_ACCOUNT_NAME':'storage'}
-    for extra,expected in [({},0),({'MISSING_ROLE':'true'},1),({'FAIL_ROLE_QUERY':'true'},1)]:
+    for extra,expected in [({},0),({'NORMALIZED_SCOPE':'true'},0),({'NORMALIZED_SCOPE':'true','WRONG_SCOPE':'true'},1),({'MISSING_ROLE':'true'},1),({'FAIL_ROLE_QUERY':'true'},1)]:
         result=subprocess.run(['bash','scripts/verify-recording-event-permissions.sh'],env={**env,**extra},capture_output=True,text=True)
         assert (result.returncode==0)==(expected==0), (extra,result.stderr)
 print('recording permissions: release isolation, 12 scoped grants, complete/missing/error preflight passed')
