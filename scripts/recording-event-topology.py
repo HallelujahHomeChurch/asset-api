@@ -48,8 +48,8 @@ def capture(path, group):
         raise ValueError('existing recording Event topology requires provisioned=true; do not orphan active triggers')
     legacy = next((j for j in current if j['name'] == 'asset-recording-validation'), None)
     changing = legacy and legacy['properties']['configuration']['triggerType'] != ('Manual' if enabled else 'Schedule')
-    if changing and active_executions(group, current):
-        raise RuntimeError('recording trigger switch requires all executions to drain before deployment')
+    if changing:
+        wait_idle(group)
     snapshots = []
     for job in current:
         props = job['properties']
@@ -89,7 +89,7 @@ def wait_idle(group):
         if not active:
             break
         if time.monotonic() >= deadline:
-            raise RuntimeError('recording executions still active; triggers remain Manual, operator must resume rollback after safe drain')
+            raise RuntimeError('recording executions still active; trigger changes require a safe drain')
         time.sleep(10)
 def quiesce(path, group):
     if os.environ.get('RECORDING_EVENTS_ENABLED', 'false') != 'true':
@@ -97,8 +97,7 @@ def quiesce(path, group):
     prior = json.loads(path.read_text())
     if not any(j['id'].endswith('/asset-recording-validation') and j['properties']['configuration']['triggerType']=='Schedule' for j in prior):
         return
-    if active_executions(group, jobs(group)):
-        raise RuntimeError('recording work active; leave the legacy schedule unchanged and retry in a quiet window')
+    wait_idle(group)
     # Signal rollback responsibility before the first mutation, including partial failures.
     with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
         out.write('paused=true\n')

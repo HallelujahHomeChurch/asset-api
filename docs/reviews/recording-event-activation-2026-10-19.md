@@ -33,6 +33,12 @@ Compare the complete scope IDs case-insensitively, preserving the exact queue
 path, principal and role requirements. A regression reproduces the mixed-case
 response; a sibling scope, missing role and query failure still fail closed.
 
+Routine legacy executions last tens of seconds even with zero claims. Snapshot
+and pre-pause admission now reuse the existing bounded five-minute idle wait,
+so a short scheduled execution can finish naturally. Persistent work still fails
+before mutation; nothing is killed, skipped or classified as idle while running.
+The existing post-pause drain and rollback responsibility remain unchanged.
+
 ## Activation gate
 
 - Fresh full Provider preview and existing difference-policy guard must pass.

@@ -89,9 +89,39 @@ class TopologyTest(unittest.TestCase):
     def test_switch_refuses_active_work(self):
         self.active = True
         os.environ['RECORDING_EVENTS_ENABLED'] = 'true'
-        with self.assertRaisesRegex(RuntimeError, 'drain before'):
+        with self.assertRaisesRegex(RuntimeError, 'still active'):
             mod.capture(self.path, 'alive')
         self.assertFalse(self.path.exists())
+
+    def test_capture_waits_for_short_scheduled_execution_without_mutating(self):
+        os.environ['RECORDING_EVENTS_ENABLED'] = 'true'
+        checks = []
+        def finishing_execution(*args):
+            if args[:4] == ('containerapp', 'job', 'execution', 'list'):
+                checks.append(args)
+                self.active = len(checks) == 1
+            return self.az(*args)
+        mod.az = finishing_execution
+        mod.capture(self.path, 'alive')
+        self.assertGreaterEqual(len(checks), 2)
+        self.assertTrue(self.path.exists())
+        self.assertEqual(self.payloads(), [])
+
+    def test_quiesce_waits_for_short_execution_before_pausing(self):
+        mod.capture(self.path, 'alive')
+        checks = []
+        def finishing_execution(*args):
+            if args[:4] == ('containerapp', 'job', 'execution', 'list'):
+                checks.append(args)
+                self.active = len(checks) == 1
+            return self.az(*args)
+        mod.az = finishing_execution
+        output = Path(self.temp.name) / 'outputs'
+        with patch.dict(os.environ, {'RECORDING_EVENTS_ENABLED': 'true', 'GITHUB_OUTPUT': str(output)}):
+            mod.quiesce(self.path, 'alive')
+        self.assertIn('paused=true', output.read_text())
+        self.assertGreaterEqual(len(checks), 3)
+        self.assertTrue(all(p[1]['properties']['configuration']['triggerType'] == 'Manual' for p in self.payloads()))
 
     def test_missing_provisioned_flag_cannot_orphan_existing_triggers(self):
         self.jobs.append(self.job('asset-recording-live', 'Event'))
