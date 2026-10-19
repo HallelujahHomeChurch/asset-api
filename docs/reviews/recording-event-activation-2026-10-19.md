@@ -19,8 +19,10 @@ The publisher binds one commit to its original image and refuses replacement.
 Do not overwrite provenance, weaken the guard, or reclassify that run as passed.
 
 This newly merged checkpoint supplies a fresh release identity for activation.
-Dispatch Production Release once on this new main commit after the exact scoped
-permission bootstrap and quiet-window checks. Do not rebuild a published commit
+After scoped permission/bootstrap and quiet-window checks, set enabled=true just
+before the approved merge with final-head CI green. This checkpoint also changes
+the preflight script, so the merge automatically starts Production Release once;
+do not manually dispatch another release for the same commit. Do not rebuild a published commit
 for another configuration rollout; use a fresh reviewed checkpoint. Ordinary
 runtime deployment stays in CI/CD; the approved IAM bootstrap alone is an operator
 procedure from merged code.
