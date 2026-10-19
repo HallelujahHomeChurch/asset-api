@@ -40,6 +40,7 @@ type OutputSpool struct {
 	objects                         RecordingOutputObjects
 	packageID, dir, url, host, path string
 	server                          *http.Server
+	ctx                             context.Context
 	cancel                          context.CancelFunc
 	done                            chan struct{}
 	media                           map[string]assets.RecordingPackageObject
@@ -62,7 +63,7 @@ func NewOutputSpool(ctx context.Context, objects RecordingOutputObjects, package
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	s := &OutputSpool{objects: objects, packageID: packageID, dir: dir, host: listener.Addr().String(), path: "/" + rand.Text(), cancel: cancel, done: make(chan struct{}), media: map[string]assets.RecordingPackageObject{}, playlists: map[string][]byte{}}
+	s := &OutputSpool{ctx: ctx, objects: objects, packageID: packageID, dir: dir, host: listener.Addr().String(), path: "/" + rand.Text(), cancel: cancel, done: make(chan struct{}), media: map[string]assets.RecordingPackageObject{}, playlists: map[string][]byte{}}
 	s.url = "http://" + s.host + s.path
 	s.server = &http.Server{Handler: http.HandlerFunc(s.receive), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8192, BaseContext: func(net.Listener) context.Context { return ctx }}
 	go func() { defer close(s.done); _ = s.server.Serve(listener) }()
@@ -165,7 +166,8 @@ func (s *OutputSpool) receiveObject(w http.ResponseWriter, r *http.Request, path
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
-	if err := s.objects.PutRecordingObject(r.Context(), "recordings/packages/"+s.packageID+"/staging/"+path, file, n, "video/mp4"); err != nil {
+	// The encoder may close a complete PUT before R2 commits it; worker cancellation still fences storage.
+	if err := s.objects.PutRecordingObject(s.ctx, "recordings/packages/"+s.packageID+"/staging/"+path, file, n, "video/mp4"); err != nil {
 		return ErrOutputUpload
 	}
 	s.media[path] = object

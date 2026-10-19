@@ -34,6 +34,27 @@ VOD was decoded before activation,852x480,375frames,MediaErrornull; this does no
 establish new upload acceptance. No synthetic publication/notification occurred.
 Preserve the source/draft/attempt; do not resubmit/delete it to erase the failure.
 
+## Reproduced source-output cancellation defect
+
+A storage stub delayed by350ms reproduces `recording_output_upload_failed` with
+these same bytes and the existing complete35s/three-rendition encode test.
+The spool reads and hashes the complete media body, then passes r.Context to R2.
+FFmpeg can close that completed PUT while R2 is committing, canceling a valid
+worker's storage operation. A deterministic test cancels the request exactly at
+storage admission and reproduces422/no committed object before the fix.
+
+After the body is fully received and validated, use the spool's worker context
+for the R2 write. The active worker/claim cancellation still cancels storage;
+partial/invalid bodies, bounded scratch, hashes, immutable paths, full package
+validation and backpressure remain. Tests retain worker-cancellation rejection
+and exercise a complete encode/full validation with delayed storage. No media
+state is declared ready from this fix alone.
+
+This is a proven code defect and matching failure class, not proof of the exact
+unrecorded provider error in the first cloud attempt. Preserve that failed
+attempt. Release initially remains Event=false, then verify the same source via
+the normal bounded retry before considering reactivation.
+
 ## Approved safe rollback
 
 Use this fresh merged commit as a new immutable release checkpoint. Do not
@@ -63,8 +84,8 @@ until source-upload acceptance and formal activation are ready.
 
 ## Unchanged scope and open gates
 
-This checkpoint changes infrastructure reference retention, with no runtime code,
-API/wire/digest/public boundary/media
+This checkpoint fixes infrastructure reference retention and source-output
+cancellation, with no API/wire/digest/public boundary/media
 validation, key or recording. Source and Event diagnostics remain open.
 Windows Event short-scene acceptance, >=24h all-execution/actual-cost evidence,
 and processing2CPU/4GiB/preview1CPU/2GiB tier A/B are not passed.

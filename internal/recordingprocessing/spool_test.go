@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"strings"
@@ -22,6 +24,7 @@ type spoolObjects struct {
 	wait    <-chan struct{}
 	started chan struct{}
 	failure error
+	delay   time.Duration
 }
 
 func (o *spoolObjects) Open(_ context.Context, key string) (io.ReadCloser, error) {
@@ -63,6 +66,13 @@ func (o *spoolObjects) PutPackageInventory(ctx context.Context, key string, data
 }
 
 func (o *spoolObjects) PutRecordingObject(ctx context.Context, key string, body io.ReadSeeker, size int64, contentType string) error {
+	if o.delay > 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(o.delay):
+		}
+	}
 	if o.failure != nil {
 		return o.failure
 	}
@@ -228,5 +238,51 @@ func TestFFmpegFMP4HTTPSpoolProducesCompleteObjects(t *testing.T) {
 	defer objects.mu.Unlock()
 	if len(objects.writes) != 3 {
 		t.Fatalf("not all init/segments persisted: %d", len(objects.writes))
+	}
+}
+
+// Cancel after the complete body has reached scratch, as an encoder closing its
+// PUT can do while storage is still committing it.
+type cancelOnPutObjects struct {
+	*spoolObjects
+	cancel context.CancelFunc
+}
+
+func (o *cancelOnPutObjects) PutRecordingObject(ctx context.Context, key string, body io.ReadSeeker, size int64, contentType string) error {
+	o.cancel()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return o.spoolObjects.PutRecordingObject(ctx, key, body, size, contentType)
+}
+func TestSpoolClosedBodyUsesWorkerCancellation(t *testing.T) {
+	for _, cancelWorker := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cancel_worker_%t", cancelWorker), func(t *testing.T) {
+			ctx, cancelJob := context.WithCancel(context.Background())
+			defer cancelJob()
+			requestCtx, cancelRequest := context.WithCancel(ctx)
+			defer cancelRequest()
+			cancel := cancelRequest
+			if cancelWorker {
+				cancel = cancelJob
+			}
+			objects := &cancelOnPutObjects{spoolObjects: &spoolObjects{}, cancel: cancel}
+			spool, err := NewOutputSpool(ctx, objects, strings.Repeat("a", 32), t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer spool.Close()
+			r := httptest.NewRequest(http.MethodPut, spool.URL()+"/720p/init.mp4", strings.NewReader("media")).WithContext(requestCtx)
+			w := httptest.NewRecorder()
+			spool.receive(w, r)
+			items, _, err := spool.Snapshot()
+			if cancelWorker {
+				if w.Code != http.StatusUnprocessableEntity || !errors.Is(err, ErrOutputUpload) || len(objects.writes) != 0 {
+					t.Fatalf("canceled worker committed output: status=%d err=%v", w.Code, err)
+				}
+			} else if w.Code != http.StatusOK || err != nil || len(items) != 1 || len(objects.writes) != 1 || items[0].SizeBytes != 5 {
+				t.Fatalf("closed complete PUT aborted storage: status=%d items=%d writes=%d err=%v", w.Code, len(items), len(objects.writes), err)
+			}
+		})
 	}
 }
