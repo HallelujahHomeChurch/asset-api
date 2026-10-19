@@ -64,21 +64,24 @@ func (j *Job) Run(ctx context.Context) (result error) {
 	defer func() {
 		slog.Info("recording_event_worker_exit", "lane", j.lane, "elapsed_ms", time.Since(started).Milliseconds(), "claims", boolCount(claimed), "renewals", renewals, "failed", result != nil)
 	}()
-	message, ok, err := j.queue.Receive(ctx, 2*time.Minute)
+	admissionCtx, admissionCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer admissionCancel()
+	message, ok, err := j.queue.Receive(admissionCtx, 2*time.Minute)
 	if err != nil || !ok {
 		return err
 	}
 	event, err := Decode(message.Body)
 	if err != nil || event.Lane != j.lane {
-		return j.queue.Poison(ctx, message)
+		return j.queue.Poison(admissionCtx, message)
 	}
-	active, err := j.repository.Begin(ctx, event)
+	active, err := j.repository.Begin(admissionCtx, event)
 	if err != nil {
 		return err
 	}
 	if !active {
-		return j.queue.Ack(ctx, message)
+		return j.queue.Ack(admissionCtx, message)
 	}
+	admissionCancel()
 	claimed = true
 	workCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -92,10 +95,12 @@ func (j *Job) Run(ctx context.Context) (result error) {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			if err := j.repository.Finish(ctx, event, result == nil); err != nil {
+			finishCtx, finishCancel := context.WithTimeout(ctx, 10*time.Second)
+			defer finishCancel()
+			if err := j.repository.Finish(finishCtx, event, result == nil); err != nil {
 				return err
 			}
-			if err := j.queue.Ack(ctx, message); err != nil {
+			if err := j.queue.Ack(finishCtx, message); err != nil {
 				return err
 			}
 			return result
