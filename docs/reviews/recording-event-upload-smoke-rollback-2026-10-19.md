@@ -39,8 +39,14 @@ Preserve the source/draft/attempt; do not resubmit/delete it to erase the failur
 Use this fresh merged commit as a new immutable release checkpoint. Do not
 rebuild the already published e9f057d commit or overwrite its provenance.
 Set RECORDING_EVENTS_ENABLED=false; keep provisioned=true,approval=true,
-processingCPU4,previewCPU4. This docs-only merge does not automatically deploy:
-after required CI/merge, dispatch Production Release once for the new main SHA.
+processingCPU4,previewCPU4. This checkpoint also fixes the template queue references, so the approved merge
+automatically deploys once. Do not manually dispatch a second release for its SHA.
+
+The original rollback preview exposed six expected queue-reference deletions
+from API/legacy environment arrays, correctly blocked by the deletion policy.
+Retain these non-secret references whenever queues are provisioned; the Event
+enabled flag still gates dispatch. A wiring regression fails before this fix.
+Do not relax the deletion policy to bypass this failure.
 
 The existing full Provider preview/what-if policy must pass. Quiet window:
 no new uploads or OBS sessions; wait all recording executions to drain without
@@ -57,7 +63,8 @@ until source-upload acceptance and formal activation are ready.
 
 ## Unchanged scope and open gates
 
-This checkpoint changes no runtime code, API/wire/digest/public boundary/media
+This checkpoint changes infrastructure reference retention, with no runtime code,
+API/wire/digest/public boundary/media
 validation, key or recording. Source and Event diagnostics remain open.
 Windows Event short-scene acceptance, >=24h all-execution/actual-cost evidence,
 and processing2CPU/4GiB/preview1CPU/2GiB tier A/B are not passed.
