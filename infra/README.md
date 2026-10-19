@@ -248,9 +248,17 @@ The live account currently reports `minimumTlsVersion=TLS1_0`; raise it to
 ## Recording Event Jobs: bootstrap and activation
 
 Ordinary Contributor releases deploy `recording-events.bicep` without IAM writes.
-The separate `recording-event-permissions.bicep` contains only twelve queue-scoped
-assignments for existing API/worker identities; no Job or application deployment.
+The separate `recording-event-permissions.bicep` contains fifteen queue-scoped
+assignments for existing API/worker identities and one custom message-write role;
+no Job or application deployment. The additional three assignments give only the
+worker `messages/write` on the work queues. Azure uses that DataAction for visibility
+renewal; it can also modify/add message content, but grants no queue management,
+poison-queue write or API write. Custom-role bootstrap additionally requires
+`roleDefinitions/write`; ordinary CI gains no IAM-write privilege.
 Its one-time operator bootstrap from merged code requires an exact reviewed
 what-if and explicit approval, following the source-storage policy above.
-`verify-recording-event-permissions.sh` gates activation on the actual grants.
+`verify-recording-event-permissions.sh` gates activation on the actual grants and the exact complete custom-role permission
+definition. The former twelve-role check was insufficient: a real source smoke
+failed its first 30-second UpdateMessage with 403. Reactivation must prove a
+successful real renewal and final ack, not just role readback.
 See [the ordered cutover and rollback](../docs/reviews/recording-event-cutover-2026-10-19.md).

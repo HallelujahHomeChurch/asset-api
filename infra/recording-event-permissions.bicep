@@ -14,6 +14,28 @@ resource poison 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-
  parent: service
  name: 'asset-recording-${lane}-poison'
 }]
+// Azure UpdateMessage needs messages/write; Processor cannot renew visibility.
+// This DataAction also permits message content writes, but no queue management.
+resource messageWriteRole 'Microsoft.Authorization/roleDefinitions@2022-04-01' = {
+ name: 'bf5dee66-37ae-4ef4-b34a-9f135e10d804'
+ properties: {
+  roleName: 'HHC Recording Queue Message Write'
+  description: 'Update recording work queue messages for renewable processing leases.'
+  type: 'CustomRole'
+  assignableScopes: [resourceGroup().id]
+  permissions: [{
+   actions: []
+   notActions: []
+   dataActions: ['Microsoft.Storage/storageAccounts/queueServices/queues/messages/write']
+   notDataActions: []
+  }]
+ }
+}
+resource messageWriter 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for (lane,i) in lanes: {
+ name: guid(queues[i].id,workerPrincipalId,'message-write')
+ scope: queues[i]
+ properties: { principalId: workerPrincipalId, principalType: 'ServicePrincipal', roleDefinitionId: messageWriteRole.id }
+}]
 resource sender 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for (lane,i) in lanes: {
  name: guid(queues[i].id,senderPrincipalId,'sender')
  scope: queues[i]

@@ -3,7 +3,8 @@
 **Follow-up:** the original 22-resource combined preview is superseded by the
 [ordered cutover review](recording-event-cutover-2026-10-19.md): normal Contributor
 provisioning creates 10 resources, and a separately approved operator bootstrap
-manages the 12 exact queue-scoped grants. Activation now drains the old scheduler
+now manages 15 exact queue-scoped grants plus a message-write custom role; the
+original 12-grant design lacked UpdateMessage permission (see the renewal follow-up). Activation now drains the old scheduler
 immediately before runtime deployment. Keep all production flags off until the
 reviewed cutover is approved.
 
