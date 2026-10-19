@@ -5,7 +5,7 @@ api="$(az containerapp show -g "$RESOURCE_GROUP" -n asset-api --query identity.p
 worker="$(az identity show -g "$RESOURCE_GROUP" -n asset-api-runtime-identity --query principalId -o tsv --only-show-errors)"
 account="$(az storage account show -g "$RESOURCE_GROUP" -n "$STORAGE_ACCOUNT_NAME" --query id -o tsv --only-show-errors)"
 renewal_role=bf5dee66-37ae-4ef4-b34a-9f135e10d804
-definition="$(az role definition list --name "$renewal_role" -o json --only-show-errors)"
+definition="$(az role definition list --name "$renewal_role" --scope "${account%/providers/*}" -o json --only-show-errors)"
 jq -e --arg role "$renewal_role" --arg group "${account%/providers/*}" '
  length==1 and .[0].name==$role and .[0].roleType=="CustomRole" and
  .[0].roleName=="HHC Recording Queue Message Write" and

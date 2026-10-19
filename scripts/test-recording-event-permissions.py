@@ -26,6 +26,8 @@ elif args[:3]==['storage','account','show']:print('/subscriptions/sub/resourceGr
 elif args[:2]==['resource','show']:pass
 elif args[:3]==['role','definition','list']:
  if os.environ.get('FAIL_DEFINITION_QUERY'):sys.exit(1)
+ if '--scope' not in args or args[args.index('--scope')+1]!='/subscriptions/sub/resourceGroups/alive':
+  print('[]');sys.exit(0)
  permissions={'actions':[],'notActions':[],'notDataActions':[],'dataActions':['Microsoft.Storage/storageAccounts/queueServices/queues/messages/write'],'condition':None,'conditionVersion':None}
  if os.environ.get('BROAD_DEFINITION'):permissions['actions']=['Microsoft.Storage/storageAccounts/queueServices/queues/delete']
  if os.environ.get('EXTRA_PERMISSION_BLOCK'):permissions=[permissions,{'actions':['*'],'notActions':[],'dataActions':[],'notDataActions':[]}]
