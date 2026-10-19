@@ -96,3 +96,32 @@ func TestWebsiteContentReadinessDependencyFailureIsUnavailable(t *testing.T) {
 		t.Fatalf("outage became deny %d %s", w.Code, w.Body.String())
 	}
 }
+
+func TestReadinessSelectedWebsiteEnvironment(t *testing.T) {
+	h := New(nil, nil, map[string]bool{"hhc-web-api-test": true, "hhc-web-api": true}, false, "test-token", WorkloadAuthConfig{}, nil).WithWebsiteContentReadiness(nil, "hhc-web-api-test")
+	for _, tc := range []struct {
+		caller string
+		want   int
+	}{{"hhc-web-api-test", 503}, {"hhc-web-api", 403}, {"hhc-web-api-test-other", 403}, {"hhc-web-api-test,hhc-web-api", 403}, {" hhc-web-api-test", 403}} {
+		r := httptest.NewRequest("POST", "/priv/website/content-readiness", strings.NewReader(`{}`))
+		r.Header.Set("Dapr-Caller-App-Id", tc.caller)
+		r.Header.Set("dapr-api-token", "test-token")
+		w := httptest.NewRecorder()
+		h.Routes().ServeHTTP(w, r)
+		if w.Code != tc.want {
+			t.Fatalf("caller %q: %d want %d body %s", tc.caller, w.Code, tc.want, w.Body.String())
+		}
+	}
+	for _, header := range []string{"Dapr-Caller-App-Id", "dapr-api-token"} {
+		r := httptest.NewRequest("POST", "/priv/website/content-readiness", strings.NewReader(`{}`))
+		r.Header.Set("Dapr-Caller-App-Id", "hhc-web-api-test")
+		r.Header.Set("dapr-api-token", "test-token")
+		r.Header.Add(header, "second")
+		w := httptest.NewRecorder()
+		h.Routes().ServeHTTP(w, r)
+		if w.Code < 400 || w.Code >= 500 {
+			t.Fatalf("multiple %s reached domain: %d", header, w.Code)
+		}
+	}
+
+}

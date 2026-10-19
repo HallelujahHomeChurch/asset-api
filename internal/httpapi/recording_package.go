@@ -12,7 +12,11 @@ import (
 )
 
 func (h *Handler) recordingPackageAllowed(w http.ResponseWriter, r *http.Request) bool {
-	if callerFromRequest(r, h.allowDevCallerHeader) != "hhc-web-api" {
+	expected := "hhc-web-api"
+	if r.URL.Path == "/priv/recordings/lifecycle" {
+		expected = h.websiteCallerAppID
+	}
+	if callerFromRequest(r, h.allowDevCallerHeader) != expected {
 		writeError(w, http.StatusForbidden, "AST_FORBIDDEN", "caller cannot manage recording packages")
 		return false
 	}

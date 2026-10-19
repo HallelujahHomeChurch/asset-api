@@ -10,13 +10,17 @@ type WebsiteContentReadinessStore interface {
 	WebsiteContentReadiness(context.Context, []assets.WebsiteContentRef) ([]assets.WebsiteContentDecision, error)
 }
 
-func (h *Handler) WithWebsiteContentReadiness(store WebsiteContentReadinessStore) *Handler {
+func (h *Handler) WithWebsiteContentReadiness(store WebsiteContentReadinessStore, websiteAppIDs ...string) *Handler {
+	h.websiteCallerAppID = "hhc-web-api"
+	if len(websiteAppIDs) > 0 && websiteAppIDs[0] != "" {
+		h.websiteCallerAppID = websiteAppIDs[0]
+	}
 	h.websiteReadiness = store
 	return h
 }
 func (h *Handler) websiteContentReadiness(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "private, no-store")
-	if len(r.Header.Values("Dapr-Caller-App-Id")) != 1 || r.Header.Get("Dapr-Caller-App-Id") != "hhc-web-api" || h.daprCaller(r) != "hhc-web-api" || len(r.Header.Values("dapr-api-token")) > 1 {
+	if len(r.Header.Values("Dapr-Caller-App-Id")) != 1 || r.Header.Get("Dapr-Caller-App-Id") != h.websiteCallerAppID || h.daprCaller(r) != h.websiteCallerAppID || len(r.Header.Values("dapr-api-token")) > 1 {
 		handleError(w, assets.ErrForbidden)
 		return
 	}

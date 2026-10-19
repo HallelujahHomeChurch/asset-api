@@ -25,6 +25,7 @@ import (
 
 type Handler struct {
 	websiteReadiness     WebsiteContentReadinessStore
+	websiteCallerAppID   string
 	service              *assets.Service
 	db                   *sql.DB
 	allowedCallers       map[string]bool
@@ -60,7 +61,7 @@ type WorkloadAuthConfig struct {
 }
 
 func New(service *assets.Service, db *sql.DB, allowedCallers map[string]bool, allowDevCallerHeader bool, appAPIToken string, workloadAuth WorkloadAuthConfig, localUpload http.HandlerFunc) *Handler {
-	return &Handler{service: service, db: db, allowedCallers: allowedCallers, allowDevCallerHeader: allowDevCallerHeader, appAPIToken: appAPIToken, workloadAuth: workloadAuth, localUpload: localUpload}
+	return &Handler{websiteCallerAppID: "hhc-web-api", service: service, db: db, allowedCallers: allowedCallers, allowDevCallerHeader: allowDevCallerHeader, appAPIToken: appAPIToken, workloadAuth: workloadAuth, localUpload: localUpload}
 }
 
 func (h *Handler) WithAudit(store *auditoutbox.Store) *Handler { h.audit = store; return h }

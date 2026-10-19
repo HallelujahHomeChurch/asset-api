@@ -422,3 +422,10 @@ paths, uploader identity, bytes, credentials or grants are exposed.
 Deploy this additive producer before the Website inbox consumer. Existing
 `/priv/recordings/lifecycle` remains the package expiry/readiness batch; no
 provider, storage, IAM or feature flag is activated by this change.
+
+Website content readiness selects one exact `ASSET_WEBSITE_CALLER_APP_ID`
+(default `hhc-web-api`, test `hhc-web-api-test`) for both raw and authenticated
+caller checks. The general allowlist cannot widen this role; opposite environments,
+arbitrary suffixes, duplicate caller/token headers, and development fallback are rejected.
+The same selected Website identity applies to the existing recording lifecycle
+read used by Inbox visibility; other recording management routes retain their roles.

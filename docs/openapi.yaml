@@ -22,7 +22,7 @@ paths:
     post:
       operationId: getWebsiteContentReadiness
       summary: Read bounded owner-bound current PDF and live readiness
-      description: Exact hhc-web-api Dapr identity and app-channel token only. No development or workload fallback. Missing, mismatched and unready media returns ready false without live projection. Dependency failures return unavailable. No objects, uploader identities, bytes or grants are returned. Existing recording lifecycle batches remain the package readiness contract.
+      description: Exact ASSET_WEBSITE_CALLER_APP_ID Dapr identity (default hhc-web-api, test hhc-web-api-test) and app-channel token only; raw and authenticated checks select the same single identity. No development or workload fallback. Missing, mismatched and unready media returns ready false without live projection. Dependency failures return unavailable. No objects, uploader identities, bytes or grants are returned. Existing recording lifecycle batches remain the package readiness contract.
       tags: [Private]
       x-hhc-visibility: private
       x-hhc-callers: [hhc-web-api]
@@ -71,7 +71,7 @@ paths:
     post:
       operationId: getRecordingLifecycleSnapshot
       summary: Read one policy-consistent lifecycle snapshot for CMS projections
-      description: Only exact recording and package bindings owned by hhc-web-api are accepted. Missing or mismatched bindings fail closed. No provider object listing or media download occurs.
+      description: Lifecycle reads select exact ASSET_WEBSITE_CALLER_APP_ID (default hhc-web-api, test hhc-web-api-test). Other recording management roles are unchanged. Only exact recording and package bindings owned by hhc-web-api are accepted. Missing or mismatched bindings fail closed. No provider object listing or media download occurs.
       tags: [Private]
       x-hhc-visibility: private
       x-hhc-callers: [hhc-web-api]

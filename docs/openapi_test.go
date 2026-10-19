@@ -348,3 +348,15 @@ func assertContains(t *testing.T, value, want string) {
 		t.Fatalf("missing %q", want)
 	}
 }
+
+func TestInboxSelectedEnvironmentContract(t *testing.T) {
+	raw, e := os.ReadFile("openapi.yaml")
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, required := range []string{"ASSET_WEBSITE_CALLER_APP_ID", "Other recording management roles are unchanged."} {
+		if !strings.Contains(string(raw), required) {
+			t.Fatalf("missing caller contract %q", required)
+		}
+	}
+}
