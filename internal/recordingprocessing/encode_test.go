@@ -44,7 +44,8 @@ func TestBrowserEncodeReadsRangesAndSpoolsThirtySecondHLS(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer source.Close()
-	storage := &spoolObjects{}
+	// Real object storage outlives the encoder closing its completed PUT.
+	storage := &spoolObjects{delay: 350 * time.Millisecond}
 	spool, err := NewOutputSpool(ctx, storage, strings.Repeat("c", 32), t.TempDir())
 	if err != nil {
 		t.Fatal(err)
