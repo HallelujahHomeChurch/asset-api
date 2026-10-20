@@ -117,7 +117,7 @@ resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' existing =
   name: containerRegistryName
 }
 
-resource runtimeVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
+resource runtimeVault 'Microsoft.KeyVault/vaults@2026-02-01' = {
   name: runtimeKeyVaultName
   location: location
   properties: {
@@ -135,7 +135,7 @@ resource runtimeVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
   }
 }
 
-resource migrationVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
+resource migrationVault 'Microsoft.KeyVault/vaults@2026-02-01' = {
   name: migrationKeyVaultName
   location: location
   properties: {
@@ -153,7 +153,7 @@ resource migrationVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
   }
 }
 
-resource auditVault 'Microsoft.KeyVault/vaults@2024-11-01' existing = {
+resource auditVault 'Microsoft.KeyVault/vaults@2026-02-01' existing = {
   name: auditVaultName
 }
 
