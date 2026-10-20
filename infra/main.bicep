@@ -88,11 +88,12 @@ var recordingR2Env = [
   { name: 'ASSET_R2_ACCESS_KEY_ID', secretRef: 'r2-access-key-id' }
   { name: 'ASSET_R2_SECRET_ACCESS_KEY', secretRef: 'r2-secret-access-key' }
 ]
-var mediaRuntimeEnv = concat(recordingR2Env, recordingProcessingEnv, [
+// Match the deployed API order so what-if does not report secretRef deletion.
+var mediaRuntimeEnv = concat(recordingR2Env, [
   { name: 'ASSET_MEDIA_PRIVATE_KEY_PEM', secretRef: 'media-private-key' }
   { name: 'ASSET_MEDIA_KEY_ID', value: mediaKeyId }
   { name: 'ASSET_MEDIA_ISSUER', value: mediaIssuer }
-])
+], skip(recordingProcessingFlags, 1), recordingEventQueueEnv, take(recordingProcessingFlags, 1))
 var retentionTriggerConfiguration = retentionScheduleEnabled ? {
   triggerType: 'Schedule'
   scheduleTriggerConfig: {
