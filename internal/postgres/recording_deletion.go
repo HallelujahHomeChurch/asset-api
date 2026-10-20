@@ -57,15 +57,23 @@ func (s *RecordingDeletionStore) DeleteRecording(ctx context.Context, id string)
 }
 
 func checkRecordingNotDeleted(ctx context.Context, tx *sql.Tx, id string) error {
-	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('recording-owner:' || $1,0))`, id); err != nil {
-		return err
-	}
-	var deleted bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM recording_deletions WHERE recording_id=$1)`, id).Scan(&deleted); err != nil {
+	deleted, err := recordingDeleted(ctx, tx, id)
+	if err != nil {
 		return err
 	}
 	if deleted {
 		return assets.ErrConflict
 	}
 	return nil
+}
+
+func recordingDeleted(ctx context.Context, tx *sql.Tx, id string) (bool, error) {
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('recording-owner:' || $1,0))`, id); err != nil {
+		return false, err
+	}
+	var deleted bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM recording_deletions WHERE recording_id=$1)`, id).Scan(&deleted); err != nil {
+		return false, err
+	}
+	return deleted, nil
 }

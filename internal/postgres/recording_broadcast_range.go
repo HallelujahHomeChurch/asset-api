@@ -41,8 +41,13 @@ func (s *RecordingCaptureStore) SetBroadcastRange(ctx context.Context, id string
 		return next, err
 	}
 	defer tx.Rollback()
-	if err = checkRecordingNotDeleted(ctx, tx, next.RecordingID); err != nil {
+	deleted, err := recordingDeleted(ctx, tx, next.RecordingID)
+	if err != nil {
 		return next, err
+	}
+	// Deletion fences new access, but must still allow durable denial to converge.
+	if deleted && (!next.Revoked || next.MemberState != "blocked") {
+		return next, assets.ErrConflict
 	}
 	c, err := scanCapture(tx.QueryRowContext(ctx, `SELECT `+captureColumns+` FROM recording_captures WHERE id=$1 FOR UPDATE`, id))
 	if err != nil {
