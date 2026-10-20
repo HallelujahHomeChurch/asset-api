@@ -173,6 +173,13 @@ func TestBroadcastRebindRequiresTerminalUnpublishedCapture(t *testing.T) {
 	if p, err := store.GetBroadcastRange(ctx, legacy.ID); err != nil || p != nil {
 		t.Fatalf("legacy policy changed: %+v %v", p, err)
 	}
+	if err := NewRecordingDeletionStore(db).DeleteRecording(ctx, c.RecordingID); err != nil {
+		t.Fatal(err)
+	}
+	oldEpochRevoke := assets.RecordingBroadcastRange{RecordingID: c.RecordingID, Epoch: 1, RangeRevision: 2, Revoked: true, MemberState: "blocked"}
+	if _, err := store.SetBroadcastRange(ctx, c.ID, oldEpochRevoke); !errors.Is(err, assets.ErrConflict) {
+		t.Fatalf("deleted old epoch bypassed latest-epoch fence: %v", err)
+	}
 }
 
 func TestBroadcastImagesUsePublicStartAndPreCaptureCustomScopes(t *testing.T) {
