@@ -2593,7 +2593,10 @@ paths:
       description: CMS-only B1 producer. Capture create with broadcastEpoch initializes
         denied member range atomically. Range CAS and R2 conditional authority writes
         finish before acknowledgement. Projection confirms current Worker authority
-        and published verified media. Legacy C1 captures are unchanged.
+        and published verified media. Deleted recordings accept only revoked=true
+        with memberState=blocked for the existing capture and latest epoch, subject
+        to unchanged revision and frozen-boundary checks. This cannot restore media
+        access or permit new captures or grants. Legacy C1 captures are unchanged.
       tags:
       - Private
       x-hhc-visibility: private
