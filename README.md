@@ -401,6 +401,18 @@ is active. If no media is ready the API performs bounded readiness probes; it do
 not start a heavy Job. Cloud execution starts, Queue requests and database load
 still belong in cost accounting.
 
+Worker cancellation covers initialization as well as claimed work. Recording
+maintenance uses its existing five-minute application budget from before DB
+setup; other recording modes have a 355-minute cooperative invocation budget
+inside the unchanged 360-minute platform limit. Media attempts retain their
+330-minute deadline. Queue receive/admission and completion/acknowledgement each
+share a ten-second control budget; that context is never used for media work.
+Timed-out unfinished work remains unacknowledged for the existing fenced retry.
+Retention handles SIGINT/SIGTERM and uses a fourteen-minute cooperative budget
+inside its existing fifteen-minute Job. Both commands defer DB close on return.
+These bounds do not certify a global count of starting, idle or draining PG
+pools. See [the lifetime evidence and remaining gates](docs/reviews/asset-worker-lifetime-2026-10-20.md).
+
 Provision and activate using the reviewed Bicep/release path only. See
 [the implementation plan](docs/superpowers/plans/2026-10-18-recording-event-jobs.md)
 and [the candidate handoff](docs/reviews/recording-events-candidate-2026-10-18.md).

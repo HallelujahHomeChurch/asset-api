@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"hhc/asset-api/internal/logging"
@@ -25,12 +27,17 @@ func main() {
 		slog.Error("invalid logging configuration", "error", err)
 		os.Exit(1)
 	}
-	if err := run(context.Background()); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	if err := run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		os.Exit(1)
 	}
 }
 
 func run(ctx context.Context) error {
+	// Leave a minute for cooperative shutdown inside the existing 900s Job.
+	ctx, cancel := context.WithTimeout(ctx, 14*time.Minute)
+	defer cancel()
 	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
 	if databaseURL == "" {
 		return errorsLog("DATABASE_URL is required", nil)

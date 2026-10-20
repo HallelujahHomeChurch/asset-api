@@ -17,6 +17,50 @@ func TestDisabledHLSDoesNotStartLegacyProcessing(t *testing.T) {
 	}
 }
 
+func TestRecordingInvocationIncludesBootstrapWithoutShorteningMedia(t *testing.T) {
+	for _, mode := range []string{"maintenance", "live", "processing", "preview", "legacy"} {
+		t.Run(mode, func(t *testing.T) {
+			started := time.Now()
+			ctx, cancel := recordingInvocationContext(context.Background(), mode)
+			defer cancel()
+			deadline, ok := ctx.Deadline()
+			if !ok {
+				t.Fatal("bootstrap and idle operations have no invocation deadline")
+			}
+			remaining := deadline.Sub(started)
+			if mode == "maintenance" {
+				if remaining < 5*time.Minute || remaining >= 6*time.Minute {
+					t.Fatalf("maintenance escaped its existing five-minute budget: %v", remaining)
+				}
+			} else if remaining <= 330*time.Minute || remaining >= 360*time.Minute {
+				t.Fatalf("whole invocation must preserve 330m media plus drain below 360m platform limit: %v", remaining)
+			}
+			cancel()
+			if ctx.Err() != context.Canceled {
+				t.Fatal("worker-owned invocation context did not cancel")
+			}
+		})
+	}
+}
+
+func TestRecordingInvocationNeverExtendsParentDeadline(t *testing.T) {
+	parent, stop := context.WithTimeout(context.Background(), time.Second)
+	defer stop()
+	for _, mode := range []string{"maintenance", "live", "processing", "preview"} {
+		ctx, cancel := recordingInvocationContext(parent, mode)
+		parentDeadline, _ := parent.Deadline()
+		deadline, _ := ctx.Deadline()
+		if !deadline.Equal(parentDeadline) {
+			t.Fatal("invocation extended the caller deadline")
+		}
+		stop()
+		if ctx.Err() != context.Canceled {
+			t.Fatal("invocation did not inherit shutdown cancellation")
+		}
+		cancel()
+	}
+}
+
 func TestDrainLiveWaitsForIncomingFragments(t *testing.T) {
 	calls := 0
 	err := drainLiveValidation(context.Background(), time.Now().Add(time.Second), time.Millisecond, func(context.Context) (bool, error) { calls++; return calls == 2, nil }, func(context.Context) (bool, error) { return calls < 2, nil }, func(context.Context) bool { return false })

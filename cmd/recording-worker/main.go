@@ -26,6 +26,14 @@ import (
 
 const liveWorkerWindow = 5 * time.Hour
 
+func recordingInvocationContext(parent context.Context, mode string) (context.Context, context.CancelFunc) {
+	if mode == "maintenance" {
+		return context.WithTimeout(parent, 5*time.Minute)
+	}
+	// Preserve each 330m media deadline and drain before the existing 360m Job.
+	return context.WithTimeout(parent, 355*time.Minute)
+}
+
 func main() {
 	if err := logging.Init(); err != nil {
 		slog.Error("invalid logging configuration", "error", err)
@@ -51,6 +59,12 @@ func run(ctx context.Context) (result error) {
 	if !hlsEnabled {
 		return nil
 	}
+	mode, err := config.RecordingWorkerMode()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := recordingInvocationContext(ctx, mode)
+	defer cancel()
 	sourceAccount, sourceContainer, err := config.RecordingSourceStorage(hlsEnabled)
 	if err != nil {
 		return err
@@ -78,10 +92,6 @@ func run(ctx context.Context) (result error) {
 			"source_cleanup_overdue", health.SourceCleanupOverdue, "waiting", health.Waiting, "active_slots", health.ActiveSlots)
 	}
 
-	mode, err := config.RecordingWorkerMode()
-	if err != nil {
-		return err
-	}
 	events, err := config.RecordingEvents()
 	if err != nil {
 		return err
@@ -92,11 +102,6 @@ func run(ctx context.Context) (result error) {
 	if mode == "legacy" || mode == "maintenance" {
 		if events.Enabled && mode == "legacy" {
 			return errors.New("legacy worker cannot run with recording events enabled")
-		}
-		if mode == "maintenance" {
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithTimeout(ctx, 5*time.Minute)
-			defer cancel()
 		}
 		return process(ctx, mode)
 	}

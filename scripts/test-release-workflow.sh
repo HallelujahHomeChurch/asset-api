@@ -1,5 +1,9 @@
 #!/bin/sh
 set -eu
+api_scale="$(awk '/^resource app / { in_api = 1; next } in_api && /^resource / { exit } in_api { print }' infra/main.bicep)"
+for expected in 'minReplicas: 1' 'maxReplicas: 8' "name: 'cpu-scaler'" "type: 'cpu'" "type: 'Utilization'" "value: '70'"; do
+  printf '%s\n' "$api_scale" | grep -Fq "$expected"
+done
 
 workflow=.github/workflows/release.yml
 grep -Fq -- '--validation-level Provider' .github/workflows/recording-source.yml
