@@ -32,7 +32,8 @@ missing captures, no unrevocation and new-capture rejection. Provider failure an
 a PostgreSQL deferred-trigger commit failure remain unacknowledged; the latter leaves
 the remote deny policy ahead, and an identical retry safely converges the DB.
 A concurrent deletion is observed waiting on the in-flight authority transaction's
-owner lock through a dedicated PostgreSQL backend before both operations finish.
+advisory owner lock through a dedicated PostgreSQL backend before both operations
+finish. Removing that advisory lock makes this regression fail; restoring it passes.
 Existing deletion, range, R2 CAS and HTTP tests remain part of validation.
 
 These are local PostgreSQL and provider-fixture tests, not production playback,

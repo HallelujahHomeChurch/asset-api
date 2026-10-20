@@ -259,7 +259,7 @@ func TestBroadcastRevocationAndDeletionSerialize(t *testing.T) {
 	go func() { deleted <- NewRecordingDeletionStore(deleteDB).DeleteRecording(ctx, c.RecordingID) }()
 	for {
 		var waiting bool
-		if err = db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid=$1 AND wait_event_type='Lock')`, deletePID).Scan(&waiting); err != nil {
+		if err = db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid=$1 AND wait_event_type='Lock' AND wait_event='advisory')`, deletePID).Scan(&waiting); err != nil {
 			t.Fatal(err)
 		}
 		if waiting {
