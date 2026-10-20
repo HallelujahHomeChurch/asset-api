@@ -3,7 +3,8 @@
 
 - Engineering issue:
 - Canonical Feature (private planning issue):
-- Project URL or explicit pending/access blocker:
+- Project (private): https://github.com/orgs/HallelujahHomeChurch/projects/1; record item/status or specific access blocker.
+- Shared workflow: [v1.1.0](https://github.com/HallelujahHomeChurch/hhc-planning/blob/9329942c91cc4d8d93104c666e2752024ee4e319/workflow/v1/WORKFLOW.md).
 - Coordinator acknowledgement / run ID / environment / branch / tested HEAD:
 - Dependency heads and published package versions:
 - Validation evidence and remaining limitations:
