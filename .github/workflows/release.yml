@@ -33,7 +33,30 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  agent_docs:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      docs_only: ${{ steps.diff.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Test documentation classification
+        run: python3 .github/scripts/test-ci-agent-docs.py
+      - name: Classify proven human documentation
+        id: diff
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: python3 .github/scripts/ci-agent-docs.py "$EVENT_NAME" "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+
   verify:
+    needs: agent_docs
+    if: ${{ needs.agent_docs.result == 'success' && needs.agent_docs.outputs.docs_only != 'true' }}
     outputs:
       image_artifact_id: ${{ steps.images_artifact.outputs.artifact-id }}
     runs-on: ubuntu-latest
