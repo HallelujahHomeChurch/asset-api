@@ -32,3 +32,8 @@ setup/tests; use the task’s smallest runtime set and preserve active writers i
 isolated worktrees. Follow explicit review/merge/deployment authority. Pure human
 documentation uses lightweight checks; source, workflow/configuration, executable
 skills and mixed changes retain full verification.
+
+If no sibling planning checkout exists, use the [single-repository fallback](https://github.com/HallelujahHomeChurch/hhc-planning/blob/73ee1af2a1ff828d72421a73626f45ff4ce04a6f/docs/cloud-environments.md#single-repository-checkout)
+to read the same entry documents through authorized GitHub access at the task’s
+immutable planning revision. Record that revision; report the exact inaccessible
+target/error without expanding permissions or copying private text here.
