@@ -19,7 +19,7 @@ import (
 	"hhc/asset-api/internal/assets"
 )
 
-// Serial intake cannot start the sibling; unbounded intake opens a third file.
+// All three approved renditions must start without serial provider waits.
 // Either failure must join cancelled siblings before removing their scratch.
 func TestLiveSegmentBoundedIntakeJoinsCancelledSibling(t *testing.T) {
 	for _, externalCancel := range []bool{false, true} {
@@ -43,16 +43,16 @@ func TestLiveSegmentBoundedIntakeJoinsCancelledSibling(t *testing.T) {
 				for range result {
 				}
 			}()
-			for i := 0; i < 2; i++ {
+			for i := 0; i < 3; i++ {
 				select {
 				case <-blocked.opened:
 				case <-ctx.Done():
-					t.Fatal("second rendition did not start concurrently")
+					t.Fatal("approved rendition did not start concurrently")
 				}
 			}
 			select {
 			case name := <-blocked.opened:
-				t.Fatalf("third rendition exceeded two-worker budget: %s", name)
+				t.Fatalf("intake exceeded the three-rendition budget: %s", name)
 			case <-time.After(50 * time.Millisecond):
 			}
 			if externalCancel {
@@ -123,19 +123,19 @@ func TestLiveSegmentCancellationReapsDecodersBeforeScratchRemoval(t *testing.T) 
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	var children []string
-	for len(children) < 2 {
+	for len(children) < 3 {
 		data, err := os.ReadFile(pids)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			t.Fatal(err)
 		}
 		children = strings.Fields(string(data))
-		if len(children) >= 2 {
+		if len(children) >= 3 {
 			break
 		}
 		select {
 		case <-ticker.C:
 		case <-ctx.Done():
-			t.Fatal("both decoders did not start")
+			t.Fatal("all three decoders did not start")
 		}
 	}
 	cancel()

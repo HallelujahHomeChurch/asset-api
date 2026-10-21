@@ -6,6 +6,7 @@ import (
 	"hhc/asset-api/internal/assets"
 	"hhc/asset-api/internal/postgres"
 	"log/slog"
+	"sync"
 	"time"
 )
 
@@ -84,19 +85,8 @@ func runLiveClaim(ctx context.Context, store *postgres.RecordingCaptureStore, ob
 				}
 				logStage(true)
 				stage, started = "stable_publication", time.Now()
-				from := "recordings/packages/" + claim.Capture.ID + "/final/" + claim.ClaimID + "/"
-				to := "recordings/captures/" + claim.Capture.ID + "/final/"
-				for _, object := range claim.Objects {
-					size, etag, err := objects.Head(ctx, from+object.Path)
-					if err != nil {
-						return err
-					}
-					if size != object.SizeBytes {
-						return assets.ErrInvalidUpload
-					}
-					if err = objects.PublishLiveObject(ctx, from+object.Path, to+object.Path, etag); err != nil {
-						return err
-					}
+				if err := publishLiveObjects(ctx, objects, claim); err != nil {
+					return err
 				}
 				snapshot, err = store.CommitLiveBatch(ctx, claim, batch)
 				if err != nil {
@@ -130,4 +120,48 @@ func runLiveClaim(ctx context.Context, store *postgres.RecordingCaptureStore, ob
 		return finishErr
 	}, 30*time.Second)
 	return err
+}
+
+// Join bounded provider copies before committing the batch or releasing its lease.
+func publishLiveObjects(ctx context.Context, objects LiveObjects, claim postgres.RecordingLiveClaim) error {
+	workCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	from := "recordings/packages/" + claim.Capture.ID + "/final/" + claim.ClaimID + "/"
+	to := "recordings/captures/" + claim.Capture.ID + "/final/"
+	var workers sync.WaitGroup
+	var mu sync.Mutex
+	var result error
+	for worker := 0; worker < 3; worker++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for index := worker; index < len(claim.Objects); index += 3 {
+				if workCtx.Err() != nil {
+					return
+				}
+				object := claim.Objects[index]
+				size, etag, err := objects.Head(workCtx, from+object.Path)
+				if err == nil && size != object.SizeBytes {
+					err = assets.ErrInvalidUpload
+				}
+				if err == nil {
+					err = objects.PublishLiveObject(workCtx, from+object.Path, to+object.Path, etag)
+				}
+				if err != nil {
+					mu.Lock()
+					if result == nil {
+						result = err
+					}
+					mu.Unlock()
+					cancel()
+					return
+				}
+			}
+		}()
+	}
+	workers.Wait()
+	if result != nil {
+		return result
+	}
+	return ctx.Err()
 }

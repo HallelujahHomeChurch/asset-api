@@ -49,8 +49,8 @@ func (p PackageMediaProbe) ValidateLiveSegment(ctx context.Context, captureID, a
 	for _, r := range renditions {
 		maxScratch = max(maxScratch, selected[r.Name+"/init.mp4"].SizeBytes+selected[fmt.Sprintf("%s/seg-%06d.m4s", r.Name, sequence)].SizeBytes)
 	}
-	// Reserve both workers before starting any provider reads.
-	if err := checkFragmentScratch(dir, 2*maxScratch); err != nil {
+	// Each approved rendition has one worker; reserve all scratch before reads.
+	if err := checkFragmentScratch(dir, int64(len(renditions))*maxScratch); err != nil {
 		return nil, err
 	}
 	jobCtx, cancel := context.WithCancel(ctx)
@@ -64,7 +64,7 @@ func (p PackageMediaProbe) ValidateLiveSegment(ctx context.Context, captureID, a
 	var workers sync.WaitGroup
 	var errorMu sync.Mutex
 	var root error
-	for worker := 0; worker < 2; worker++ {
+	for worker := 0; worker < len(renditions); worker++ {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
