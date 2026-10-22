@@ -144,6 +144,16 @@ func (s *RecordingCaptureStore) GetCapture(ctx context.Context, id string) (asse
 	return s.UpdateCapture(ctx, id, func(*assets.RecordingCapture) error { return nil })
 }
 func (s *RecordingCaptureStore) UpdateCapture(ctx context.Context, id string, fn func(*assets.RecordingCapture) error) (assets.RecordingCapture, error) {
+	return s.updateCapture(ctx, id, func(_ *sql.Tx, c *assets.RecordingCapture) error { return fn(c) })
+}
+
+func (s *RecordingCaptureStore) WithCaptureGrant(ctx context.Context, id string, fn func(*assets.RecordingCapture, assets.RecordingBroadcastReader) error) (assets.RecordingCapture, error) {
+	return s.updateCapture(ctx, id, func(tx *sql.Tx, c *assets.RecordingCapture) error {
+		return fn(c, broadcastReader{tx, s.broadcastObjects})
+	})
+}
+
+func (s *RecordingCaptureStore) updateCapture(ctx context.Context, id string, fn func(*sql.Tx, *assets.RecordingCapture) error) (assets.RecordingCapture, error) {
 	var c assets.RecordingCapture
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -226,7 +236,7 @@ func (s *RecordingCaptureStore) UpdateCapture(ctx context.Context, id string, fn
 		previousObjects[o.Path] = o
 	}
 	previousPackage := c.PackageID
-	if err = fn(&c); err != nil {
+	if err = fn(tx, &c); err != nil {
 		return c, err
 	}
 	if previousPackage == nil && c.PackageID != nil {

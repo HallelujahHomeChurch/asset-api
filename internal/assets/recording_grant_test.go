@@ -192,3 +192,7 @@ func TestBroadcastGrantsCarryAuthorityAndSeparatePreviewPurpose(t *testing.T) {
 		t.Fatalf("revoked new grant: %v", err)
 	}
 }
+
+func (r *broadcastGrantRepo) WithCaptureGrant(ctx context.Context, id string, fn func(*RecordingCapture, RecordingBroadcastReader) error) (RecordingCapture, error) {
+	return r.UpdateCapture(ctx, id, func(c *RecordingCapture) error { return fn(c, r) })
+}

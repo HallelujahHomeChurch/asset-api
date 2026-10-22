@@ -25,8 +25,19 @@ func scanBroadcastRange(row coverScanner) (*assets.RecordingBroadcastRange, erro
 
 const broadcastRangeColumns = `recording_id,epoch,range_revision,start_sequence,end_sequence_exclusive,revoked,member_state`
 
+type broadcastReader struct {
+	query interface {
+		QueryRowContext(context.Context, string, ...any) *sql.Row
+	}
+	broadcastObjects assets.RecordingBroadcastObjects
+}
+
 func (s *RecordingCaptureStore) GetBroadcastRange(ctx context.Context, id string) (*assets.RecordingBroadcastRange, error) {
-	return scanBroadcastRange(s.db.QueryRowContext(ctx, `SELECT `+broadcastRangeColumns+` FROM recording_broadcast_ranges WHERE capture_id=$1`, id))
+	return (broadcastReader{s.db, s.broadcastObjects}).GetBroadcastRange(ctx, id)
+}
+
+func (s broadcastReader) GetBroadcastRange(ctx context.Context, id string) (*assets.RecordingBroadcastRange, error) {
+	return scanBroadcastRange(s.query.QueryRowContext(ctx, `SELECT `+broadcastRangeColumns+` FROM recording_broadcast_ranges WHERE capture_id=$1`, id))
 }
 
 func (s *RecordingCaptureStore) SetBroadcastRange(ctx context.Context, id string, next assets.RecordingBroadcastRange) (assets.RecordingBroadcastRange, error) {
@@ -85,12 +96,16 @@ func (s *RecordingCaptureStore) SetBroadcastRange(ctx context.Context, id string
 }
 
 func (s *RecordingCaptureStore) GetBroadcastProjection(ctx context.Context, id string) (assets.RecordingBroadcastProjection, error) {
+	return (broadcastReader{s.db, s.broadcastObjects}).GetBroadcastProjection(ctx, id)
+}
+
+func (s broadcastReader) GetBroadcastProjection(ctx context.Context, id string) (assets.RecordingBroadcastProjection, error) {
 	var raw []byte
 	var revision int64
 	var last int
 	var ended, terminal bool
 	var p assets.RecordingBroadcastRange
-	err := s.db.QueryRowContext(ctx, `SELECT b.recording_id,b.epoch,b.range_revision,b.start_sequence,b.end_sequence_exclusive,b.revoked,b.member_state,l.segments,l.published_revision,l.published_sequence,l.ended AND l.published_revision=l.revision,c.terminal_at IS NOT NULL OR c.state IN ('failed','expired','aborted') FROM recording_broadcast_ranges b JOIN recording_live l ON l.capture_id=b.capture_id JOIN recording_captures c ON c.id=b.capture_id WHERE b.capture_id=$1`, id).Scan(&p.RecordingID, &p.Epoch, &p.RangeRevision, &p.StartSequence, &p.EndSequenceExclusive, &p.Revoked, &p.MemberState, &raw, &revision, &last, &ended, &terminal)
+	err := s.query.QueryRowContext(ctx, `SELECT b.recording_id,b.epoch,b.range_revision,b.start_sequence,b.end_sequence_exclusive,b.revoked,b.member_state,l.segments,l.published_revision,l.published_sequence,l.ended AND l.published_revision=l.revision,c.terminal_at IS NOT NULL OR c.state IN ('failed','expired','aborted') FROM recording_broadcast_ranges b JOIN recording_live l ON l.capture_id=b.capture_id JOIN recording_captures c ON c.id=b.capture_id WHERE b.capture_id=$1`, id).Scan(&p.RecordingID, &p.Epoch, &p.RangeRevision, &p.StartSequence, &p.EndSequenceExclusive, &p.Revoked, &p.MemberState, &raw, &revision, &last, &ended, &terminal)
 	if errors.Is(err, sql.ErrNoRows) {
 		return assets.RecordingBroadcastProjection{}, assets.ErrNotFound
 	}

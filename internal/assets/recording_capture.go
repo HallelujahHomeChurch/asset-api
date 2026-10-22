@@ -88,6 +88,8 @@ type RecordingCaptureRepository interface {
 	GetCapture(context.Context, string) (RecordingCapture, error)
 	// Callback and declarations/receipt/package insertion commit atomically.
 	UpdateCapture(context.Context, string, func(*RecordingCapture) error) (RecordingCapture, error)
+	// Grant authority reads share the transaction and connection holding the lease.
+	WithCaptureGrant(context.Context, string, func(*RecordingCapture, RecordingBroadcastReader) error) (RecordingCapture, error)
 }
 type RecordingCaptureService struct {
 	repository RecordingCaptureRepository
