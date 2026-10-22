@@ -239,3 +239,7 @@ func TestCaptureReceiptLimitReservesAbortAfterSeal(t *testing.T) {
 		t.Fatal("abort reserve exceeded total receipt cap")
 	}
 }
+
+func (r *captureRepo) WithCaptureGrant(ctx context.Context, id string, fn func(*RecordingCapture, RecordingBroadcastReader) error) (RecordingCapture, error) {
+	return r.UpdateCapture(ctx, id, func(c *RecordingCapture) error { return fn(c, nil) })
+}

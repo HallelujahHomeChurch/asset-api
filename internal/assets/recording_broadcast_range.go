@@ -50,10 +50,13 @@ type RecordingBroadcastObjects interface {
 	PutBroadcastRange(context.Context, string, []byte) error
 	ReadBroadcastRange(context.Context, string) ([]byte, error)
 }
-type RecordingBroadcastRepository interface {
-	SetBroadcastRange(context.Context, string, RecordingBroadcastRange) (RecordingBroadcastRange, error)
+type RecordingBroadcastReader interface {
 	GetBroadcastRange(context.Context, string) (*RecordingBroadcastRange, error)
 	GetBroadcastProjection(context.Context, string) (RecordingBroadcastProjection, error)
+}
+type RecordingBroadcastRepository interface {
+	RecordingBroadcastReader
+	SetBroadcastRange(context.Context, string, RecordingBroadcastRange) (RecordingBroadcastRange, error)
 }
 
 func ValidateBroadcastRangeChange(current *RecordingBroadcastRange, next RecordingBroadcastRange) error {

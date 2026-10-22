@@ -161,7 +161,7 @@ func (s *RecordingCaptureService) grantLive(ctx context.Context, signer *Recordi
 	if !captureUUID.MatchString(recording) || !captureUUID.MatchString(user) || !captureUUID.MatchString(scope) || requested.IsZero() {
 		return grant, ErrInvalidInput
 	}
-	_, err := s.repository.UpdateCapture(ctx, id, func(c *RecordingCapture) error {
+	_, err := s.repository.WithCaptureGrant(ctx, id, func(c *RecordingCapture, repo RecordingBroadcastReader) error {
 		now := s.now().UTC()
 		if c.RecordingID != recording {
 			return ErrForbidden
@@ -193,8 +193,7 @@ func (s *RecordingCaptureService) grantLive(ctx context.Context, signer *Recordi
 		var err error
 		claims := map[string]any{"recordingId": recording, "captureId": c.ID, "scopeId": scope, "userId": user}
 		if c.BroadcastEpoch > 0 {
-			repo, ok := s.repository.(RecordingBroadcastRepository)
-			if !ok {
+			if repo == nil {
 				return errors.New("broadcast ranges unavailable")
 			}
 			policy, err := repo.GetBroadcastRange(ctx, c.ID)

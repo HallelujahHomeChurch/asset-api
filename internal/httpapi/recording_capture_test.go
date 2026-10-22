@@ -226,3 +226,7 @@ func TestBroadcastSignalRequiresExplicitClosePolicyAndOwner(t *testing.T) {
 		}
 	}
 }
+
+func (r *httpCaptureRepo) WithCaptureGrant(ctx context.Context, id string, fn func(*assets.RecordingCapture, assets.RecordingBroadcastReader) error) (assets.RecordingCapture, error) {
+	return r.UpdateCapture(ctx, id, func(c *assets.RecordingCapture) error { return fn(c, nil) })
+}
