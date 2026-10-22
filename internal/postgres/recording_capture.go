@@ -148,8 +148,31 @@ func (s *RecordingCaptureStore) UpdateCapture(ctx context.Context, id string, fn
 }
 
 func (s *RecordingCaptureStore) WithCaptureGrant(ctx context.Context, id string, fn func(*assets.RecordingCapture, assets.RecordingBroadcastReader) error) (assets.RecordingCapture, error) {
+	var epoch int64
+	if err := s.db.QueryRowContext(ctx, `SELECT broadcast_epoch FROM recording_captures WHERE id=$1`, id).Scan(&epoch); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return assets.RecordingCapture{}, assets.ErrNotFound
+		}
+		return assets.RecordingCapture{}, err
+	}
+	var authority []byte
+	if epoch > 0 {
+		if s.broadcastObjects == nil {
+			return assets.RecordingCapture{}, errors.New("broadcast policy storage unavailable")
+		}
+		var err error
+		authority, err = s.broadcastObjects.ReadBroadcastRange(ctx, id)
+		if err != nil {
+			return assets.RecordingCapture{}, err
+		}
+		if len(authority) == 0 {
+			return assets.RecordingCapture{}, errors.New("broadcast authority unavailable")
+		}
+	}
+	// Read remotely before locking, then compare with current transactional authority.
+	// A concurrent revoke/delete must invalidate the snapshot before signing.
 	return s.updateCapture(ctx, id, func(tx *sql.Tx, c *assets.RecordingCapture) error {
-		return fn(c, broadcastReader{tx, s.broadcastObjects})
+		return fn(c, broadcastReader{query: tx, broadcastObjects: s.broadcastObjects, authority: authority})
 	})
 }
 
