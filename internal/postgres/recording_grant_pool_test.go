@@ -24,7 +24,7 @@ func TestBroadcastLiveGrantUsesOnePoolConnection(t *testing.T) {
 	}
 	objects := &broadcastMemoryObjects{values: map[string][]byte{}}
 	store := NewRecordingCaptureStore(db).WithBroadcastObjects(objects)
-	now := time.Now().UTC()
+	now := time.Now().UTC().Truncate(time.Microsecond)
 	c := assets.RecordingCapture{ID: strings.Repeat("a", 32), ActorID: "actor", RecordingID: "11111111-1111-4111-8111-111111111111", CreateKey: "grant-pool", State: "uploading", CreatedAt: now, ExpiresAt: now.Add(time.Hour), BroadcastEpoch: 1, Receipts: map[string]assets.RecordingCaptureStoredReceipt{}}
 	if _, err := store.CreateCapture(ctx, c); err != nil {
 		t.Fatal(err)
