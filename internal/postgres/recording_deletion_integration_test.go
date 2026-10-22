@@ -122,3 +122,49 @@ func TestRecordingDeletionFencesSourceJobAndRetriesCleanup(t *testing.T) {
 		t.Fatal("temporary source not cleaned")
 	}
 }
+
+func TestRecordingDeletionExpiresReadySourceAndRetainsAttemptReceipt(t *testing.T) {
+	ctx := context.Background()
+	db := isolatedIntegrationDB(t)
+	if err := migrations.Run(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	store := NewRecordingSourceStore(db)
+	svc := assets.NewRecordingSourceService(store, &sourceBlobFixture{}, time.Now)
+	p, err := svc.Create(ctx, assets.CreateRecordingSourceInput{ActorID: "ready-delete-actor", RecordingID: "ready-delete-recording", FileName: "source.mp4", SizeBytes: 5, ChecksumSHA256: strings.Repeat("a", 64), IdempotencyKey: "ready-delete"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Complete(ctx, p.ID, p.ActorID); err != nil {
+		t.Fatal(err)
+	}
+	claim, err := store.ClaimSourceProcessing(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copy := assets.RecordingSourceCopy{Key: "recording-sources/" + p.ID + "/final/" + claim.ClaimID + "/source", State: "success", SizeBytes: 5, ETag: "verified-etag"}
+	if err := store.CheckpointSourceCopy(ctx, p.ID, claim.ClaimID, copy); err != nil {
+		t.Fatal(err)
+	}
+	inv := testRecordingPackage(t, p.ID, p.ActorID, p.RecordingID).Inventory
+	if err := store.FinishSourceProcessing(ctx, p.ID, claim.ClaimID, inv); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := NewRecordingDeletionStore(db).DeleteRecording(ctx, p.RecordingID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := store.Get(ctx, p.ID)
+	if err != nil || got.State != "expired" || got.PackageID != "" || got.SourceKey != copy.Key {
+		t.Fatalf("source deletion did not retain input receipt: %+v %v", got, err)
+	}
+	pack, err := NewRecordingPackageStore(db).Get(ctx, claim.ClaimID)
+	if err != nil || pack.State != "expired" {
+		t.Fatalf("derived package not fenced: %+v %v", pack, err)
+	}
+	var attemptState string
+	if err := db.QueryRowContext(ctx, `SELECT state FROM recording_source_attempts WHERE source_id=$1 AND claim_id=$2`, p.ID, claim.ClaimID).Scan(&attemptState); err != nil || attemptState != "ready" {
+		t.Fatalf("completed attempt receipt lost: %q %v", attemptState, err)
+	}
+}
