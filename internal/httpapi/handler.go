@@ -24,6 +24,8 @@ import (
 )
 
 type Handler struct {
+	websiteReadiness     WebsiteContentReadinessStore
+	websiteCallerAppID   string
 	service              *assets.Service
 	db                   *sql.DB
 	allowedCallers       map[string]bool
@@ -59,7 +61,7 @@ type WorkloadAuthConfig struct {
 }
 
 func New(service *assets.Service, db *sql.DB, allowedCallers map[string]bool, allowDevCallerHeader bool, appAPIToken string, workloadAuth WorkloadAuthConfig, localUpload http.HandlerFunc) *Handler {
-	return &Handler{service: service, db: db, allowedCallers: allowedCallers, allowDevCallerHeader: allowDevCallerHeader, appAPIToken: appAPIToken, workloadAuth: workloadAuth, localUpload: localUpload}
+	return &Handler{websiteCallerAppID: "hhc-web-api", service: service, db: db, allowedCallers: allowedCallers, allowDevCallerHeader: allowDevCallerHeader, appAPIToken: appAPIToken, workloadAuth: workloadAuth, localUpload: localUpload}
 }
 
 func (h *Handler) WithAudit(store *auditoutbox.Store) *Handler { h.audit = store; return h }
@@ -100,6 +102,7 @@ func (h *Handler) Routes() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "healthy"})
 	})
 	mux.HandleFunc("GET /ready", h.ready)
+	mux.HandleFunc("POST /priv/website/content-readiness", h.websiteContentReadiness)
 	mux.HandleFunc("GET /api/assets/public/{assetID}", h.publicDownload)
 	mux.HandleFunc("GET /api/assets/public/{assetID}/{variant}", h.publicDerivativeDownload)
 	mux.Handle("POST /api/assets/personal-space/uploads", h.personalReader(http.HandlerFunc(h.createPersonalUpload)))

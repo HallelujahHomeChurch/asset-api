@@ -59,3 +59,20 @@ func TestRecordingRetentionOwnerAndHumanMutationBoundary(t *testing.T) {
 		t.Fatalf("unauthorized calls reached store: %d", s.calls)
 	}
 }
+
+func TestRecordingLifecycleSelectedWebsiteEnvironment(t *testing.T) {
+	h := New(nil, nil, map[string]bool{"hhc-web-api": true, "hhc-web-api-test": true}, false, "synthetic", WorkloadAuthConfig{}, nil).WithWebsiteContentReadiness(nil, "hhc-web-api-test").WithRecordingPackages(assets.NewRecordingPackageService(&httpPackageRepo{}, nil, nil)).WithRecordingRetention(&retentionStoreStub{}).Routes()
+	for _, tc := range []struct {
+		caller string
+		want   int
+	}{{"hhc-web-api-test", 200}, {"hhc-web-api", 403}, {"hhc-web-api-test-other", 403}} {
+		r := httptest.NewRequest("POST", "/priv/recordings/lifecycle", strings.NewReader(`{"items":[],"sourceItems":[]}`))
+		r.Header.Set("Dapr-Caller-App-Id", tc.caller)
+		r.Header.Set("dapr-api-token", "synthetic")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != tc.want {
+			t.Fatalf("%s = %d want %d %s", tc.caller, w.Code, tc.want, w.Body.String())
+		}
+	}
+}

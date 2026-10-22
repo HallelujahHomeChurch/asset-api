@@ -44,6 +44,7 @@ type Config struct {
 	DBConnMaxLifetime         time.Duration
 	AllowedCallers            map[string]bool
 	ReaderCallerAppID         string
+	WebsiteCallerAppID        string
 	AllowDevCallerHeader      bool
 	AppAPIToken               string
 	WorkloadTenantID          string
@@ -91,6 +92,7 @@ func Load() (Config, error) {
 		DBMaxIdleConns:            5,
 		DBConnMaxLifetime:         30 * time.Minute,
 		AllowedCallers:            splitSet(value("ASSET_ALLOWED_CALLERS", "account-api,hhc-web-api,hhc-line-function-bot")),
+		WebsiteCallerAppID:        value("ASSET_WEBSITE_CALLER_APP_ID", "hhc-web-api"),
 		ReaderCallerAppID:         strings.TrimSpace(value("ASSET_READER_CALLER_APP_ID", "api-gateway")),
 		AllowDevCallerHeader:      strings.EqualFold(value("ASSET_ALLOW_DEV_CALLER_HEADER", "false"), "true"),
 		AppAPIToken:               os.Getenv("APP_API_TOKEN"),
@@ -143,6 +145,9 @@ func Load() (Config, error) {
 	cfg.RecordingSourceAccountURL, cfg.RecordingSourceContainer, err = RecordingSourceStorage(cfg.RecordingHLSEnabled)
 	if err != nil {
 		return Config{}, err
+	}
+	if cfg.WebsiteCallerAppID != "hhc-web-api" && cfg.WebsiteCallerAppID != "hhc-web-api-test" {
+		return Config{}, fmt.Errorf("ASSET_WEBSITE_CALLER_APP_ID must select one exact Website identity")
 	}
 	if cfg.AllowedCallers[cfg.ReaderCallerAppID] {
 		return Config{}, fmt.Errorf("ASSET_READER_CALLER_APP_ID must not be in ASSET_ALLOWED_CALLERS")
