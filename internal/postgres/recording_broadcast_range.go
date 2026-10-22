@@ -30,10 +30,11 @@ type broadcastReader struct {
 		QueryRowContext(context.Context, string, ...any) *sql.Row
 	}
 	broadcastObjects assets.RecordingBroadcastObjects
+	authority        []byte
 }
 
 func (s *RecordingCaptureStore) GetBroadcastRange(ctx context.Context, id string) (*assets.RecordingBroadcastRange, error) {
-	return (broadcastReader{s.db, s.broadcastObjects}).GetBroadcastRange(ctx, id)
+	return (broadcastReader{query: s.db, broadcastObjects: s.broadcastObjects}).GetBroadcastRange(ctx, id)
 }
 
 func (s broadcastReader) GetBroadcastRange(ctx context.Context, id string) (*assets.RecordingBroadcastRange, error) {
@@ -96,7 +97,7 @@ func (s *RecordingCaptureStore) SetBroadcastRange(ctx context.Context, id string
 }
 
 func (s *RecordingCaptureStore) GetBroadcastProjection(ctx context.Context, id string) (assets.RecordingBroadcastProjection, error) {
-	return (broadcastReader{s.db, s.broadcastObjects}).GetBroadcastProjection(ctx, id)
+	return (broadcastReader{query: s.db, broadcastObjects: s.broadcastObjects}).GetBroadcastProjection(ctx, id)
 }
 
 func (s broadcastReader) GetBroadcastProjection(ctx context.Context, id string) (assets.RecordingBroadcastProjection, error) {
@@ -121,9 +122,12 @@ func (s broadcastReader) GetBroadcastProjection(ctx context.Context, id string) 
 	if s.broadcastObjects == nil {
 		return assets.RecordingBroadcastProjection{}, errors.New("broadcast policy storage unavailable")
 	}
-	remoteJSON, err := s.broadcastObjects.ReadBroadcastRange(ctx, id)
-	if err != nil {
-		return assets.RecordingBroadcastProjection{}, err
+	remoteJSON := s.authority
+	if remoteJSON == nil {
+		remoteJSON, err = s.broadcastObjects.ReadBroadcastRange(ctx, id)
+		if err != nil {
+			return assets.RecordingBroadcastProjection{}, err
+		}
 	}
 	var remote assets.RecordingBroadcastRange
 	if err = json.Unmarshal(remoteJSON, &remote); err != nil {
