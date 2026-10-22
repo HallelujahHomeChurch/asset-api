@@ -35,7 +35,8 @@ func (s *RecordingDeletionStore) DeleteRecording(ctx context.Context, id string)
 	if _, err = tx.ExecContext(ctx, `SELECT slot FROM recording_processing_slots ORDER BY slot FOR UPDATE`); err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE recording_sources SET state='expired',claim_id=NULL,claimed_until=NULL,cleanup_after=clock_timestamp() WHERE recording_id=$1`, id); err != nil {
+	// Expired sources cannot retain the ready-only package link; attempt receipts remain.
+	if _, err = tx.ExecContext(ctx, `UPDATE recording_sources SET state='expired',package_id=NULL,claim_id=NULL,claimed_until=NULL,cleanup_after=clock_timestamp() WHERE recording_id=$1`, id); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE recording_packages SET state='expired',claim_id=NULL,claimed_until=NULL,preview_claim_id=NULL,preview_claimed_until=NULL,media_expires_at=LEAST(media_expires_at,clock_timestamp()),cleanup_after=clock_timestamp() WHERE recording_id=$1`, id); err != nil {
