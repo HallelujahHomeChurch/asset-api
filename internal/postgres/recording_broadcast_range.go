@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"hhc/asset-api/internal/assets"
+	"hhc/asset-api/internal/diagnostics"
 	"reflect"
+	"time"
 )
 
 func (s *RecordingCaptureStore) WithBroadcastObjects(objects assets.RecordingBroadcastObjects) *RecordingCaptureStore {
@@ -106,7 +108,9 @@ func (s broadcastReader) GetBroadcastProjection(ctx context.Context, id string) 
 	var last int
 	var ended, terminal bool
 	var p assets.RecordingBroadcastRange
+	started := time.Now()
 	err := s.query.QueryRowContext(ctx, `SELECT b.recording_id,b.epoch,b.range_revision,b.start_sequence,b.end_sequence_exclusive,b.revoked,b.member_state,l.segments,l.published_revision,l.published_sequence,l.ended AND l.published_revision=l.revision,c.terminal_at IS NOT NULL OR c.state IN ('failed','expired','aborted') FROM recording_broadcast_ranges b JOIN recording_live l ON l.capture_id=b.capture_id JOIN recording_captures c ON c.id=b.capture_id WHERE b.capture_id=$1`, id).Scan(&p.RecordingID, &p.Epoch, &p.RangeRevision, &p.StartSequence, &p.EndSequenceExclusive, &p.Revoked, &p.MemberState, &raw, &revision, &last, &ended, &terminal)
+	diagnostics.Default.Observe(diagnostics.ProjectionSQL, started, err)
 	if errors.Is(err, sql.ErrNoRows) {
 		return assets.RecordingBroadcastProjection{}, assets.ErrNotFound
 	}
@@ -124,10 +128,15 @@ func (s broadcastReader) GetBroadcastProjection(ctx context.Context, id string) 
 	}
 	remoteJSON := s.authority
 	if remoteJSON == nil {
+		started = time.Now()
 		remoteJSON, err = s.broadcastObjects.ReadBroadcastRange(ctx, id)
+		diagnostics.Default.Observe(diagnostics.ProjectionAuthority, started, err)
 		if err != nil {
 			return assets.RecordingBroadcastProjection{}, err
 		}
+	}
+	if s.authority != nil {
+		diagnostics.Default.Observe(diagnostics.ProjectionReuse, time.Now(), nil)
 	}
 	var remote assets.RecordingBroadcastRange
 	if err = json.Unmarshal(remoteJSON, &remote); err != nil {
