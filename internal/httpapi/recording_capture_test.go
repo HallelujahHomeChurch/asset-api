@@ -230,3 +230,48 @@ func TestBroadcastSignalRequiresExplicitClosePolicyAndOwner(t *testing.T) {
 func (r *httpCaptureRepo) WithCaptureGrant(ctx context.Context, id string, fn func(*assets.RecordingCapture, assets.RecordingBroadcastReader) error) (assets.RecordingCapture, error) {
 	return r.UpdateCapture(ctx, id, func(c *assets.RecordingCapture) error { return fn(c, nil) })
 }
+
+func TestCaptureRecoveryWireOptIn(t *testing.T) {
+	for _, tc := range []struct {
+		name, extra string
+		status      int
+		version     string
+	}{
+		{"legacy", ``, 201, ""},
+		{"recovery", `,"recoveryVersion":"common-watermark-v1"`, 201, assets.RecordingRecoveryVersion},
+		{"unknown", `,"recoveryVersion":"future"`, 400, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &httpCaptureRepo{}
+			h := New(nil, nil, map[string]bool{"hhc-web-api": true}, true, "", WorkloadAuthConfig{}, nil).WithRecordingCaptures(assets.NewRecordingCaptureService(repo, nil, time.Now)).Routes()
+			body := `{"recordingId":"11111111-1111-4111-8111-111111111111","operationKey":"create","broadcastEpoch":1,"segmentFrames":300` + tc.extra + `}`
+			r := httptest.NewRequest("POST", "/priv/recording-captures", strings.NewReader(body))
+			r.Header.Set("X-Internal-Caller-App-Id", "hhc-web-api")
+			r.Header.Set("X-HHC-Actor-ID", "22222222-2222-4222-8222-222222222222")
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			if w.Code != tc.status || repo.c.Recovery.Version != tc.version {
+				t.Fatalf("create %d %s recovery=%s", w.Code, w.Body.String(), repo.c.Recovery.Version)
+			}
+			if tc.status != 201 {
+				return
+			}
+			r = httptest.NewRequest("POST", "/priv/recording-captures/"+repo.c.ID+"/broadcast-signal", strings.NewReader(`{"closeIfIdle":false}`))
+			r.Header.Set("X-Internal-Caller-App-Id", "hhc-web-api")
+			r.Header.Set("X-HHC-Actor-ID", repo.c.ActorID)
+			w = httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			var signal map[string]any
+			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &signal) != nil {
+				t.Fatal(w.Body.String())
+			}
+			marker, exists := signal["recoveryVersion"]
+			if tc.version == "" && exists || tc.version != "" && marker != tc.version {
+				t.Fatalf("capability %v", signal)
+			}
+			if signal["deadline"] != nil || signal["state"] != "waiting" {
+				t.Fatal("unstarted capture received recovery window")
+			}
+		})
+	}
+}
