@@ -416,3 +416,49 @@ pools. See [the lifetime evidence and remaining gates](docs/reviews/asset-worker
 Provision and activate using the reviewed Bicep/release path only. See
 [the implementation plan](docs/superpowers/plans/2026-10-18-recording-event-jobs.md)
 and [the candidate handoff](docs/reviews/recording-events-candidate-2026-10-18.md).
+
+### Bounded API diagnostics
+
+The HTTP server emits local `database/sql` pool statistics every 15 seconds
+(`db_pool_summary`) and one fixed-schema `media_stage_summary` every 120 seconds
+through the existing console logger. `LOG_LEVEL=warn/error` suppresses these
+Info summaries; missing records must not be interpreted as zero errors.
+No collector, provider query, per-request log or exported ID is added. Requests
+only update an in-memory fixed-size aggregate; the logger runs separately.
+Shutdown cancels the loop and waits at most one second for a blocked console
+sink. Normal cancellation exits the loop; there is no final flush guarantee.
+
+Stage `schema=1` encodes `rows_json` as a JSON matrix with these ordered rows (indices are stable):
+
+| Index | Stage |
+| --- | --- |
+| 0 | Grant broadcast-epoch SQL |
+| 1 | Grant remote authority read (outside transaction) |
+| 2 | Capture BeginTx (pool acquisition plus transaction setup) |
+| 3 | Capture owner advisory-lock SQL |
+| 4 | Capture FOR UPDATE SQL |
+| 5 | Capture callback, including grant policy/signing where applicable |
+| 6 | Capture commit |
+| 7 | Broadcast projection SQL |
+| 8 | Broadcast projection remote authority read |
+| 9 | Broadcast projection reuses prefetched authority (count, not cache latency) |
+| 10 | Capture live-progress FOR UPDATE SQL |
+
+Each row is `[count,error,cancel,sum_ms,max_ms,le10,le100,le1000]`.
+Buckets are cumulative; cancellations/deadlines are also included in errors.
+`count-le1000` counts durations above one second. Counts cover completed stages,
+not all admitted operations or in-flight work; projection validation following
+its reads can still fail. Capture stages are shared with non-grant callers and
+callback time can overlap projection time. Do not sum nested durations or label
+SQL elapsed as exact PostgreSQL lock wait. No request-level correlation is
+claimed. Counters reset at each summary; pool wait counters are interval deltas
+with a fresh baseline on process start. Use revision/replica log metadata for
+attribution. DBStats wait means connection-pool wait, not row-lock wait.
+
+Tests bound each stage line to 2,048 bytes and each pool line to 512 bytes.
+At these intervals the incremental raw-log budget is at most 4,423,680 bytes/day
+per API replica (35,389,440 at eight replicas), excluding platform envelopes,
+indexing and existing logs. No detailed slow/error samples are emitted. Console
+backpressure can delay summaries; actual intervals are logged, and absent data
+is a telemetry gap. This does not change Application Insights caps, retention,
+alert delivery or release configuration. Worker binaries do not start this loop.

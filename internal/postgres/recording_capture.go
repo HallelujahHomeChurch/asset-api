@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"hhc/asset-api/internal/assets"
+	"hhc/asset-api/internal/diagnostics"
 	"time"
 )
 
@@ -149,7 +150,10 @@ func (s *RecordingCaptureStore) UpdateCapture(ctx context.Context, id string, fn
 
 func (s *RecordingCaptureStore) WithCaptureGrant(ctx context.Context, id string, fn func(*assets.RecordingCapture, assets.RecordingBroadcastReader) error) (assets.RecordingCapture, error) {
 	var epoch int64
-	if err := s.db.QueryRowContext(ctx, `SELECT broadcast_epoch FROM recording_captures WHERE id=$1`, id).Scan(&epoch); err != nil {
+	started := time.Now()
+	err := s.db.QueryRowContext(ctx, `SELECT broadcast_epoch FROM recording_captures WHERE id=$1`, id).Scan(&epoch)
+	diagnostics.Default.Observe(diagnostics.GrantSQL, started, err)
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return assets.RecordingCapture{}, assets.ErrNotFound
 		}
@@ -161,7 +165,9 @@ func (s *RecordingCaptureStore) WithCaptureGrant(ctx context.Context, id string,
 			return assets.RecordingCapture{}, errors.New("broadcast policy storage unavailable")
 		}
 		var err error
+		started = time.Now()
 		authority, err = s.broadcastObjects.ReadBroadcastRange(ctx, id)
+		diagnostics.Default.Observe(diagnostics.GrantAuthority, started, err)
 		if err != nil {
 			return assets.RecordingCapture{}, err
 		}
@@ -178,7 +184,9 @@ func (s *RecordingCaptureStore) WithCaptureGrant(ctx context.Context, id string,
 
 func (s *RecordingCaptureStore) updateCapture(ctx context.Context, id string, fn func(*sql.Tx, *assets.RecordingCapture) error) (assets.RecordingCapture, error) {
 	var c assets.RecordingCapture
+	started := time.Now()
 	tx, err := s.db.BeginTx(ctx, nil)
+	diagnostics.Default.Observe(diagnostics.CaptureBegin, started, err)
 	if err != nil {
 		return c, err
 	}
@@ -193,10 +201,15 @@ func (s *RecordingCaptureStore) updateCapture(ctx context.Context, id string, fn
 	if err != nil {
 		return c, err
 	}
-	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('recording-owner:' || $1,0))`, recording); err != nil {
+	started = time.Now()
+	_, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('recording-owner:' || $1,0))`, recording)
+	diagnostics.Default.Observe(diagnostics.CaptureOwnerLock, started, err)
+	if err != nil {
 		return c, err
 	}
+	started = time.Now()
 	c, err = scanCapture(tx.QueryRowContext(ctx, `SELECT `+captureColumns+` FROM recording_captures WHERE id=$1 FOR UPDATE`, id))
+	diagnostics.Default.Observe(diagnostics.CaptureRow, started, err)
 	if err != nil {
 		return c, err
 	}
@@ -250,7 +263,9 @@ func (s *RecordingCaptureStore) updateCapture(ctx context.Context, id string, fn
 		c.TerminalAt = &at
 		c.TerminalReason = &reason
 	}
+	started = time.Now()
 	err = tx.QueryRowContext(ctx, `SELECT published_revision,published_sequence,published_media_end,last_advanced_at,ended_at,ended AND published_revision=revision,read_grant_until FROM recording_live WHERE capture_id=$1 FOR UPDATE`, c.ID).Scan(&c.Progress.Revision, &c.Progress.LastSequence, &c.Progress.MediaEndSeconds, &c.Progress.LastAdvancedAt, &c.Progress.EndedAt, &c.Progress.Ended, &c.ReadGrantUntil)
+	diagnostics.Default.Observe(diagnostics.CaptureLiveRow, started, err)
 	if err != nil {
 		return c, err
 	}
@@ -259,7 +274,10 @@ func (s *RecordingCaptureStore) updateCapture(ctx context.Context, id string, fn
 		previousObjects[o.Path] = o
 	}
 	previousPackage := c.PackageID
-	if err = fn(tx, &c); err != nil {
+	started = time.Now()
+	err = fn(tx, &c)
+	diagnostics.Default.Observe(diagnostics.CaptureCallback, started, err)
+	if err != nil {
 		return c, err
 	}
 	if previousPackage == nil && c.PackageID != nil {
@@ -344,7 +362,10 @@ func (s *RecordingCaptureStore) updateCapture(ctx context.Context, id string, fn
 			return c, err
 		}
 	}
-	return c, tx.Commit()
+	started = time.Now()
+	err = tx.Commit()
+	diagnostics.Default.Observe(diagnostics.CaptureCommit, started, err)
+	return c, err
 }
 
 var _ assets.RecordingCaptureRepository = (*RecordingCaptureStore)(nil)
