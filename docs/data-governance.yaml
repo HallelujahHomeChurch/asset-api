@@ -242,6 +242,14 @@ datasets:
     subject_keys: []
     data_classes: [identity, content, security, activity]
     fields:
+      - {name: recording_captures.recovery_version, purpose: Pin opt-in recovery capability across replay and rollback, necessity: required, data_classes: [security]}
+      - {name: recording_captures.recovery_active, purpose: Disable recovery after range termination or revocation, necessity: required, data_classes: [security]}
+      - {name: recording_captures.recovery_activation_at, purpose: Persist the live recovery wall-clock baseline without restart extension, necessity: required, data_classes: [activity]}
+      - {name: recording_captures.recovery_baseline_end, purpose: Bind the activation clock to a common media baseline, necessity: required, data_classes: [security]}
+      - {name: recording_captures.recovery_segment_ns, purpose: Pin the validated segment duration used for bounded recovery, necessity: required, data_classes: [security]}
+      - {name: recording_captures.recovery_common_end, purpose: Retain the last qualifying contiguous three-rendition confirmation, necessity: required, data_classes: [activity]}
+      - {name: recording_captures.recovery_common_accepted_at, purpose: Record the acceptance instant of qualifying common progress, necessity: required, data_classes: [activity]}
+      - {name: recording_captures.recovery_deadline, purpose: Serialize confirmation and immutable public cutoff at one durable deadline, necessity: required, data_classes: [security]}
       - {name: recording_captures.last_media_confirmed_at, purpose: Detect stream signal loss from fresh media arrivals without using verification lag, necessity: required, data_classes: [activity]}
       - {name: recording_captures.idle_end_sequence_exclusive, purpose: Preserve the immutable public boundary after signal loss and retries, necessity: required, data_classes: [security]}
       - {name: recording_captures.segment_frames, purpose: Pin the validated segment profile across reconnects, necessity: required, data_classes: [security]}
