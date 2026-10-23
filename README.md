@@ -50,6 +50,31 @@ service for these private asset operations.
 
 ## HLS package producer contract
 
+Capture confirmation performs storage LIST outside its database transaction.
+A short preflight preserves accepted receipt replay without accessing storage;
+the final transaction rechecks ownership, expiry, state, epoch, deletion and
+object declarations before applying evidence. Only newly confirmed media advances
+the activity watermark. This removes storage latency from the capture lock and
+pool occupancy, but does not eliminate database contention or change idle cutoff.
+New broadcast capture creation can opt in with
+`recoveryVersion: "common-watermark-v1"`; omission preserves legacy behavior.
+An operation cannot change its version on replay. The first successful live
+range transaction arms a persisted wall/media baseline using decoded frame rate.
+Only contiguous confirmation across all three renditions advances recovery.
+After 30 seconds without bounded fresh progress, signal state is interrupted;
+at the persisted five-minute deadline, confirmation/close serializes an immutable
+cutoff before accepting late supplementation. Old backlog does not receive a
+fresh five minutes merely because one more segment arrived. This is bounded
+arrival evidence, not proof of a running encoder; pre-activation unknown backlog
+cannot be fully distinguished with the existing protocol.
+
+The additive migration leaves existing captures on their legacy clock. Repeated
+range writes and process/replica restarts do not rearm. Manual end, revocation,
+deletion and terminal state disable recovery. Signal capability and common
+watermark fields are optional; consumers must treat missing capability as legacy,
+including after server rollback. Neither this policy nor public cutoff controls
+native OBS recording; a separately negotiated client policy owns local behavior.
+
 Human CMS administrators can preview and confirm one global retention policy
 (1–365 days) through `/priv/recordings/retention-policy`. Active policy uses
 immutable accepted upload completion, including browser sources before encoding.
@@ -416,3 +441,77 @@ pools. See [the lifetime evidence and remaining gates](docs/reviews/asset-worker
 Provision and activate using the reviewed Bicep/release path only. See
 [the implementation plan](docs/superpowers/plans/2026-10-18-recording-event-jobs.md)
 and [the candidate handoff](docs/reviews/recording-events-candidate-2026-10-18.md).
+
+### Bounded API diagnostics
+
+The HTTP server emits local `database/sql` pool statistics every 15 seconds
+(`db_pool_summary`) and one fixed-schema `media_stage_summary` every 120 seconds
+through the existing console logger. `LOG_LEVEL=warn/error` suppresses these
+Info summaries; missing records must not be interpreted as zero errors.
+No collector, provider query, per-request log or exported ID is added. Requests
+only update an in-memory fixed-size aggregate; the logger runs separately.
+Shutdown cancels the loop and waits at most one second for a blocked console
+sink. Normal cancellation exits the loop; there is no final flush guarantee.
+
+Stage `schema=1` encodes `rows_json` as a JSON matrix with these ordered rows (indices are stable):
+
+| Index | Stage |
+| --- | --- |
+| 0 | Grant broadcast-epoch SQL |
+| 1 | Grant remote authority read (outside transaction) |
+| 2 | Capture BeginTx (pool acquisition plus transaction setup) |
+| 3 | Capture owner advisory-lock SQL |
+| 4 | Capture FOR UPDATE SQL |
+| 5 | Capture callback, including grant policy/signing where applicable |
+| 6 | Capture commit |
+| 7 | Broadcast projection SQL |
+| 8 | Broadcast projection remote authority read |
+| 9 | Broadcast projection reuses prefetched authority (count, not cache latency) |
+| 10 | Capture live-progress FOR UPDATE SQL |
+
+Each row is `[count,error,cancel,sum_ms,max_ms,le10,le100,le1000]`.
+Buckets are cumulative; cancellations/deadlines are also included in errors.
+`count-le1000` counts durations above one second. Counts cover completed stages,
+not all admitted operations or in-flight work; projection validation following
+its reads can still fail. Capture stages are shared with non-grant callers and
+callback time can overlap projection time. Do not sum nested durations or label
+SQL elapsed as exact PostgreSQL lock wait. No request-level correlation is
+claimed. Counters reset at each summary; pool wait counters are interval deltas
+with a fresh baseline on process start. Use revision/replica log metadata for
+attribution. DBStats wait means connection-pool wait, not row-lock wait.
+
+Tests bound each stage line to 2,048 bytes and each pool line to 512 bytes.
+At these intervals the incremental raw-log budget is at most 4,423,680 bytes/day
+per API replica (35,389,440 at eight replicas), excluding platform envelopes,
+indexing and existing logs. No detailed slow/error samples are emitted. Console
+backpressure can delay summaries; actual intervals are logged, and absent data
+is a telemetry gap. This does not change Application Insights caps, retention,
+alert delivery or release configuration. Worker binaries do not start this loop.
+
+### Recording authority transition evidence
+
+After successful PostgreSQL commits, `recording_authority_committed` records only
+first recovery activation, first idle cutoff, and explicit range revocation. A
+replayed transition, callback rollback or failed commit emits none. These events
+are independent of trace sampling, not durable audit. No capture/recording/user ID,
+URL, credential, object path, SQL argument or error text is included.
+
+`capture_ref` is SHA256 of `hhc.recording.capture.v1` + NUL + the canonical
+32-lowercase-hex capture ID (no UUID hyphen conversion). It is stable, linkable
+operational metadata, **not anonymous**; existing log access and retention apply.
+Another service must deliberately use the identical algorithm to correlate it.
+Validated version00 `traceparent` supplies trace/parent-span IDs even with sampled=0;
+missing/invalid context logs null. This does not create a span or prove a complete
+CMS/OBS trace. The header is correlation data, never authorization.
+
+The existing diagnostics reporter drains at most16 events per15-second DB tick
+from a fixed32-slot queue; no new goroutine, collector or request-time sink write.
+Each text/JSON event is tested below1KiB (nominal ceiling64KiB/minute/replica from this
+channel, usually three records per capture; ticker scheduling can bunch a pending tick). Existing two-minute cadence emits
+`recording_authority_delivery` with written, queue_dropped, write_failed and
+filtered_or_shutdown counters. Info-level filtering can suppress both events and
+summary; `written` means the local handler accepted it, not collector ingestion.
+A stalled sink cannot block request enqueues; it can delay all reporter output.
+Existing bounded server shutdown remains, with no guaranteed queue flush.
+Commit-to-enqueue crashes, saturation, shutdown, collector failure and ingestion
+caps can lose evidence. Durable PostgreSQL authority remains the source of truth.

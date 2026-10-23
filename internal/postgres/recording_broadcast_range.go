@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"hhc/asset-api/internal/assets"
+	"hhc/asset-api/internal/diagnostics"
 	"reflect"
+	"time"
 )
 
 func (s *RecordingCaptureStore) WithBroadcastObjects(objects assets.RecordingBroadcastObjects) *RecordingCaptureStore {
@@ -88,12 +90,59 @@ func (s *RecordingCaptureStore) SetBroadcastRange(ctx context.Context, id string
 	if _, err = tx.ExecContext(ctx, `UPDATE recording_broadcast_ranges SET range_revision=$2,start_sequence=$3,end_sequence_exclusive=$4,revoked=$5,member_state=$6 WHERE capture_id=$1`, id, next.RangeRevision, next.StartSequence, next.EndSequenceExclusive, next.Revoked, next.MemberState); err != nil {
 		return next, err
 	}
+	wasActivated := c.Recovery.ActivationAt != nil
+	if c.Recovery.Version == assets.RecordingRecoveryVersion {
+		var rate float64
+		var acceptedAt time.Time
+		if err = tx.QueryRowContext(ctx, `SELECT clock_timestamp()`).Scan(&acceptedAt); err != nil {
+			return next, err
+		}
+		if c.Recovery.ActivationAt == nil && next.MemberState == "live" && !next.Revoked && next.EndSequenceExclusive == nil {
+			if err = readCaptureObjects(ctx, tx, &c); err != nil {
+				return next, err
+			}
+			var raw []byte
+			if err = tx.QueryRowContext(ctx, `SELECT segments FROM recording_live WHERE capture_id=$1`, id).Scan(&raw); err != nil {
+				return next, err
+			}
+			var history []assets.RecordingLiveSegment
+			if err = json.Unmarshal(raw, &history); err != nil {
+				return next, err
+			}
+			if len(history) > 0 {
+				rate = history[0].Renditions["1080p"].FrameRate
+				if rate == 0 {
+					rate = 30
+				}
+			}
+		}
+		if err = assets.ArmCaptureRecovery(&c, next, rate, acceptedAt); err != nil {
+			return next, err
+		}
+		r := c.Recovery
+		if _, err = tx.ExecContext(ctx, `UPDATE recording_captures SET recovery_active=$2,recovery_activation_at=$3,recovery_baseline_end=$4,recovery_segment_ns=$5,recovery_common_end=$6,recovery_common_accepted_at=$7,recovery_deadline=$8 WHERE id=$1`, id, r.Active, r.ActivationAt, r.BaselineEnd, r.SegmentDuration, r.CommonEnd, r.LastCommonConfirmedAt, r.Deadline); err != nil {
+			return next, err
+		}
+	}
 	// Hold the capture/range lock until the conditional authority write completes.
 	// A failed DB commit can only invalidate signed grants, never expose more bytes.
 	if err = s.broadcastObjects.PutBroadcastRange(ctx, id, broadcastRangeJSON(next)); err != nil {
 		return next, err
 	}
-	return next, tx.Commit()
+	if err = tx.Commit(); err != nil {
+		return next, err
+	}
+	if !wasActivated && c.Recovery.ActivationAt != nil {
+		diagnostics.Default.Transition(ctx, diagnostics.RecoveryActivated, c.ID, c.BroadcastEpoch, next.RangeRevision, -1, *c.Recovery.Deadline)
+	}
+	if !current.Revoked && next.Revoked {
+		cutoff := -1
+		if next.EndSequenceExclusive != nil {
+			cutoff = *next.EndSequenceExclusive
+		}
+		diagnostics.Default.Transition(ctx, diagnostics.BroadcastRevoked, c.ID, c.BroadcastEpoch, next.RangeRevision, cutoff, time.Time{})
+	}
+	return next, nil
 }
 
 func (s *RecordingCaptureStore) GetBroadcastProjection(ctx context.Context, id string) (assets.RecordingBroadcastProjection, error) {
@@ -106,7 +155,9 @@ func (s broadcastReader) GetBroadcastProjection(ctx context.Context, id string) 
 	var last int
 	var ended, terminal bool
 	var p assets.RecordingBroadcastRange
+	started := time.Now()
 	err := s.query.QueryRowContext(ctx, `SELECT b.recording_id,b.epoch,b.range_revision,b.start_sequence,b.end_sequence_exclusive,b.revoked,b.member_state,l.segments,l.published_revision,l.published_sequence,l.ended AND l.published_revision=l.revision,c.terminal_at IS NOT NULL OR c.state IN ('failed','expired','aborted') FROM recording_broadcast_ranges b JOIN recording_live l ON l.capture_id=b.capture_id JOIN recording_captures c ON c.id=b.capture_id WHERE b.capture_id=$1`, id).Scan(&p.RecordingID, &p.Epoch, &p.RangeRevision, &p.StartSequence, &p.EndSequenceExclusive, &p.Revoked, &p.MemberState, &raw, &revision, &last, &ended, &terminal)
+	diagnostics.Default.Observe(diagnostics.ProjectionSQL, started, err)
 	if errors.Is(err, sql.ErrNoRows) {
 		return assets.RecordingBroadcastProjection{}, assets.ErrNotFound
 	}
@@ -124,10 +175,15 @@ func (s broadcastReader) GetBroadcastProjection(ctx context.Context, id string) 
 	}
 	remoteJSON := s.authority
 	if remoteJSON == nil {
+		started = time.Now()
 		remoteJSON, err = s.broadcastObjects.ReadBroadcastRange(ctx, id)
+		diagnostics.Default.Observe(diagnostics.ProjectionAuthority, started, err)
 		if err != nil {
 			return assets.RecordingBroadcastProjection{}, err
 		}
+	}
+	if s.authority != nil {
+		diagnostics.Default.Observe(diagnostics.ProjectionReuse, time.Now(), nil)
 	}
 	var remote assets.RecordingBroadcastRange
 	if err = json.Unmarshal(remoteJSON, &remote); err != nil {
