@@ -7,6 +7,7 @@ import (
 	"errors"
 	"hhc/asset-api/internal/assets"
 	"reflect"
+	"time"
 )
 
 func (s *RecordingCaptureStore) WithBroadcastObjects(objects assets.RecordingBroadcastObjects) *RecordingCaptureStore {
@@ -87,6 +88,39 @@ func (s *RecordingCaptureStore) SetBroadcastRange(ctx context.Context, id string
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE recording_broadcast_ranges SET range_revision=$2,start_sequence=$3,end_sequence_exclusive=$4,revoked=$5,member_state=$6 WHERE capture_id=$1`, id, next.RangeRevision, next.StartSequence, next.EndSequenceExclusive, next.Revoked, next.MemberState); err != nil {
 		return next, err
+	}
+	if c.Recovery.Version == assets.RecordingRecoveryVersion {
+		var rate float64
+		var acceptedAt time.Time
+		if err = tx.QueryRowContext(ctx, `SELECT clock_timestamp()`).Scan(&acceptedAt); err != nil {
+			return next, err
+		}
+		if c.Recovery.ActivationAt == nil && next.MemberState == "live" && !next.Revoked && next.EndSequenceExclusive == nil {
+			if err = readCaptureObjects(ctx, tx, &c); err != nil {
+				return next, err
+			}
+			var raw []byte
+			if err = tx.QueryRowContext(ctx, `SELECT segments FROM recording_live WHERE capture_id=$1`, id).Scan(&raw); err != nil {
+				return next, err
+			}
+			var history []assets.RecordingLiveSegment
+			if err = json.Unmarshal(raw, &history); err != nil {
+				return next, err
+			}
+			if len(history) > 0 {
+				rate = history[0].Renditions["1080p"].FrameRate
+				if rate == 0 {
+					rate = 30
+				}
+			}
+		}
+		if err = assets.ArmCaptureRecovery(&c, next, rate, acceptedAt); err != nil {
+			return next, err
+		}
+		r := c.Recovery
+		if _, err = tx.ExecContext(ctx, `UPDATE recording_captures SET recovery_active=$2,recovery_activation_at=$3,recovery_baseline_end=$4,recovery_segment_ns=$5,recovery_common_end=$6,recovery_common_accepted_at=$7,recovery_deadline=$8 WHERE id=$1`, id, r.Active, r.ActivationAt, r.BaselineEnd, r.SegmentDuration, r.CommonEnd, r.LastCommonConfirmedAt, r.Deadline); err != nil {
+			return next, err
+		}
 	}
 	// Hold the capture/range lock until the conditional authority write completes.
 	// A failed DB commit can only invalidate signed grants, never expose more bytes.

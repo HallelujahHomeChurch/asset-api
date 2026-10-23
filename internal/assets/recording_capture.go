@@ -38,6 +38,7 @@ type RecordingCaptureStoredReceipt struct {
 // Receipts and declarations are persisted together. Queued is upload evidence,
 // never immutable hash/media validation or an authorization to play.
 type RecordingCapture struct {
+	Recovery                                   RecordingCaptureRecovery
 	LastMediaConfirmedAt                       *time.Time
 	IdleEndSequenceExclusive                   *int
 	SegmentFrames                              int
@@ -125,12 +126,21 @@ func captureOwner(c RecordingCapture, actor string) error {
 	return nil
 }
 func (s *RecordingCaptureService) Create(ctx context.Context, recording, actor, key string) (RecordingCaptureResult, error) {
-	return s.create(ctx, recording, actor, key, 0, 900)
+	return s.create(ctx, recording, actor, key, 0, 900, "")
 }
 func (s *RecordingCaptureService) CreateBroadcast(ctx context.Context, recording, actor, key string, epoch int64, profile ...int) (RecordingCaptureResult, error) {
 	frames := 900
 	if len(profile) > 0 && profile[0] != 0 {
 		frames = profile[0]
+	}
+	return s.CreateBroadcastWithRecovery(ctx, recording, actor, key, epoch, frames, "")
+}
+func (s *RecordingCaptureService) CreateBroadcastWithRecovery(ctx context.Context, recording, actor, key string, epoch int64, frames int, recoveryVersion string) (RecordingCaptureResult, error) {
+	if recoveryVersion != "" && recoveryVersion != RecordingRecoveryVersion {
+		return RecordingCaptureResult{}, ErrInvalidInput
+	}
+	if frames == 0 {
+		frames = 900
 	}
 	if frames != 300 && frames != 900 {
 		return RecordingCaptureResult{}, ErrInvalidInput
@@ -138,20 +148,24 @@ func (s *RecordingCaptureService) CreateBroadcast(ctx context.Context, recording
 	if epoch < 1 || epoch > BroadcastMaxRevision {
 		return RecordingCaptureResult{}, ErrInvalidInput
 	}
-	return s.create(ctx, recording, actor, key, epoch, frames)
+	return s.create(ctx, recording, actor, key, epoch, frames, recoveryVersion)
 }
-func (s *RecordingCaptureService) create(ctx context.Context, recording, actor, key string, epoch int64, frames int) (RecordingCaptureResult, error) {
+func (s *RecordingCaptureService) create(ctx context.Context, recording, actor, key string, epoch int64, frames int, recoveryVersion string) (RecordingCaptureResult, error) {
 	if !captureUUID.MatchString(recording) || !captureUUID.MatchString(actor) || !captureOperationKey.MatchString(key) {
 		return RecordingCaptureResult{}, ErrInvalidInput
 	}
 	now := s.now().UTC().Truncate(time.Microsecond)
 	c := RecordingCapture{SegmentFrames: frames, BroadcastEpoch: epoch, ID: newID(), RecordingID: recording, ActorID: actor, CreateKey: key, State: "uploading", Progress: RecordingLiveProgress{LastSequence: -1}, CreatedAt: now, ExpiresAt: now.Add(RecordingUploadTTL), Receipts: map[string]RecordingCaptureStoredReceipt{}}
+	c.Recovery.Version = recoveryVersion
 	digest := captureDigest([]string{recording, actor})
 	if epoch > 0 {
 		digest = captureDigest([]any{recording, actor, epoch})
 	}
 	if frames == 300 {
 		digest = captureDigest([]any{recording, actor, epoch, frames})
+	}
+	if recoveryVersion != "" {
+		digest = captureDigest([]any{recording, actor, epoch, frames, recoveryVersion})
 	}
 	c.Receipts[key] = RecordingCaptureStoredReceipt{digest, RecordingCaptureReceipt{key, "create", now, c.ID}}
 	got, err := s.repository.CreateCapture(ctx, c)
@@ -348,15 +362,17 @@ func (s *RecordingCaptureService) Confirm(ctx context.Context, id, actor, key st
 				return ErrCaptureMissingObjects
 			}
 		}
+		acceptedAt := s.now().UTC()
+		closeExpiredCaptureRecovery(c, acceptedAt)
 		for _, i := range indices {
 			if c.Objects[i].State == "declared" {
 				c.Objects[i].State = "queued"
 				if strings.HasSuffix(c.Objects[i].Path, ".m4s") {
-					now := s.now().UTC()
-					c.LastMediaConfirmedAt = &now
+					c.LastMediaConfirmedAt = &acceptedAt
 				}
 			}
 		}
+		advanceCaptureRecovery(c, acceptedAt)
 		return nil
 	})
 }
