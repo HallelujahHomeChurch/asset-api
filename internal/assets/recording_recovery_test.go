@@ -183,3 +183,48 @@ func TestRecoveryNeverArmsWithoutVerifiedProfileOrAfterCutoff(t *testing.T) {
 		t.Fatal("old cutoff rearmed")
 	}
 }
+
+type recoveryClockObjects struct {
+	*packageObjects
+	afterList func()
+}
+
+func (o recoveryClockObjects) ListPackageObjects(ctx context.Context, id string, limit int) (map[string]int64, error) {
+	sizes, err := o.packageObjects.ListPackageObjects(ctx, id, limit)
+	o.afterList()
+	return sizes, err
+}
+
+func TestRecoveryConfirmUsesOneAcceptanceInstantAcrossDeadline(t *testing.T) {
+	s, repo, _, c := recoveryFixture(t)
+	objects := s.objects.(*packageObjects)
+	var paths []string
+	for _, q := range []string{"480p", "720p", "1080p"} {
+		path := q + "/seg-000010.m4s"
+		paths = append(paths, path)
+		c.Objects = append(c.Objects, RecordingCaptureObject{RecordingPackageObject: RecordingPackageObject{Path: path, SizeBytes: 10}, State: "declared"})
+		objects.sizes["recordings/packages/"+c.ID+"/staging/"+path] = 10
+	}
+	repo.captures[c.ID] = c
+	before := c.Recovery.Deadline.Add(-time.Microsecond)
+	after := c.Recovery.Deadline.Add(time.Microsecond)
+	calls := 0
+	s.objects = recoveryClockObjects{objects, func() { calls = 0 }}
+	s.now = func() time.Time {
+		calls++
+		if calls <= 2 {
+			return before
+		}
+		return after
+	}
+	if _, err := s.Confirm(context.Background(), c.ID, c.ActorID, "cross-boundary", paths); err != nil {
+		t.Fatal(err)
+	}
+	current := repo.captures[c.ID]
+	if current.Recovery.LastCommonConfirmedAt == nil || !current.Recovery.LastCommonConfirmedAt.Equal(before) || current.LastMediaConfirmedAt == nil || !current.LastMediaConfirmedAt.Equal(before) {
+		t.Fatal("confirmation used multiple acceptance instants")
+	}
+	if current.IdleEndSequenceExclusive != nil {
+		t.Fatal("accepted-before-deadline confirmation was closed later in same mutation")
+	}
+}

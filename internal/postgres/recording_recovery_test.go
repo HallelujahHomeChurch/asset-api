@@ -48,7 +48,7 @@ func recoveryPGFixture(t *testing.T) (*sql.DB, *RecordingCaptureStore, assets.Re
 	if _, err = service.Confirm(ctx, id, actor, "initial", initial); err != nil {
 		t.Fatal(err)
 	}
-	history := []assets.RecordingLiveSegment{{Sequence: 0, Renditions: map[string]assets.RecordingLiveFragment{"1080p": {FrameRate: 30000.0 / 1001, VideoFrames: 300, Start: 0, End: 10.01}}}}
+	history := []assets.RecordingLiveSegment{{Sequence: 0, Renditions: map[string]assets.RecordingLiveFragment{"1080p": {FrameRate: 30000.0 / 1001, VideoFrames: 300, Start: 0, End: 10.01}, "720p": {FrameRate: 30000.0 / 1001, VideoFrames: 300, Start: 0, End: 10.01}, "480p": {FrameRate: 30000.0 / 1001, VideoFrames: 300, Start: 0, End: 10.01}}}}
 	raw, _ := json.Marshal(history)
 	if _, err = db.ExecContext(ctx, `UPDATE recording_live SET segments=$2 WHERE capture_id=$1`, id, raw); err != nil {
 		t.Fatal(err)
@@ -120,7 +120,7 @@ func TestRecoveryPersistsAcrossReplicasAndDeadlineRace(t *testing.T) {
 	}
 }
 func TestRecoveryRangeReplayAndTerminalFences(t *testing.T) {
-	for _, change := range []string{"replay", "revoke", "stop", "delete"} {
+	for _, change := range []string{"replay", "revoke", "stop", "delete", "old-revoke", "old-stop"} {
 		t.Run(change, func(t *testing.T) {
 			db, store, c, objects, policy := recoveryPGFixture(t)
 			policy.RangeRevision++
@@ -134,7 +134,11 @@ func TestRecoveryRangeReplayAndTerminalFences(t *testing.T) {
 				policy.MemberState = "vod"
 			}
 			var err error
-			if change == "delete" {
+			if change == "old-revoke" {
+				_, err = db.Exec(`UPDATE recording_broadcast_ranges SET revoked=true,member_state='blocked' WHERE capture_id=$1`, c.ID)
+			} else if change == "old-stop" {
+				_, err = db.Exec(`UPDATE recording_broadcast_ranges SET end_sequence_exclusive=1,member_state='vod' WHERE capture_id=$1`, c.ID)
+			} else if change == "delete" {
 				err = NewRecordingDeletionStore(db).DeleteRecording(context.Background(), c.RecordingID)
 			} else {
 				_, err = store.SetBroadcastRange(context.Background(), c.ID, policy)
@@ -142,14 +146,17 @@ func TestRecoveryRangeReplayAndTerminalFences(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			current, err := store.GetCapture(context.Background(), c.ID)
+			current := c
+			if !strings.HasPrefix(change, "old-") {
+				current, err = store.GetCapture(context.Background(), c.ID)
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
 			if !current.Recovery.ActivationAt.Equal(*c.Recovery.ActivationAt) || !current.Recovery.Deadline.Equal(*c.Recovery.Deadline) {
 				t.Fatal("authority reset")
 			}
-			if change != "replay" && current.Recovery.Active {
+			if change != "replay" && !strings.HasPrefix(change, "old-") && current.Recovery.Active {
 				t.Fatal("terminal range retained recovery")
 			}
 			svc := assets.NewRecordingCaptureService(NewRecordingCaptureStore(db), objects, func() time.Time { return c.Recovery.ActivationAt.Add(time.Minute) })
@@ -160,7 +167,7 @@ func TestRecoveryRangeReplayAndTerminalFences(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if change != "replay" && !current.Recovery.Deadline.Equal(*c.Recovery.Deadline) {
+			if change != "replay" && (current.Recovery.Active || !current.Recovery.Deadline.Equal(*c.Recovery.Deadline)) {
 				t.Fatal("terminal authority renewed")
 			}
 		})

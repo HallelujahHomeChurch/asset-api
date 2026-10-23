@@ -257,6 +257,17 @@ func (s *RecordingCaptureStore) updateCapture(ctx context.Context, id string, fn
 	if err != nil {
 		return c, err
 	}
+	// Older binaries can end/revoke a range without clearing the additive recovery
+	// columns. Recheck durable range authority under the same capture lock.
+	if c.Recovery.Active {
+		policy, policyErr := scanBroadcastRange(tx.QueryRowContext(ctx, `SELECT `+broadcastRangeColumns+` FROM recording_broadcast_ranges WHERE capture_id=$1`, c.ID))
+		if policyErr != nil {
+			return c, policyErr
+		}
+		if policy == nil || policy.Epoch != c.BroadcastEpoch || policy.MemberState != "live" || policy.Revoked || policy.EndSequenceExclusive != nil {
+			c.Recovery.Active = false
+		}
+	}
 	previousObjects := make(map[string]assets.RecordingCaptureObject, len(c.Objects))
 	for _, o := range c.Objects {
 		previousObjects[o.Path] = o

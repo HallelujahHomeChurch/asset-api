@@ -362,17 +362,17 @@ func (s *RecordingCaptureService) Confirm(ctx context.Context, id, actor, key st
 				return ErrCaptureMissingObjects
 			}
 		}
-		closeExpiredCaptureRecovery(c, s.now())
+		acceptedAt := s.now().UTC()
+		closeExpiredCaptureRecovery(c, acceptedAt)
 		for _, i := range indices {
 			if c.Objects[i].State == "declared" {
 				c.Objects[i].State = "queued"
 				if strings.HasSuffix(c.Objects[i].Path, ".m4s") {
-					now := s.now().UTC()
-					c.LastMediaConfirmedAt = &now
+					c.LastMediaConfirmedAt = &acceptedAt
 				}
 			}
 		}
-		advanceCaptureRecovery(c, s.now())
+		advanceCaptureRecovery(c, acceptedAt)
 		return nil
 	})
 }
