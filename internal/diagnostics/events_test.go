@@ -106,3 +106,38 @@ func TestTransitionTextEncodingBoundAndFilteredSink(t *testing.T) {
 		t.Fatal("filtered event not counted")
 	}
 }
+
+func TestBlockedEventWriterDoesNotHoldQueueLock(t *testing.T) {
+	var r Recorder
+	r.Transition(context.Background(), RecoveryActivated, fixtureCapture, 1, 1, -1, time.Time{})
+	sink := &blockedSink{make(chan struct{}, 1), make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { defer close(done); r.flushEvents(ctx, slog.New(slog.NewTextHandler(sink, nil))) }()
+	select {
+	case <-sink.entered:
+	case <-time.After(time.Second):
+		t.Fatal("event sink not called")
+	}
+	queued := make(chan struct{})
+	go func() {
+		r.Transition(context.Background(), BroadcastRevoked, fixtureCapture, 1, 2, -1, time.Time{})
+		close(queued)
+	}()
+	select {
+	case <-queued:
+	case <-time.After(time.Second):
+		t.Fatal("blocked writer held queue lock")
+	}
+	cancel()
+	close(sink.release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("writer failed to exit after release")
+	}
+	if r.eventSnapshot()[2] != 1 {
+		t.Fatal("sink failure not accounted")
+	}
+}
