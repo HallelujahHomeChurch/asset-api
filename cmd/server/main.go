@@ -17,6 +17,7 @@ import (
 	"hhc/asset-api/internal/clamav"
 	"hhc/asset-api/internal/config"
 	"hhc/asset-api/internal/derivativequeue"
+	"hhc/asset-api/internal/diagnostics"
 	"hhc/asset-api/internal/httpapi"
 	"hhc/asset-api/internal/lifecycle"
 	"hhc/asset-api/internal/logging"
@@ -56,6 +57,20 @@ func run() error {
 	db.SetMaxIdleConns(cfg.DBMaxIdleConns)
 	db.SetConnMaxLifetime(cfg.DBConnMaxLifetime)
 	defer db.Close()
+	diagnosticsCtx, diagnosticsCancel := context.WithCancel(ctx)
+	diagnosticsDone := make(chan struct{})
+	go func() {
+		defer close(diagnosticsDone)
+		diagnostics.Default.Run(diagnosticsCtx, db.Stats, slog.Default())
+	}()
+	defer func() {
+		diagnosticsCancel()
+		// A blocked console sink must not indefinitely hold service shutdown.
+		select {
+		case <-diagnosticsDone:
+		case <-time.After(time.Second):
+		}
+	}()
 	var blobStore assets.BlobStore
 	var localUpload http.HandlerFunc
 	if cfg.StorageBackend == "azure" {
