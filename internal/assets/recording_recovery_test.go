@@ -20,6 +20,7 @@ func appendRecoverySegments(c *RecordingCapture, start, end int, quality string)
 func recoveryFixture(t *testing.T) (*RecordingCaptureService, *captureRepo, *time.Time, RecordingCapture) {
 	t.Helper()
 	s, repo, _, now, c := captureTest(t)
+	*now = now.Truncate(time.Microsecond).Add(123 * time.Nanosecond)
 	c.BroadcastEpoch = 1
 	c.SegmentFrames = 300
 	c.Recovery.Version = RecordingRecoveryVersion
@@ -28,6 +29,8 @@ func recoveryFixture(t *testing.T) (*RecordingCaptureService, *captureRepo, *tim
 	if err := ArmCaptureRecovery(&c, RecordingBroadcastRange{MemberState: "live", StartSequence: &start}, 30000.0/1001, *now); err != nil {
 		t.Fatal(err)
 	}
+	// Follow the persisted microsecond authority baseline on every platform.
+	*now = *c.Recovery.ActivationAt
 	repo.captures[c.ID] = c
 	return s, repo, now, c
 }
