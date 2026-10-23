@@ -31,8 +31,11 @@ const (
 // Rows are count, error, cancellation, sum_ms, max_ms, <=10ms, <=100ms, <=1000ms.
 // Buckets are cumulative. Slower-than-1000ms is count minus the final bucket.
 type Recorder struct {
-	mu   sync.Mutex
-	rows [stageCount][8]uint64
+	mu         sync.Mutex
+	rows       [stageCount][8]uint64
+	events     [32]event
+	eventCount int
+	eventStats [4]uint64
 }
 
 var Default Recorder
@@ -94,6 +97,7 @@ func (r *Recorder) run(ctx context.Context, stats func() sql.DBStats, logger *sl
 			now, current := time.Now(), stats()
 			logger.Info("db_pool_summary", "interval_ms", now.Sub(last).Milliseconds(), "max", current.MaxOpenConnections, "open", current.OpenConnections, "in_use", current.InUse, "idle", current.Idle, "wait_count", max(current.WaitCount-previous.WaitCount, 0), "wait_ms", max((current.WaitDuration-previous.WaitDuration).Milliseconds(), 0))
 			previous, last = current, now
+			r.flushEvents(ctx, logger)
 		case <-stageTick.C:
 			if ctx.Err() != nil {
 				return
@@ -101,6 +105,8 @@ func (r *Recorder) run(ctx context.Context, stats func() sql.DBStats, logger *sl
 			now := time.Now()
 			logStages(logger, now.Sub(lastStages), r.Snapshot())
 			lastStages = now
+			counts := r.eventSnapshot()
+			logger.Info("recording_authority_delivery", "written", counts[0], "queue_dropped", counts[1], "write_failed", counts[2], "filtered_or_shutdown", counts[3])
 		}
 	}
 }

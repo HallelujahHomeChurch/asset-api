@@ -20,6 +20,7 @@ import (
 	"hhc/asset-api/internal/assets"
 	"hhc/asset-api/internal/auditclient"
 	"hhc/asset-api/internal/auditoutbox"
+	"hhc/asset-api/internal/diagnostics"
 	"hhc/asset-api/internal/storage/r2"
 )
 
@@ -1296,7 +1297,7 @@ func requestID(next http.Handler) http.Handler {
 			id = strconv.FormatInt(time.Now().UnixNano(), 36)
 		}
 		w.Header().Set("X-HHC-Request-ID", id)
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(diagnostics.WithTraceParent(r.Context(), r.Header.Get("traceparent"))))
 	})
 }
 

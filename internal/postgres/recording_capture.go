@@ -287,6 +287,7 @@ func (s *RecordingCaptureStore) updateCapture(ctx context.Context, id string, fn
 	for _, o := range c.Objects {
 		previousObjects[o.Path] = o
 	}
+	previousCutoff := c.IdleEndSequenceExclusive
 	previousPackage := c.PackageID
 	started = time.Now()
 	err = fn(tx, &c)
@@ -382,6 +383,13 @@ func (s *RecordingCaptureStore) updateCapture(ctx context.Context, id string, fn
 	started = time.Now()
 	err = tx.Commit()
 	diagnostics.Default.Observe(diagnostics.CaptureCommit, started, err)
+	if err == nil && previousCutoff == nil && c.IdleEndSequenceExclusive != nil {
+		var deadline time.Time
+		if c.Recovery.Deadline != nil {
+			deadline = *c.Recovery.Deadline
+		}
+		diagnostics.Default.Transition(ctx, diagnostics.IdleCutoffCommitted, c.ID, c.BroadcastEpoch, 0, *c.IdleEndSequenceExclusive, deadline)
+	}
 	return c, err
 }
 

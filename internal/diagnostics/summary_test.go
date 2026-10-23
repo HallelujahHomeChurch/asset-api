@@ -160,6 +160,7 @@ func TestUnavailableSinkDoesNotBlockObservations(t *testing.T) {
 	observed := make(chan struct{})
 	go func() {
 		r.Observe(GrantAuthority, time.Now(), errors.New("https://private.invalid?token=secret"))
+		r.Transition(context.Background(), RecoveryActivated, fixtureCapture, 1, 2, -1, time.Time{})
 		close(observed)
 	}()
 	select {

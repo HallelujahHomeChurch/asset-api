@@ -90,6 +90,7 @@ func (s *RecordingCaptureStore) SetBroadcastRange(ctx context.Context, id string
 	if _, err = tx.ExecContext(ctx, `UPDATE recording_broadcast_ranges SET range_revision=$2,start_sequence=$3,end_sequence_exclusive=$4,revoked=$5,member_state=$6 WHERE capture_id=$1`, id, next.RangeRevision, next.StartSequence, next.EndSequenceExclusive, next.Revoked, next.MemberState); err != nil {
 		return next, err
 	}
+	wasActivated := c.Recovery.ActivationAt != nil
 	if c.Recovery.Version == assets.RecordingRecoveryVersion {
 		var rate float64
 		var acceptedAt time.Time
@@ -128,7 +129,20 @@ func (s *RecordingCaptureStore) SetBroadcastRange(ctx context.Context, id string
 	if err = s.broadcastObjects.PutBroadcastRange(ctx, id, broadcastRangeJSON(next)); err != nil {
 		return next, err
 	}
-	return next, tx.Commit()
+	if err = tx.Commit(); err != nil {
+		return next, err
+	}
+	if !wasActivated && c.Recovery.ActivationAt != nil {
+		diagnostics.Default.Transition(ctx, diagnostics.RecoveryActivated, c.ID, c.BroadcastEpoch, next.RangeRevision, -1, *c.Recovery.Deadline)
+	}
+	if !current.Revoked && next.Revoked {
+		cutoff := -1
+		if next.EndSequenceExclusive != nil {
+			cutoff = *next.EndSequenceExclusive
+		}
+		diagnostics.Default.Transition(ctx, diagnostics.BroadcastRevoked, c.ID, c.BroadcastEpoch, next.RangeRevision, cutoff, time.Time{})
+	}
+	return next, nil
 }
 
 func (s *RecordingCaptureStore) GetBroadcastProjection(ctx context.Context, id string) (assets.RecordingBroadcastProjection, error) {

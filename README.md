@@ -487,3 +487,31 @@ indexing and existing logs. No detailed slow/error samples are emitted. Console
 backpressure can delay summaries; actual intervals are logged, and absent data
 is a telemetry gap. This does not change Application Insights caps, retention,
 alert delivery or release configuration. Worker binaries do not start this loop.
+
+### Recording authority transition evidence
+
+After successful PostgreSQL commits, `recording_authority_committed` records only
+first recovery activation, first idle cutoff, and explicit range revocation. A
+replayed transition, callback rollback or failed commit emits none. These events
+are independent of trace sampling, not durable audit. No capture/recording/user ID,
+URL, credential, object path, SQL argument or error text is included.
+
+`capture_ref` is SHA256 of `hhc.recording.capture.v1` + NUL + the canonical
+32-lowercase-hex capture ID (no UUID hyphen conversion). It is stable, linkable
+operational metadata, **not anonymous**; existing log access and retention apply.
+Another service must deliberately use the identical algorithm to correlate it.
+Validated version00 `traceparent` supplies trace/parent-span IDs even with sampled=0;
+missing/invalid context logs null. This does not create a span or prove a complete
+CMS/OBS trace. The header is correlation data, never authorization.
+
+The existing diagnostics reporter drains at most16 events per15-second DB tick
+from a fixed32-slot queue; no new goroutine, collector or request-time sink write.
+Each text/JSON event is tested below1KiB (nominal ceiling64KiB/minute/replica from this
+channel, usually three records per capture; ticker scheduling can bunch a pending tick). Existing two-minute cadence emits
+`recording_authority_delivery` with written, queue_dropped, write_failed and
+filtered_or_shutdown counters. Info-level filtering can suppress both events and
+summary; `written` means the local handler accepted it, not collector ingestion.
+A stalled sink cannot block request enqueues; it can delay all reporter output.
+Existing bounded server shutdown remains, with no guaranteed queue flush.
+Commit-to-enqueue crashes, saturation, shutdown, collector failure and ingestion
+caps can lose evidence. Durable PostgreSQL authority remains the source of truth.
