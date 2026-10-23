@@ -34,7 +34,7 @@ func TestConcurrentAccountingAndBoundedFields(t *testing.T) {
 		t.Fatal("snapshot did not reset")
 	}
 	var out bytes.Buffer
-	slog.New(slog.NewJSONHandler(&out, nil)).Info("media_stage_summary", "schema", 1, "interval_ms", 120000, "rows", rows)
+	logStages(slog.New(slog.NewJSONHandler(&out, nil)), 2*time.Minute, rows)
 	for _, secret := range []string{"secret", "signed.invalid", "user-id", "SQL"} {
 		if strings.Contains(out.String(), secret) {
 			t.Fatal("sensitive data emitted")
@@ -47,13 +47,13 @@ func TestConcurrentAccountingAndBoundedFields(t *testing.T) {
 		}
 	}
 	out.Reset()
-	slog.New(slog.NewJSONHandler(&out, nil)).Info("media_stage_summary", "schema", 1, "interval_ms", 120000, "rows", rows)
+	logStages(slog.New(slog.NewJSONHandler(&out, nil)), 2*time.Minute, rows)
 	if out.Len() > 2048 {
 		t.Fatalf("summary exceeds byte budget: %d", out.Len())
 	}
 	t.Logf("worst-case stage summary bytes: %d", out.Len())
 	out.Reset()
-	slog.New(slog.NewTextHandler(&out, nil)).Info("media_stage_summary", "schema", 1, "interval_ms", 120000, "rows", rows)
+	logStages(slog.New(slog.NewTextHandler(&out, nil)), 2*time.Minute, rows)
 	if out.Len() > 2048 {
 		t.Fatalf("text summary exceeds budget: %d", out.Len())
 	}

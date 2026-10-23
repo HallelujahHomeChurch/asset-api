@@ -428,7 +428,7 @@ only update an in-memory fixed-size aggregate; the logger runs separately.
 Shutdown cancels the loop and waits at most one second for a blocked console
 sink. Normal cancellation exits the loop; there is no final flush guarantee.
 
-Stage `schema=1` has these ordered rows (indices are stable):
+Stage `schema=1` encodes `rows_json` as a JSON matrix with these ordered rows (indices are stable):
 
 | Index | Stage |
 | --- | --- |

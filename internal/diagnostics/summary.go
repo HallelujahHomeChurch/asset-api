@@ -4,6 +4,7 @@ package diagnostics
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"sync"
@@ -98,8 +99,15 @@ func (r *Recorder) run(ctx context.Context, stats func() sql.DBStats, logger *sl
 				return
 			}
 			now := time.Now()
-			logger.Info("media_stage_summary", "schema", 1, "interval_ms", now.Sub(lastStages).Milliseconds(), "rows", r.Snapshot())
+			logStages(logger, now.Sub(lastStages), r.Snapshot())
 			lastStages = now
 		}
 	}
+}
+
+func logStages(logger *slog.Logger, interval time.Duration, rows [stageCount][8]uint64) {
+	// A fixed integer matrix cannot fail JSON encoding; preserve parseable arrays
+	// even when the existing service logger uses slog.TextHandler.
+	encoded, _ := json.Marshal(rows)
+	logger.Info("media_stage_summary", "schema", 1, "interval_ms", interval.Milliseconds(), "rows_json", string(encoded))
 }
