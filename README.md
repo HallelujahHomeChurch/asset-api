@@ -50,6 +50,13 @@ service for these private asset operations.
 
 ## HLS package producer contract
 
+Capture confirmation performs storage LIST outside its database transaction.
+A short preflight preserves accepted receipt replay without accessing storage;
+the final transaction rechecks ownership, expiry, state, epoch, deletion and
+object declarations before applying evidence. Only newly confirmed media advances
+the activity watermark. This removes storage latency from the capture lock and
+pool occupancy, but does not eliminate database contention or change idle cutoff.
+
 Human CMS administrators can preview and confirm one global retention policy
 (1–365 days) through `/priv/recordings/retention-policy`. Active policy uses
 immutable accepted upload completion, including browser sources before encoding.
