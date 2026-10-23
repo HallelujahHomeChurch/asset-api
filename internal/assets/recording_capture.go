@@ -344,14 +344,44 @@ func (s *RecordingCaptureService) Sign(ctx context.Context, id, actor string, pa
 func (s *RecordingCaptureService) Confirm(ctx context.Context, id, actor, key string, paths []string) (RecordingCaptureResult, error) {
 	paths = slices.Clone(paths)
 	slices.Sort(paths)
-	return s.mutate(ctx, id, actor, key, "confirm", paths, func(c *RecordingCapture) error {
+	// Run the usual authority and receipt checks without committing a new receipt.
+	// An accepted replay needs no storage request, including after terminal state.
+	needsObjects := errors.New("confirm needs storage evidence")
+	var snapshot RecordingCapture
+	var declarations []RecordingPackageObject
+	result, err := s.mutate(ctx, id, actor, key, "confirm", paths, func(c *RecordingCapture) error {
 		indices, err := capturePaths(*c, paths)
 		if err != nil {
 			return err
 		}
-		sizes, err := s.objects.ListPackageObjects(ctx, c.ID, RecordingPackageMaxObjects)
+		snapshot = *c
+		for _, i := range indices {
+			declarations = append(declarations, c.Objects[i].RecordingPackageObject)
+		}
+		return needsObjects
+	})
+	if !errors.Is(err, needsObjects) {
+		return result, err
+	}
+	// No SQL transaction or connection is retained during the remote LIST.
+	sizes, listErr := s.objects.ListPackageObjects(ctx, id, RecordingPackageMaxObjects)
+	return s.mutate(ctx, id, actor, key, "confirm", paths, func(c *RecordingCapture) error {
+		if c.RecordingID != snapshot.RecordingID || c.BroadcastEpoch != snapshot.BroadcastEpoch {
+			return ErrConflict
+		}
+		indices, err := capturePaths(*c, paths)
 		if err != nil {
 			return err
+		}
+		for n, i := range indices {
+			if c.Objects[i].RecordingPackageObject != declarations[n] {
+				return ErrConflict
+			}
+		}
+		// Recheck receipts before reporting a LIST error: a concurrent confirm
+		// may already have committed this exact operation successfully.
+		if listErr != nil {
+			return listErr
 		}
 		for _, i := range indices {
 			o := c.Objects[i]

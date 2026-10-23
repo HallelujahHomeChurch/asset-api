@@ -50,6 +50,12 @@ service for these private asset operations.
 
 ## HLS package producer contract
 
+Capture confirmation performs storage LIST outside its database transaction.
+A short preflight preserves accepted receipt replay without accessing storage;
+the final transaction rechecks ownership, expiry, state, epoch, deletion and
+object declarations before applying evidence. Only newly confirmed media advances
+the activity watermark. This removes storage latency from the capture lock and
+pool occupancy, but does not eliminate database contention or change idle cutoff.
 New broadcast capture creation can opt in with
 `recoveryVersion: "common-watermark-v1"`; omission preserves legacy behavior.
 An operation cannot change its version on replay. The first successful live
