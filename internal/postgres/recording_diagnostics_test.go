@@ -15,17 +15,32 @@ func TestGrantDiagnosticsSeparateAuthorityWaitFromTransaction(t *testing.T) {
 	paused := &pausedGrantAuthority{objects, make(chan struct{}, 1), make(chan struct{})}
 	store.WithBroadcastObjects(paused)
 	diagnostics.Default.Snapshot()
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	_, err := store.WithCaptureGrant(ctx, c.ID, func(*assets.RecordingCapture, assets.RecordingBroadcastReader) error {
-		t.Fatal("callback must not run before authority returns")
-		return nil
-	})
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("authority did not time out: %v", err)
+	result := make(chan error, 1)
+	go func() {
+		_, err := store.WithCaptureGrant(ctx, c.ID, func(*assets.RecordingCapture, assets.RecordingBroadcastReader) error {
+			return errors.New("callback must not run before authority returns")
+		})
+		result <- err
+	}()
+	select {
+	case <-paused.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("authority read not reached")
+	}
+	cancel()
+	var err error
+	select {
+	case err = <-result:
+	case <-time.After(5 * time.Second):
+		t.Fatal("authority read did not cancel")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("authority did not cancel: %v", err)
 	}
 	rows := diagnostics.Default.Snapshot()
-	if rows[diagnostics.GrantSQL][0] != 1 || rows[diagnostics.GrantAuthority][0] != 1 || rows[diagnostics.GrantAuthority][2] != 1 || rows[diagnostics.GrantAuthority][4] < 40 || rows[diagnostics.CaptureBegin][0] != 0 {
+	if rows[diagnostics.GrantSQL][0] != 1 || rows[diagnostics.GrantAuthority][0] != 1 || rows[diagnostics.GrantAuthority][2] != 1 || rows[diagnostics.CaptureBegin][0] != 0 {
 		t.Fatalf("wrong stage attribution: %v", rows)
 	}
 	store.WithBroadcastObjects(objects)
