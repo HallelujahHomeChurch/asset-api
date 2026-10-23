@@ -50,6 +50,25 @@ service for these private asset operations.
 
 ## HLS package producer contract
 
+New broadcast capture creation can opt in with
+`recoveryVersion: "common-watermark-v1"`; omission preserves legacy behavior.
+An operation cannot change its version on replay. The first successful live
+range transaction arms a persisted wall/media baseline using decoded frame rate.
+Only contiguous confirmation across all three renditions advances recovery.
+After 30 seconds without bounded fresh progress, signal state is interrupted;
+at the persisted five-minute deadline, confirmation/close serializes an immutable
+cutoff before accepting late supplementation. Old backlog does not receive a
+fresh five minutes merely because one more segment arrived. This is bounded
+arrival evidence, not proof of a running encoder; pre-activation unknown backlog
+cannot be fully distinguished with the existing protocol.
+
+The additive migration leaves existing captures on their legacy clock. Repeated
+range writes and process/replica restarts do not rearm. Manual end, revocation,
+deletion and terminal state disable recovery. Signal capability and common
+watermark fields are optional; consumers must treat missing capability as legacy,
+including after server rollback. Neither this policy nor public cutoff controls
+native OBS recording; a separately negotiated client policy owns local behavior.
+
 Human CMS administrators can preview and confirm one global retention policy
 (1–365 days) through `/priv/recordings/retention-policy`. Active policy uses
 immutable accepted upload completion, including browser sources before encoding.

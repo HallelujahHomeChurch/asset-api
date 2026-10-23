@@ -19,12 +19,12 @@ func NewRecordingCaptureStore(db *sql.DB) *RecordingCaptureStore {
 	return &RecordingCaptureStore{db: db}
 }
 
-const captureColumns = `id,actor_id,recording_id,create_key,state,created_at,expires_at,declared_bytes,declared_objects,receipts,package_id,inventory,terminal_at,terminal_reason,broadcast_epoch,segment_frames,last_media_confirmed_at,idle_end_sequence_exclusive`
+const captureColumns = `id,actor_id,recording_id,create_key,state,created_at,expires_at,declared_bytes,declared_objects,receipts,package_id,inventory,terminal_at,terminal_reason,broadcast_epoch,segment_frames,last_media_confirmed_at,idle_end_sequence_exclusive,recovery_version,recovery_active,recovery_activation_at,recovery_baseline_end,recovery_segment_ns,recovery_common_end,recovery_common_accepted_at,recovery_deadline`
 
 func scanCapture(row *sql.Row) (assets.RecordingCapture, error) {
 	var c assets.RecordingCapture
 	var receipts, inv []byte
-	err := row.Scan(&c.ID, &c.ActorID, &c.RecordingID, &c.CreateKey, &c.State, &c.CreatedAt, &c.ExpiresAt, &c.DeclaredBytes, &c.DeclaredObjects, &receipts, &c.PackageID, &inv, &c.TerminalAt, &c.TerminalReason, &c.BroadcastEpoch, &c.SegmentFrames, &c.LastMediaConfirmedAt, &c.IdleEndSequenceExclusive)
+	err := row.Scan(&c.ID, &c.ActorID, &c.RecordingID, &c.CreateKey, &c.State, &c.CreatedAt, &c.ExpiresAt, &c.DeclaredBytes, &c.DeclaredObjects, &receipts, &c.PackageID, &inv, &c.TerminalAt, &c.TerminalReason, &c.BroadcastEpoch, &c.SegmentFrames, &c.LastMediaConfirmedAt, &c.IdleEndSequenceExclusive, &c.Recovery.Version, &c.Recovery.Active, &c.Recovery.ActivationAt, &c.Recovery.BaselineEnd, &c.Recovery.SegmentDuration, &c.Recovery.CommonEnd, &c.Recovery.LastCommonConfirmedAt, &c.Recovery.Deadline)
 	if errors.Is(err, sql.ErrNoRows) {
 		return c, assets.ErrNotFound
 	}
@@ -119,11 +119,14 @@ func (s *RecordingCaptureStore) CreateCapture(ctx context.Context, c assets.Reco
 			return c, assets.ErrConflict
 		}
 	}
+	if c.TerminalAt != nil || c.State != "uploading" {
+		c.Recovery.Active = false
+	}
 	receipts, err := json.Marshal(c.Receipts)
 	if err != nil {
 		return c, err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO recording_captures(id,actor_id,recording_id,create_key,state,created_at,expires_at,receipts,broadcast_epoch,segment_frames) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, c.ID, c.ActorID, c.RecordingID, c.CreateKey, c.State, c.CreatedAt, c.ExpiresAt, receipts, c.BroadcastEpoch, captureSegmentFrames(c))
+	_, err = tx.ExecContext(ctx, `INSERT INTO recording_captures(id,actor_id,recording_id,create_key,state,created_at,expires_at,receipts,broadcast_epoch,segment_frames,recovery_version) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, c.ID, c.ActorID, c.RecordingID, c.CreateKey, c.State, c.CreatedAt, c.ExpiresAt, receipts, c.BroadcastEpoch, captureSegmentFrames(c), c.Recovery.Version)
 	if err != nil {
 		return c, mapCollectionError(err)
 	}
@@ -269,6 +272,17 @@ func (s *RecordingCaptureStore) updateCapture(ctx context.Context, id string, fn
 	if err != nil {
 		return c, err
 	}
+	// Older binaries can end/revoke a range without clearing the additive recovery
+	// columns. Recheck durable range authority under the same capture lock.
+	if c.Recovery.Active {
+		policy, policyErr := scanBroadcastRange(tx.QueryRowContext(ctx, `SELECT `+broadcastRangeColumns+` FROM recording_broadcast_ranges WHERE capture_id=$1`, c.ID))
+		if policyErr != nil {
+			return c, policyErr
+		}
+		if policy == nil || policy.Epoch != c.BroadcastEpoch || policy.MemberState != "live" || policy.Revoked || policy.EndSequenceExclusive != nil {
+			c.Recovery.Active = false
+		}
+	}
 	previousObjects := make(map[string]assets.RecordingCaptureObject, len(c.Objects))
 	for _, o := range c.Objects {
 		previousObjects[o.Path] = o
@@ -337,6 +351,9 @@ func (s *RecordingCaptureStore) updateCapture(ctx context.Context, id string, fn
 	if _, err = tx.ExecContext(ctx, `UPDATE recording_live SET read_grant_until=$2 WHERE capture_id=$1`, c.ID, c.ReadGrantUntil); err != nil {
 		return c, err
 	}
+	if c.TerminalAt != nil || c.State != "uploading" {
+		c.Recovery.Active = false
+	}
 	receipts, err := json.Marshal(c.Receipts)
 	if err != nil {
 		return c, err
@@ -349,7 +366,7 @@ func (s *RecordingCaptureStore) updateCapture(ctx context.Context, id string, fn
 		}
 		inventory = data
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE recording_captures SET state=$2,declared_bytes=$3,declared_objects=$4,receipts=$5,package_id=$6,inventory=$7,terminal_at=$8,terminal_reason=$9,last_media_confirmed_at=$10,idle_end_sequence_exclusive=$11 WHERE id=$1`, id, c.State, c.DeclaredBytes, c.DeclaredObjects, receipts, c.PackageID, inventory, c.TerminalAt, c.TerminalReason, c.LastMediaConfirmedAt, c.IdleEndSequenceExclusive)
+	_, err = tx.ExecContext(ctx, `UPDATE recording_captures SET state=$2,declared_bytes=$3,declared_objects=$4,receipts=$5,package_id=$6,inventory=$7,terminal_at=$8,terminal_reason=$9,last_media_confirmed_at=$10,idle_end_sequence_exclusive=$11,recovery_version=$12,recovery_active=$13,recovery_activation_at=$14,recovery_baseline_end=$15,recovery_segment_ns=$16,recovery_common_end=$17,recovery_common_accepted_at=$18,recovery_deadline=$19 WHERE id=$1`, id, c.State, c.DeclaredBytes, c.DeclaredObjects, receipts, c.PackageID, inventory, c.TerminalAt, c.TerminalReason, c.LastMediaConfirmedAt, c.IdleEndSequenceExclusive, c.Recovery.Version, c.Recovery.Active, c.Recovery.ActivationAt, c.Recovery.BaselineEnd, c.Recovery.SegmentDuration, c.Recovery.CommonEnd, c.Recovery.LastCommonConfirmedAt, c.Recovery.Deadline)
 	if err != nil {
 		return c, err
 	}
