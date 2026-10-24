@@ -68,7 +68,7 @@ func Run(ctx context.Context, db *sql.DB) (err error) {
 		if !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		tx, err := connection.BeginTx(ctx, nil)
+		tx, err := beginMigrationTransaction(ctx, connection)
 		if err != nil {
 			return err
 		}
