@@ -959,6 +959,25 @@ paths:
         '206': { $ref: '#/components/responses/Download' }
         '403': { $ref: '#/components/responses/Error' }
         '416': { $ref: '#/components/responses/Error' }
+  /priv/assets/{assetID}/bulletin-illustration:
+    parameters: [ { $ref: '#/components/parameters/AssetID' } ]
+    get:
+      summary: Read a source-bound private bulletin illustration
+      tags: [Private]
+      description: Only the authenticated owning CMS may read this exact issue/checksum-bound, clean private cms.weekly.image PNG. Rechecks ownership, deletion, upload, scan and processing on every request. No service grant is created or revoked; this does not permit PDF or general owner downloads.
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      parameters:
+        - { name: issueId, in: query, required: true, schema: { type: string, minLength: 1 } }
+        - { name: checksumSha256, in: query, required: true, schema: { type: string, pattern: '^[0-9a-f]{64}$' } }
+      responses:
+        '200': { $ref: '#/components/responses/Download' }
+        '206': { $ref: '#/components/responses/Download' }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '416': { $ref: '#/components/responses/Error' }
   /priv/assets/{assetID}/public-url:
     parameters: [ { $ref: '#/components/parameters/AssetID' } ]
     get:
