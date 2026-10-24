@@ -435,7 +435,7 @@ func (s *RecordingCaptureStore) updateCapture(ctx context.Context, id string, fn
 			return c, err
 		}
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE recording_live SET read_grant_until=$2 WHERE capture_id=$1`, c.ID, c.ReadGrantUntil); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE recording_live SET read_grant_until=$2 WHERE capture_id=$1 AND read_grant_until IS DISTINCT FROM $2::timestamptz`, c.ID, c.ReadGrantUntil); err != nil {
 		return c, err
 	}
 	if c.TerminalAt != nil || c.State != "uploading" {
@@ -453,7 +453,9 @@ func (s *RecordingCaptureStore) updateCapture(ctx context.Context, id string, fn
 		}
 		inventory = data
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE recording_captures SET state=$2,declared_bytes=$3,declared_objects=$4,receipts=$5,package_id=$6,inventory=$7,terminal_at=$8,terminal_reason=$9,last_media_confirmed_at=$10,idle_end_sequence_exclusive=$11,recovery_version=$12,recovery_active=$13,recovery_activation_at=$14,recovery_baseline_end=$15,recovery_segment_ns=$16,recovery_common_end=$17,recovery_common_accepted_at=$18,recovery_deadline=$19 WHERE id=$1`, id, c.State, c.DeclaredBytes, c.DeclaredObjects, receipts, c.PackageID, inventory, c.TerminalAt, c.TerminalReason, c.LastMediaConfirmedAt, c.IdleEndSequenceExclusive, c.Recovery.Version, c.Recovery.Active, c.Recovery.ActivationAt, c.Recovery.BaselineEnd, c.Recovery.SegmentDuration, c.Recovery.CommonEnd, c.Recovery.LastCommonConfirmedAt, c.Recovery.Deadline)
+	_, err = tx.ExecContext(ctx, `UPDATE recording_captures SET state=$2,declared_bytes=$3,declared_objects=$4,receipts=$5,package_id=$6,inventory=$7,terminal_at=$8,terminal_reason=$9,last_media_confirmed_at=$10,idle_end_sequence_exclusive=$11,recovery_version=$12,recovery_active=$13,recovery_activation_at=$14,recovery_baseline_end=$15,recovery_segment_ns=$16,recovery_common_end=$17,recovery_common_accepted_at=$18,recovery_deadline=$19 WHERE id=$1
+ AND (state,declared_bytes,declared_objects,receipts,package_id,inventory,terminal_at,terminal_reason,last_media_confirmed_at,idle_end_sequence_exclusive,recovery_version,recovery_active,recovery_activation_at,recovery_baseline_end,recovery_segment_ns,recovery_common_end,recovery_common_accepted_at,recovery_deadline)
+ IS DISTINCT FROM ($2,$3,$4,$5::jsonb,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`, id, c.State, c.DeclaredBytes, c.DeclaredObjects, receipts, c.PackageID, inventory, c.TerminalAt, c.TerminalReason, c.LastMediaConfirmedAt, c.IdleEndSequenceExclusive, c.Recovery.Version, c.Recovery.Active, c.Recovery.ActivationAt, c.Recovery.BaselineEnd, c.Recovery.SegmentDuration, c.Recovery.CommonEnd, c.Recovery.LastCommonConfirmedAt, c.Recovery.Deadline)
 	if err != nil {
 		return c, err
 	}
