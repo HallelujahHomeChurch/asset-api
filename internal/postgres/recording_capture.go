@@ -263,6 +263,9 @@ func (s *RecordingCaptureStore) WithCaptureGrant(ctx context.Context, id string,
 	}
 	// Read remotely before locking, then compare with current transactional authority.
 	// A concurrent revoke/delete must invalidate the snapshot before signing.
+	if c, handled, err := s.withActiveCaptureGrant(ctx, id, authority, fn); handled || err != nil {
+		return c, err
+	}
 	return s.updateCapture(ctx, id, func(tx *sql.Tx, c *assets.RecordingCapture) error {
 		return fn(c, broadcastReader{query: tx, broadcastObjects: s.broadcastObjects, authority: authority})
 	})
