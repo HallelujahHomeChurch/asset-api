@@ -342,6 +342,7 @@ jobs:
           [[ "$(az role assignment list --scope "$blob_scope" --assignee-object-id "$derivative_principal" --query "[?roleDefinitionName=='Storage Blob Data Contributor'] | length(@)" -o tsv --only-show-errors)" == "1" ]]
           [[ "$(az role assignment list --scope "$runtime_vault" --assignee-object-id "$derivative_principal" --query "[?roleDefinitionName=='Key Vault Secrets User'] | length(@)" -o tsv --only-show-errors)" == "1" ]]
           [[ "$(az resource show --ids "$runtime_vault/secrets/database-url" --api-version 2024-11-01 --query properties.attributes.enabled -o tsv --only-show-errors)" == "true" ]]
+          [[ "$(az resource show --ids "$runtime_vault/secrets/jobs-database-url" --api-version 2024-11-01 --query properties.attributes.enabled -o tsv --only-show-errors)" == "true" ]]
           [[ "$(az resource show --ids "$migration_vault/secrets/database-url" --api-version 2024-11-01 --query properties.attributes.enabled -o tsv --only-show-errors)" == "true" ]]
           [[ "$(az resource show --ids "$audit_token_scope" --api-version 2024-11-01 --query properties.attributes.enabled -o tsv --only-show-errors)" == "true" ]]
           if [[ "$MEMBER_VIDEO_ENABLED" == true ]]; then
