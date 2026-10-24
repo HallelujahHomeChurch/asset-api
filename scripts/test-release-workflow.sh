@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 api_scale="$(awk '/^resource app / { in_api = 1; next } in_api && /^resource / { exit } in_api { print }' infra/main.bicep)"
-for expected in 'minReplicas: 1' 'maxReplicas: 8' "name: 'cpu-scaler'" "type: 'cpu'" "type: 'Utilization'" "value: '70'"; do
+for expected in 'minReplicas: 1' 'maxReplicas: 8' "name: 'cpu-scaler'" "type: 'cpu'" "type: 'Utilization'" "value: '60'" "name: 'http-concurrency'" "concurrentRequests: '10'"; do
   printf '%s\n' "$api_scale" | grep -Fq "$expected"
 done
 
@@ -151,9 +151,9 @@ fi
 grep -q "CLAMAV_SCAN_TIMEOUT', value: '10m'" infra/main.bicep
 grep -q "ASSET_SCAN_MAX_FILE_SIZE_BYTES', value: '209715200'" infra/main.bicep
 asset_runtime_block="$(awk "/name: 'asset-api'/ { seen++; if (seen == 2) capture = 1 } capture { print } capture && /probes:/ { exit }" infra/main.bicep)"
-printf '%s\n' "${asset_runtime_block}" | grep -Fq "cpu: json('0.25')" &&
-  printf '%s\n' "${asset_runtime_block}" | grep -Fq "memory: '0.5Gi'" || {
-  echo 'asset-api runtime must remain at 0.25 CPU / 0.5Gi' >&2
+printf '%s\n' "${asset_runtime_block}" | grep -Fq "cpu: json('0.5')" &&
+  printf '%s\n' "${asset_runtime_block}" | grep -Fq "memory: '1Gi'" || {
+  echo 'asset-api runtime must use the validated 0.5 CPU / 1Gi capacity pair' >&2
   exit 1
 }
 grep -q "CLAMAV_MAX_FILE_SIZE_BYTES', value: '209715200'" infra/main.bicep

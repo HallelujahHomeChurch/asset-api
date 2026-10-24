@@ -211,15 +211,15 @@ func TestLoadCanDisableEmbeddedScannerForQueueCutover(t *testing.T) {
 func TestLoadReadsDatabasePoolSettings(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://test")
 	t.Setenv("ASSET_ALLOW_DEV_CALLER_HEADER", "true")
-	t.Setenv("DB_MAX_OPEN_CONNS", "12")
-	t.Setenv("DB_MAX_IDLE_CONNS", "6")
+	t.Setenv("DB_MAX_OPEN_CONNS", "8")
+	t.Setenv("DB_MAX_IDLE_CONNS", "4")
 	t.Setenv("DB_CONN_MAX_LIFETIME", "45m")
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.DBMaxOpenConns != 12 || cfg.DBMaxIdleConns != 6 || cfg.DBConnMaxLifetime != 45*time.Minute {
+	if cfg.DBMaxOpenConns != 8 || cfg.DBMaxIdleConns != 4 || cfg.DBConnMaxLifetime != 45*time.Minute {
 		t.Fatalf("unexpected database pool config: %+v", cfg)
 	}
 }
