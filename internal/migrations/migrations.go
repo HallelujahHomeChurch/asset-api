@@ -4,27 +4,37 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"database/sql/driver"
 	"embed"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
 	"sort"
+	"time"
 )
 
 //go:embed sql/*.sql
 var files embed.FS
 
-func Run(ctx context.Context, db *sql.DB) error {
+func Run(ctx context.Context, db *sql.DB) (err error) {
 	connection, err := db.Conn(ctx)
 	if err != nil {
 		return err
 	}
 	defer connection.Close()
 	if _, err := connection.ExecContext(ctx, `SELECT pg_advisory_lock(hashtext('hhc_asset_api_migrations'))`); err != nil {
+		_ = connection.Raw(func(any) error { return driver.ErrBadConn })
 		return err
 	}
-	defer connection.ExecContext(context.Background(), `SELECT pg_advisory_unlock(hashtext('hhc_asset_api_migrations'))`)
+	defer func() {
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if _, unlockErr := connection.ExecContext(cleanup, `SELECT pg_advisory_unlock(hashtext('hhc_asset_api_migrations'))`); unlockErr != nil {
+			err = errors.Join(err, fmt.Errorf("release migration lock: %w", unlockErr))
+			_ = connection.Raw(func(any) error { return driver.ErrBadConn })
+		}
+	}()
 	if _, err := connection.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (version text PRIMARY KEY, checksum text NOT NULL DEFAULT '', applied_at timestamptz NOT NULL DEFAULT now())`); err != nil {
 		return err
 	}
