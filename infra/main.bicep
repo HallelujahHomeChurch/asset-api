@@ -516,15 +516,6 @@ resource app 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
               }
             }
           }
-          // CPU stays low while requests wait on I/O.
-          {
-            name: 'http-concurrency'
-            http: {
-              metadata: {
-                concurrentRequests: '10'
-              }
-            }
-          }
         ]
         cooldownPeriod: 300
         pollingInterval: 30

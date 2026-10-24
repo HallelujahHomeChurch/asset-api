@@ -1,9 +1,14 @@
 #!/bin/sh
 set -eu
 api_scale="$(awk '/^resource app / { in_api = 1; next } in_api && /^resource / { exit } in_api { print }' infra/main.bicep)"
-for expected in 'minReplicas: 1' 'maxReplicas: 8' "name: 'cpu-scaler'" "type: 'cpu'" "type: 'Utilization'" "value: '60'" "name: 'http-concurrency'" "concurrentRequests: '10'"; do
+for expected in 'minReplicas: 1' 'maxReplicas: 8' "name: 'cpu-scaler'" "type: 'cpu'" "type: 'Utilization'" "value: '60'"; do
   printf '%s\n' "$api_scale" | grep -Fq "$expected"
 done
+# The selected API scaling policy is CPU-only.
+if printf '%s\n' "$api_scale" | grep -Eq '^[[:space:]]*http:|concurrentRequests:'; then
+  echo 'API scaling must remain CPU-only' >&2
+  exit 1
+fi
 
 workflow=.github/workflows/release.yml
 grep -Fq -- '--validation-level Provider' .github/workflows/recording-source.yml
