@@ -272,3 +272,9 @@ Provision/cap the Job-only login and validate all effective Job identities while
 admission is paused before releasing this dependency. This task does not create
 credentials or apply configuration. See azure-infra PR144 for the reviewed
 operator preview and48-connection shared Job budget.
+
+## API capacity and scaling
+
+The API uses0.5vCPU/1GiB with a bounded8-open/4-idle SQL pool. Keep min1/max8,30s custom polling and300s stabilization/cooldown configuration. CPU60 is paired with native HTTP target10 so I/O waits can also request capacity; CPU-only scaling is insufficient for this workload. Job logins are separately capped and must pass the shared48-login inventory/drain gate before this capacity release. API and persistent scanner budgets remain separate.
+
+The local shared-PG test used900-history captures,50synthetic subjects and delayed dependency/replica startup: three120req/s-per-service trials passed for the paired CMS/Asset0.5CPU configuration. This is not managed ACA timing or end-to-end viewer acceptance; older failed cases remain in the incident report. Pool ceilings are stress bounds, not simultaneous allocated connections.

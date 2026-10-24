@@ -456,8 +456,8 @@ resource app 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
           env: concat([
             { name: 'PORT', value: '8080' }
             { name: 'DATABASE_URL', secretRef: 'database-url' }
-            { name: 'DB_MAX_OPEN_CONNS', value: '4' }
-            { name: 'DB_MAX_IDLE_CONNS', value: '2' }
+            { name: 'DB_MAX_OPEN_CONNS', value: '8' }
+            { name: 'DB_MAX_IDLE_CONNS', value: '4' }
             { name: 'DB_CONN_MAX_LIFETIME', value: '30m' }
             { name: 'ASSET_PUBLIC_BASE_URL', value: publicBaseUrl }
             { name: 'ASSET_STORAGE_BACKEND', value: 'azure' }
@@ -483,8 +483,8 @@ resource app 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
             { name: 'AUDIT_TOKEN', secretRef: 'audit-token' }
           ], memberVideoEnabled ? mediaRuntimeEnv : [])
           resources: {
-            cpu: json('0.25')
-            memory: '0.5Gi'
+            cpu: json('0.5')
+            memory: '1Gi'
           }
           probes: [
             {
@@ -512,7 +512,16 @@ resource app 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
               type: 'cpu'
               metadata: {
                 type: 'Utilization'
-                value: '70'
+                value: '60'
+              }
+            }
+          }
+          // CPU stays low while requests wait on I/O.
+          {
+            name: 'http-concurrency'
+            http: {
+              metadata: {
+                concurrentRequests: '10'
               }
             }
           }
