@@ -145,8 +145,49 @@ func (s *RecordingCaptureStore) CreateCapture(ctx context.Context, c assets.Reco
 	return c, tx.Commit()
 }
 func (s *RecordingCaptureStore) GetCapture(ctx context.Context, id string) (assets.RecordingCapture, error) {
+	if c, observed, err := s.observeUploadingCapture(ctx, id); observed || err != nil {
+		return c, err
+	}
 	return s.UpdateCapture(ctx, id, func(*assets.RecordingCapture) error { return nil })
 }
+
+// Status reads share a committed snapshot; grants and mutations keep their fences.
+func (s *RecordingCaptureStore) observeUploadingCapture(ctx context.Context, id string) (assets.RecordingCapture, bool, error) {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		return assets.RecordingCapture{}, false, err
+	}
+	defer tx.Rollback()
+	c, err := scanCapture(tx.QueryRowContext(ctx, `SELECT `+captureColumns+` FROM recording_captures WHERE id=$1`, id))
+	if err != nil {
+		return c, false, err
+	}
+	if c.State != "uploading" || c.PackageID != nil || c.TerminalAt != nil || !time.Now().Before(c.ExpiresAt) {
+		return c, false, nil
+	}
+	var deleted bool
+	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM recording_deletions WHERE recording_id=$1)`, c.RecordingID).Scan(&deleted); err != nil || deleted {
+		return c, false, err
+	}
+	if c.Recovery.Active {
+		policy, err := scanBroadcastRange(tx.QueryRowContext(ctx, `SELECT `+broadcastRangeColumns+` FROM recording_broadcast_ranges WHERE capture_id=$1`, c.ID))
+		if err != nil {
+			return c, false, err
+		}
+		if policy == nil || policy.Epoch != c.BroadcastEpoch || policy.MemberState != "live" || policy.Revoked || policy.EndSequenceExclusive != nil {
+			return c, false, nil
+		}
+	}
+	if err = readCaptureObjects(ctx, tx, &c); err != nil {
+		return c, false, err
+	}
+	err = tx.QueryRowContext(ctx, `SELECT published_revision,published_sequence,published_media_end,last_advanced_at,ended_at,ended AND published_revision=revision,read_grant_until FROM recording_live WHERE capture_id=$1`, c.ID).Scan(&c.Progress.Revision, &c.Progress.LastSequence, &c.Progress.MediaEndSeconds, &c.Progress.LastAdvancedAt, &c.Progress.EndedAt, &c.Progress.Ended, &c.ReadGrantUntil)
+	if err != nil {
+		return c, false, err
+	}
+	return c, true, tx.Commit()
+}
+
 func (s *RecordingCaptureStore) UpdateCapture(ctx context.Context, id string, fn func(*assets.RecordingCapture) error) (assets.RecordingCapture, error) {
 	return s.updateCapture(ctx, id, func(_ *sql.Tx, c *assets.RecordingCapture) error { return fn(c) })
 }
