@@ -521,3 +521,5 @@ connection. Unlock uses a detached five-second context, reports cleanup errors
 and completes before the CLI exits; application facts and published migrations
 are unchanged. Local fault tests cover acquisition, unlock errors and a stalled
 unlock, using only disposable PostgreSQL.
+
+Active recording grants read a narrow capture projection and only extend the locked live read-grant deadline. They keep owner/revocation/deletion fences without loading producer receipt/object history or rewriting the capture row; terminal/package/recovery paths retain full lifecycle handling.
