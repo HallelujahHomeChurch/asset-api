@@ -275,6 +275,6 @@ operator preview and48-connection shared Job budget.
 
 ## API capacity and scaling
 
-The API uses0.5vCPU/1GiB with a bounded8-open/4-idle SQL pool. Keep min1/max8,30s custom polling and300s stabilization/cooldown configuration. CPU60 is paired with native HTTP target10 so I/O waits can also request capacity; CPU-only scaling is insufficient for this workload. Job logins are separately capped and must pass the shared48-login inventory/drain gate before this capacity release. API and persistent scanner budgets remain separate.
+The API uses0.25vCPU/0.5GiB with a bounded8-open/4-idle SQL pool. Keep min1/max8,30s custom polling and300s stabilization/cooldown configuration. CPU60 remains paired with native HTTP target10. HTTP10 is a provisional default, not a measured capacity limit; the native metric, route coverage and useful scale-up timing still need validation. CPU-only headroom has not been established. Job logins are separately capped and must pass the shared48-login inventory/drain gate before this capacity release. API and persistent scanner budgets remain separate.
 
 The local shared-PG test used900-history captures,50synthetic subjects and delayed dependency/replica startup: three120req/s-per-service trials passed for the paired CMS/Asset0.5CPU configuration. This is not managed ACA timing or end-to-end viewer acceptance; older failed cases remain in the incident report. Pool ceilings are stress bounds, not simultaneous allocated connections.
