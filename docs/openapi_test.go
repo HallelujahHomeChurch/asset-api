@@ -68,6 +68,7 @@ func TestOpenAPIContract(t *testing.T) {
 		{"DELETE", "/priv/assets/collections/{collectionID}/acl/{aclID}", "[hhc-line-function-bot]"},
 		{"GET", "/priv/assets/{assetID}", "[account-api, hhc-web-api, hhc-line-function-bot]"},
 		{"GET", "/priv/assets/{assetID}/download", "[account-api, hhc-web-api, hhc-line-function-bot]"},
+		{"GET", "/priv/assets/{assetID}/bulletin-illustration", "[hhc-web-api]"},
 		{"GET", "/priv/assets/{assetID}/public-url", "[account-api, hhc-web-api, hhc-line-function-bot]"},
 		{"POST", "/priv/assets/{assetID}/complete", "[account-api, hhc-web-api, hhc-line-function-bot]"},
 		{"POST", "/priv/assets/{assetID}/grants", "[account-api, hhc-web-api, hhc-line-function-bot]"},
