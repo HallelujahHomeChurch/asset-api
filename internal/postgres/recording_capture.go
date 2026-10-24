@@ -19,7 +19,10 @@ func NewRecordingCaptureStore(db *sql.DB) *RecordingCaptureStore {
 	return &RecordingCaptureStore{db: db}
 }
 
-const captureColumns = `id,actor_id,recording_id,create_key,state,created_at,expires_at,declared_bytes,declared_objects,receipts,package_id,inventory,terminal_at,terminal_reason,broadcast_epoch,segment_frames,last_media_confirmed_at,idle_end_sequence_exclusive,recovery_version,recovery_active,recovery_activation_at,recovery_baseline_end,recovery_segment_ns,recovery_common_end,recovery_common_accepted_at,recovery_deadline`
+const captureIdentityColumns = `id,actor_id,recording_id,create_key,state,created_at,expires_at,declared_bytes,declared_objects,`
+const captureStateColumns = `package_id,inventory,terminal_at,terminal_reason,broadcast_epoch,segment_frames,last_media_confirmed_at,idle_end_sequence_exclusive,recovery_version,recovery_active,recovery_activation_at,recovery_baseline_end,recovery_segment_ns,recovery_common_end,recovery_common_accepted_at,recovery_deadline`
+const captureColumns = captureIdentityColumns + `receipts,` + captureStateColumns
+const captureObservationColumns = captureIdentityColumns + `'{}'::jsonb,` + captureStateColumns
 
 func scanCapture(row *sql.Row) (assets.RecordingCapture, error) {
 	var c assets.RecordingCapture
@@ -145,20 +148,34 @@ func (s *RecordingCaptureStore) CreateCapture(ctx context.Context, c assets.Reco
 	return c, tx.Commit()
 }
 func (s *RecordingCaptureStore) GetCapture(ctx context.Context, id string) (assets.RecordingCapture, error) {
-	if c, observed, err := s.observeUploadingCapture(ctx, id); observed || err != nil {
+	if c, observed, err := s.observeUploadingCapture(ctx, id, "", 0); observed || err != nil {
 		return c, err
 	}
 	return s.UpdateCapture(ctx, id, func(*assets.RecordingCapture) error { return nil })
 }
 
+func (s *RecordingCaptureStore) ObserveCapture(ctx context.Context, id, cursor string, limit int) (assets.RecordingCapture, error) {
+	if limit < 1 || limit > 1000 {
+		return assets.RecordingCapture{}, assets.ErrInvalidInput
+	}
+	if c, observed, err := s.observeUploadingCapture(ctx, id, cursor, limit); observed || err != nil {
+		return c, err
+	}
+	return s.GetCapture(ctx, id)
+}
+
 // Status reads share a committed snapshot; grants and mutations keep their fences.
-func (s *RecordingCaptureStore) observeUploadingCapture(ctx context.Context, id string) (assets.RecordingCapture, bool, error) {
+func (s *RecordingCaptureStore) observeUploadingCapture(ctx context.Context, id, cursor string, limit int) (assets.RecordingCapture, bool, error) {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 	if err != nil {
 		return assets.RecordingCapture{}, false, err
 	}
 	defer tx.Rollback()
-	c, err := scanCapture(tx.QueryRowContext(ctx, `SELECT `+captureColumns+` FROM recording_captures WHERE id=$1`, id))
+	columns := captureColumns
+	if limit > 0 {
+		columns = captureObservationColumns
+	}
+	c, err := scanCapture(tx.QueryRowContext(ctx, `SELECT `+columns+` FROM recording_captures WHERE id=$1`, id))
 	if err != nil {
 		return c, false, err
 	}
@@ -178,8 +195,33 @@ func (s *RecordingCaptureStore) observeUploadingCapture(ctx context.Context, id 
 			return c, false, nil
 		}
 	}
-	if err = readCaptureObjects(ctx, tx, &c); err != nil {
-		return c, false, err
+	if limit == 0 {
+		if err = readCaptureObjects(ctx, tx, &c); err != nil {
+			return c, false, err
+		}
+	} else {
+		count := limit + 1
+		if cursor != "" {
+			count++
+		}
+		rows, err := tx.QueryContext(ctx, `SELECT path,size_bytes,sha256,state FROM recording_capture_objects WHERE capture_id=$1 AND path COLLATE "C">=$2 COLLATE "C" ORDER BY path COLLATE "C" LIMIT $3`, id, cursor, count)
+		if err != nil {
+			return c, false, err
+		}
+		c.Objects = []assets.RecordingCaptureObject{}
+		for rows.Next() {
+			var object assets.RecordingCaptureObject
+			if err = rows.Scan(&object.Path, &object.SizeBytes, &object.SHA256, &object.State); err != nil {
+				rows.Close()
+				return c, false, err
+			}
+			c.Objects = append(c.Objects, object)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return c, false, err
+		}
 	}
 	err = tx.QueryRowContext(ctx, `SELECT published_revision,published_sequence,published_media_end,last_advanced_at,ended_at,ended AND published_revision=revision,read_grant_until FROM recording_live WHERE capture_id=$1`, c.ID).Scan(&c.Progress.Revision, &c.Progress.LastSequence, &c.Progress.MediaEndSeconds, &c.Progress.LastAdvancedAt, &c.Progress.EndedAt, &c.Progress.Ended, &c.ReadGrantUntil)
 	if err != nil {

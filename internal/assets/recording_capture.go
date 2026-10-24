@@ -187,7 +187,7 @@ func (s *RecordingCaptureService) Get(ctx context.Context, id, actor, cursor str
 	if limit < 1 || limit > 1000 {
 		return RecordingCaptureStatus{}, ErrInvalidInput
 	}
-	c, err := s.repository.GetCapture(ctx, id)
+	c, err := s.observeCapture(ctx, id, cursor, limit)
 	if err != nil {
 		return RecordingCaptureStatus{}, err
 	}
@@ -202,6 +202,15 @@ func (s *RecordingCaptureService) Get(ctx context.Context, id, actor, cursor str
 		c.TerminalReason = &reason
 	}
 	return captureStatus(c, cursor, limit)
+}
+
+func (s *RecordingCaptureService) observeCapture(ctx context.Context, id, cursor string, limit int) (RecordingCapture, error) {
+	if observer, ok := s.repository.(interface {
+		ObserveCapture(context.Context, string, string, int) (RecordingCapture, error)
+	}); ok {
+		return observer.ObserveCapture(ctx, id, cursor, limit)
+	}
+	return s.repository.GetCapture(ctx, id)
 }
 func (s *RecordingCaptureService) mutate(ctx context.Context, id, actor, key, operation string, input any, fn func(*RecordingCapture) error) (RecordingCaptureResult, error) {
 	if !captureOperationKey.MatchString(key) {

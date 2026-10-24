@@ -236,7 +236,7 @@ func (s *RecordingCaptureService) grantLive(ctx context.Context, signer *Recordi
 	return grant, err
 }
 func (s *RecordingCaptureService) LiveProgress(ctx context.Context, id, actor string) (RecordingLiveProgress, error) {
-	c, err := s.repository.GetCapture(ctx, id)
+	c, err := s.observeCapture(ctx, id, "", 1)
 	if err == nil {
 		err = captureOwner(c, actor)
 	}
