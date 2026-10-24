@@ -262,3 +262,13 @@ definition. The former twelve-role check was insufficient: a real source smoke
 failed its first 30-second UpdateMessage with 403. Reactivation must prove a
 successful real renewal and final ack, not just role readback.
 See [the ordered cutover and rollback](../docs/reviews/recording-event-cutover-2026-10-19.md).
+
+## Shared Job login cap (pending cutover)
+
+Database-backed Jobs use runtime-vault `jobs-database-url`, authenticating as
+`asset_jobs` with a shared server limit26. The API and persistent scan App keep
+`database-url`; migration keeps its separate migration identity (limit1).
+Provision/cap the Job-only login and validate all effective Job identities while
+admission is paused before releasing this dependency. This task does not create
+credentials or apply configuration. See azure-infra PR144 for the reviewed
+operator preview and48-connection shared Job budget.

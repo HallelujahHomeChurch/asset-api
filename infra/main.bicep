@@ -770,7 +770,7 @@ resource scanJob 'Microsoft.App/jobs@2025-07-01' = if (deployScanJob) {
         { server: registry.properties.loginServer, identity: pullIdentity.id }
       ]
       secrets: [
-        { name: 'database-url', keyVaultUrl: '${runtimeVault.properties.vaultUri}secrets/database-url', identity: scanIdentity.id }
+        { name: 'database-url', keyVaultUrl: '${runtimeVault.properties.vaultUri}secrets/jobs-database-url', identity: scanIdentity.id }
       ]
     }
     template: {
@@ -1028,7 +1028,7 @@ resource derivativeJob 'Microsoft.App/jobs@2025-07-01' = if (deployDerivativeJob
         { server: registry.properties.loginServer, identity: pullIdentity.id }
       ]
       secrets: [
-        { name: 'database-url', keyVaultUrl: '${runtimeVault.properties.vaultUri}secrets/database-url', identity: derivativeIdentity.id }
+        { name: 'database-url', keyVaultUrl: '${runtimeVault.properties.vaultUri}secrets/jobs-database-url', identity: derivativeIdentity.id }
       ]
     }
     template: {
@@ -1073,7 +1073,7 @@ resource retentionJob 'Microsoft.App/jobs@2025-07-01' = if (deployRetentionJob) 
         { server: registry.properties.loginServer, identity: pullIdentity.id }
       ]
       secrets: [
-        { name: 'database-url', keyVaultUrl: '${runtimeVault.properties.vaultUri}secrets/database-url', identity: runtimeIdentity.id }
+        { name: 'database-url', keyVaultUrl: '${runtimeVault.properties.vaultUri}secrets/jobs-database-url', identity: runtimeIdentity.id }
       ]
     }, retentionTriggerConfiguration)
     template: {
@@ -1124,7 +1124,7 @@ resource recordingJob 'Microsoft.App/jobs@2025-07-01' = if (memberVideoEnabled) 
         { server: registry.properties.loginServer, identity: pullIdentity.id }
       ]
       secrets: concat([
-        { name: 'database-url', keyVaultUrl: '${runtimeVault.properties.vaultUri}secrets/database-url', identity: runtimeIdentity.id }
+        { name: 'database-url', keyVaultUrl: '${runtimeVault.properties.vaultUri}secrets/jobs-database-url', identity: runtimeIdentity.id }
       ], recordingSecrets)
     }
     template: {
@@ -1231,7 +1231,7 @@ module recordingEvents './recording-events.bicep' = if (recordingEventsProvision
   pullIdentityId:pullIdentity.id
   workerIdentityId:runtimeIdentity.id
   workerClientId:runtimeIdentity.properties.clientId
-  databaseSecretUrl:'${runtimeVault.properties.vaultUri}secrets/database-url'
+  databaseSecretUrl:'${runtimeVault.properties.vaultUri}secrets/jobs-database-url'
   secrets:recordingSecrets
   r2Env:recordingR2Env
   processingEnv:recordingProcessingFlags
