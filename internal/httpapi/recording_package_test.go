@@ -102,8 +102,8 @@ func (s *httpPackageRepo) Freeze(context.Context, string, time.Time) error {
 	s.p.State = "freezing"
 	return nil
 }
-func (s *httpPackageRepo) WithSessionLock(ctx context.Context, _ string, fn func(context.Context) error) error {
-	return fn(ctx)
+func (s *httpPackageRepo) WithSessionLock(ctx context.Context, _ string, fn func(context.Context, assets.RecordingPackageSession) error) error {
+	return fn(ctx, s)
 }
 
 type httpPackageObjects struct{}
@@ -203,4 +203,11 @@ func TestRecordingPackageCreateAndCompleteHTTP(t *testing.T) {
 	if w.Code != 400 {
 		t.Fatalf("oversized inventory: %d", w.Code)
 	}
+}
+
+func (r *httpPackageRepo) GetBroadcastRange(context.Context, string) (*assets.RecordingBroadcastRange, error) {
+	return nil, nil
+}
+func (r *httpPackageRepo) GetBroadcastProjection(context.Context, string) (assets.RecordingBroadcastProjection, error) {
+	return assets.RecordingBroadcastProjection{}, nil
 }

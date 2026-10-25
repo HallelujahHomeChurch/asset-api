@@ -12,8 +12,8 @@ import (
 
 type packageRepo struct{ packages map[string]RecordingPackage }
 
-func (r *packageRepo) WithSessionLock(ctx context.Context, _ string, fn func(context.Context) error) error {
-	return fn(ctx)
+func (r *packageRepo) WithSessionLock(ctx context.Context, _ string, fn func(context.Context, RecordingPackageSession) error) error {
+	return fn(ctx, r)
 }
 func (r *packageRepo) FindByIdempotency(_ context.Context, key string) (RecordingPackage, error) {
 	for _, p := range r.packages {
@@ -206,4 +206,11 @@ func TestRecordingPackageStatusUsesRemoteEvidenceAndPages(t *testing.T) {
 	if _, err := svc.Sign(ctx, p.ID, input.ActorID, []string{"master.m3u8"}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("subsecond capability: %v", err)
 	}
+}
+
+func (r *packageRepo) GetBroadcastRange(context.Context, string) (*RecordingBroadcastRange, error) {
+	return nil, nil
+}
+func (r *packageRepo) GetBroadcastProjection(context.Context, string) (RecordingBroadcastProjection, error) {
+	return RecordingBroadcastProjection{}, nil
 }

@@ -212,7 +212,7 @@ func TestRecordingRetentionExtendsWithoutResetAndFailsClosed(t *testing.T) {
 	if _, err := store.UpdateRetentionPolicy(other, in); !errors.Is(err, assets.ErrConflict) {
 		t.Fatalf("other actor accepted preview: %v", err)
 	}
-	if err := store.WithSessionLock(ctx, p.ID, func(ctx context.Context) error {
+	if err := store.WithSessionLock(ctx, p.ID, func(ctx context.Context, session assets.RecordingPackageSession) error {
 		_, err := store.UpdateRetentionPolicy(ctx, in)
 		if !errors.Is(err, assets.ErrConflict) {
 			t.Fatalf("policy must not cross grant/cleanup lock: %v", err)

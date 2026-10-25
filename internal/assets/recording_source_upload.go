@@ -61,8 +61,15 @@ type RecordingSourceStatus struct {
 	NextCursor         int                          `json:"nextCursor"`
 }
 
+// RecordingSourceSession exposes only operations on the connection owned by the session lock.
+// It must only be used during the WithSessionLock callback.
+type RecordingSourceSession interface {
+	Get(context.Context, string) (RecordingSource, error)
+	Finalize(context.Context, string, string, time.Time) error
+}
+
 type RecordingSourceRepository interface {
-	WithSessionLock(context.Context, string, func(context.Context) error) error
+	WithSessionLock(context.Context, string, func(context.Context, RecordingSourceSession) error) error
 	FindByIdempotency(context.Context, string) (RecordingSource, error)
 	Create(context.Context, RecordingSource) error
 	Get(context.Context, string) (RecordingSource, error)
@@ -199,10 +206,14 @@ func (s *RecordingSourceService) Create(ctx context.Context, input CreateRecordi
 }
 
 func (s *RecordingSourceService) Get(ctx context.Context, id, actor string) (RecordingSource, error) {
+	return getRecordingSource(ctx, s.repository, id, actor)
+}
+
+func getRecordingSource(ctx context.Context, repository RecordingSourceSession, id, actor string) (RecordingSource, error) {
 	if !mediaID.MatchString(id) || !mediaID.MatchString(actor) {
 		return RecordingSource{}, ErrInvalidInput
 	}
-	p, err := s.repository.Get(ctx, id)
+	p, err := repository.Get(ctx, id)
 	if err != nil {
 		return RecordingSource{}, err
 	}
@@ -217,8 +228,8 @@ func (s *RecordingSourceService) Sign(ctx context.Context, id, actor string, num
 		return nil, ErrInvalidInput
 	}
 	var signed []SignedRecordingSourceBlock
-	err := s.repository.WithSessionLock(ctx, id, func(ctx context.Context) error {
-		p, err := s.Get(ctx, id, actor)
+	err := s.repository.WithSessionLock(ctx, id, func(ctx context.Context, session RecordingSourceSession) error {
+		p, err := getRecordingSource(ctx, session, id, actor)
 		if err != nil {
 			return err
 		}
@@ -254,9 +265,9 @@ func (s *RecordingSourceService) Sign(ctx context.Context, id, actor string, num
 
 func (s *RecordingSourceService) Complete(ctx context.Context, id, actor string) (RecordingSource, error) {
 	var p RecordingSource
-	err := s.repository.WithSessionLock(ctx, id, func(ctx context.Context) error {
+	err := s.repository.WithSessionLock(ctx, id, func(ctx context.Context, session RecordingSourceSession) error {
 		var err error
-		p, err = s.Get(ctx, id, actor)
+		p, err = getRecordingSource(ctx, session, id, actor)
 		if err != nil {
 			return err
 		}
@@ -278,10 +289,10 @@ func (s *RecordingSourceService) Complete(ctx context.Context, id, actor string)
 		if metadata.Size != p.SizeBytes || metadata.ETag == "" {
 			return ErrInvalidUpload
 		}
-		if err := s.repository.Finalize(ctx, id, metadata.ETag, s.now().UTC()); err != nil {
+		if err := session.Finalize(ctx, id, metadata.ETag, s.now().UTC()); err != nil {
 			return err
 		}
-		p, err = s.repository.Get(ctx, id)
+		p, err = session.Get(ctx, id)
 		return err
 	})
 	return p, err

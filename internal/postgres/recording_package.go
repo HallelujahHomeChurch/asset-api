@@ -11,16 +11,24 @@ import (
 )
 
 type RecordingPackageStore struct {
-	db    *sql.DB
-	locks *recordingSessionStore
+	db               *sql.DB
+	locks            *recordingSessionStore
+	broadcastObjects assets.RecordingBroadcastObjects
 }
 
 func NewRecordingPackageStore(db *sql.DB) *RecordingPackageStore {
 	return &RecordingPackageStore{db: db, locks: newRecordingSessionStore(db)}
 }
 
-func (s *RecordingPackageStore) WithSessionLock(ctx context.Context, id string, fn func(context.Context) error) error {
-	return s.locks.WithSessionLock(ctx, "package-"+id, fn)
+func (s *RecordingPackageStore) WithSessionLock(ctx context.Context, id string, fn func(context.Context, assets.RecordingPackageSession) error) error {
+	return s.locks.WithSessionLock(ctx, "package-"+id, func(ctx context.Context, conn *sql.Conn) error {
+		return fn(ctx, recordingPackageSession{query: conn, broadcastReader: broadcastReader{query: conn, broadcastObjects: s.broadcastObjects}})
+	})
+}
+
+func (s *RecordingPackageStore) WithBroadcastObjects(objects assets.RecordingBroadcastObjects) *RecordingPackageStore {
+	s.broadcastObjects = objects
+	return s
 }
 
 const recordingPackageColumns = `id,session_id,owner_service,actor_id,recording_id,idempotency_key,state,size_bytes,created_at,expires_at,inventory`
@@ -44,12 +52,21 @@ func scanRecordingPackage(row *sql.Row) (assets.RecordingPackage, error) {
 	return p, err
 }
 
+type recordingPackageSession struct {
+	query recordingStatements
+	broadcastReader
+}
+
 func (s *RecordingPackageStore) Get(ctx context.Context, id string) (assets.RecordingPackage, error) {
-	return scanRecordingPackage(s.locks.statements(ctx).QueryRowContext(ctx, `SELECT `+recordingPackageSelectColumns+` FROM recording_packages WHERE id=$1 AND EXISTS(SELECT 1 FROM recording_retention_policy WHERE singleton)`, id))
+	return (recordingPackageSession{query: s.db}).Get(ctx, id)
+}
+
+func (s recordingPackageSession) Get(ctx context.Context, id string) (assets.RecordingPackage, error) {
+	return scanRecordingPackage(s.query.QueryRowContext(ctx, `SELECT `+recordingPackageSelectColumns+` FROM recording_packages WHERE id=$1 AND EXISTS(SELECT 1 FROM recording_retention_policy WHERE singleton)`, id))
 }
 
 func (s *RecordingPackageStore) FindByIdempotency(ctx context.Context, key string) (assets.RecordingPackage, error) {
-	return scanRecordingPackage(s.locks.statements(ctx).QueryRowContext(ctx, `SELECT `+recordingPackageSelectColumns+` FROM recording_packages WHERE idempotency_key=$1`, key))
+	return scanRecordingPackage(s.db.QueryRowContext(ctx, `SELECT `+recordingPackageSelectColumns+` FROM recording_packages WHERE idempotency_key=$1`, key))
 }
 
 func (s *RecordingPackageStore) Create(ctx context.Context, p assets.RecordingPackage) error {
@@ -101,7 +118,11 @@ func (s *RecordingPackageStore) Create(ctx context.Context, p assets.RecordingPa
 // This row is the durable job receipt. The worker, not this request, freezes
 // and verifies the object graph before committing a ready package.
 func (s *RecordingPackageStore) Freeze(ctx context.Context, id string, at time.Time) error {
-	result, err := s.locks.statements(ctx).ExecContext(ctx, `UPDATE recording_packages SET state='freezing',completed_at=COALESCE(completed_at,$2) WHERE id=$1 AND state='uploading' AND expires_at > $2`, id, at)
+	return (recordingPackageSession{query: s.db}).Freeze(ctx, id, at)
+}
+
+func (s recordingPackageSession) Freeze(ctx context.Context, id string, at time.Time) error {
+	result, err := s.query.ExecContext(ctx, `UPDATE recording_packages SET state='freezing',completed_at=COALESCE(completed_at,$2) WHERE id=$1 AND state='uploading' AND expires_at > $2`, id, at)
 	return recordingTransitionResult(result, err)
 }
 

@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -40,15 +41,15 @@ func (h *Handler) issueRecordingPackageGrant(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	var grant assets.RecordingGrant
-	err := h.recordingPackages.WithReady(r.Context(), r.PathValue("packageID"), input.RecordingID, func(p assets.RecordingPackage) error {
+	err := h.recordingPackages.WithReady(r.Context(), r.PathValue("packageID"), input.RecordingID, func(ctx context.Context, p assets.RecordingPackage, broadcasts assets.RecordingBroadcastReader) error {
 		var err error
 		if h.recordingBroadcasts != nil {
-			policy, readErr := h.recordingBroadcasts.GetBroadcastRange(r.Context(), p.ID)
+			policy, readErr := broadcasts.GetBroadcastRange(ctx, p.ID)
 			if readErr != nil {
 				return readErr
 			}
 			if policy != nil {
-				projection, readErr := h.recordingBroadcasts.GetBroadcastProjection(r.Context(), p.ID)
+				projection, readErr := broadcasts.GetBroadcastProjection(ctx, p.ID)
 				if readErr != nil {
 					return readErr
 				}

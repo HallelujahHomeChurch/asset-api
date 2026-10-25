@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"time"
 )
@@ -40,8 +41,8 @@ func (s *RecordingSourceStore) ReconcileSources(ctx context.Context, deleteSourc
 		if err := ctx.Err(); err != nil {
 			return errors.Join(failures, err)
 		}
-		if err := s.WithSessionLock(ctx, id, func(ctx context.Context) error {
-			q := s.locks.statements(ctx)
+		if err := s.locks.WithSessionLock(ctx, "source-"+id, func(ctx context.Context, conn *sql.Conn) error {
+			q := conn
 			// Persist before provider calls so even a timeout cannot starve later items.
 			result, err := q.ExecContext(ctx, `UPDATE recording_sources SET cleanup_after=clock_timestamp()+interval '5 minutes' WHERE id=$1 AND cleanup_after<=clock_timestamp()`, id)
 			if err != nil {
@@ -56,7 +57,7 @@ func (s *RecordingSourceStore) ReconcileSources(ctx context.Context, deleteSourc
  ((state='uploading' AND expires_at<=clock_timestamp()) OR (retry_until<=clock_timestamp() AND (claimed_until IS NULL OR claimed_until<=clock_timestamp())))`, id); err != nil {
 				return err
 			}
-			p, err := s.Get(ctx, id)
+			p, err := (recordingSourceSession{query: conn}).Get(ctx, id)
 			if err != nil {
 				return err
 			}
