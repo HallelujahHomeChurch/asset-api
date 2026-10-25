@@ -34,6 +34,11 @@ var namespacePolicies = map[string]NamespacePolicy{
 		MaxSizeBytes: 20 << 20, DefaultVisibility: VisibilityPrivate, Visibilities: map[Visibility]bool{VisibilityPrivate: true}, Processing: ProcessingNotRequired,
 		CacheControl: "private, no-store",
 	},
+	"cms.weekly.image": {
+		OwnerService: "hhc-web-api", MIMETypes: map[string]bool{"image/png": true},
+		MaxSizeBytes: 2 << 20, DefaultVisibility: VisibilityPrivate, Visibilities: map[Visibility]bool{VisibilityPrivate: true}, Processing: ProcessingNotRequired,
+		CacheControl: "private, no-store",
+	},
 	"cms.news.cover": {
 		OwnerService: "hhc-web-api", MIMETypes: map[string]bool{"image/jpeg": true, "image/png": true, "image/webp": true},
 		MaxSizeBytes: 10 << 20, DefaultVisibility: VisibilityPrivate, Visibilities: map[Visibility]bool{VisibilityPrivate: true, VisibilityPublic: true}, Processing: ProcessingPending,

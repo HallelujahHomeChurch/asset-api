@@ -221,6 +221,8 @@ func (h *Handler) assetAction(w http.ResponseWriter, r *http.Request) {
 	switch r.PathValue("action") {
 	case "download":
 		h.authorizedDownload(w, r)
+	case "bulletin-illustration":
+		h.bulletinIllustrationDownload(w, r)
 	case "public-url":
 		h.publicURL(w, r)
 	default:

@@ -31,6 +31,19 @@ func TestWeeklyBulletinPolicyIsPermanentlyPrivate(t *testing.T) {
 	}
 }
 
+func TestWeeklyIllustrationsCannotBecomePublicOrAcceptActiveContent(t *testing.T) {
+	policy, ok := PolicyFor("cms.weekly.image")
+	if !ok || policy.OwnerService != "hhc-web-api" || policy.DefaultVisibility != VisibilityPrivate || !policy.AllowsVisibility(VisibilityPrivate) || policy.AllowsVisibility(VisibilityPublic) || policy.AllowsVisibility(VisibilityRestricted) {
+		t.Fatal("weekly illustration policy must remain owner-bound and private", policy)
+	}
+	if !policy.AllowsMIME("image/png") || policy.AllowsMIME("image/svg+xml") || policy.AllowsMIME("text/html") || !policy.AllowsSize("image/png", 2<<20) || policy.AllowsSize("image/png", 2<<20+1) || policy.AllowsSize("image/png", 0) {
+		t.Fatal("illustrations must be bounded raster PNGs", policy)
+	}
+	if policy.CacheControl != "private, no-store" || policy.Processing != ProcessingNotRequired {
+		t.Fatal("illustrations must use private original bytes and the normal malware scan gate", policy)
+	}
+}
+
 func TestHomeBannerPolicy(t *testing.T) {
 	policy, ok := PolicyFor("cms.home.banner")
 	if !ok {
