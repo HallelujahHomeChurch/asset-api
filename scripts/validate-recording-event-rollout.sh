@@ -9,4 +9,4 @@ fi
 if [[ "${RECORDING_EVENTS_ENABLED:-false}" == true ]]; then
  [[ "${RECORDING_EVENTS_PROVISIONED:-false}" == true && "${RECORDING_HLS_ENABLED:-false}" == true && "${MEMBER_VIDEO_ENABLED:-false}" == true ]] || { echo 'event activation requires provisioned HLS resources' >&2; exit 1; }
 fi
-[[ "${RECORDING_PROCESSING_CPU:-2}" =~ ^(2|4)$ && "${RECORDING_PREVIEW_CPU:-1}" =~ ^(1|4)$ ]] || { echo 'invalid recording resource tier' >&2; exit 1; }
+[[ "${RECORDING_LIVE_CPU:-4}" =~ ^(2|4)$ && "${RECORDING_PROCESSING_CPU:-2}" =~ ^(2|4)$ && "${RECORDING_PREVIEW_CPU:-1}" =~ ^(1|4)$ ]] || { echo 'invalid recording resource tier' >&2; exit 1; }

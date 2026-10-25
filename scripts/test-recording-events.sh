@@ -21,6 +21,19 @@ if RECORDING_EVENTS_PROVISIONED=true RECORDING_EVENTS_CHANGE_APPROVED=false bash
  echo 'event provisioning bypassed approval' >&2; exit 1
 fi
 RECORDING_EVENTS_PROVISIONED=true RECORDING_EVENTS_ENABLED=true RECORDING_EVENTS_CHANGE_APPROVED=true RECORDING_HLS_ENABLED=true MEMBER_VIDEO_ENABLED=true bash scripts/validate-recording-event-rollout.sh
+for cpu in 2 4; do
+ RECORDING_LIVE_CPU="$cpu" bash scripts/validate-recording-event-rollout.sh
+done
+for cpu in 1 3 0 invalid; do
+ if RECORDING_LIVE_CPU="$cpu" bash scripts/validate-recording-event-rollout.sh >/dev/null 2>&1; then
+  echo 'invalid live tier accepted' >&2; exit 1
+ fi
+done
+grep -Fq 'param recordingLiveCPU int = 4' infra/main.bicep
+grep -Fq 'liveCPU:recordingLiveCPU' infra/main.bicep
+grep -Fq 'param liveCPU int = 4' infra/recording-events.bicep
+grep -Fq 'RECORDING_LIVE_CPU: ${{ vars.RECORDING_LIVE_CPU' .github/workflows/release.yml
+test "$(grep -Fc 'recordingLiveCPU="$RECORDING_LIVE_CPU"' .github/workflows/release.yml)" = 2
 
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT

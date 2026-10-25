@@ -2,6 +2,7 @@ import importlib.util
 from pathlib import Path
 import tempfile
 import os
+import subprocess
 from unittest.mock import patch
 import unittest
 
@@ -69,6 +70,46 @@ class TopologyTest(unittest.TestCase):
         mod.capture(self.path, 'alive')
         mod.restore(self.path, 'alive')
         self.assertEqual(self.payloads()[0][1]['properties']['configuration']['triggerType'], 'Event')
+
+    def test_live_resource_rollback_preserves_both_tiers(self):
+        for cpu, memory in [(2, '4Gi'), (4, '8Gi')]:
+            with self.subTest(cpu=cpu):
+                self.calls.clear()
+                self.path.unlink(missing_ok=True)
+                self.jobs = [self.job('asset-recording-live', 'Event')]
+                self.jobs[0]['properties']['template']['containers'][0]['resources'] = {'cpu': cpu, 'memory': memory}
+                mod.capture(self.path, 'alive')
+                mod.restore(self.path, 'alive')
+                restored = self.payloads()[0][1]['properties']['template']['containers'][0]['resources']
+                self.assertEqual(restored, {'cpu': cpu, 'memory': memory})
+
+    def test_job_readback_accepts_selected_live_tier_and_rejects_drift(self):
+        az = Path(self.temp.name) / 'az'
+        az.write_text('''#!/usr/bin/env python3
+import os, sys
+args = sys.argv
+name = args[args.index('-n')+1]
+query = args[args.index('--query')+1]
+cpu = {'live': int(os.environ['ACTUAL_LIVE_CPU']), 'processing': 2, 'preview': 1, 'maintenance': .5}.get(name.removeprefix('asset-recording-'), 4)
+memory = {4:'8Gi', 2:'4Gi', 1:'2Gi', .5:'1Gi'}[cpu]
+values = {'properties.configuration.triggerType': 'Schedule' if name.endswith('maintenance') else 'Manual' if name.endswith('validation') else 'Event',
+'properties.template.containers[0].image': 'fixture@sha256:abc',
+'properties.template.containers[0].resources.cpu': cpu,
+'properties.template.containers[0].resources.memory': memory,
+'properties.configuration.eventTriggerConfig.scale.minExecutions': 0,
+'properties.configuration.eventTriggerConfig.scale.maxExecutions': 1,
+'properties.configuration.eventTriggerConfig.scale.rules[0].metadata.queueLengthStrategy': 'visibleonly',
+'properties.configuration.scheduleTriggerConfig.cronExpression': '17 * * * *'}
+print(values[query])
+''')
+        az.chmod(0o755)
+        for selected, actual, success in [('2', '2', True), ('4', '4', True), ('4', '2', False), ('2', '4', False)]:
+            with self.subTest(selected=selected, actual=actual):
+                env = {**os.environ, 'PATH': self.temp.name+os.pathsep+os.environ['PATH'], 'RESOURCE_GROUP': 'fixture',
+                       'RECORDING_EVENTS_PROVISIONED': 'true', 'RECORDING_EVENTS_ENABLED': 'true',
+                       'RECORDING_LIVE_CPU': selected, 'ACTUAL_LIVE_CPU': actual, 'RECORDING_IMAGE_REF': 'fixture@sha256:abc'}
+                result = subprocess.run(['bash', 'scripts/verify-recording-jobs.sh'], env=env, capture_output=True, text=True)
+                self.assertEqual(result.returncode == 0, success, result.stderr)
 
     def test_active_execution_does_not_restore_competing_schedule(self):
         mod.capture(self.path, 'alive')

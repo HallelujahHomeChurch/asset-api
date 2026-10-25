@@ -123,6 +123,14 @@ hits. Browser source ingest/encode is independently gated; CMS/player integratio
 and provider acceptance remain subsequent work. Enabling these producers is not
 end-to-end readiness.
 
+New timeline preview sprites sample each immutable fragment every ten seconds.
+The existing 960×90 JPEG layout and five-second VTT cues remain compatible:
+adjacent cues reuse the same sample. Existing live receipts and published sprites
+are reused without regeneration; one JPEG is still written per media fragment,
+so fewer sampled frames does not imply half as many JPEG objects.
+An immutable-image conflict retries that batch with the legacy sampling cadence
+to finish any pre-upgrade JPEG left without its receipt; it never overwrites it.
+
 When older ffprobe rejects AAC timing, validation retries against the same
 fragment's bounded `trex`/`tfhd`/`trun` sample durations, matched by track ID,
 time base and exact packet count. This preserves declared timing across source
@@ -414,11 +422,23 @@ across every lane. `maxExecutions` is not a global container concurrency guarant
 The candidate worker modes are `live`, `processing`, `preview`, and `maintenance`;
 `legacy` remains the default rollback mode and refuses to run when event mode is
 enabled. Media Event Jobs use `minExecutions=0`, visible-message scaling, and one
-execution target per lane. Live stays at 4 CPU/8 GiB; processing is a candidate
-2 CPU/4 GiB; previews are a candidate 1 CPU/2 GiB. Either reduced tier can be reset
+execution target per lane. Live supports a target 2 CPU/4 GiB through
+`RECORDING_LIVE_CPU=2`; its staged default remains 4 CPU/8 GiB until the reviewed
+rollout selects the reduced tier. Processing is a candidate 2 CPU/4 GiB;
+previews are a candidate 1 CPU/2 GiB. Each reduced tier can be reset
 to 4 CPU/8 GiB independently of trigger mode. No validation or image-quality
 parameter changes with the tier. The hourly maintenance candidate is 0.5 CPU/1 GiB,
 bounded to five minutes, and invokes no FFmpeg processing.
+
+Live owns capture thumbnails and live covers, including custom/default covers
+before input starts. It drains eligible auxiliary work after each media batch
+and before idle exit; existing SQL priority and the two global slots still gate
+claims. Preview owns VOD covers and ready-package thumbnail finalization.
+Stop/seal keeps capture thumbnails eligible through freezing/validating. Once
+the package is ready, VOD waits for an admitted live preview lease to finish or
+expire, then resumes durable progress and immutable per-segment receipts.
+Stale live claims cannot publish. Ten-second image sampling does not set event
+frequency. See [the handoff and resource verification](docs/reviews/recording-live-handoff-2026-10-25.md).
 
 Normal retry/lease recovery is handled by the running API dispatcher and Queue
 visibility, not hourly maintenance. Keep API min replicas >=1 while this dispatcher

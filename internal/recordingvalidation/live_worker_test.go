@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -206,6 +207,76 @@ func TestLiveWorkerPublishesTwoFullyDecoded2997Captures(t *testing.T) {
 		t.Fatalf("third capture exceeded admission bound: %+v %v", pending, err)
 	}
 	t.Logf("two complete moving-media 29.97fps batches: %s", time.Since(started))
+}
+
+// Measure complete three-rendition intake plus thumbnails against 10.01s arrivals.
+// The caller must enforce the CPU/memory tier; synthetic storage has no WAN delay.
+func TestLiveTenSecondPairsWithPreviews(t *testing.T) {
+	if os.Getenv("TEST_DATABASE_URL") == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	probe, pack, media, declarations, _ := liveMovingMediaFixture(t, 300)
+	for round := 0; round < 3; round++ {
+		db, store, objects, ids := liveWorkerMediaFixture(t, pack, media, declarations)
+		if _, err := db.Exec(`UPDATE recording_captures SET state='failed',terminal_at=now() WHERE id=$1`, ids[2]); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`UPDATE recording_captures SET segment_frames=300`); err != nil {
+			t.Fatal(err)
+		}
+		objects.passThrough = true
+		probe.Objects = objects
+		started := time.Now()
+		if processed, err := RunLiveValidation(context.Background(), store, objects, probe); err != nil || !processed {
+			t.Fatal(processed, err)
+		}
+		previews := &previewMemoryObjects{packageMemoryObjects: objects.packageMemoryObjects}
+		repo := postgres.NewRecordingPackageStore(db)
+		for range ids[:2] {
+			if processed, err := RunLivePreview(context.Background(), repo, previews, probe); err != nil || !processed {
+				t.Fatal("paired preview", processed, err)
+			}
+		}
+		for _, id := range ids[:2] {
+			last, vtt, err := repo.LivePreviewProgress(context.Background(), id)
+			if err != nil || last != 0 || strings.Count(vtt, " --> ") != 2 {
+				t.Fatal("thumbnail backlog", last, vtt, err)
+			}
+		}
+		t.Logf("LIVE_PAIR round=%d media_seconds=10.01 elapsed_seconds=%.3f preview_backlog=0", round, time.Since(started).Seconds())
+		// Model the validator's ready commit, then exercise the actual VOD worker.
+		id := ids[0]
+		renditions := assets.LiveRenditions()
+		inventory := assets.RecordingPackageInventory{SchemaVersion: 1, PresetVersion: assets.RecordingTenSecondPreset, Objects: declarations, Renditions: renditions[:]}
+		for i := range inventory.Renditions {
+			inventory.Renditions[i].SegmentCount = 1
+			inventory.Renditions[i].DurationSeconds = 10.01
+			inventory.Renditions[i].FrameRate = 30000.0 / 1001
+		}
+		data, err := json.Marshal(inventory)
+		if err != nil {
+			t.Fatal(err)
+		}
+		prefix := "recordings/packages/" + id + "/final/validated/"
+		if _, err := db.Exec(`INSERT INTO recording_packages(id,session_id,owner_service,actor_id,recording_id,idempotency_key,state,size_bytes,created_at,expires_at,inventory,completed_at,ready_at,final_prefix,media_expires_at) SELECT id,id,'hhc-web-api',actor_id,recording_id,'seal:'||id,'ready',declared_bytes,created_at,expires_at,$2,now(),now(),$3,now()+interval '1 day' FROM recording_captures WHERE id=$1`, id, data, prefix); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`UPDATE recording_captures SET state='ready',package_id=id WHERE id=$1`, id); err != nil {
+			t.Fatal(err)
+		}
+		vodProbe := probe
+		vodProbe.FFmpeg, vodProbe.FFprobe = "/missing/ffmpeg", "/missing/ffprobe"
+		images := previews.images
+		delete(previews.pointers, id)
+		if processed, err := RunPackagePreview(context.Background(), repo, previews, vodProbe); err != nil || !processed {
+			t.Fatal("VOD failed to finalize completed live receipts without decoding", processed, err)
+		}
+		var state string
+		last, published := previews.pointers[id]
+		if err := db.QueryRow(`SELECT preview_state FROM recording_packages WHERE id=$1`, id).Scan(&state); err != nil || state != "ready" || previews.images != images || string(objects.bytes[prefix+"previews/current.json"]) != `{"attempt":"capture"}` || !published || last != 0 {
+			t.Fatal("VOD preview pointer/state not finalized", state, err)
+		}
+	}
 }
 
 func liveWorkerFixture(t *testing.T) (*sql.DB, *postgres.RecordingCaptureStore, *liveWorkerObjects, []string) {

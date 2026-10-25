@@ -127,6 +127,7 @@ func processRecording(ctx context.Context, mode string, db *sql.DB, objects *r2.
 	liveStore := postgres.NewRecordingCaptureStore(db)
 	if mode == "legacy" || mode == "live" {
 		liveClaims := 0
+		auxiliaryClaims := 0
 		liveSession := false
 		acquired, err := liveStore.WithLiveWorker(ctx, func(ctx context.Context, check func(context.Context) error) (result error) {
 			ctx, cancel := context.WithTimeout(ctx, liveWorkerWindow+30*time.Minute)
@@ -137,7 +138,7 @@ func processRecording(ctx context.Context, mode string, db *sql.DB, objects *r2.
 			slog.Info("recording_live_worker_start", "max_seconds", int(liveWorkerWindow.Seconds()))
 			defer func() {
 				slog.Info("recording_live_worker_exit", "elapsed_ms", time.Since(started).Milliseconds(),
-					"processing_ms", busy.Milliseconds(), "non_processing_ms", (time.Since(started) - busy).Milliseconds(), "claims", liveClaims, "polls", polls, "failed", result != nil)
+					"processing_ms", busy.Milliseconds(), "non_processing_ms", (time.Since(started) - busy).Milliseconds(), "claims", liveClaims, "auxiliary_claims", auxiliaryClaims, "polls", polls, "failed", result != nil)
 			}()
 			// Stay across cron boundaries without changing claim/slot concurrency.
 			// Use gaps between fragments for optional media so a background
@@ -160,6 +161,9 @@ func processRecording(ctx context.Context, mode string, db *sql.DB, objects *r2.
 					liveSession = liveSession || active
 					return active, err
 				}, func(ctx context.Context) bool {
+					if err := check(ctx); err != nil {
+						return false
+					}
 					before := time.Now()
 					defer func() { busy += time.Since(before) }()
 					processed, err := recordingvalidation.RunLiveCoverProcessing(ctx, postgres.NewRecordingLiveCoverStore(db), objects, probe)
@@ -167,11 +171,17 @@ func processRecording(ctx context.Context, mode string, db *sql.DB, objects *r2.
 						slog.Warn("recording_live_cover_processing_failed")
 					}
 					if processed || err != nil {
+						if processed {
+							auxiliaryClaims++
+						}
 						return processed
 					}
 					processed, err = recordingvalidation.RunLivePreview(ctx, packages, objects, probe)
 					if err != nil {
 						slog.Warn("recording_live_preview_processing_failed")
+					}
+					if processed {
+						auxiliaryClaims++
 					}
 					return processed
 				})
@@ -191,7 +201,7 @@ func processRecording(ctx context.Context, mode string, db *sql.DB, objects *r2.
 	}
 	liveCovers := postgres.NewRecordingLiveCoverStore(db)
 	covers := postgres.NewRecordingCoverStore(db)
-	if mode == "legacy" || mode == "preview" {
+	if mode == "legacy" {
 		if _, err := recordingvalidation.RunLiveCoverProcessing(ctx, liveCovers, objects, probe); err != nil {
 			slog.Warn("recording_live_cover_processing_failed")
 		}
@@ -223,8 +233,10 @@ func processRecording(ctx context.Context, mode string, db *sql.DB, objects *r2.
 	if mode == "legacy" || mode == "preview" {
 		// Preview claims defer to waiting validation/source work in SQL and
 		// use the same global slots. Only one long claim runs per execution.
-		if _, err := recordingvalidation.RunLivePreview(ctx, packages, objects, probe); err != nil {
-			slog.Warn("recording_live_preview_processing_failed")
+		if mode == "legacy" {
+			if _, err := recordingvalidation.RunLivePreview(ctx, packages, objects, probe); err != nil {
+				slog.Warn("recording_live_preview_processing_failed")
+			}
 		}
 		processed, coverErr := recordingvalidation.RunCoverProcessing(ctx, covers, packages, liveCovers, objects, probe)
 		if processed || coverErr != nil {
@@ -253,7 +265,10 @@ func drainLiveValidation(ctx context.Context, deadline time.Time, interval time.
 		if err != nil {
 			return err
 		}
-		if processed {
+		// Live auxiliary work is owned here even before input starts or after
+		// Stop/seal. SQL claims retain validation priority and the shared slot cap.
+		auxiliary := optional(ctx)
+		if processed || auxiliary {
 			continue
 		}
 		active, err := pending(ctx)
@@ -262,9 +277,6 @@ func drainLiveValidation(ctx context.Context, deadline time.Time, interval time.
 		}
 		if !active {
 			return nil
-		}
-		if optional(ctx) {
-			continue
 		}
 		timer := time.NewTimer(min(interval, time.Until(deadline)))
 		select {

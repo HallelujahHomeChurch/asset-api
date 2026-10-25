@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hhc/asset-api/internal/assets"
 	"hhc/asset-api/internal/postgres"
+	"hhc/asset-api/internal/storage/r2"
 	"log/slog"
 	"strings"
 	"time"
@@ -23,13 +24,18 @@ func (p PackageMediaProbe) generateSharedPreviews(ctx context.Context, id, media
 	}
 	prefix := "recordings/captures/" + id + "/final/previews/"
 	var vtt string
-	err := p.generatePreviewRange(ctx, mediaPrefix, prefix+"shared/", inventory, r, timeline, first, previous, func(ctx context.Context, key string, data []byte) error {
+	put := func(ctx context.Context, key string, data []byte) error {
 		if strings.HasSuffix(key, "/index.vtt") {
 			vtt = string(data)
 			key = fmt.Sprintf("%s%d/index.vtt", prefix, r.SegmentCount)
 		}
 		return objects.PutPackagePreview(ctx, key, data)
-	})
+	}
+	err := p.generatePreviewRange(ctx, mediaPrefix, prefix+"shared/", inventory, r, timeline, first, previous, previewSampleSeconds, put)
+	if errors.Is(err, r2.ErrLiveConflict) {
+		// Complete a pre-upgrade JPEG whose worker died before writing its receipt.
+		err = p.generatePreviewRange(ctx, mediaPrefix, prefix+"shared/", inventory, r, timeline, first, previous, 5, put)
+	}
 	if err != nil {
 		return "", err
 	}

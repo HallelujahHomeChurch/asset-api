@@ -37,6 +37,17 @@ func (s *RecordingPackageStore) ClaimPackagePreview(ctx context.Context) (Record
 	if err != nil {
 		return c, err
 	}
+	// Serialize handoff with a live claim admitted before this package was ready.
+	// Lock order stays slots -> package -> preview progress; live claims do not
+	// lock the package row while holding preview progress.
+	var liveClaim bool
+	err = tx.QueryRowContext(ctx, `SELECT COALESCE(claimed_until>clock_timestamp(),false) FROM recording_live_previews WHERE capture_id=$1 FOR UPDATE`, id).Scan(&liveClaim)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return c, err
+	}
+	if liveClaim {
+		return c, assets.ErrNotFound
+	}
 	c.ClaimID = newStoreID()
 	if _, err = tx.ExecContext(ctx, `UPDATE recording_packages SET preview_state='processing',preview_claim_id=$2,preview_claimed_until=clock_timestamp()+interval '2 minutes',preview_attempts=preview_attempts+1 WHERE id=$1`, id, c.ClaimID); err != nil {
 		return c, err
