@@ -2,3 +2,10 @@
 .data
 .env
 coverage.out
+
+# Generated verification/Worker output is not an input to the Go images.
+.artifacts
+.worktrees
+**/node_modules
+**/.wrangler
+workers/member-media/pages/*/dist
