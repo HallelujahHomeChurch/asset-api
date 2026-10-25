@@ -123,6 +123,12 @@ hits. Browser source ingest/encode is independently gated; CMS/player integratio
 and provider acceptance remain subsequent work. Enabling these producers is not
 end-to-end readiness.
 
+New timeline preview sprites sample each immutable fragment every ten seconds.
+The existing 960×90 JPEG layout and five-second VTT cues remain compatible:
+adjacent cues reuse the same sample. Existing live receipts and published sprites
+are reused without regeneration; one JPEG is still written per media fragment,
+so fewer sampled frames does not imply half as many JPEG objects.
+
 When older ffprobe rejects AAC timing, validation retries against the same
 fragment's bounded `trex`/`tfhd`/`trun` sample durations, matched by track ID,
 time base and exact packet count. This preserves declared timing across source

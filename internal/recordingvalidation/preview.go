@@ -27,6 +27,8 @@ type PreviewObjects interface {
 	PutPackagePreview(context.Context, string, []byte) error
 }
 
+const previewSampleSeconds = 10
+
 func RunPackagePreview(ctx context.Context, repo *postgres.RecordingPackageStore, objects PreviewObjects, probe PackageMediaProbe) (bool, error) {
 	c, err := repo.ClaimPackagePreview(ctx)
 	if errors.Is(err, assets.ErrNotFound) {
@@ -212,7 +214,7 @@ func (p PackageMediaProbe) generatePreviewRange(ctx context.Context, mediaPrefix
 		if err != nil {
 			return err
 		}
-		filter := fmt.Sprintf("setpts=PTS-STARTPTS,select='gte(t,selected_n*5)',scale=160:90:force_original_aspect_ratio=decrease,pad=160:90:(ow-iw)/2:(oh-ih)/2,tile=6x1:nb_frames=%d", cells)
+		filter := fmt.Sprintf("setpts=PTS-STARTPTS,select='gte(t,selected_n*%d)',scale=160:90:force_original_aspect_ratio=decrease,pad=160:90:(ow-iw)/2:(oh-ih)/2,tile=6x1:nb_frames=%d", previewSampleSeconds, cells)
 		decodeCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		err = exec.CommandContext(decodeCtx, p.FFmpeg, "-nostdin", "-v", "error", "-xerror", "-protocol_whitelist", "file", "-enable_drefs", "0", "-use_absolute_path", "0", "-threads", "2", "-i", input, "-an", "-vf", filter, "-frames:v", "1", "-threads", "1", "-q:v", "4", "-fs", "1048576", output).Run()
 		cancel()
@@ -240,8 +242,14 @@ func (p PackageMediaProbe) generatePreviewRange(ctx context.Context, mediaPrefix
 		}
 		var cue strings.Builder
 		for cell := 0; cell < cells; cell++ {
-			start := startSeconds + float64(cell*5)
-			fmt.Fprintf(&cue, "%s --> %s\nseg-%06d.jpg#xywh=%d,0,160,90\n\n", previewTimestamp(start), previewTimestamp(math.Min(start+5, end)), i, cell*160)
+			// Keep five-second cues readable by existing players; pairs share one sample.
+			for offset := 0; offset < previewSampleSeconds; offset += 5 {
+				start := startSeconds + float64(cell*previewSampleSeconds+offset)
+				if start >= end {
+					break
+				}
+				fmt.Fprintf(&cue, "%s --> %s\nseg-%06d.jpg#xywh=%d,0,160,90\n\n", previewTimestamp(start), previewTimestamp(math.Min(start+5, end)), i, cell*160)
+			}
 		}
 		vtt.WriteString(cue.String())
 		if shared {
@@ -280,7 +288,7 @@ func previewCells(data []byte, duration float64) (int, error) {
 		first = math.Min(first, pts)
 		last = math.Max(last, pts)
 	}
-	cells := min(6, int(math.Ceil(duration/5)), int(math.Floor((last-first+0.000001)/5))+1)
+	cells := min(3, int(math.Ceil(duration/previewSampleSeconds)), int(math.Floor((last-first+0.000001)/previewSampleSeconds))+1)
 	if cells < 1 {
 		return 0, assets.ErrInvalidUpload
 	}
