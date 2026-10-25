@@ -543,3 +543,14 @@ are unchanged. Local fault tests cover acquisition, unlock errors and a stalled
 unlock, using only disposable PostgreSQL.
 
 Active recording grants read a narrow capture projection and only extend the locked live read-grant deadline. They keep owner/revocation/deletion fences without loading producer receipt/object history or rewriting the capture row; terminal/package/recovery paths retain full lifecycle handling.
+
+## Private bulletin illustrations
+
+The CMS-only `GET /priv/assets/{assetID}/bulletin-illustration` requires the exact
+`issueId` and `checksumSha256`. Every request checks the authenticated owner,
+private `cms.weekly.image` namespace, source-illustration purpose/locale, deletion,
+completed upload, clean scan, size and processing state before an ETag-bound Blob
+read. It performs no grant writes and never permits PDF/general owner downloads.
+Responses remain `private, no-store`. Release this additive route before the
+coordinated CMS client; no public routing, media lifecycle or runtime activation
+is changed here. Tracking: https://github.com/HallelujahHomeChurch/hhc-web-api/issues/339.
