@@ -208,6 +208,44 @@ func TestLiveWorkerPublishesTwoFullyDecoded2997Captures(t *testing.T) {
 	t.Logf("two complete moving-media 29.97fps batches: %s", time.Since(started))
 }
 
+// Measure complete three-rendition intake plus thumbnails against 10.01s arrivals.
+// The caller must enforce the CPU/memory tier; synthetic storage has no WAN delay.
+func TestLiveTenSecondPairsWithPreviews(t *testing.T) {
+	if os.Getenv("TEST_DATABASE_URL") == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	probe, pack, media, declarations, _ := liveMovingMediaFixture(t, 300)
+	for round := 0; round < 3; round++ {
+		db, store, objects, ids := liveWorkerMediaFixture(t, pack, media, declarations)
+		if _, err := db.Exec(`UPDATE recording_captures SET state='failed',terminal_at=now() WHERE id=$1`, ids[2]); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`UPDATE recording_captures SET segment_frames=300`); err != nil {
+			t.Fatal(err)
+		}
+		objects.passThrough = true
+		probe.Objects = objects
+		started := time.Now()
+		if processed, err := RunLiveValidation(context.Background(), store, objects, probe); err != nil || !processed {
+			t.Fatal(processed, err)
+		}
+		previews := &previewMemoryObjects{packageMemoryObjects: objects.packageMemoryObjects}
+		repo := postgres.NewRecordingPackageStore(db)
+		for range ids[:2] {
+			if processed, err := RunLivePreview(context.Background(), repo, previews, probe); err != nil || !processed {
+				t.Fatal("paired preview", processed, err)
+			}
+		}
+		for _, id := range ids[:2] {
+			last, vtt, err := repo.LivePreviewProgress(context.Background(), id)
+			if err != nil || last != 0 || strings.Count(vtt, " --> ") != 2 {
+				t.Fatal("thumbnail backlog", last, vtt, err)
+			}
+		}
+		t.Logf("LIVE_PAIR round=%d media_seconds=10.01 elapsed_seconds=%.3f preview_backlog=0", round, time.Since(started).Seconds())
+	}
+}
+
 func liveWorkerFixture(t *testing.T) (*sql.DB, *postgres.RecordingCaptureStore, *liveWorkerObjects, []string) {
 	pack, bytes, declarations := liveIntakeFixture()
 	return liveWorkerMediaFixture(t, pack, bytes, declarations)

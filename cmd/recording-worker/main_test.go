@@ -88,6 +88,21 @@ func TestDrainLiveIdleAndCancellation(t *testing.T) {
 	}
 }
 
+func TestDrainLiveFinishesAuxiliaryWorkAfterInputStops(t *testing.T) {
+	for _, media := range []bool{false, true} {
+		t.Run(map[bool]string{false: "cover-before-input", true: "preview-after-final-fragment"}[media], func(t *testing.T) {
+			mediaCalls, auxiliaryCalls, pendingCalls := 0, 0, 0
+			err := drainLiveValidation(context.Background(), time.Now().Add(time.Second), time.Hour,
+				func(context.Context) (bool, error) { mediaCalls++; return media && mediaCalls == 1, nil },
+				func(context.Context) (bool, error) { pendingCalls++; return false, nil },
+				func(context.Context) bool { auxiliaryCalls++; return auxiliaryCalls <= 3 })
+			if err != nil || mediaCalls != 4 || auxiliaryCalls != 4 || pendingCalls != 1 {
+				t.Fatalf("lost auxiliary work: media=%d auxiliary=%d pending=%d err=%v", mediaCalls, auxiliaryCalls, pendingCalls, err)
+			}
+		})
+	}
+}
+
 func TestDrainLiveStandbyHonorsDeadline(t *testing.T) {
 	started := time.Now()
 	calls := 0

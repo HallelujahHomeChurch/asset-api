@@ -33,6 +33,8 @@ param recordingSourceEnabled bool = false
 param recordingEventsProvisioned bool = false
 param recordingEventsEnabled bool = false
 @allowed([2, 4])
+param recordingLiveCPU int = 4
+@allowed([2, 4])
 param recordingProcessingCPU int = 2
 @allowed([1, 4])
 param recordingPreviewCPU int = 1
@@ -1245,6 +1247,7 @@ module recordingEvents './recording-events.bicep' = if (recordingEventsProvision
   r2Env:recordingR2Env
   processingEnv:recordingProcessingFlags
   enabled:recordingEventsEnabled
+  liveCPU:recordingLiveCPU
   processingCPU:recordingProcessingCPU
   previewCPU:recordingPreviewCPU
  }

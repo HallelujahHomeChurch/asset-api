@@ -134,8 +134,26 @@ func TestPreviewRealNonzeroTimestampAndPartialTail(t *testing.T) {
 	if err != nil || !bytes.Equal(legacyImage, objects.bytes[legacyPrefix+"shared/seg-000000.jpg"]) || !strings.Contains(vtt, "00:00:05.000 --> 00:00:10.000\nseg-000000.jpg#xywh=160") {
 		t.Fatalf("legacy orphan recovery changed immutable image or lost its cues: %v", err)
 	}
+	// Stop leaves one old-cadence live receipt; VOD adds only the new-cadence tail.
+	mixedCapture := strings.Repeat("c", 32)
+	mixedPrefix := "recordings/captures/" + mixedCapture + "/final/previews/shared/"
+	first := p.Inventory.Renditions[0]
+	first.SegmentCount = 1
+	if err := probe.generatePreviewRange(context.Background(), p.FinalPrefix, mixedPrefix, p.Inventory.Objects, first, timeline[:1], 0, "WEBVTT\n\n", 5, shared.PutPackagePreview); err != nil {
+		t.Fatal(err)
+	}
+	oldImage := bytes.Clone(objects.bytes[mixedPrefix+"seg-000000.jpg"])
+	previous := string(objects.bytes[mixedPrefix+"seg-000000.vtt"])
+	shared.images = 0
+	vtt, err = probe.generateSharedPreviews(context.Background(), mixedCapture, p.FinalPrefix, p.Inventory.Objects, p.Inventory.Renditions[0], timeline, 1, previous, shared)
+	if err != nil || shared.images != 1 || !bytes.Equal(oldImage, objects.bytes[mixedPrefix+"seg-000000.jpg"]) || strings.Count(vtt, " --> ") != 8 || !strings.Contains(vtt, "00:00:05.000 --> 00:00:10.000\nseg-000000.jpg#xywh=160") || !strings.Contains(vtt, "00:00:35.000 --> 00:00:36.200\nseg-000001.jpg#xywh=0") {
+		t.Fatalf("mixed live/VOD handoff: images=%d err=%v VTT=%s", shared.images, err, vtt)
+	}
 	probe.FFmpeg = "/missing/ffmpeg"
 	shared.images = 0
+	if _, err := probe.generateSharedPreviews(context.Background(), mixedCapture, p.FinalPrefix, p.Inventory.Objects, p.Inventory.Renditions[0], timeline, 1, previous, shared); err != nil || shared.images != 0 {
+		t.Fatalf("post-write/pre-commit retry decoded completed tail: %v", err)
+	}
 	if _, err = probe.generateSharedPreviews(context.Background(), capture, p.FinalPrefix, p.Inventory.Objects, p.Inventory.Renditions[0], timeline, 0, "WEBVTT\n\n", shared); err != nil {
 		t.Fatal("VOD failed to reuse receipts", err)
 	}
