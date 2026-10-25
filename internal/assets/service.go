@@ -97,6 +97,10 @@ func (s *Service) replayUpload(ctx context.Context, input CreateUploadInput, key
 	if session.Fingerprint != requestFingerprint(input) {
 		return CreatedUpload{}, true, ErrConflict
 	}
+	if !asset.DeletedAt.IsZero() || !asset.PurgedAt.IsZero() {
+		asset.UploadStatus = UploadFailed
+		session.Status = UploadFailed
+	}
 	created := CreatedUpload{Asset: asset, Session: session}
 	if session.Status == UploadCreated && s.now().Before(session.ExpiresAt) {
 		created.Target, err = s.blobs.CreateUploadTarget(ctx, session.StagingObjectKey, session.MaxSizeBytes, session.ExpiresAt)
