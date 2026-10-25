@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"hhc/asset-api/internal/assets"
+	"hhc/asset-api/internal/storage/r2"
 )
 
 func TestPreviewRealNonzeroTimestampAndPartialTail(t *testing.T) {
@@ -121,6 +122,18 @@ func TestPreviewRealNonzeroTimestampAndPartialTail(t *testing.T) {
 	if shared.images != 1 || !bytes.Equal(original, objects.bytes[sharedPrefix+"seg-000000.jpg"]) {
 		t.Fatal("gap recovery reencoded completed image")
 	}
+	// A pre-upgrade worker may have written its JPEG but crashed before its receipt.
+	legacyCapture := strings.Repeat("b", 32)
+	legacyPrefix := "recordings/captures/" + legacyCapture + "/final/previews/"
+	if err = probe.generatePreviewRange(context.Background(), p.FinalPrefix, legacyPrefix+"shared/", p.Inventory.Objects, p.Inventory.Renditions[0], timeline, 0, "WEBVTT\n\n", 5, shared.PutPackagePreview); err != nil {
+		t.Fatal(err)
+	}
+	legacyImage := bytes.Clone(objects.bytes[legacyPrefix+"shared/seg-000000.jpg"])
+	delete(objects.bytes, legacyPrefix+"shared/seg-000000.vtt")
+	vtt, err = probe.generateSharedPreviews(context.Background(), legacyCapture, p.FinalPrefix, p.Inventory.Objects, p.Inventory.Renditions[0], timeline, 0, "WEBVTT\n\n", shared)
+	if err != nil || !bytes.Equal(legacyImage, objects.bytes[legacyPrefix+"shared/seg-000000.jpg"]) || !strings.Contains(vtt, "00:00:05.000 --> 00:00:10.000\nseg-000000.jpg#xywh=160") {
+		t.Fatalf("legacy orphan recovery changed immutable image or lost its cues: %v", err)
+	}
 	probe.FFmpeg = "/missing/ffmpeg"
 	shared.images = 0
 	if _, err = probe.generateSharedPreviews(context.Background(), capture, p.FinalPrefix, p.Inventory.Objects, p.Inventory.Renditions[0], timeline, 0, "WEBVTT\n\n", shared); err != nil {
@@ -147,7 +160,7 @@ func TestPreviewCellsDoNotExposeDurationRoundingPadding(t *testing.T) {
 		{`{"packets":[{"pts_time":"30"},{"pts_time":"40.000000"}]}`, 10.04, 2},
 		{`{"packets":[{"pts_time":"0"},{"pts_time":"29.966667"}]}`, 30, 3},
 	} {
-		got, err := previewCells([]byte(tc.data), tc.duration)
+		got, err := previewCells([]byte(tc.data), tc.duration, previewSampleSeconds)
 		if err != nil || got != tc.want {
 			t.Fatalf("cells %d want %d: %v", got, tc.want, err)
 		}
@@ -160,6 +173,9 @@ type previewMemoryObjects struct {
 }
 
 func (s *previewMemoryObjects) PutPackagePreview(_ context.Context, key string, data []byte) error {
+	if existing, ok := s.bytes[key]; ok && !bytes.Equal(existing, data) {
+		return r2.ErrLiveConflict
+	}
 	if strings.HasSuffix(key, ".jpg") {
 		s.images++
 	}

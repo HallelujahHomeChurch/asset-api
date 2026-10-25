@@ -128,6 +128,8 @@ The existing 960×90 JPEG layout and five-second VTT cues remain compatible:
 adjacent cues reuse the same sample. Existing live receipts and published sprites
 are reused without regeneration; one JPEG is still written per media fragment,
 so fewer sampled frames does not imply half as many JPEG objects.
+An immutable-image conflict retries that batch with the legacy sampling cadence
+to finish any pre-upgrade JPEG left without its receipt; it never overwrites it.
 
 When older ffprobe rejects AAC timing, validation retries against the same
 fragment's bounded `trex`/`tfhd`/`trun` sample durations, matched by track ID,

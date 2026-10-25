@@ -105,10 +105,10 @@ func (p PackageMediaProbe) GeneratePreviewsWithTimeline(ctx context.Context, pkg
 			r = candidate
 		}
 	}
-	return p.generatePreviewRange(ctx, pkg.FinalPrefix, pkg.FinalPrefix+"previews/"+attempt+"/", pkg.Inventory.Objects, r, timeline, 0, "WEBVTT\n\n", put)
+	return p.generatePreviewRange(ctx, pkg.FinalPrefix, pkg.FinalPrefix+"previews/"+attempt+"/", pkg.Inventory.Objects, r, timeline, 0, "WEBVTT\n\n", previewSampleSeconds, put)
 }
 
-func (p PackageMediaProbe) generatePreviewRange(ctx context.Context, mediaPrefix, outPrefix string, inventory []assets.RecordingPackageObject, r assets.RecordingRendition, timeline []assets.RecordingLiveSegment, first int, previous string, put func(context.Context, string, []byte) error) (result error) {
+func (p PackageMediaProbe) generatePreviewRange(ctx context.Context, mediaPrefix, outPrefix string, inventory []assets.RecordingPackageObject, r assets.RecordingRendition, timeline []assets.RecordingLiveSegment, first int, previous string, sampleSeconds int, put func(context.Context, string, []byte) error) (result error) {
 	dir, err := os.MkdirTemp(p.ScratchRoot, "hhc-preview-")
 	if err != nil {
 		return err
@@ -210,11 +210,11 @@ func (p PackageMediaProbe) generatePreviewRange(ctx context.Context, mediaPrefix
 		if err != nil {
 			return err
 		}
-		cells, err := previewCells(packetData, end-startSeconds)
+		cells, err := previewCells(packetData, end-startSeconds, sampleSeconds)
 		if err != nil {
 			return err
 		}
-		filter := fmt.Sprintf("setpts=PTS-STARTPTS,select='gte(t,selected_n*%d)',scale=160:90:force_original_aspect_ratio=decrease,pad=160:90:(ow-iw)/2:(oh-ih)/2,tile=6x1:nb_frames=%d", previewSampleSeconds, cells)
+		filter := fmt.Sprintf("setpts=PTS-STARTPTS,select='gte(t,selected_n*%d)',scale=160:90:force_original_aspect_ratio=decrease,pad=160:90:(ow-iw)/2:(oh-ih)/2,tile=6x1:nb_frames=%d", sampleSeconds, cells)
 		decodeCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		err = exec.CommandContext(decodeCtx, p.FFmpeg, "-nostdin", "-v", "error", "-xerror", "-protocol_whitelist", "file", "-enable_drefs", "0", "-use_absolute_path", "0", "-threads", "2", "-i", input, "-an", "-vf", filter, "-frames:v", "1", "-threads", "1", "-q:v", "4", "-fs", "1048576", output).Run()
 		cancel()
@@ -243,8 +243,8 @@ func (p PackageMediaProbe) generatePreviewRange(ctx context.Context, mediaPrefix
 		var cue strings.Builder
 		for cell := 0; cell < cells; cell++ {
 			// Keep five-second cues readable by existing players; pairs share one sample.
-			for offset := 0; offset < previewSampleSeconds; offset += 5 {
-				start := startSeconds + float64(cell*previewSampleSeconds+offset)
+			for offset := 0; offset < sampleSeconds; offset += 5 {
+				start := startSeconds + float64(cell*sampleSeconds+offset)
 				if start >= end {
 					break
 				}
@@ -270,7 +270,7 @@ func (p PackageMediaProbe) generatePreviewRange(ctx context.Context, mediaPrefix
 	return put(ctx, outPrefix+"index.vtt", []byte(vtt.String()))
 }
 
-func previewCells(data []byte, duration float64) (int, error) {
+func previewCells(data []byte, duration float64, sampleSeconds int) (int, error) {
 	var output struct {
 		Packets []struct {
 			PTS string `json:"pts_time"`
@@ -288,7 +288,7 @@ func previewCells(data []byte, duration float64) (int, error) {
 		first = math.Min(first, pts)
 		last = math.Max(last, pts)
 	}
-	cells := min(3, int(math.Ceil(duration/previewSampleSeconds)), int(math.Floor((last-first+0.000001)/previewSampleSeconds))+1)
+	cells := min(30/sampleSeconds, int(math.Ceil(duration/float64(sampleSeconds))), int(math.Floor((last-first+0.000001)/float64(sampleSeconds)))+1)
 	if cells < 1 {
 		return 0, assets.ErrInvalidUpload
 	}
