@@ -187,7 +187,8 @@ func TestPreviewCellsDoNotExposeDurationRoundingPadding(t *testing.T) {
 
 type previewMemoryObjects struct {
 	*packageMemoryObjects
-	images int
+	images   int
+	pointers map[string]int
 }
 
 func (s *previewMemoryObjects) PutPackagePreview(_ context.Context, key string, data []byte) error {
@@ -200,6 +201,10 @@ func (s *previewMemoryObjects) PutPackagePreview(_ context.Context, key string, 
 	s.bytes[key] = bytes.Clone(data)
 	return nil
 }
-func (s *previewMemoryObjects) AdvanceLivePreviewPointer(context.Context, string, int) error {
+func (s *previewMemoryObjects) AdvanceLivePreviewPointer(_ context.Context, id string, last int) error {
+	if s.pointers == nil {
+		s.pointers = map[string]int{}
+	}
+	s.pointers[id] = last
 	return nil
 }

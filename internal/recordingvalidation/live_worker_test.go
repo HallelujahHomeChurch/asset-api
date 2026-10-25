@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -243,6 +244,38 @@ func TestLiveTenSecondPairsWithPreviews(t *testing.T) {
 			}
 		}
 		t.Logf("LIVE_PAIR round=%d media_seconds=10.01 elapsed_seconds=%.3f preview_backlog=0", round, time.Since(started).Seconds())
+		// Model the validator's ready commit, then exercise the actual VOD worker.
+		id := ids[0]
+		renditions := assets.LiveRenditions()
+		inventory := assets.RecordingPackageInventory{SchemaVersion: 1, PresetVersion: assets.RecordingTenSecondPreset, Objects: declarations, Renditions: renditions[:]}
+		for i := range inventory.Renditions {
+			inventory.Renditions[i].SegmentCount = 1
+			inventory.Renditions[i].DurationSeconds = 10.01
+			inventory.Renditions[i].FrameRate = 30000.0 / 1001
+		}
+		data, err := json.Marshal(inventory)
+		if err != nil {
+			t.Fatal(err)
+		}
+		prefix := "recordings/packages/" + id + "/final/validated/"
+		if _, err := db.Exec(`INSERT INTO recording_packages(id,session_id,owner_service,actor_id,recording_id,idempotency_key,state,size_bytes,created_at,expires_at,inventory,completed_at,ready_at,final_prefix,media_expires_at) SELECT id,id,'hhc-web-api',actor_id,recording_id,'seal:'||id,'ready',declared_bytes,created_at,expires_at,$2,now(),now(),$3,now()+interval '1 day' FROM recording_captures WHERE id=$1`, id, data, prefix); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`UPDATE recording_captures SET state='ready',package_id=id WHERE id=$1`, id); err != nil {
+			t.Fatal(err)
+		}
+		vodProbe := probe
+		vodProbe.FFmpeg, vodProbe.FFprobe = "/missing/ffmpeg", "/missing/ffprobe"
+		images := previews.images
+		delete(previews.pointers, id)
+		if processed, err := RunPackagePreview(context.Background(), repo, previews, vodProbe); err != nil || !processed {
+			t.Fatal("VOD failed to finalize completed live receipts without decoding", processed, err)
+		}
+		var state string
+		last, published := previews.pointers[id]
+		if err := db.QueryRow(`SELECT preview_state FROM recording_packages WHERE id=$1`, id).Scan(&state); err != nil || state != "ready" || previews.images != images || string(objects.bytes[prefix+"previews/current.json"]) != `{"attempt":"capture"}` || !published || last != 0 {
+			t.Fatal("VOD preview pointer/state not finalized", state, err)
+		}
 	}
 }
 

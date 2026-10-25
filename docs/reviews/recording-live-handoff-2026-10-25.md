@@ -57,6 +57,13 @@ zero thumbnail backlog. The same quota runs passed real mixed-sampling/partial-t
 preview generation, cover generation and short-tail validation before/during
 seal, including rejection of a sealed short interior fragment.
 
+The paired fixture also models the validator's subsequent ready commit and calls
+the actual `RunPackagePreview` with both media tools unavailable. It must finish
+the ready preview state, advance the capture preview pointer and write the VOD
+`current.json` without another JPEG write. This checks the worker-level success
+path alongside the PostgreSQL competing-claim/expiry tests and real partial-tail
+generation tests; it does not repeat full package validation in that fixture.
+
 Reproduce with a disposable test database accessible from the container:
 
 ```sh
