@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"hhc/asset-api/internal/assets"
+	"hhc/asset-api/internal/storage/r2"
 )
 
 func TestPreviewRealNonzeroTimestampAndPartialTail(t *testing.T) {
@@ -28,7 +29,8 @@ func TestPreviewRealNonzeroTimestampAndPartialTail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	args := []string{"-nostdin", "-v", "error", "-f", "lavfi", "-i", "color=c=red:size=320x180:rate=30", "-t", "36.2", "-c:v", "libx264", "-threads", "2", "-preset", "ultrafast", "-g", "900", "-f", "hls", "-hls_time", "30", "-hls_playlist_type", "vod", "-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", "init.mp4", "-hls_segment_filename", filepath.Join(dir, "seg-%06d.m4s"), filepath.Join(dir, "index.m3u8")}
+	// Five-second green intervals distinguish ten-second samples from the old cadence.
+	args := []string{"-nostdin", "-v", "error", "-f", "lavfi", "-i", "color=c=red:size=320x180:rate=30,drawbox=color=lime:t=fill:enable='gte(mod(t,10),5)'", "-t", "36.2", "-c:v", "libx264", "-threads", "2", "-preset", "ultrafast", "-g", "900", "-f", "hls", "-hls_time", "30", "-hls_playlist_type", "vod", "-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", "init.mp4", "-hls_segment_filename", filepath.Join(dir, "seg-%06d.m4s"), filepath.Join(dir, "index.m3u8")}
 	if out, err := exec.Command(ffmpeg, args...).CombinedOutput(); err != nil {
 		t.Fatalf("fixture: %s %v", out, err)
 	}
@@ -68,17 +70,23 @@ func TestPreviewRealNonzeroTimestampAndPartialTail(t *testing.T) {
 	if len(order) != 3 || order[2] != prefix+"index.vtt" {
 		t.Fatalf("index not last: %v", order)
 	}
-	if strings.Count(vtt, " --> ") != 8 || !strings.Contains(vtt, "00:00:35.000 --> 00:00:36.200\nseg-000001.jpg#xywh=160,0,160,90") || strings.Contains(vtt, "seg-000001.jpg#xywh=320") {
+	if strings.Count(vtt, " --> ") != 8 || !strings.Contains(vtt, "00:00:35.000 --> 00:00:36.200\nseg-000001.jpg#xywh=0,0,160,90") || strings.Contains(vtt, "seg-000001.jpg#xywh=160") {
 		t.Fatalf("bad VTT: %s", vtt)
+	}
+	for interval := 0; interval < 6; interval++ {
+		cue := fmt.Sprintf("%s --> %s\nseg-000000.jpg#xywh=%d,0,160,90", previewTimestamp(float64(interval*5)), previewTimestamp(float64((interval+1)*5)), interval/2*160)
+		if !strings.Contains(vtt, cue) {
+			t.Fatalf("five-second compatibility cue does not reuse its ten-second sample: %s", cue)
+		}
 	}
 	for _, name := range []string{"seg-000000.jpg", "seg-000001.jpg"} {
 		image, err := jpeg.Decode(bytes.NewReader(writes[prefix+name]))
 		if err != nil {
 			t.Fatal(err)
 		}
-		cells := 6
+		cells := 3
 		if name == "seg-000001.jpg" {
-			cells = 2
+			cells = 1
 		}
 		for i := 0; i < cells; i++ {
 			red, green, blue, _ := image.At(i*160+80, 45).RGBA()
@@ -114,8 +122,38 @@ func TestPreviewRealNonzeroTimestampAndPartialTail(t *testing.T) {
 	if shared.images != 1 || !bytes.Equal(original, objects.bytes[sharedPrefix+"seg-000000.jpg"]) {
 		t.Fatal("gap recovery reencoded completed image")
 	}
+	// A pre-upgrade worker may have written its JPEG but crashed before its receipt.
+	legacyCapture := strings.Repeat("b", 32)
+	legacyPrefix := "recordings/captures/" + legacyCapture + "/final/previews/"
+	if err = probe.generatePreviewRange(context.Background(), p.FinalPrefix, legacyPrefix+"shared/", p.Inventory.Objects, p.Inventory.Renditions[0], timeline, 0, "WEBVTT\n\n", 5, shared.PutPackagePreview); err != nil {
+		t.Fatal(err)
+	}
+	legacyImage := bytes.Clone(objects.bytes[legacyPrefix+"shared/seg-000000.jpg"])
+	delete(objects.bytes, legacyPrefix+"shared/seg-000000.vtt")
+	vtt, err = probe.generateSharedPreviews(context.Background(), legacyCapture, p.FinalPrefix, p.Inventory.Objects, p.Inventory.Renditions[0], timeline, 0, "WEBVTT\n\n", shared)
+	if err != nil || !bytes.Equal(legacyImage, objects.bytes[legacyPrefix+"shared/seg-000000.jpg"]) || !strings.Contains(vtt, "00:00:05.000 --> 00:00:10.000\nseg-000000.jpg#xywh=160") {
+		t.Fatalf("legacy orphan recovery changed immutable image or lost its cues: %v", err)
+	}
+	// Stop leaves one old-cadence live receipt; VOD adds only the new-cadence tail.
+	mixedCapture := strings.Repeat("c", 32)
+	mixedPrefix := "recordings/captures/" + mixedCapture + "/final/previews/shared/"
+	first := p.Inventory.Renditions[0]
+	first.SegmentCount = 1
+	if err := probe.generatePreviewRange(context.Background(), p.FinalPrefix, mixedPrefix, p.Inventory.Objects, first, timeline[:1], 0, "WEBVTT\n\n", 5, shared.PutPackagePreview); err != nil {
+		t.Fatal(err)
+	}
+	oldImage := bytes.Clone(objects.bytes[mixedPrefix+"seg-000000.jpg"])
+	previous := string(objects.bytes[mixedPrefix+"seg-000000.vtt"])
+	shared.images = 0
+	vtt, err = probe.generateSharedPreviews(context.Background(), mixedCapture, p.FinalPrefix, p.Inventory.Objects, p.Inventory.Renditions[0], timeline, 1, previous, shared)
+	if err != nil || shared.images != 1 || !bytes.Equal(oldImage, objects.bytes[mixedPrefix+"seg-000000.jpg"]) || strings.Count(vtt, " --> ") != 8 || !strings.Contains(vtt, "00:00:05.000 --> 00:00:10.000\nseg-000000.jpg#xywh=160") || !strings.Contains(vtt, "00:00:35.000 --> 00:00:36.200\nseg-000001.jpg#xywh=0") {
+		t.Fatalf("mixed live/VOD handoff: images=%d err=%v VTT=%s", shared.images, err, vtt)
+	}
 	probe.FFmpeg = "/missing/ffmpeg"
 	shared.images = 0
+	if _, err := probe.generateSharedPreviews(context.Background(), mixedCapture, p.FinalPrefix, p.Inventory.Objects, p.Inventory.Renditions[0], timeline, 1, previous, shared); err != nil || shared.images != 0 {
+		t.Fatalf("post-write/pre-commit retry decoded completed tail: %v", err)
+	}
 	if _, err = probe.generateSharedPreviews(context.Background(), capture, p.FinalPrefix, p.Inventory.Objects, p.Inventory.Renditions[0], timeline, 0, "WEBVTT\n\n", shared); err != nil {
 		t.Fatal("VOD failed to reuse receipts", err)
 	}
@@ -135,10 +173,12 @@ func TestPreviewCellsDoNotExposeDurationRoundingPadding(t *testing.T) {
 		want     int
 	}{
 		{`{"packets":[{"pts_time":"30"},{"pts_time":"34.966667"}]}`, 5.01, 1},
-		{`{"packets":[{"pts_time":"30"},{"pts_time":"35.000000"}]}`, 5.04, 2},
-		{`{"packets":[{"pts_time":"0"},{"pts_time":"29.966667"}]}`, 30, 6},
+		{`{"packets":[{"pts_time":"30"},{"pts_time":"35.000000"}]}`, 5.04, 1},
+		{`{"packets":[{"pts_time":"30"},{"pts_time":"39.966667"}]}`, 10.01, 1},
+		{`{"packets":[{"pts_time":"30"},{"pts_time":"40.000000"}]}`, 10.04, 2},
+		{`{"packets":[{"pts_time":"0"},{"pts_time":"29.966667"}]}`, 30, 3},
 	} {
-		got, err := previewCells([]byte(tc.data), tc.duration)
+		got, err := previewCells([]byte(tc.data), tc.duration, previewSampleSeconds)
 		if err != nil || got != tc.want {
 			t.Fatalf("cells %d want %d: %v", got, tc.want, err)
 		}
@@ -147,16 +187,24 @@ func TestPreviewCellsDoNotExposeDurationRoundingPadding(t *testing.T) {
 
 type previewMemoryObjects struct {
 	*packageMemoryObjects
-	images int
+	images   int
+	pointers map[string]int
 }
 
 func (s *previewMemoryObjects) PutPackagePreview(_ context.Context, key string, data []byte) error {
+	if existing, ok := s.bytes[key]; ok && !bytes.Equal(existing, data) {
+		return r2.ErrLiveConflict
+	}
 	if strings.HasSuffix(key, ".jpg") {
 		s.images++
 	}
 	s.bytes[key] = bytes.Clone(data)
 	return nil
 }
-func (s *previewMemoryObjects) AdvanceLivePreviewPointer(context.Context, string, int) error {
+func (s *previewMemoryObjects) AdvanceLivePreviewPointer(_ context.Context, id string, last int) error {
+	if s.pointers == nil {
+		s.pointers = map[string]int{}
+	}
+	s.pointers[id] = last
 	return nil
 }

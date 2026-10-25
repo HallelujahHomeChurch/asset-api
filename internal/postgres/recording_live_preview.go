@@ -22,7 +22,7 @@ const livePreviewAlive = `cap.terminal_at IS NULL AND NOT EXISTS(SELECT 1 FROM r
 
 func (s *RecordingPackageStore) ClaimLivePreview(ctx context.Context) (RecordingLivePreviewClaim, error) {
 	var c RecordingLivePreviewClaim
-	if _, err := s.db.ExecContext(ctx, `INSERT INTO recording_live_previews(capture_id) SELECT l.capture_id FROM recording_live l JOIN recording_captures cap ON cap.id=l.capture_id WHERE l.published_sequence>=0 AND cap.state='uploading' AND cap.expires_at>now() AND NOT EXISTS(SELECT 1 FROM recording_live_previews p WHERE p.capture_id=l.capture_id) ORDER BY cap.created_at LIMIT 20 ON CONFLICT DO NOTHING`); err != nil {
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO recording_live_previews(capture_id) `+livePreviewBootstrapCandidate+` ORDER BY cap.created_at LIMIT 20 ON CONFLICT DO NOTHING`); err != nil {
 		return c, err
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -45,6 +45,15 @@ func (s *RecordingPackageStore) ClaimLivePreview(ctx context.Context) (Recording
 	}
 	if err != nil {
 		return c, err
+	}
+	// VOD claims lock this same progress row. Recheck readiness in a fresh
+	// statement after the lock, rather than using the admission query's snapshot.
+	var vodReady bool
+	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM recording_captures cap JOIN recording_packages p ON p.id=cap.package_id WHERE cap.id=$1 AND p.state='ready')`, c.CaptureID).Scan(&vodReady); err != nil {
+		return c, err
+	}
+	if vodReady {
+		return c, assets.ErrNotFound
 	}
 	if err = json.Unmarshal(raw, &c.Timeline); err != nil {
 		return c, err

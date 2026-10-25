@@ -23,15 +23,14 @@ func (s *RecordingEventStore) workReady(ctx context.Context, lane string) (bool,
 	var query string
 	switch lane {
 	case "live":
-		query = liveWakeCandidate
+		query = `SELECT 1 WHERE EXISTS (` + liveWakeCandidate + `) OR EXISTS (` + liveCoverWakeCandidate + `) OR EXISTS (` + livePreviewWakeCandidate + `) OR EXISTS (` + livePreviewBootstrapCandidate + `) OR EXISTS (SELECT 1 FROM recording_live_covers WHERE state='processing' AND attempts=3 AND claimed_until<=now())`
 	case "processing":
 		query = `SELECT 1 WHERE EXISTS (` + packageWakeCandidate + `) OR EXISTS (SELECT 1 FROM recording_packages WHERE state='validating' AND validation_attempts=3 AND claimed_until<=now())`
 		if s.sources {
 			query = `SELECT 1 WHERE EXISTS (` + sourceWakeCandidate + `) OR EXISTS (` + query + `) OR EXISTS (SELECT 1 FROM recording_sources WHERE state IN ('finalizing','queued','processing') AND processing_attempts=3 AND claimed_until<=now())`
 		}
 	case "preview":
-		query = `SELECT 1 WHERE EXISTS (` + liveCoverWakeCandidate + `) OR EXISTS (` + coverWakeCandidate + `) OR EXISTS (` + previewWakeCandidate + `) OR EXISTS (` + livePreviewWakeCandidate + `) OR EXISTS (SELECT 1 FROM recording_live l JOIN recording_captures c ON c.id=l.capture_id WHERE c.state='uploading' AND c.expires_at>now() AND l.published_sequence>=0 AND NOT EXISTS(SELECT 1 FROM recording_live_previews p WHERE p.capture_id=l.capture_id) AND ` + previewWorkWaiting + `)`
-		query = `SELECT 1 WHERE EXISTS (` + query + `) OR EXISTS (SELECT 1 FROM recording_live_covers WHERE state='processing' AND attempts=3 AND claimed_until<=now()) OR EXISTS (SELECT 1 FROM recording_covers WHERE state='processing' AND attempts=3 AND claimed_until<=now()) OR EXISTS (SELECT 1 FROM recording_packages WHERE preview_state='processing' AND preview_attempts=3 AND preview_claimed_until<=now())`
+		query = `SELECT 1 WHERE EXISTS (` + coverWakeCandidate + `) OR EXISTS (` + previewWakeCandidate + `) OR EXISTS (SELECT 1 FROM recording_covers WHERE state='processing' AND attempts=3 AND claimed_until<=now()) OR EXISTS (SELECT 1 FROM recording_packages WHERE preview_state='processing' AND preview_attempts=3 AND preview_claimed_until<=now())`
 	default:
 		return false, assets.ErrInvalidInput
 	}
