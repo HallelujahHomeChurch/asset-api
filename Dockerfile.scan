@@ -3,8 +3,8 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /asset-scan-worker ./cmd/scan-worker
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /asset-signature-refresh ./cmd/signature-refresh
+RUN --mount=type=cache,id=asset-go-build,target=/root/.cache/go-build CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /asset-scan-worker ./cmd/scan-worker
+RUN --mount=type=cache,id=asset-go-build,target=/root/.cache/go-build CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /asset-signature-refresh ./cmd/signature-refresh
 
 FROM debian:bookworm-slim
 RUN apt-get update \

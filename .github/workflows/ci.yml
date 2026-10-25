@@ -7,6 +7,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: asset-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   agent_docs:
     runs-on: ubuntu-latest
@@ -31,7 +35,7 @@ jobs:
 
   verify:
     needs: agent_docs
-    if: ${{ always() && (needs.agent_docs.result != 'success' || needs.agent_docs.outputs.docs_only != 'true') }}
+    if: ${{ !cancelled() && (needs.agent_docs.result != 'success' || needs.agent_docs.outputs.docs_only != 'true') }}
     outputs:
       image_artifact_id: ${{ steps.images_artifact.outputs.artifact-id }}
       api_image_id: ${{ steps.image_fixture.outputs.api_image_id }}
