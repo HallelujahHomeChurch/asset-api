@@ -29,6 +29,10 @@ func TestSourceJobsShareGlobalSlotsAndFenceStaleWorkers(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// Retained unclaimed sources must survive the maintenance migrator replay.
+	if err := migrations.Run(ctx, db); err != nil {
+		t.Fatal(err)
+	}
 	first, err := store.ClaimSourceProcessing(ctx)
 	if err != nil {
 		t.Fatal(err)
