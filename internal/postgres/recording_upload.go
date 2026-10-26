@@ -26,19 +26,10 @@ func recordingTransitionResult(result sql.Result, err error) error {
 	return nil
 }
 
-type recordingLockConnKey struct{}
-
 type recordingStatements interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-}
-
-func (s *recordingSessionStore) statements(ctx context.Context) recordingStatements {
-	if conn, ok := ctx.Value(recordingLockConnKey{}).(*sql.Conn); ok {
-		return conn
-	}
-	return s.db
 }
 
 func newRecordingSessionStore(db *sql.DB) *recordingSessionStore {
@@ -47,7 +38,7 @@ func newRecordingSessionStore(db *sql.DB) *recordingSessionStore {
 
 // Serialize R2 completion and deletion across API/worker processes. A failed
 // contender retries instead of holding every pool connection waiting for a lock.
-func (s *recordingSessionStore) WithSessionLock(ctx context.Context, id string, run func(context.Context) error) (resultErr error) {
+func (s *recordingSessionStore) WithSessionLock(ctx context.Context, id string, run func(context.Context, *sql.Conn) error) (resultErr error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	conn, err := s.db.Conn(ctx)
@@ -97,5 +88,5 @@ func (s *recordingSessionStore) WithSessionLock(ctx context.Context, id string, 
 			resultErr = errors.Join(resultErr, unlockErr)
 		}
 	}()
-	return run(context.WithValue(ctx, recordingLockConnKey{}, conn))
+	return run(ctx, conn)
 }

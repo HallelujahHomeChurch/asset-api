@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"time"
@@ -38,13 +39,13 @@ func (s *RecordingPackageStore) PackageCleanupCandidates(ctx context.Context) ([
 // object paths. Failed deletion is retried; successful sweeps are repeated to
 // remove late writes made with capabilities issued before complete/expiry.
 func (s *RecordingPackageStore) CleanupPackage(ctx context.Context, id string, deleteObjects func(context.Context, []string) error) error {
-	return s.WithSessionLock(ctx, id, func(ctx context.Context) error {
-		p, err := s.Get(ctx, id)
+	return s.locks.WithSessionLock(ctx, "package-"+id, func(ctx context.Context, conn *sql.Conn) error {
+		p, err := (recordingPackageSession{query: conn}).Get(ctx, id)
 		if err != nil {
 			return err
 		}
 		var uploadExpired, mediaExpired, gracePassed, due bool
-		err = s.locks.statements(ctx).QueryRowContext(ctx, `SELECT expires_at<=clock_timestamp(),COALESCE(media_expires_at<=clock_timestamp(),false),COALESCE(GREATEST(media_expires_at+interval '1 hour',grant_cleanup_after)<=clock_timestamp(),false),cleanup_after<=clock_timestamp() FROM recording_packages WHERE id=$1`, id).Scan(&uploadExpired, &mediaExpired, &gracePassed, &due)
+		err = conn.QueryRowContext(ctx, `SELECT expires_at<=clock_timestamp(),COALESCE(media_expires_at<=clock_timestamp(),false),COALESCE(GREATEST(media_expires_at+interval '1 hour',grant_cleanup_after)<=clock_timestamp(),false),cleanup_after<=clock_timestamp() FROM recording_packages WHERE id=$1`, id).Scan(&uploadExpired, &mediaExpired, &gracePassed, &due)
 		if err != nil {
 			return err
 		}
@@ -52,18 +53,18 @@ func (s *RecordingPackageStore) CleanupPackage(ctx context.Context, id string, d
 			return nil
 		}
 		var captureProtected bool
-		if err := s.locks.statements(ctx).QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM recording_captures c JOIN recording_live l ON l.capture_id=c.id WHERE c.package_id=$1 AND NOT (`+captureCleanupSafe+`))`, id).Scan(&captureProtected); err != nil {
+		if err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM recording_captures c JOIN recording_live l ON l.capture_id=c.id WHERE c.package_id=$1 AND NOT (`+captureCleanupSafe+`))`, id).Scan(&captureProtected); err != nil {
 			return err
 		}
 		if captureProtected {
 			return nil
 		}
 		// Persist before provider calls so even a timeout cannot starve later items.
-		if _, err := s.locks.statements(ctx).ExecContext(ctx, `UPDATE recording_packages SET cleanup_after=clock_timestamp()+interval '5 minutes' WHERE id=$1`, id); err != nil {
+		if _, err := conn.ExecContext(ctx, `UPDATE recording_packages SET cleanup_after=clock_timestamp()+interval '5 minutes' WHERE id=$1`, id); err != nil {
 			return err
 		}
 		if p.State == "uploading" && uploadExpired || p.State == "ready" && mediaExpired {
-			if _, err := s.locks.statements(ctx).ExecContext(ctx, `UPDATE recording_packages SET state='expired' WHERE id=$1 AND state=$2`, id, p.State); err != nil {
+			if _, err := conn.ExecContext(ctx, `UPDATE recording_packages SET state='expired' WHERE id=$1 AND state=$2`, id, p.State); err != nil {
 				return err
 			}
 			p.State = "expired"
@@ -92,10 +93,10 @@ func (s *RecordingPackageStore) CleanupPackage(ctx context.Context, id string, d
 				return err
 			}
 		}
-		if _, err := s.locks.statements(ctx).ExecContext(ctx, `UPDATE recording_package_attempts a SET state='abandoned',finished_at=clock_timestamp() FROM recording_packages p WHERE a.package_id=p.id AND p.id=$1 AND a.state='processing' AND (a.claim_id IS DISTINCT FROM p.claim_id OR (p.state='failed' AND p.claimed_until<=clock_timestamp()))`, id); err != nil {
+		if _, err := conn.ExecContext(ctx, `UPDATE recording_package_attempts a SET state='abandoned',finished_at=clock_timestamp() FROM recording_packages p WHERE a.package_id=p.id AND p.id=$1 AND a.state='processing' AND (a.claim_id IS DISTINCT FROM p.claim_id OR (p.state='failed' AND p.claimed_until<=clock_timestamp()))`, id); err != nil {
 			return err
 		}
-		rows, err := s.locks.statements(ctx).QueryContext(ctx, `SELECT claim_id FROM recording_package_attempts WHERE package_id=$1 AND
+		rows, err := conn.QueryContext(ctx, `SELECT claim_id FROM recording_package_attempts WHERE package_id=$1 AND
  ((state IN ('failed','abandoned','purged') AND finished_at+interval '6 hours'<=clock_timestamp()) OR (state='ready' AND $2))`, id, gracePassed)
 		if err != nil {
 			return err
@@ -118,7 +119,7 @@ func (s *RecordingPackageStore) CleanupPackage(ctx context.Context, id string, d
 			if err := deletePrefix("recordings/packages/"+id+"/final/"+attempt+"/", true); err != nil {
 				return err
 			}
-			if _, err := s.locks.statements(ctx).ExecContext(ctx, `UPDATE recording_package_attempts SET state='purged' WHERE claim_id=$1 AND package_id=$2`, attempt, id); err != nil {
+			if _, err := conn.ExecContext(ctx, `UPDATE recording_package_attempts SET state='purged' WHERE claim_id=$1 AND package_id=$2`, attempt, id); err != nil {
 				return err
 			}
 		}
@@ -126,7 +127,7 @@ func (s *RecordingPackageStore) CleanupPackage(ctx context.Context, id string, d
 		// until media expiry + grant grace, including an ambiguous successful
 		// pointer publication. Repeat declared-key sweeps to catch late writes.
 		if gracePassed && p.FinalPrefix != "" {
-			rows, err := s.locks.statements(ctx).QueryContext(ctx, `SELECT claim_id FROM recording_preview_attempts WHERE package_id=$1`, id)
+			rows, err := conn.QueryContext(ctx, `SELECT claim_id FROM recording_preview_attempts WHERE package_id=$1`, id)
 			if err != nil {
 				return err
 			}
@@ -167,7 +168,7 @@ func (s *RecordingPackageStore) CleanupPackage(ctx context.Context, id string, d
 		}
 		// ponytail: daily declared-key sweep retains metadata; add bounded metadata
 		// compaction only after retention policy and provider late-write bounds agree.
-		_, err = s.locks.statements(ctx).ExecContext(ctx, `UPDATE recording_packages SET cleanup_after=CASE WHEN state='expired' AND GREATEST(media_expires_at+interval '1 hour',grant_cleanup_after)>clock_timestamp() THEN GREATEST(media_expires_at+interval '1 hour',grant_cleanup_after) ELSE clock_timestamp()+interval '24 hours' END WHERE id=$1`, id)
+		_, err = conn.ExecContext(ctx, `UPDATE recording_packages SET cleanup_after=CASE WHEN state='expired' AND GREATEST(media_expires_at+interval '1 hour',grant_cleanup_after)>clock_timestamp() THEN GREATEST(media_expires_at+interval '1 hour',grant_cleanup_after) ELSE clock_timestamp()+interval '24 hours' END WHERE id=$1`, id)
 		return err
 	})
 }

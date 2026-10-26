@@ -103,7 +103,7 @@ func run() error {
 		}
 		handler.WithRecordingSigner(signer)
 		if cfg.RecordingHLSEnabled {
-			handler.WithRecordingPackages(assets.NewRecordingPackageService(postgres.NewRecordingPackageStore(db), objects, time.Now))
+			handler.WithRecordingPackages(assets.NewRecordingPackageService(postgres.NewRecordingPackageStore(db).WithBroadcastObjects(objects), objects, time.Now))
 			captureStore := postgres.NewRecordingCaptureStore(db).WithBroadcastObjects(objects)
 			handler.WithRecordingCaptures(assets.NewRecordingCaptureService(captureStore, objects, time.Now))
 			handler.WithRecordingBroadcasts(captureStore)
