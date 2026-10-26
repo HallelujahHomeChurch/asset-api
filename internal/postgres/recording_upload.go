@@ -50,6 +50,7 @@ func (s *recordingSessionStore) WithSessionLock(ctx context.Context, id string, 
 	// the exclusive counterpart before touching any package or cover row.
 	var policyLocked bool
 	if err := conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock_shared(`+retentionLock+`)`).Scan(&policyLocked); err != nil {
+		_ = conn.Raw(func(any) error { return driver.ErrBadConn })
 		return err
 	}
 	if !policyLocked {
@@ -70,6 +71,7 @@ func (s *recordingSessionStore) WithSessionLock(ctx context.Context, id string, 
 	}()
 	var acquired bool
 	if err := conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock(hashtextextended('recording-session:' || $1,0))`, id).Scan(&acquired); err != nil {
+		_ = conn.Raw(func(any) error { return driver.ErrBadConn })
 		return err
 	}
 	if !acquired {

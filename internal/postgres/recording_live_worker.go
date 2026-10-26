@@ -16,8 +16,13 @@ func (s *RecordingCaptureStore) WithLiveWorker(ctx context.Context, run func(con
 	}
 	defer conn.Close()
 	const key = `hashtextextended('recording-live-worker',0)`
-	if err = conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock(`+key+`)`).Scan(&acquired); err != nil || !acquired {
-		return acquired, err
+	if err = conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock(`+key+`)`).Scan(&acquired); err != nil {
+		// An acquisition error does not prove the session owns no lock.
+		_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		return false, err
+	}
+	if !acquired {
+		return false, nil
 	}
 	defer func() {
 		unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
