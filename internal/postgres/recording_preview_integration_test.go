@@ -38,6 +38,10 @@ func TestPreviewBackfillSharedSlotsFencingAndCleanup(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// Retain pending previews across migration replay before consumers resume.
+	if err := migrations.Run(ctx, db); err != nil {
+		t.Fatal(err)
+	}
 	// Competing scheduled executions must never claim the same package or
 	// create more than two global processing leases.
 	type result struct {

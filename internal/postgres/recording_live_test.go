@@ -42,6 +42,10 @@ func TestLiveProgressFencesUnpublishedAndStaleClaims(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Accepted, unclaimed live segments retain their authority across replay.
+	if err := migrations.Run(ctx, db); err != nil {
+		t.Fatal(err)
+	}
 	claim, err := store.ClaimLiveValidation(ctx)
 	if err != nil {
 		t.Fatal(err)
