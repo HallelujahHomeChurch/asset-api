@@ -22,6 +22,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"hhc/asset-api/internal/diagnostics"
 )
 
 const uploadTTL = 10 * time.Minute
@@ -38,7 +40,7 @@ func NewService(repository Repository, blobs BlobStore, publicBaseURL string, no
 	return &Service{repository: repository, blobs: blobs, publicBaseURL: strings.TrimRight(publicBaseURL, "/"), now: now}
 }
 
-func (s *Service) CreateUploadSession(ctx context.Context, input CreateUploadInput, idempotencyKey string) (CreatedUpload, error) {
+func (s *Service) CreateUploadSession(ctx context.Context, input CreateUploadInput, idempotencyKey string) (created CreatedUpload, err error) {
 	policy, ok := PolicyFor(input.Namespace)
 	if !ok || policy.OwnerService != input.OwnerService || !policy.AllowsMIME(input.ExpectedMIMEType) || !matchesFileExtension(input.OriginalFileName, input.ExpectedMIMEType) || input.OwnerType == "" || input.OwnerID == "" || !policy.AllowsSize(input.ExpectedMIMEType, input.MaxSizeBytes) || idempotencyKey == "" {
 		return CreatedUpload{}, ErrInvalidInput
@@ -48,6 +50,10 @@ func (s *Service) CreateUploadSession(ctx context.Context, input CreateUploadInp
 	}
 	if !policy.AllowsVisibility(input.Visibility) {
 		return CreatedUpload{}, ErrInvalidInput
+	}
+	stage := diagnostics.UploadReplay
+	if input.Namespace == "cms.weekly.image" {
+		defer func() { diagnostics.BulletinUploadFailure(ctx, stage, err) }()
 	}
 	if replay, ok, err := s.replayUpload(ctx, input, idempotencyKey); err != nil || ok {
 		return replay, err
@@ -59,10 +65,12 @@ func (s *Service) CreateUploadSession(ctx context.Context, input CreateUploadInp
 	stagingObjectKey := path.Join(environmentPrefix(), input.Namespace, now.Format("2006"), now.Format("01"), assetID, "staging", sessionID)
 	asset := Asset{ID: assetID, Namespace: input.Namespace, OwnerService: input.OwnerService, OwnerType: input.OwnerType, OwnerID: input.OwnerID, Purpose: input.Purpose, Locale: input.Locale, OriginalFileName: sanitizeFileName(input.OriginalFileName), ObjectKey: objectKey, ExpectedMIMEType: input.ExpectedMIMEType, UploadStatus: UploadCreated, ScanStatus: ScanPending, ProcessingStatus: policy.Processing, Visibility: input.Visibility, CreatedAt: now, UpdatedAt: now}
 	session := UploadSession{ID: sessionID, AssetID: assetID, IdempotencyKey: idempotencyKey, CallerService: input.OwnerService, Operation: "create_upload", Fingerprint: requestFingerprint(input), StagingObjectKey: stagingObjectKey, MaxSizeBytes: input.MaxSizeBytes, Status: UploadCreated, ExpiresAt: now.Add(uploadTTL), CreatedAt: now}
+	stage = diagnostics.UploadSign
 	target, err := s.blobs.CreateUploadTarget(ctx, stagingObjectKey, input.MaxSizeBytes, session.ExpiresAt)
 	if err != nil {
 		return CreatedUpload{}, fmt.Errorf("create upload target: %w", err)
 	}
+	stage = diagnostics.UploadPersist
 	if err := s.repository.CreateUpload(ctx, asset, session); err != nil {
 		if replay, ok, replayErr := s.replayUpload(ctx, input, idempotencyKey); replayErr == nil && ok {
 			return replay, nil
@@ -88,6 +96,10 @@ func (s *Service) replayUpload(ctx context.Context, input CreateUploadInput, key
 	}
 	if session.Fingerprint != requestFingerprint(input) {
 		return CreatedUpload{}, true, ErrConflict
+	}
+	if !asset.DeletedAt.IsZero() || !asset.PurgedAt.IsZero() {
+		asset.UploadStatus = UploadFailed
+		session.Status = UploadFailed
 	}
 	created := CreatedUpload{Asset: asset, Session: session}
 	if session.Status == UploadCreated && s.now().Before(session.ExpiresAt) {

@@ -92,9 +92,14 @@ func (s *Store) CreateUpload(ctx context.Context, asset assets.Asset, session as
 }
 
 func (s *Store) GetAsset(ctx context.Context, id string) (assets.Asset, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id,namespace,owner_service,owner_type,owner_id,purpose,locale,original_file_name,object_key,expected_mime_type,detected_mime_type,size_bytes,checksum_sha256,etag,upload_status,scan_status,scan_details,scan_signature_version,scan_failure_category,processing_status,visibility,created_at,updated_at,COALESCE(deleted_at,'0001-01-01'::timestamptz),scan_attempts,scan_event_id,processing_attempts,processing_error,COALESCE(processing_next_attempt_at,'0001-01-01'::timestamptz),COALESCE(processing_claimed_until,'0001-01-01'::timestamptz) FROM assets WHERE id=$1 AND purged_at IS NULL`, id)
+	return s.getAsset(ctx, id, false)
+}
+
+// Receipt replay needs retained tombstones; ordinary reads still hide purged assets.
+func (s *Store) getAsset(ctx context.Context, id string, includePurged bool) (assets.Asset, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT id,namespace,owner_service,owner_type,owner_id,purpose,locale,original_file_name,object_key,expected_mime_type,detected_mime_type,size_bytes,checksum_sha256,etag,upload_status,scan_status,scan_details,scan_signature_version,scan_failure_category,processing_status,visibility,created_at,updated_at,COALESCE(deleted_at,'0001-01-01'::timestamptz),scan_attempts,scan_event_id,processing_attempts,processing_error,COALESCE(processing_next_attempt_at,'0001-01-01'::timestamptz),COALESCE(processing_claimed_until,'0001-01-01'::timestamptz),COALESCE(purged_at,'0001-01-01'::timestamptz) FROM assets WHERE id=$1 AND ($2 OR purged_at IS NULL)`, id, includePurged)
 	var value assets.Asset
-	err := row.Scan(&value.ID, &value.Namespace, &value.OwnerService, &value.OwnerType, &value.OwnerID, &value.Purpose, &value.Locale, &value.OriginalFileName, &value.ObjectKey, &value.ExpectedMIMEType, &value.DetectedMIMEType, &value.SizeBytes, &value.ChecksumSHA256, &value.ETag, &value.UploadStatus, &value.ScanStatus, &value.ScanDetails, &value.ScanSignature, &value.ScanFailure, &value.ProcessingStatus, &value.Visibility, &value.CreatedAt, &value.UpdatedAt, &value.DeletedAt, &value.ScanAttempts, &value.ScanEventID, &value.ProcessingAttempts, &value.ProcessingError, &value.ProcessingNextAt, &value.ProcessingClaimedUntil)
+	err := row.Scan(&value.ID, &value.Namespace, &value.OwnerService, &value.OwnerType, &value.OwnerID, &value.Purpose, &value.Locale, &value.OriginalFileName, &value.ObjectKey, &value.ExpectedMIMEType, &value.DetectedMIMEType, &value.SizeBytes, &value.ChecksumSHA256, &value.ETag, &value.UploadStatus, &value.ScanStatus, &value.ScanDetails, &value.ScanSignature, &value.ScanFailure, &value.ProcessingStatus, &value.Visibility, &value.CreatedAt, &value.UpdatedAt, &value.DeletedAt, &value.ScanAttempts, &value.ScanEventID, &value.ProcessingAttempts, &value.ProcessingError, &value.ProcessingNextAt, &value.ProcessingClaimedUntil, &value.PurgedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return assets.Asset{}, assets.ErrNotFound
 	}
@@ -117,7 +122,7 @@ func (s *Store) FindUploadByIdempotency(ctx context.Context, caller, operation, 
 	} else if err != nil {
 		return assets.Asset{}, assets.UploadSession{}, err
 	}
-	asset, err := s.GetAsset(ctx, assetID)
+	asset, err := s.getAsset(ctx, assetID, true)
 	if err != nil {
 		return assets.Asset{}, assets.UploadSession{}, err
 	}
