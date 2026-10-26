@@ -44,6 +44,14 @@ and no next claim with the real hold control; if unavailable, naturally drain on
 that lane or postpone. Keep existing PG physical-drain checks. No NOLOGIN,
 termination, queue deletion or attempt reset to manufacture idle.
 
+`recording_preview_attempts`, `recording_cover_attempts` and
+`recording_live_cover_attempts` have no completion marker (`finished_at`/state).
+They therefore cannot supply an unfinished-attempt count. This SQL cannot tell
+whether a superseded attempt is still writing externally. Accept settlement of
+these lanes only with actual execution-termination evidence **and** the owner's
+lease/publication fencing contract; without either, settlement remains unproved.
+Do not infer it from a current row's cleared lease or this report's zero counts.
+
 ## Cost and compatibility
 
 One scan per component (assets and packages have distinct scan/preview semantics).
