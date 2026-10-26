@@ -59,8 +59,8 @@ type httpSourceRepo struct {
 	p assets.RecordingSource
 }
 
-func (s *httpSourceRepo) WithSessionLock(ctx context.Context, _ string, fn func(context.Context) error) error {
-	return fn(ctx)
+func (s *httpSourceRepo) WithSessionLock(ctx context.Context, _ string, fn func(context.Context, assets.RecordingSourceSession) error) error {
+	return fn(ctx, s)
 }
 func (s *httpSourceRepo) Get(context.Context, string) (assets.RecordingSource, error) {
 	return s.p, nil

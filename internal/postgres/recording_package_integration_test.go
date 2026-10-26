@@ -50,8 +50,8 @@ func TestRecordingPackagePersistenceAndDurableFreeze(t *testing.T) {
 	lockCtx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	interrupted := errors.New("response lost after durable freeze")
-	err = store.WithSessionLock(lockCtx, p.ID, func(ctx context.Context) error {
-		if err := store.Freeze(ctx, p.ID, time.Now()); err != nil {
+	err = store.WithSessionLock(lockCtx, p.ID, func(ctx context.Context, session assets.RecordingPackageSession) error {
+		if err := session.Freeze(ctx, p.ID, time.Now()); err != nil {
 			return err
 		}
 		return interrupted

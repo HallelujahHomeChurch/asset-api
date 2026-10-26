@@ -18,8 +18,10 @@ func NewRecordingSourceStore(db *sql.DB) *RecordingSourceStore {
 	return &RecordingSourceStore{db: db, locks: newRecordingSessionStore(db)}
 }
 
-func (s *RecordingSourceStore) WithSessionLock(ctx context.Context, id string, fn func(context.Context) error) error {
-	return s.locks.WithSessionLock(ctx, "source-"+id, fn)
+func (s *RecordingSourceStore) WithSessionLock(ctx context.Context, id string, fn func(context.Context, assets.RecordingSourceSession) error) error {
+	return s.locks.WithSessionLock(ctx, "source-"+id, func(ctx context.Context, conn *sql.Conn) error {
+		return fn(ctx, recordingSourceSession{query: conn})
+	})
 }
 
 const recordingSourceColumns = `id,owner_service,actor_id,recording_id,idempotency_key,file_name,size_bytes,checksum_sha256,block_count,state,created_at,expires_at,completed_at,retry_until,COALESCE(staging_etag,''),COALESCE(copy_attempt_id,''),COALESCE(source_key,''),COALESCE(source_etag,''),source_verified_at,processing_attempts,COALESCE(processing_error,''),COALESCE(package_id,''),processing_progress`
@@ -38,11 +40,17 @@ func scanRecordingSource(row *sql.Row) (assets.RecordingSource, error) {
 	return p, err
 }
 
+type recordingSourceSession struct{ query recordingStatements }
+
 func (s *RecordingSourceStore) Get(ctx context.Context, id string) (assets.RecordingSource, error) {
-	return scanRecordingSource(s.locks.statements(ctx).QueryRowContext(ctx, `SELECT `+recordingSourceColumns+` FROM recording_sources WHERE id=$1`, id))
+	return (recordingSourceSession{query: s.db}).Get(ctx, id)
+}
+
+func (s recordingSourceSession) Get(ctx context.Context, id string) (assets.RecordingSource, error) {
+	return scanRecordingSource(s.query.QueryRowContext(ctx, `SELECT `+recordingSourceColumns+` FROM recording_sources WHERE id=$1`, id))
 }
 func (s *RecordingSourceStore) FindByIdempotency(ctx context.Context, key string) (assets.RecordingSource, error) {
-	return scanRecordingSource(s.locks.statements(ctx).QueryRowContext(ctx, `SELECT `+recordingSourceColumns+` FROM recording_sources WHERE idempotency_key=$1`, key))
+	return scanRecordingSource(s.db.QueryRowContext(ctx, `SELECT `+recordingSourceColumns+` FROM recording_sources WHERE idempotency_key=$1`, key))
 }
 
 func (s *RecordingSourceStore) Create(ctx context.Context, p assets.RecordingSource) error {
@@ -90,10 +98,14 @@ func (s *RecordingSourceStore) Create(ctx context.Context, p assets.RecordingSou
 // The row itself is the durable finalize work. A retry can discover it without
 // a second queue send; provider bytes remain untrusted until the worker verifies.
 func (s *RecordingSourceStore) Finalize(ctx context.Context, id, etag string, at time.Time) error {
+	return (recordingSourceSession{query: s.db}).Finalize(ctx, id, etag, at)
+}
+
+func (s recordingSourceSession) Finalize(ctx context.Context, id, etag string, at time.Time) error {
 	if etag == "" {
 		return assets.ErrInvalidInput
 	}
-	result, err := s.locks.statements(ctx).ExecContext(ctx, `UPDATE recording_sources SET state='finalizing',staging_etag=$2,completed_at=$3,retry_until=$3+interval '7 days' WHERE id=$1 AND state='uploading' AND expires_at>$3`, id, etag, at)
+	result, err := s.query.ExecContext(ctx, `UPDATE recording_sources SET state='finalizing',staging_etag=$2,completed_at=$3,retry_until=$3+interval '7 days' WHERE id=$1 AND state='uploading' AND expires_at>$3`, id, etag, at)
 	return recordingTransitionResult(result, err)
 }
 

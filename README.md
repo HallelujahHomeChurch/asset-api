@@ -20,6 +20,23 @@ optional exact `ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID` / `OBJECT_ID` pair. It maps
 to the existing `hhc-web-api` owner, not a new asset owner. Both identifiers
 must be configured together; leaving both empty preserves existing behavior.
 
+## CI test scheduling
+
+`python3 scripts/test-go-lanes.py` runs all packages discovered by `go list ./...`
+with `-race -count=1 -p=1` in two processes on the same runner. Media packages
+(recording validation, recording processing and derivatives) execute serially in
+one lane; all remaining and newly added packages execute serially in the other.
+This overlaps database waits with media work without adding another runner. Media
+worker and database integration fixtures use distinct per-test schemas.
+
+The runner publishes `.artifacts/data-governance/test-events.jsonl` only after
+both lanes succeed and every package has a terminal result. Failure or cancellation
+stops both process groups. `python3 scripts/test-go-lanes_test.py` checks package
+coverage, event integrity, failure and cancellation. The direct serial command
+`go test -race -json ./... -count=1 -p=1` remains useful for comparison; both paths
+require the same disposable PostgreSQL and media tools. Governance export still
+runs after the complete event stream is available.
+
 ## Routes
 
 - `GET /health`

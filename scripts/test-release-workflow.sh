@@ -83,7 +83,8 @@ grep -Fq 'fs --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-co
 grep -Fq 'image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 asset-api:verify' .github/workflows/ci.yml
 grep -Fq 'image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 asset-scan:verify' .github/workflows/ci.yml
 for candidate in .github/workflows/ci.yml "$workflow"; do
-  grep -Fq 'go test -race -json ./... -count=1 -p=1 | tee .artifacts/data-governance/test-events.jsonl' "$candidate"
+  grep -Fq 'python3 scripts/test-go-lanes_test.py' "$candidate"
+  grep -Fq 'python3 scripts/test-go-lanes.py' "$candidate"
   grep -Fq "GOVERNANCE_TEST_EVENTS=\"\$PWD/.artifacts/data-governance/test-events.jsonl\"" "$candidate"
   grep -Fq "go test ./internal/governance -run '^TestDataGovernanceExport\$' -count=1" "$candidate"
   grep -Fq 'bash scripts/test-publish-data-governance.sh' "$candidate"

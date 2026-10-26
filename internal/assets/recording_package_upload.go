@@ -63,8 +63,16 @@ type SignedRecordingObject struct {
 	r2.PresignedPart
 }
 
+// RecordingPackageSession exposes only operations on the connection owned by the session lock.
+// It must only be used during the WithSessionLock callback.
+type RecordingPackageSession interface {
+	RecordingBroadcastReader
+	Get(context.Context, string) (RecordingPackage, error)
+	Freeze(context.Context, string, time.Time) error
+}
+
 type RecordingPackageRepository interface {
-	WithSessionLock(context.Context, string, func(context.Context) error) error
+	WithSessionLock(context.Context, string, func(context.Context, RecordingPackageSession) error) error
 	FindByIdempotency(context.Context, string) (RecordingPackage, error)
 	Create(context.Context, RecordingPackage) error
 	Get(context.Context, string) (RecordingPackage, error)
@@ -117,7 +125,11 @@ func (s *RecordingPackageService) Create(ctx context.Context, input CreateRecord
 }
 
 func (s *RecordingPackageService) Get(ctx context.Context, id, actor string) (RecordingPackage, error) {
-	p, err := s.repository.Get(ctx, id)
+	return getRecordingPackage(ctx, s.repository.Get, id, actor)
+}
+
+func getRecordingPackage(ctx context.Context, get func(context.Context, string) (RecordingPackage, error), id, actor string) (RecordingPackage, error) {
+	p, err := get(ctx, id)
 	if err != nil {
 		return RecordingPackage{}, err
 	}
@@ -130,7 +142,11 @@ func (s *RecordingPackageService) Get(ctx context.Context, id, actor string) (Re
 // Only the owning CMS may use this private operation after checking the viewer's
 // entitlement/publication. Uploader identity is not the viewer identity.
 func (s *RecordingPackageService) GetReady(ctx context.Context, id, recordingID string) (RecordingPackage, error) {
-	p, err := s.repository.Get(ctx, id)
+	return s.getReady(ctx, s.repository.Get, id, recordingID)
+}
+
+func (s *RecordingPackageService) getReady(ctx context.Context, get func(context.Context, string) (RecordingPackage, error), id, recordingID string) (RecordingPackage, error) {
+	p, err := get(ctx, id)
 	if err != nil {
 		return RecordingPackage{}, err
 	}
@@ -141,13 +157,13 @@ func (s *RecordingPackageService) GetReady(ctx context.Context, id, recordingID 
 }
 
 // The callback must issue the grant while holding the policy/package lock.
-func (s *RecordingPackageService) WithReady(ctx context.Context, id, recordingID string, use func(RecordingPackage) error) error {
-	return s.repository.WithSessionLock(ctx, id, func(ctx context.Context) error {
-		p, err := s.GetReady(ctx, id, recordingID)
+func (s *RecordingPackageService) WithReady(ctx context.Context, id, recordingID string, use func(context.Context, RecordingPackage, RecordingBroadcastReader) error) error {
+	return s.repository.WithSessionLock(ctx, id, func(ctx context.Context, session RecordingPackageSession) error {
+		p, err := s.getReady(ctx, session.Get, id, recordingID)
 		if err != nil {
 			return err
 		}
-		return use(p)
+		return use(ctx, p, session)
 	})
 }
 
@@ -156,8 +172,8 @@ func (s *RecordingPackageService) Sign(ctx context.Context, id, actor string, pa
 		return nil, ErrInvalidInput
 	}
 	var signed []SignedRecordingObject
-	err := s.repository.WithSessionLock(ctx, id, func(ctx context.Context) error {
-		p, err := s.Get(ctx, id, actor)
+	err := s.repository.WithSessionLock(ctx, id, func(ctx context.Context, session RecordingPackageSession) error {
+		p, err := getRecordingPackage(ctx, session.Get, id, actor)
 		if err != nil {
 			return err
 		}
@@ -207,9 +223,9 @@ func recordingObjectContentType(path string) string {
 // the request, and never claims that bytes or media have already been verified.
 func (s *RecordingPackageService) Complete(ctx context.Context, id, actor string) (RecordingPackage, error) {
 	var p RecordingPackage
-	err := s.repository.WithSessionLock(ctx, id, func(ctx context.Context) error {
+	err := s.repository.WithSessionLock(ctx, id, func(ctx context.Context, session RecordingPackageSession) error {
 		var err error
-		p, err = s.Get(ctx, id, actor)
+		p, err = getRecordingPackage(ctx, session.Get, id, actor)
 		if err != nil {
 			return err
 		}
@@ -217,7 +233,7 @@ func (s *RecordingPackageService) Complete(ctx context.Context, id, actor string
 		case "freezing", "validating", "ready":
 			return nil
 		case "uploading":
-			if err := s.repository.Freeze(ctx, id, s.now().UTC()); err != nil {
+			if err := session.Freeze(ctx, id, s.now().UTC()); err != nil {
 				return err
 			}
 			p.State = "freezing"
