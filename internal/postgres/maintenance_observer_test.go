@@ -92,9 +92,9 @@ func TestMaintenanceObserverClassifiesRealPostgresState(t *testing.T) {
 		}
 	}
 	now := time.Now().UTC()
-	for _, id := range []string{"secret-active", "secret-expired", "secret-due", "secret-delayed", "secret-failed"} {
+	for _, id := range []string{"secret-active", "secret-expired", "secret-due", "secret-delayed", "secret-failed", "secret-scan-delayed", "secret-derivative-active", "secret-derivative-expired"} {
 		scan, processing := assets.ScanClean, assets.ProcessingPending
-		if id == "secret-active" || id == "secret-expired" {
+		if id == "secret-active" || id == "secret-expired" || id == "secret-scan-delayed" {
 			scan, processing = assets.ScanPending, assets.ProcessingReady
 		}
 		if id == "secret-failed" {
@@ -103,8 +103,11 @@ func TestMaintenanceObserverClassifiesRealPostgresState(t *testing.T) {
 		insertAsset(t, db, id, assets.UploadCompleted, scan, processing, now, time.Time{})
 	}
 	for _, q := range []string{
-		"UPDATE assets SET scan_claimed_until=now()+interval '1 minute' WHERE id='secret-active'",
-		"UPDATE assets SET scan_claimed_until=now()-interval '1 minute' WHERE id='secret-expired'",
+		"UPDATE assets SET scan_status='clean',deleted_at=now(),scan_claimed_until=now()+interval '1 minute' WHERE id='secret-active'",
+		"UPDATE assets SET scan_status='clean',purged_at=now(),scan_claimed_until=now()-interval '1 minute' WHERE id='secret-expired'",
+		"UPDATE assets SET scan_next_attempt_at=now()+interval '1 hour' WHERE id='secret-scan-delayed'",
+		"UPDATE assets SET processing_status='ready',deleted_at=now(),processing_claimed_until=now()+interval '1 minute' WHERE id='secret-derivative-active'",
+		"UPDATE assets SET processing_status='ready',purged_at=now(),processing_claimed_until=now()-interval '1 minute' WHERE id='secret-derivative-expired'",
 		"UPDATE assets SET processing_next_attempt_at=now()+interval '1 hour' WHERE id='secret-delayed'",
 		"INSERT INTO asset_derivative_outbox(event_id,asset_id,asset_etag,available_at,created_at) VALUES('secret-event','secret-due','secret-etag',now()+interval '1 hour',now())",
 		"UPDATE recording_event_wakes SET state='running',token='secret-token',dispatch_generation=generation,lease_until=now()+interval '1 minute' WHERE lane='live'",
@@ -119,7 +122,8 @@ func TestMaintenanceObserverClassifiesRealPostgresState(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct{ component, column, want string }{
-		{"scan", "leased", "1"}, {"scan", "expired_claim_review", "1"},
+		{"scan", "leased", "1"}, {"scan", "expired_claim_review", "1"}, {"scan", "retained_delayed_candidate", "1"},
+		{"derivative", "leased", "1"}, {"derivative", "expired_claim_review", "1"},
 		{"derivative", "retained_due_candidate", "1"}, {"derivative", "retained_delayed_candidate", "1"}, {"derivative", "terminal_failed_candidate", "1"},
 		{"derivative_outbox", "retained_delayed_candidate", "1"}, {"wake_live", "leased", "1"}, {"package", "unleased_effect_review", "1"},
 	} {

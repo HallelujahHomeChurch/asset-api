@@ -12,12 +12,14 @@ WITH components(component) AS (VALUES
  ('wake_live'), ('wake_processing'), ('wake_preview')),
 work(component, state, lease_until, due_at, expires_at, attempt_started_at) AS (
  SELECT 'scan', CASE WHEN scan_status='failed' THEN 'failed' ELSE 'pending' END,
-  scan_claimed_until, NULL::timestamptz, NULL::timestamptz, NULL::timestamptz
- FROM assets WHERE scan_status IN ('pending','failed') AND deleted_at IS NULL AND purged_at IS NULL
+  scan_claimed_until, scan_next_attempt_at, NULL::timestamptz, NULL::timestamptz
+ FROM assets WHERE scan_claimed_until IS NOT NULL
+ OR (scan_status IN ('pending','failed') AND deleted_at IS NULL AND purged_at IS NULL)
  UNION ALL
  SELECT 'derivative', CASE WHEN processing_status='failed' THEN 'failed' ELSE 'pending' END,
   processing_claimed_until, processing_next_attempt_at, NULL, NULL
- FROM assets WHERE processing_status IN ('pending','failed') AND deleted_at IS NULL AND purged_at IS NULL
+ FROM assets WHERE processing_claimed_until IS NOT NULL
+ OR (processing_status IN ('pending','failed') AND deleted_at IS NULL AND purged_at IS NULL)
  UNION ALL
  SELECT 'upload','uploading',NULL,NULL,expires_at,NULL FROM upload_sessions WHERE completed_at IS NULL AND status='created'
  UNION ALL
