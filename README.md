@@ -267,6 +267,19 @@ first.
 startup. This controls application slog and default standard-log output.
 Persisted audit records remain independent of this setting.
 
+Recording cleanup emits `recording_cleanup_start` / `recording_cleanup_phase`
+with the fixed phase name, elapsed time and cancellation state. R2 bulk deletion
+emits `recording_delete_attempt` for each HTTP attempt (time to response headers,
+status code; zero means no response) and `recording_delete_batch` for the whole
+SDK operation, including retries, body decoding and per-object failure count.
+These aggregate diagnostics omit object keys, bucket names, URLs and raw provider
+errors. Compare phase totals, batch totals and attempt timings before attributing
+a deadline to cumulative work, retry backoff or a stalled provider request.
+They do not establish the network/provider root cause or confirm physical absence
+of objects; declared inventory sizes and durable purge receipts are not a storage
+measurement. Existing cleanup deadlines, fences and retry schedules are unchanged.
+
+
 ## Progressive capture intake
 
 Private `/priv/recording-captures` routes share the existing HLS runtime gate and

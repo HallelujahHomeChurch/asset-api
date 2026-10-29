@@ -195,9 +195,13 @@ func processRecording(ctx context.Context, mode string, db *sql.DB, objects *r2.
 
 	}
 	if mode == "legacy" || mode == "maintenance" {
-		cleanupErr = errors.Join(packages.ReconcilePackages(ctx, objects.DeletePackageObjects), liveStore.ReconcileCaptures(ctx, objects.DeletePackageObjects), liveStore.ReconcileLive(ctx, objects.DeletePackageObjects))
+		cleanupErr = errors.Join(
+			observeCleanup(ctx, "packages", func() error { return packages.ReconcilePackages(ctx, objects.DeletePackageObjects) }),
+			observeCleanup(ctx, "captures", func() error { return liveStore.ReconcileCaptures(ctx, objects.DeletePackageObjects) }),
+			observeCleanup(ctx, "live", func() error { return liveStore.ReconcileLive(ctx, objects.DeletePackageObjects) }),
+		)
 		liveCovers := postgres.NewRecordingLiveCoverStore(db)
-		cleanupErr = errors.Join(cleanupErr, liveCovers.Reconcile(ctx, objects.DeleteCoverObjects))
+		cleanupErr = errors.Join(cleanupErr, observeCleanup(ctx, "live_covers", func() error { return liveCovers.Reconcile(ctx, objects.DeleteCoverObjects) }))
 	}
 	liveCovers := postgres.NewRecordingLiveCoverStore(db)
 	covers := postgres.NewRecordingCoverStore(db)
@@ -207,7 +211,7 @@ func processRecording(ctx context.Context, mode string, db *sql.DB, objects *r2.
 		}
 	}
 	if mode == "legacy" || mode == "maintenance" {
-		cleanupErr = errors.Join(cleanupErr, covers.Reconcile(ctx, objects.DeleteCoverObjects))
+		cleanupErr = errors.Join(cleanupErr, observeCleanup(ctx, "covers", func() error { return covers.Reconcile(ctx, objects.DeleteCoverObjects) }))
 	}
 	if sourceAccount != "" && (mode == "legacy" || mode == "processing" || mode == "maintenance") {
 		sources, err := azurestorage.New(sourceAccount, sourceContainer)
@@ -216,7 +220,9 @@ func processRecording(ctx context.Context, mode string, db *sql.DB, objects *r2.
 		}
 		repository := postgres.NewRecordingSourceStore(db)
 		if mode != "processing" {
-			cleanupErr = errors.Join(cleanupErr, repository.ReconcileSources(ctx, sources.DeleteRecordingSource, objects.DeleteSourceAttempt))
+			cleanupErr = errors.Join(cleanupErr, observeCleanup(ctx, "sources", func() error {
+				return repository.ReconcileSources(ctx, sources.DeleteRecordingSource, objects.DeleteSourceAttempt)
+			}))
 		}
 		if mode != "maintenance" {
 			// One long processing claim per execution keeps the 5.5-hour app
@@ -228,7 +234,7 @@ func processRecording(ctx context.Context, mode string, db *sql.DB, objects *r2.
 		}
 	}
 	if mode == "maintenance" {
-		return errors.Join(cleanupErr, postgres.NewRecordingEventStore(db, sourceAccount != "").Sweep(ctx))
+		return errors.Join(cleanupErr, observeCleanup(ctx, "events", func() error { return postgres.NewRecordingEventStore(db, sourceAccount != "").Sweep(ctx) }))
 	}
 	if mode == "legacy" || mode == "preview" {
 		// Preview claims defer to waiting validation/source work in SQL and
@@ -287,4 +293,13 @@ func drainLiveValidation(ctx context.Context, deadline time.Time, interval time.
 		}
 	}
 	return nil
+}
+
+func observeCleanup(ctx context.Context, phase string, run func() error) (err error) {
+	started := time.Now()
+	slog.Info("recording_cleanup_start", "phase", phase)
+	defer func() {
+		slog.Info("recording_cleanup_phase", "phase", phase, "elapsed_ms", time.Since(started).Milliseconds(), "failed", err != nil, "deadline_exceeded", errors.Is(err, context.DeadlineExceeded), "context_expired", ctx.Err() != nil)
+	}()
+	return run()
 }

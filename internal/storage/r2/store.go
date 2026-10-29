@@ -194,7 +194,7 @@ func (s *Store) DeletePackageObjects(ctx context.Context, keys []string) error {
 		scope = current
 		objects = append(objects, types.ObjectIdentifier{Key: aws.String(key)})
 	}
-	result, err := s.client.DeleteObjects(ctx, &s3.DeleteObjectsInput{Bucket: aws.String(s.bucket), Delete: &types.Delete{Objects: objects, Quiet: aws.Bool(true)}})
+	result, err := s.deleteObjects(ctx, objects)
 	if err != nil {
 		return fmt.Errorf("delete R2 package objects: %w", err)
 	}
