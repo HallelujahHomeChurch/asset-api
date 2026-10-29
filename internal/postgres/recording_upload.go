@@ -38,7 +38,19 @@ func newRecordingSessionStore(db *sql.DB) *recordingSessionStore {
 
 // Serialize R2 completion and deletion across API/worker processes. A failed
 // contender retries instead of holding every pool connection waiting for a lock.
-func (s *recordingSessionStore) WithSessionLock(ctx context.Context, id string, run func(context.Context, *sql.Conn) error) (resultErr error) {
+func (s *recordingSessionStore) WithSessionLock(ctx context.Context, id string, run func(context.Context, *sql.Conn) error) error {
+	return s.withSessionLock(ctx, id, false, run)
+}
+
+func (s *recordingSessionStore) WithReadSessionLock(ctx context.Context, id string, run func(context.Context, *sql.Conn) error) error {
+	return s.withSessionLock(ctx, id, true, run)
+}
+
+func (s *recordingSessionStore) withSessionLock(ctx context.Context, id string, shared bool, run func(context.Context, *sql.Conn) error) (resultErr error) {
+	lock, unlock := "pg_try_advisory_lock", "pg_advisory_unlock"
+	if shared {
+		lock, unlock = "pg_try_advisory_lock_shared", "pg_advisory_unlock_shared"
+	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	conn, err := s.db.Conn(ctx)
@@ -70,7 +82,7 @@ func (s *recordingSessionStore) WithSessionLock(ctx context.Context, id string, 
 		}
 	}()
 	var acquired bool
-	if err := conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock(hashtextextended('recording-session:' || $1,0))`, id).Scan(&acquired); err != nil {
+	if err := conn.QueryRowContext(ctx, `SELECT `+lock+`(hashtextextended('recording-session:' || $1,0))`, id).Scan(&acquired); err != nil {
 		_ = conn.Raw(func(any) error { return driver.ErrBadConn })
 		return err
 	}
@@ -81,7 +93,7 @@ func (s *recordingSessionStore) WithSessionLock(ctx context.Context, id string, 
 		unlockCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 		defer stop()
 		var released bool
-		unlockErr := conn.QueryRowContext(unlockCtx, `SELECT pg_advisory_unlock(hashtextextended('recording-session:' || $1,0))`, id).Scan(&released)
+		unlockErr := conn.QueryRowContext(unlockCtx, `SELECT `+unlock+`(hashtextextended('recording-session:' || $1,0))`, id).Scan(&released)
 		if unlockErr != nil || !released {
 			if unlockErr == nil {
 				unlockErr = errors.New("recording session lock was not held")

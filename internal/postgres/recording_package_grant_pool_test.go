@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -22,6 +23,14 @@ func TestPackageGrantUsesOnePoolConnection(t *testing.T) {
 	for _, mode := range []string{"no-policy", "vod", "revoked", "authority-mismatch", "projection-pending", "broadcast-disabled"} {
 		t.Run(mode, func(t *testing.T) { testPackageGrantPool(t, mode) })
 	}
+}
+
+func TestConcurrentPackageGrantsShareReadLock(t *testing.T) {
+	testPackageGrantPool(t, "concurrent")
+}
+
+func TestPackageGrantRejectsConcurrentMutation(t *testing.T) {
+	testPackageGrantPool(t, "writer-conflict")
 }
 
 func testPackageGrantPool(t *testing.T, mode string) {
@@ -79,14 +88,61 @@ func testPackageGrantPool(t *testing.T, mode string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	service := assets.NewRecordingPackageService(packages, nil, time.Now)
 	handler := httpapi.New(nil, nil, map[string]bool{"hhc-web-api": true}, true, "", httpapi.WorkloadAuthConfig{}, nil).
-		WithRecordingPackages(assets.NewRecordingPackageService(packages, nil, time.Now)).
+		WithRecordingPackages(service).
 		WithRecordingSigner(signer)
 	if mode != "broadcast-disabled" {
 		handler.WithRecordingBroadcasts(NewRecordingCaptureStore(db).WithBroadcastObjects(objects))
 	}
 	h := handler.Routes()
 	db.SetMaxOpenConns(1)
+	if mode == "concurrent" || mode == "writer-conflict" {
+		db.SetMaxOpenConns(4)
+		entered, release := make(chan struct{}), make(chan struct{})
+		done := make(chan error, 1)
+		go func() {
+			hold := func() error { close(entered); <-release; return nil }
+			if mode == "writer-conflict" {
+				done <- packages.WithSessionLock(ctx, p.ID, func(context.Context, assets.RecordingPackageSession) error { return hold() })
+			} else {
+				done <- service.WithReady(ctx, p.ID, p.RecordingID, func(context.Context, assets.RecordingPackage, assets.RecordingBroadcastReader) error { return hold() })
+			}
+		}()
+		defer func() {
+			close(release)
+			if err := <-done; err != nil {
+				t.Error(err)
+			}
+		}()
+		select {
+		case <-entered:
+		case <-time.After(time.Second):
+			t.Fatal("first grant did not enter")
+		}
+		if mode == "concurrent" {
+			err := packages.WithSessionLock(ctx, p.ID, func(context.Context, assets.RecordingPackageSession) error {
+				t.Error("mutation overlapped active grant")
+				return nil
+			})
+			if !errors.Is(err, assets.ErrConflict) {
+				t.Fatalf("grant did not exclude mutation: %v", err)
+			}
+			policyConn, err := db.Conn(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var policyLocked bool
+			err = policyConn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock(`+retentionLock+`)`).Scan(&policyLocked)
+			if policyLocked {
+				_, _ = policyConn.ExecContext(ctx, `SELECT pg_advisory_unlock(`+retentionLock+`)`)
+			}
+			policyConn.Close()
+			if err != nil || policyLocked {
+				t.Fatalf("grant did not exclude retention change: %v %v", policyLocked, err)
+			}
+		}
+	}
 	grantCtx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	body, _ := json.Marshal(map[string]any{"recordingId": p.RecordingID, "scopeId": "22222222-2222-4222-8222-222222222222", "recordingExpiresAt": time.Now().Add(time.Hour)})
@@ -95,7 +151,7 @@ func testPackageGrantPool(t *testing.T, mode string) {
 	response := httptest.NewRecorder()
 	h.ServeHTTP(response, request)
 	want := 200
-	if mode == "revoked" || mode == "authority-mismatch" || mode == "projection-pending" {
+	if mode == "revoked" || mode == "authority-mismatch" || mode == "projection-pending" || mode == "writer-conflict" {
 		want = 409
 	}
 	if response.Code != want {
