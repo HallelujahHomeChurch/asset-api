@@ -125,6 +125,7 @@ func processRecording(ctx context.Context, mode string, db *sql.DB, objects *r2.
 	probe := recordingvalidation.PackageMediaProbe{Objects: objects, FFmpeg: "/usr/bin/ffmpeg", FFprobe: "/usr/bin/ffprobe"}
 	var cleanupErr error
 	liveStore := postgres.NewRecordingCaptureStore(db)
+	removePackageObjects := objects.NewPackageCleanup()
 	if mode == "legacy" || mode == "live" {
 		liveClaims := 0
 		auxiliaryClaims := 0
@@ -196,9 +197,9 @@ func processRecording(ctx context.Context, mode string, db *sql.DB, objects *r2.
 	}
 	if mode == "legacy" || mode == "maintenance" {
 		cleanupErr = errors.Join(
-			observeCleanup(ctx, "packages", func() error { return packages.ReconcilePackages(ctx, objects.DeletePackageObjects) }),
-			observeCleanup(ctx, "captures", func() error { return liveStore.ReconcileCaptures(ctx, objects.DeletePackageObjects) }),
-			observeCleanup(ctx, "live", func() error { return liveStore.ReconcileLive(ctx, objects.DeletePackageObjects) }),
+			observeCleanup(ctx, "packages", func() error { return packages.ReconcilePackages(ctx, removePackageObjects) }),
+			observeCleanup(ctx, "captures", func() error { return liveStore.ReconcileCaptures(ctx, removePackageObjects) }),
+			observeCleanup(ctx, "live", func() error { return liveStore.ReconcileLive(ctx, removePackageObjects) }),
 		)
 		liveCovers := postgres.NewRecordingLiveCoverStore(db)
 		cleanupErr = errors.Join(cleanupErr, observeCleanup(ctx, "live_covers", func() error { return liveCovers.Reconcile(ctx, objects.DeleteCoverObjects) }))

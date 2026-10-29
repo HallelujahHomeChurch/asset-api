@@ -584,3 +584,13 @@ read. It performs no grant writes and never permits PDF/general owner downloads.
 Responses remain `private, no-store`. Release this additive route before the
 coordinated CMS client; no public routing, media lifecycle or runtime activation
 is changed here. Tracking: https://github.com/HallelujahHomeChurch/hhc-web-api/issues/339.
+
+Recording maintenance takes one bounded, invocation-local object listing per
+owner staging/final prefix and intersects it with the reconciler's declared,
+authorized keys. Purged attempt receipts therefore do not generate repeated
+empty delete calls. The list cannot authorize undeclared or cross-owner deletion;
+listing failure leaves the durable retry pending. Each new invocation refreshes
+the listing to preserve late-write sweeps. `recording_cleanup_inventory` reports
+only object/page counts and elapsed time. Source-attempt and cover cleanup retain
+their existing paths. Listings stop after 100 pages per prefix and never extend
+the existing cleanup deadline.
