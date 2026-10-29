@@ -12,6 +12,9 @@ import (
 
 type packageRepo struct{ packages map[string]RecordingPackage }
 
+func (r *packageRepo) WithReadSessionLock(ctx context.Context, _ string, fn func(context.Context, RecordingPackageReader) error) error {
+	return fn(ctx, r)
+}
 func (r *packageRepo) WithSessionLock(ctx context.Context, _ string, fn func(context.Context, RecordingPackageSession) error) error {
 	return fn(ctx, r)
 }

@@ -26,6 +26,12 @@ func (s *RecordingPackageStore) WithSessionLock(ctx context.Context, id string, 
 	})
 }
 
+func (s *RecordingPackageStore) WithReadSessionLock(ctx context.Context, id string, fn func(context.Context, assets.RecordingPackageReader) error) error {
+	return s.locks.WithReadSessionLock(ctx, "package-"+id, func(ctx context.Context, conn *sql.Conn) error {
+		return fn(ctx, recordingPackageSession{query: conn, broadcastReader: broadcastReader{query: conn, broadcastObjects: s.broadcastObjects}})
+	})
+}
+
 func (s *RecordingPackageStore) WithBroadcastObjects(objects assets.RecordingBroadcastObjects) *RecordingPackageStore {
 	s.broadcastObjects = objects
 	return s

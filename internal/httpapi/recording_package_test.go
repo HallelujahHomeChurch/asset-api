@@ -102,6 +102,9 @@ func (s *httpPackageRepo) Freeze(context.Context, string, time.Time) error {
 	s.p.State = "freezing"
 	return nil
 }
+func (s *httpPackageRepo) WithReadSessionLock(ctx context.Context, _ string, fn func(context.Context, assets.RecordingPackageReader) error) error {
+	return fn(ctx, s)
+}
 func (s *httpPackageRepo) WithSessionLock(ctx context.Context, _ string, fn func(context.Context, assets.RecordingPackageSession) error) error {
 	return fn(ctx, s)
 }

@@ -63,15 +63,21 @@ type SignedRecordingObject struct {
 	r2.PresignedPart
 }
 
-// RecordingPackageSession exposes only operations on the connection owned by the session lock.
-// It must only be used during the WithSessionLock callback.
-type RecordingPackageSession interface {
+// RecordingPackageReader exposes reads on the connection owned by the read lock.
+// It must only be used during the WithReadSessionLock callback.
+type RecordingPackageReader interface {
 	RecordingBroadcastReader
 	Get(context.Context, string) (RecordingPackage, error)
+}
+
+// RecordingPackageSession adds mutations under the exclusive session lock.
+type RecordingPackageSession interface {
+	RecordingPackageReader
 	Freeze(context.Context, string, time.Time) error
 }
 
 type RecordingPackageRepository interface {
+	WithReadSessionLock(context.Context, string, func(context.Context, RecordingPackageReader) error) error
 	WithSessionLock(context.Context, string, func(context.Context, RecordingPackageSession) error) error
 	FindByIdempotency(context.Context, string) (RecordingPackage, error)
 	Create(context.Context, RecordingPackage) error
@@ -156,9 +162,10 @@ func (s *RecordingPackageService) getReady(ctx context.Context, get func(context
 	return p, nil
 }
 
-// The callback must issue the grant while holding the policy/package lock.
+// Grants share the policy/package read locks with other viewers, while excluding
+// retention changes and package mutation until issuance completes.
 func (s *RecordingPackageService) WithReady(ctx context.Context, id, recordingID string, use func(context.Context, RecordingPackage, RecordingBroadcastReader) error) error {
-	return s.repository.WithSessionLock(ctx, id, func(ctx context.Context, session RecordingPackageSession) error {
+	return s.repository.WithReadSessionLock(ctx, id, func(ctx context.Context, session RecordingPackageReader) error {
 		p, err := s.getReady(ctx, session.Get, id, recordingID)
 		if err != nil {
 			return err

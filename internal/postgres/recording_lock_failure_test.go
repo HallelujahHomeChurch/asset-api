@@ -24,7 +24,7 @@ func TestRecordingLockAcquisitionFailureDiscardsSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer observer.Close()
-	for _, fault := range []string{"live-worker", "session-policy", "session-owner"} {
+	for _, fault := range []string{"live-worker", "session-policy", "session-owner", "session-owner-shared"} {
 		t.Run(fault, func(t *testing.T) {
 			db := isolatedIntegrationDB(t)
 			db.SetMaxOpenConns(1)
@@ -38,11 +38,14 @@ func TestRecordingLockAcquisitionFailureDiscardsSession(t *testing.T) {
 				fn = "pg_try_advisory_lock_shared"
 				key = retentionLock
 			}
-			if fault == "session-owner" {
+			if fault == "session-owner" || fault == "session-owner-shared" {
 				key = `hashtextextended('recording-session:acquisition-fault',0)`
 			}
+			if fault == "session-owner-shared" {
+				fn = "pg_try_advisory_lock_shared"
+			}
 			// Session locks survive a statement error, including an uncertain acquisition result.
-			if _, err := db.Exec(`CREATE FUNCTION ` + fn + `(bigint) RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_catalog.` + fn + `($1); RAISE EXCEPTION 'synthetic acquisition failure'; END $$`); err != nil {
+			if _, err := db.Exec(`CREATE FUNCTION ` + fn + `(bigint) RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN IF $1 = ` + key + ` THEN PERFORM pg_catalog.` + fn + `($1); RAISE EXCEPTION 'synthetic acquisition failure'; END IF; RETURN pg_catalog.` + fn + `($1); END $$`); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := db.Exec(`SELECT set_config('search_path',$1,false)`, schema+",pg_catalog"); err != nil {
@@ -58,6 +61,8 @@ func TestRecordingLockAcquisitionFailureDiscardsSession(t *testing.T) {
 					t.Fatal("failed acquisition ran worker")
 					return nil
 				})
+			} else if fault == "session-owner-shared" {
+				acquireErr = newRecordingSessionStore(db).WithReadSessionLock(context.Background(), "acquisition-fault", func(context.Context, *sql.Conn) error { t.Fatal("failed acquisition ran callback"); return nil })
 			} else {
 				acquireErr = newRecordingSessionStore(db).WithSessionLock(context.Background(), "acquisition-fault", func(context.Context, *sql.Conn) error { t.Fatal("failed acquisition ran callback"); return nil })
 			}
