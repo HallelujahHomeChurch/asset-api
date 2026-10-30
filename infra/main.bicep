@@ -416,7 +416,7 @@ resource app 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
         httpMaxRequestSize: 210
         appPort: 8080
         appProtocol: 'http'
-        logLevel: 'warn'
+        logLevel: 'info'
       }
       ingress: {
         external: false
