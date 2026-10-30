@@ -364,11 +364,9 @@ func (h *Handler) accountCaller(next http.Handler) http.Handler {
 func sameToken(got, want string) bool {
 	return got != "" && want != "" && subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
-func (h *Handler) ready(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-	defer cancel()
-	if err := h.db.PingContext(ctx); err != nil {
-		writeError(w, http.StatusServiceUnavailable, "AST_NOT_READY", "database unavailable")
+func (h *Handler) ready(w http.ResponseWriter, _ *http.Request) {
+	if h.db == nil {
+		writeError(w, http.StatusServiceUnavailable, "AST_NOT_READY", "application not initialized")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})

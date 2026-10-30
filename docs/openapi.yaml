@@ -157,7 +157,8 @@ paths:
         '200': { $ref: '#/components/responses/Health' }
   /ready:
     get:
-      summary: Asset API operation
+      summary: Application initialization readiness
+      description: Checks local initialization only. Database and Dapr availability are monitored separately; readiness does not certify end-to-end operations.
       tags: [Operations]
       x-hhc-visibility: operations
       x-hhc-callers: []

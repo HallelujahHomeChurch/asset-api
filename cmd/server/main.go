@@ -16,6 +16,7 @@ import (
 	"hhc/asset-api/internal/auditoutbox"
 	"hhc/asset-api/internal/clamav"
 	"hhc/asset-api/internal/config"
+	"hhc/asset-api/internal/dependencyhealth"
 	"hhc/asset-api/internal/derivativequeue"
 	"hhc/asset-api/internal/diagnostics"
 	"hhc/asset-api/internal/httpapi"
@@ -57,6 +58,8 @@ func run() error {
 	db.SetMaxIdleConns(cfg.DBMaxIdleConns)
 	db.SetConnMaxLifetime(cfg.DBConnMaxLifetime)
 	defer db.Close()
+	stopDependencyHealth := dependencyhealth.Start(ctx, db, os.Getenv("DAPR_HTTP_PORT"), os.Getenv("DAPR_API_TOKEN"), slog.Default())
+	defer stopDependencyHealth()
 	diagnosticsCtx, diagnosticsCancel := context.WithCancel(ctx)
 	diagnosticsDone := make(chan struct{})
 	go func() {

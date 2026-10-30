@@ -571,3 +571,32 @@ read. It performs no grant writes and never permits PDF/general owner downloads.
 Responses remain `private, no-store`. Release this additive route before the
 coordinated CMS client; no public routing, media lifecycle or runtime activation
 is changed here. Tracking: https://github.com/HallelujahHomeChurch/hhc-web-api/issues/339.
+
+## Application probes and dependency monitoring
+
+Readiness checks local application initialization only; it never pings PostgreSQL
+or Dapr. A transient dependency outage therefore does not remove an otherwise
+responsive API replica. Existing startup configuration/schema checks and all
+request authorization, persistence and payment safety remain authoritative.
+Readiness is not a database, media, payment or end-to-end acceptance test.
+
+One process-owned monitor emits `dependency_health` for `db` and `dapr_outbound`
+every 30 seconds, including healthy baseline/recovery. Each dependency has its
+own two-second deadline; checks are sequential and cannot overlap. DB records
+separate `acquire` from `ping` failures and include pool counts. Dapr uses only
+loopback `/v1.0/healthz/outbound` when `DAPR_HTTP_PORT` is set, with
+`DAPR_API_TOKEN` if present; redirects are rejected. Missing dependencies are
+reported as `not_configured`, not healthy. Outcomes are bounded to `ok`,
+`deadline`, `cancelled`, `unavailable`, and `not_configured`; raw errors, DSNs,
+tokens, response bodies and request data are never logged.
+
+The monitor is cancelled and joined on shutdown before closing the DB.
+Keep `LOG_LEVEL=info` to retain healthy heartbeats; an absent heartbeat for an
+expected active replica for 90 seconds means monitoring is missing/stale, not
+healthy. Correlate platform replica lifecycle before alerting on a stopped
+replica. No alert resource or production configuration is changed here.
+For release acceptance, check these dependency events plus a representative
+protected request; a green readiness probe alone no longer proves DB health.
+
+These periodic checks can miss shorter outages and do not attribute a particular
+request failure. Pool wait counts are lifetime totals, not per-request latency.
