@@ -34,13 +34,13 @@ func TestDatabaseAcquireDeadlineAndRecovery(t *testing.T) {
 	defer held.Close()
 	var b bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&b, nil))
-	checkDB(context.Background(), db, logger)
+	checkDB(context.Background(), db, logger, &observation{})
 	if !strings.Contains(b.String(), `"phase":"acquire"`) || !strings.Contains(b.String(), `"outcome":"deadline"`) {
 		t.Fatal(b.String())
 	}
 	_ = held.Close()
 	b.Reset()
-	checkDB(context.Background(), db, logger)
+	checkDB(context.Background(), db, logger, &observation{})
 	if !strings.Contains(b.String(), `"phase":"ping"`) || !strings.Contains(b.String(), `"outcome":"ok"`) {
 		t.Fatal(b.String())
 	}

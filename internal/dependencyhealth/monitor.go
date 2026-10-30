@@ -19,17 +19,18 @@ func Start(parent context.Context, db *sql.DB, daprPort, token string, logger *s
 		defer close(done)
 		client := &http.Client{Timeout: 2 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 		defer client.CloseIdleConnections()
+		var dbObservation, daprObservation observation
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		for {
 			if ctx.Err() != nil {
 				return
 			}
-			checkDB(ctx, db, logger)
+			checkDB(ctx, db, logger, &dbObservation)
 			if ctx.Err() != nil {
 				return
 			}
-			checkDapr(ctx, client, daprPort, token, logger)
+			checkDapr(ctx, client, daprPort, token, logger, &daprObservation)
 			select {
 			case <-ctx.Done():
 				return
@@ -47,7 +48,7 @@ func Start(parent context.Context, db *sql.DB, daprPort, token string, logger *s
 	}
 }
 
-func checkDB(parent context.Context, db *sql.DB, logger *slog.Logger) {
+func checkDB(parent context.Context, db *sql.DB, logger *slog.Logger, observation *observation) {
 	started := time.Now()
 	phase, outcome := "acquire", "not_configured"
 	if db != nil {
@@ -66,10 +67,10 @@ func checkDB(parent context.Context, db *sql.DB, logger *slog.Logger) {
 		s := db.Stats()
 		attrs = append(attrs, "pool_max", s.MaxOpenConnections, "pool_open", s.OpenConnections, "pool_in_use", s.InUse, "pool_wait_count", s.WaitCount)
 	}
-	emit(parent, logger, outcome, attrs...)
+	emit(parent, logger, observation, outcome, attrs...)
 }
 
-func checkDapr(parent context.Context, client *http.Client, port, token string, logger *slog.Logger) {
+func checkDapr(parent context.Context, client *http.Client, port, token string, logger *slog.Logger, observation *observation) {
 	started := time.Now()
 	outcome, status := "not_configured", 0
 	if port != "" {
@@ -91,7 +92,7 @@ func checkDapr(parent context.Context, client *http.Client, port, token string, 
 			}
 		}
 	}
-	emit(parent, logger, outcome, "dependency", "dapr_outbound", "phase", "health", "outcome", outcome, "elapsed_ms", time.Since(started).Milliseconds(), "status", status)
+	emit(parent, logger, observation, outcome, "dependency", "dapr_outbound", "phase", "health", "outcome", outcome, "elapsed_ms", time.Since(started).Milliseconds(), "status", status)
 }
 
 func classify(err error) string {
@@ -107,10 +108,27 @@ func classify(err error) string {
 	}
 }
 
-func emit(ctx context.Context, logger *slog.Logger, outcome string, attrs ...any) {
+func emit(ctx context.Context, logger *slog.Logger, observation *observation, outcome string, attrs ...any) {
+	if !observation.due(outcome, time.Now()) {
+		return
+	}
 	level := slog.LevelInfo
 	if outcome != "ok" && outcome != "not_configured" {
 		level = slog.LevelWarn
 	}
 	logger.Log(ctx, level, "dependency_health", attrs...)
+}
+
+// observation is owned by the single monitor loop, independently per dependency.
+type observation struct {
+	outcome string
+	emitted time.Time
+}
+
+func (o *observation) due(outcome string, now time.Time) bool {
+	if !o.emitted.IsZero() && o.outcome == outcome && now.Sub(o.emitted) < 5*time.Minute {
+		return false
+	}
+	o.outcome, o.emitted = outcome, now
+	return true
 }

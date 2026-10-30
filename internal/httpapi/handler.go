@@ -1292,12 +1292,9 @@ func parseRange(value string) (assets.ByteRange, bool, error) {
 }
 func requestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id := r.Header.Get("X-HHC-Request-ID")
-		if id == "" {
-			id = strconv.FormatInt(time.Now().UnixNano(), 36)
-		}
+		ctx, id := diagnostics.HTTPContext(r.Context(), r.Header)
 		w.Header().Set("X-HHC-Request-ID", id)
-		next.ServeHTTP(w, r.WithContext(diagnostics.WithTraceParent(r.Context(), r.Header.Get("traceparent"))))
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 

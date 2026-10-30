@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hhc/asset-api/internal/diagnostics"
 	"io"
 	"net"
 	"net/http"
@@ -347,6 +348,7 @@ func (c *Client) Append(ctx context.Context, payload []byte) (result AppendResul
 	if err != nil {
 		return AppendResult{Result: "dead_letter"}
 	}
+	diagnostics.ForwardHTTP(ctx, request.Header)
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("X-Audit-Token", c.token)
 	response, err := c.http.Do(request)

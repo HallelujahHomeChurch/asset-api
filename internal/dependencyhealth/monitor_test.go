@@ -46,7 +46,7 @@ func TestDependencyOutcomesAndRedaction(t *testing.T) {
 				}
 				return &http.Response{StatusCode: tc.status, Body: io.NopCloser(strings.NewReader("private-response")), Header: make(http.Header)}, nil
 			})}
-			checkDapr(context.Background(), client, "3500", "secret-dsn-token", logger)
+			checkDapr(context.Background(), client, "3500", "secret-dsn-token", logger, &observation{})
 			s := b.String()
 			if !strings.Contains(s, `"outcome":"`+tc.want+`"`) || !strings.Contains(s, `"dependency":"dapr_outbound"`) {
 				t.Fatalf("unexpected event %s", s)
@@ -68,12 +68,12 @@ func TestDBFailureIsIndependentAndSanitized(t *testing.T) {
 	_ = db.Close()
 	var b bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&b, nil))
-	checkDB(context.Background(), db, logger)
+	checkDB(context.Background(), db, logger, &observation{})
 	if !strings.Contains(b.String(), `"phase":"acquire"`) || !strings.Contains(b.String(), `"outcome":"unavailable"`) || strings.Contains(b.String(), "secret-dsn-token") {
 		t.Fatal(b.String())
 	}
 	b.Reset()
-	checkDB(context.Background(), nil, logger)
+	checkDB(context.Background(), nil, logger, &observation{})
 	if !strings.Contains(b.String(), `"outcome":"not_configured"`) {
 		t.Fatal(b.String())
 	}
@@ -91,7 +91,7 @@ func TestMonitoringCancellationAndInvalidPort(t *testing.T) {
 	}
 	client := &http.Client{Transport: transportFunc(func(*http.Request) (*http.Response, error) { t.Fatal("invalid port caused request"); return nil, nil })}
 	for _, port := range []string{"", "0", "65536", "secret/path"} {
-		checkDapr(context.Background(), client, port, "secret", logger)
+		checkDapr(context.Background(), client, port, "secret", logger, &observation{})
 	}
 	if strings.Contains(b.String(), "secret") {
 		t.Fatal("port leaked")
@@ -107,7 +107,7 @@ func TestDaprCheckCancelsInFlight(t *testing.T) {
 		<-r.Context().Done()
 		return nil, r.Context().Err()
 	})}
-	checkDapr(ctx, client, "3500", "", logger)
+	checkDapr(ctx, client, "3500", "", logger, &observation{})
 	if !strings.Contains(b.String(), `"outcome":"cancelled"`) {
 		t.Fatal(b.String())
 	}

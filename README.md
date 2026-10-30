@@ -580,8 +580,9 @@ responsive API replica. Existing startup configuration/schema checks and all
 request authorization, persistence and payment safety remain authoritative.
 Readiness is not a database, media, payment or end-to-end acceptance test.
 
-One process-owned monitor emits `dependency_health` for `db` and `dapr_outbound`
-every 30 seconds, including healthy baseline/recovery. Each dependency has its
+One process-owned monitor samples `db` and `dapr_outbound` every 30 seconds.
+It emits `dependency_health` on initial observation, outcome transitions and
+five-minute heartbeats, including healthy baseline/recovery. Each dependency has its
 own two-second deadline; checks are sequential and cannot overlap. DB records
 separate `acquire` from `ping` failures and include pool counts. Dapr uses only
 loopback `/v1.0/healthz/outbound` when `DAPR_HTTP_PORT` is set, with
@@ -592,7 +593,7 @@ tokens, response bodies and request data are never logged.
 
 The monitor is cancelled and joined on shutdown before closing the DB.
 Keep `LOG_LEVEL=info` to retain healthy heartbeats; an absent heartbeat for an
-expected active replica for 90 seconds means monitoring is missing/stale, not
+expected active replica for 6 minutes means monitoring is missing/stale, not
 healthy. Correlate platform replica lifecycle before alerting on a stopped
 replica. No alert resource or production configuration is changed here.
 For release acceptance, check these dependency events plus a representative
@@ -600,3 +601,14 @@ protected request; a green readiness probe alone no longer proves DB health.
 
 These periodic checks can miss shorter outages and do not attribute a particular
 request failure. Pool wait counts are lifetime totals, not per-request latency.
+
+Dependency probes still sample every 30 seconds. `dependency_health` logs the
+initial result, each outcome transition, and a five-minute heartbeat per dependency;
+unchanged samples do not emit another event. Missing/stale heartbeats are unknown,
+not healthy. Allow six minutes for heartbeat detection on expected active replicas.
+
+HTTP diagnostic correlation accepts one bounded request ID and one valid W3C
+version-00 traceparent (flags 00/01); malformed values are replaced (ID) or omitted (trace).
+Response IDs and named-client diagnostic context agree. Caller audit headers
+remain independently validated; generated diagnostic IDs never establish audit
+actor provenance. Background audit dispatch does not reconstruct a request trace.

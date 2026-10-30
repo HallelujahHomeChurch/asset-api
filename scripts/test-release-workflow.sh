@@ -114,8 +114,10 @@ assert_governance_artifact_step .github/workflows/ci.yml
 assert_governance_artifact_step "$workflow"
 grep -Fq 'docker pull "$IMAGE_REF"' "$workflow"
 grep -Fq 'docker pull "$SCAN_IMAGE_REF"' "$workflow"
-grep -Fq 'image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 "$IMAGE_REF"' "$workflow"
-grep -Fq 'image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 "$SCAN_IMAGE_REF"' "$workflow"
+python3 scripts/test-trivy-report.py
+test "$(grep -Fc 'sh scripts/scan-image.sh "$IMAGE_REF"' "$workflow")" -eq 1
+test "$(grep -Fc 'sh scripts/scan-image.sh "$SCAN_IMAGE_REF"' "$workflow")" -eq 1
+
 scan_line="$(grep -n 'name: Scan immutable images' "$workflow" | cut -d: -f1)"
 what_if_line="$(grep -n 'name: Reject destructive infrastructure changes' "$workflow" | cut -d: -f1)"
 test "$scan_line" -lt "$what_if_line"
