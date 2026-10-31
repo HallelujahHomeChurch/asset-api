@@ -501,7 +501,7 @@ grep -Fq "allowedPrincipals: { identities: concat([lineAttachmentObjectId], extr
 # W3: the watermark worker identity is wired end to end and approved separately.
 grep -q 'ASSET_WATERMARK_WORKLOAD_CLIENT_ID' "$workflow"
 grep -q 'ASSET_WATERMARK_WORKLOAD_OBJECT_ID' "$workflow"
-[[ "$(grep -c 'watermarkWorkerClientId="$ASSET_WATERMARK_WORKLOAD_CLIENT_ID" watermarkWorkerObjectId="$ASSET_WATERMARK_WORKLOAD_OBJECT_ID"' "$workflow")" == 2 ]]
+[ "$(grep -c 'watermarkWorkerClientId="$ASSET_WATERMARK_WORKLOAD_CLIENT_ID" watermarkWorkerObjectId="$ASSET_WATERMARK_WORKLOAD_OBJECT_ID"' "$workflow")" = 2 ]
 grep -Fq "WATERMARK_ROLE_APPROVED: \${{ github.event_name == 'workflow_dispatch' && inputs.approve_watermark_app_role && 'true' || 'false' }}" "$workflow"
 grep -Fq "{ name: 'ASSET_WATERMARK_WORKLOAD_CLIENT_ID', value: watermarkWorkerAuthEnabled ? watermarkWorkerClientId : '' }" infra/main.bicep
 
