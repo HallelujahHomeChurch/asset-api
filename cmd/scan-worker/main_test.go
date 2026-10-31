@@ -89,13 +89,18 @@ func TestDeploymentPassesWarmQueueToWorker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Count(string(template), "{ name: 'ASSET_SCAN_WARM_QUEUE_URL', value: 'https://${storageAccount.name}.queue.${az.environment().suffixes.storage}/asset-scan-warm' }") != 3 {
+	if strings.Count(string(template), "{ name: 'ASSET_SCAN_WARM_QUEUE_URL', value: 'https://${storageAccount.name}.queue.${az.environment().suffixes.storage}/asset-scan-warm' }") != 2 {
 		t.Fatal("asset-scan-worker must receive ASSET_SCAN_WARM_QUEUE_URL")
 	}
 	if !strings.Contains(string(template), "resource scanWarmQueueProcessor") || strings.Count(string(template), "dependsOn: [acrPull, scanSecretAccess, scanQueueProcessor, scanQueueReader, scanWarmQueueReader, scanWarmQueueProcessor") != 2 {
 		t.Fatal("asset-scan-worker must be allowed to delete warm pulses")
 	}
-	if !strings.Contains(string(template), "queueName: 'asset-scan-warm'\n                queueLength: '20'") {
-		t.Fatal("twenty warm pulses must hold exactly one worker replica")
+	// Meeting warmth now comes from KEDA cron rules; the worker still drains
+	// leftover pulses, but the warm queue no longer scales it.
+	if strings.Contains(string(template), "queueName: 'asset-scan-warm'") {
+		t.Fatal("asset-scan-warm must not be a scan worker scale rule")
+	}
+	if strings.Count(string(template), "type: 'cron'") != 5 {
+		t.Fatal("asset-scan-worker must declare the five meeting cron rules")
 	}
 }

@@ -36,9 +36,11 @@ before exporting evidence.
 
 ## Controlled run
 
-1. Create or edit a test Meeting so the current time is inside its resolved
-   media window. Confirm both one-minute warmer jobs run and the edit is visible
-   within 60 seconds.
+1. Run inside a scheduled meeting window. The LINE attachment app and
+   `asset-scan-worker` are held warm by hard-coded KEDA cron rules (see
+   [infra/README.md](../../infra/README.md#meeting-warm-windows)); confirm both
+   have one replica 5 minutes before start. Editing a test Meeting no longer
+   moves the warm window.
 2. Send representative image, PDF, presentation/office, audio, and video files
    through the test LINE group. Include the `<=1 MiB`, `1-5 MiB`, and `5-25 MiB`
    buckets where the formats permit.
@@ -47,7 +49,7 @@ before exporting evidence.
 4. Confirm the eligible p95 is at most 20 seconds, every sample has all six
    stages, and both queue-scaled workers return to zero after their queues
    drain.
-5. Record warmer executions and worker warm hours for the same window. Accept
+5. Record worker warm hours for the same window. Accept
    cost only from the measured window; do not extrapolate from deployment or
    test traffic.
 
@@ -60,9 +62,8 @@ Run one controlled case per row. Never weaken or bypass the scanner.
 | Clean file | Published only after the clean scan result; authenticated Presenter receipt is recorded. |
 | EICAR/infected | Remains unavailable, is never published, and has no Presenter receipt. |
 | Transient scanner failure | Retries within the existing bound; download remains denied until a later clean result. |
-| Meeting API unavailable | Warmer execution fails closed; ordinary queue-triggered cold processing still completes. |
-| Warm queue unavailable | Warm pulse fails without losing durable upload/scan work; cold processing still completes. |
-| Schedule edit | Both warmers observe the resolved-window change within 60 seconds. |
+| Outside a cron window | Ordinary queue-triggered cold processing still completes. |
+| Schedule edit | The weekly meeting cron drift check reports any uncovered occurrence; edit the cron rules and release. |
 
 For pending, infected, and failed assets, verify the public and restricted
 download paths deny access. Restore any temporarily unavailable dependency

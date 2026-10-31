@@ -8,7 +8,7 @@ import re
 import subprocess
 import time
 
-JOBS = ('asset-scan', 'asset-scan-warmer', 'asset-clamav-signature-refresh', 'asset-derivative')
+JOBS = ('asset-scan', 'asset-clamav-signature-refresh', 'asset-derivative')
 APP = 'asset-scan-worker'
 CONFIG = ('triggerType', 'manualTriggerConfig', 'scheduleTriggerConfig', 'eventTriggerConfig',
           'replicaTimeout', 'replicaRetryLimit')
@@ -18,8 +18,6 @@ ENV = {
     'CLAMAV_SIGNATURE_CONTAINER', 'CLAMAV_SIGNATURE_MAX_AGE', 'CLAMAV_SCAN_TIMEOUT',
     'ASSET_SCAN_MAX_FILE_SIZE_BYTES', 'CLAMAV_MAX_FILE_SIZE_BYTES', 'CLAMAV_MAX_SCAN_SIZE_BYTES',
     'CLAMAV_MAX_FILES', 'CLAMAV_MAX_RECURSION', 'CLAMAV_MAX_RETRIES',
-    'MEETING_API_BASE_URL', 'MEETING_API_AUDIENCE', 'ASSET_SCAN_WARM_LEAD',
-    'ASSET_SCAN_WARM_TAIL', 'ASSET_SCAN_WARM_HTTP_TIMEOUT',
     'ASSET_DERIVATIVE_QUEUE_URL', 'ASSET_DERIVATIVE_POISON_QUEUE_URL',
     'ASSET_RETENTION_APPLY_ENABLED',
 }

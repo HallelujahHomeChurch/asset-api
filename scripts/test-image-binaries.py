@@ -4,8 +4,8 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-FAKE = "#!/usr/bin/env python3\nimport os,sys,pathlib,tarfile,io\nargs=sys.argv[1:]; mode=os.environ['CASE']\nwith open(os.environ['CALLS'],'a') as f: f.write(args[0]+'\\n')\nif args[0]=='create': print('fixture-container')\nelif args[0]=='rm': pass\nelif args[0]=='export':\n if mode=='exportfail': sys.exit(42)\n with tarfile.open(fileobj=sys.stdout.buffer, mode='w|') as t:\n  for name in ['asset-derivative-worker','asset-scan-warmer']:\n   if mode==name: continue\n   info=tarfile.TarInfo(name); t.addfile(info)\nelse: sys.exit(99)\n"
-for case in ['ok', 'asset-derivative-worker', 'asset-scan-warmer', 'exportfail']:
+FAKE = "#!/usr/bin/env python3\nimport os,sys,pathlib,tarfile,io\nargs=sys.argv[1:]; mode=os.environ['CASE']\nwith open(os.environ['CALLS'],'a') as f: f.write(args[0]+'\\n')\nif args[0]=='create': print('fixture-container')\nelif args[0]=='rm': pass\nelif args[0]=='export':\n if mode=='exportfail': sys.exit(42)\n with tarfile.open(fileobj=sys.stdout.buffer, mode='w|') as t:\n  for name in ['asset-derivative-worker']:\n   if mode==name: continue\n   info=tarfile.TarInfo(name); t.addfile(info)\nelse: sys.exit(99)\n"
+for case in ['ok', 'asset-derivative-worker', 'exportfail']:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         docker = root / 'docker'

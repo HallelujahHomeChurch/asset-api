@@ -1,0 +1,72 @@
+name: Meeting Cron Drift
+
+# The asset-scan-worker warm windows are hard-coded KEDA cron rules in
+# infra/main.bicep. This weekly check compares them with the public meeting
+# occurrences; it needs no Azure credentials.
+on:
+  schedule:
+    - cron: "0 1 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: meeting-cron-drift
+  cancel-in-progress: false
+
+jobs:
+  drift:
+    name: Check asset-scan-worker cron coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ISSUE_TITLE: "Meeting cron drift: asset-scan-worker"
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check meeting occurrences against cron rules
+        id: check
+        shell: bash
+        run: |
+          set +e
+          python3 scripts/meeting-cron-drift.py --report "${RUNNER_TEMP}/drift-report.md"
+          status=$?
+          set -e
+          echo "status=${status}" >> "${GITHUB_OUTPUT}"
+          if [[ "${status}" != 0 && "${status}" != 1 ]]; then
+            echo "Drift check could not run (exit ${status})" >&2
+            exit "${status}"
+          fi
+      - name: Open or update the drift issue
+        if: steps.check.outputs.status == '1'
+        shell: bash
+        run: |
+          {
+            cat "${RUNNER_TEMP}/drift-report.md"
+            echo
+            echo "Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } > "${RUNNER_TEMP}/issue-body.md"
+          number="$(gh issue list --state open --search "in:title \"${ISSUE_TITLE}\"" \
+            --json number,title --jq "map(select(.title == env.ISSUE_TITLE)) | .[0].number // empty")"
+          if [[ -n "${number}" ]]; then
+            gh issue edit "${number}" --body-file "${RUNNER_TEMP}/issue-body.md"
+            echo "Updated drift issue #${number}"
+          else
+            gh issue create --title "${ISSUE_TITLE}" --body-file "${RUNNER_TEMP}/issue-body.md"
+          fi
+          echo "Meeting occurrences are not covered by the asset-scan-worker cron rules" >&2
+          exit 1
+      - name: Close a resolved drift issue
+        if: steps.check.outputs.status == '0'
+        shell: bash
+        run: |
+          number="$(gh issue list --state open --search "in:title \"${ISSUE_TITLE}\"" \
+            --json number,title --jq "map(select(.title == env.ISSUE_TITLE)) | .[0].number // empty")"
+          if [[ -n "${number}" ]]; then
+            gh issue close "${number}" --comment "All scheduled meeting occurrences in the next 28 days are covered again."
+          fi

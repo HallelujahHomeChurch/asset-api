@@ -43,8 +43,6 @@ jq -e '
         or ((.changeType == "Create" or .changeType == "Modify")
           and (.resourceId | endswith("/Microsoft.App/jobs/asset-recording-validation")))
         or ((.changeType == "Create" or .changeType == "Modify")
-          and (.resourceId | endswith("/Microsoft.App/jobs/asset-scan-warmer")))
-        or ((.changeType == "Create" or .changeType == "Modify")
           and (.resourceId | endswith("/Microsoft.App/containerApps/asset-api/authConfigs/current")))
         or ((.changeType == "Create" or .changeType == "Modify")
           and (.resourceId | endswith("/Microsoft.App/containerApps/asset-scan-worker")))
