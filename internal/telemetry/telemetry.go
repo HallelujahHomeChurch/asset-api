@@ -3,6 +3,8 @@ package telemetry
 
 import (
 	"context"
+	"errors"
+	"io"
 	"log/slog"
 	"math"
 	"net/http"
@@ -112,7 +114,6 @@ type AuditTransport struct{ Base http.RoundTripper }
 
 func (t AuditTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	ctx, span := otel.Tracer("asset-api/http").Start(r.Context(), "audit.http", trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(attribute.String("http.request.method", method(r.Method))))
-	defer span.End()
 	request := r.Clone(ctx)
 	request.Header = r.Header.Clone()
 	if trace.SpanContextFromContext(ctx).IsValid() {
@@ -126,10 +127,16 @@ func (t AuditTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	if err != nil {
 		span.SetStatus(codes.Error, "")
 		span.SetAttributes(attribute.String("error.type", "transport_error"))
+		span.End()
 	} else {
 		span.SetAttributes(attribute.Int("http.response.status_code", response.StatusCode))
 		if response.StatusCode >= 500 {
 			span.SetStatus(codes.Error, "")
+		}
+		if response.Body == nil || response.Body == http.NoBody {
+			span.End()
+		} else {
+			response.Body = &auditBody{ReadCloser: response.Body, span: span}
 		}
 	}
 	return response, err
@@ -155,3 +162,32 @@ type resourceSpan struct {
 }
 
 func (s resourceSpan) Resource() *resource.Resource { return s.resource }
+
+// Body reads remain governed by the existing HTTP client's deadline/cancellation.
+type auditBody struct {
+	io.ReadCloser
+	span trace.Span
+	once sync.Once
+}
+
+func (b *auditBody) finish(err error) {
+	b.once.Do(func() {
+		if err != nil && !errors.Is(err, io.EOF) {
+			b.span.SetStatus(codes.Error, "")
+			b.span.SetAttributes(attribute.String("error.type", "body_error"))
+		}
+		b.span.End()
+	})
+}
+func (b *auditBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if err != nil {
+		b.finish(err)
+	}
+	return n, err
+}
+func (b *auditBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.finish(err)
+	return err
+}

@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from urllib.parse import parse_qs, unquote, urlsplit
 
 MEDIA = frozenset({
     "hhc/asset-api/internal/recordingvalidation",
@@ -22,6 +23,26 @@ def partition(packages):
     # New packages default to the serial lane; no path-based test exclusions.
     return [[p for p in packages if p not in MEDIA],
             [p for p in packages if p in MEDIA]]
+
+
+def lane_environments():
+    serial = dict(os.environ)
+    media = dict(serial)
+    urls = [serial.get("TEST_DATABASE_URL", ""), serial.get("TEST_MEDIA_DATABASE_URL", "")]
+    names = []
+    for url in urls:
+        parsed = urlsplit(url)
+        name = unquote(parsed.path.removeprefix("/"))
+        if (parsed.scheme not in ("postgres", "postgresql")
+                or parsed.hostname not in ("localhost", "127.0.0.1", "::1")
+                or not name or "/" in name
+                or {key.lower() for key in parse_qs(parsed.query, keep_blank_values=True)} & {"dbname", "database", "host", "hostaddr", "port", "service"}):
+            raise ValueError("two explicit loopback PostgreSQL database URLs are required")
+        names.append(name)
+    if names[0] == names[1]:
+        raise ValueError("test lanes require different databases; schemas do not isolate advisory locks")
+    media["TEST_DATABASE_URL"] = urls[1]
+    return [serial, media]
 
 
 def verify_events(path, packages):
@@ -40,6 +61,7 @@ def verify_events(path, packages):
 def run(output):
     # Never leave a previous successful manifest usable after a failed run.
     output.unlink(missing_ok=True)
+    environments = lane_environments()
     packages = subprocess.check_output(["go", "list", "./..."], text=True).splitlines()
     lanes = partition(packages)
     print(f"Go test lanes: {len(lanes[0])} serial + {len(lanes[1])} media packages",
@@ -50,10 +72,10 @@ def run(output):
         paths = [Path(directory) / f"{i}.jsonl" for i in range(len(lanes))]
         files = [path.open("w") for path in paths]
         try:
-            for lane, stream in zip(lanes, files):
+            for lane, stream, environment in zip(lanes, files, environments):
                 processes.append(subprocess.Popen(
                     ["go", "test", "-race", "-json", *lane, "-count=1", "-p=1"],
-                    stdout=stream, start_new_session=True))
+                    stdout=stream, start_new_session=True, env=environment))
             while True:
                 statuses = [p.poll() for p in processes]
                 if any(code not in (None, 0) for code in statuses):

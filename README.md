@@ -26,16 +26,35 @@ must be configured together; leaving both empty preserves existing behavior.
 with `-race -count=1 -p=1` in two processes on the same runner. Media packages
 (recording validation, recording processing and derivatives) execute serially in
 one lane; all remaining and newly added packages execute serially in the other.
-This overlaps database waits with media work without adding another runner. Media
-worker and database integration fixtures use distinct per-test schemas.
+This overlaps database waits with media work without adding another runner.
+
+Each lane needs its own disposable logical database: serial tests use
+`TEST_DATABASE_URL`; media tests use `TEST_MEDIA_DATABASE_URL`. Per-test schemas
+remain separate but do not isolate database-scoped advisory locks. Both URLs must
+name different loopback databases; missing configuration, equal database names
+and database/routing query overrides fail before tests start. Other environment
+settings remain unchanged. Both CI and release verification create `asset_media_test`
+in their existing PostgreSQL service before launching the lanes; their shared
+workflow policy checks enforce the same setup. No production lock key, conflict
+behavior, lease or timeout is changed.
+
+Create `asset_test` and `asset_media_test` on a disposable local server, then run:
+
+```sh
+TEST_DATABASE_URL='postgres://postgres:postgres@localhost:5432/asset_test?sslmode=disable' \
+TEST_MEDIA_DATABASE_URL='postgres://postgres:postgres@localhost:5432/asset_media_test?sslmode=disable' \
+TEST_POSTGRES_DSN='postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable' \
+ASSET_ALLOW_DESTRUCTIVE_TEST=1 HHC_REQUIRE_MEDIA_TESTS=1 \
+python3 scripts/test-go-lanes.py
+```
 
 The runner publishes `.artifacts/data-governance/test-events.jsonl` only after
 both lanes succeed and every package has a terminal result. Failure or cancellation
 stops both process groups. `python3 scripts/test-go-lanes_test.py` checks package
-coverage, event integrity, failure and cancellation. The direct serial command
-`go test -race -json ./... -count=1 -p=1` remains useful for comparison; both paths
-require the same disposable PostgreSQL and media tools. Governance export still
-runs after the complete event stream is available.
+coverage, database/environment isolation, event integrity, failure and cancellation.
+The direct serial command `go test -race -json ./... -count=1 -p=1` remains useful
+for comparison; both paths require disposable PostgreSQL and media tools.
+Governance export still runs after the complete event stream is available.
 
 ## Routes
 
@@ -675,8 +694,9 @@ events prefer the active application trace/span and retain legacy context as a
 fallback, without changing persisted audit provenance. URLs, headers, object IDs, payloads, peer
 addresses and raw errors are excluded. Export buffering is bounded and failures
 do not fail application requests. Streaming interfaces and HTTP cancellation are
-preserved. Audit transport spans cover response headers, not response-body
-consumption; durable outbox attempts start independent traces when no live parent
+preserved. Audit transport spans end once at response-body EOF or Close and classify body
+read/close failures without raw error text; existing cancellation/deadlines remain
+authoritative. Durable outbox attempts start independent traces when no live parent
 exists. Audit provenance is unchanged.
 
 Scan, derivative and recording workers/Jobs, storage SDK calls, queue continuity

@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 SCRIPT = Path(__file__).with_name("test-go-lanes.py")
 spec = importlib.util.spec_from_file_location("lanes", SCRIPT)
@@ -24,6 +25,25 @@ class GoLanesTest(unittest.TestCase):
         for invalid in (packages + [packages[0]], packages[1:]):
             with self.assertRaises(ValueError):
                 lanes.partition(invalid)
+
+    def test_database_identity_and_environment_preservation(self):
+        serial = "postgres://postgres@localhost:5432/asset_test?sslmode=disable"
+        media = "postgres://postgres@localhost:5432/asset_media_test?sslmode=disable"
+        environment = {"TEST_DATABASE_URL": serial, "TEST_MEDIA_DATABASE_URL": media,
+                       "TEST_POSTGRES_DSN": "admin-unchanged", "HHC_REQUIRE_MEDIA_TESTS": "1"}
+        with patch.dict(os.environ, environment, clear=True):
+            first, second = lanes.lane_environments()
+        self.assertEqual(first, environment)
+        self.assertEqual(second, dict(environment, TEST_DATABASE_URL=media))
+        invalid = [("", media), (serial, ""), (serial, serial),
+                   (serial, media.replace("asset_media_test", "asset_%74est")),
+                   (serial, media + "&dbname=asset_test"), (serial, media + "&dbname=")]
+        invalid.extend((serial, media + "&" + key + "=override")
+                       for key in ("host", "HOSTADDR", "port", "service"))
+        for left, right in invalid:
+            with patch.dict(os.environ, {"TEST_DATABASE_URL": left, "TEST_MEDIA_DATABASE_URL": right}, clear=True):
+                with self.assertRaises(ValueError):
+                    lanes.lane_environments()
 
     def test_requires_one_successful_terminal_event_per_package(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -56,6 +76,11 @@ if sys.argv[1] == "list":
  print("\\n".join(packages)); sys.exit(0)
 assert sys.argv[1:4] == ["test", "-race", "-json"]
 assert sys.argv[-2:] == ["-count=1", "-p=1"]
+is_media = packages[0] in sys.argv
+expected = os.environ["TEST_MEDIA_DATABASE_URL"] if is_media else os.environ["EXPECTED_SERIAL_DATABASE_URL"]
+assert os.environ["TEST_DATABASE_URL"] == expected
+assert os.environ["TEST_POSTGRES_DSN"] == "admin-preserved"
+assert os.environ["HHC_REQUIRE_MEDIA_TESTS"] == "1"
 with open(os.environ["PID_FILE"], "a") as f: f.write(str(os.getpid()) + "\\n")
 mode = os.environ.get("FAKE_MODE", "pass")
 if mode == "sleep" or (mode == "fail" and packages[0] in sys.argv):
@@ -72,10 +97,22 @@ for p in sys.argv[4:-2]:
  print(json.dumps({"Action":"pass", "Package":p}))
 ''')
             go.chmod(0o755)
-            env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"])
+            env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"],
+                       TEST_DATABASE_URL="postgres://postgres@localhost:5432/asset_test",
+                       TEST_MEDIA_DATABASE_URL="postgres://postgres@localhost:5432/asset_media_test",
+                       EXPECTED_SERIAL_DATABASE_URL="postgres://postgres@localhost:5432/asset_test",
+                       TEST_POSTGRES_DSN="admin-preserved", HHC_REQUIRE_MEDIA_TESTS="1")
             output = root / ".artifacts/data-governance/test-events.jsonl"
-            for mode in ("pass", "fail", "sleep", "incomplete", "listfail"):
+            for mode in ("pass", "missing-serial", "missing-media", "shared-db", "fail", "sleep", "incomplete", "listfail"):
                 env["FAKE_MODE"] = mode
+                env["TEST_DATABASE_URL"] = env["EXPECTED_SERIAL_DATABASE_URL"]
+                env["TEST_MEDIA_DATABASE_URL"] = "postgres://postgres@localhost:5432/asset_media_test"
+                if mode == "missing-serial":
+                    env.pop("TEST_DATABASE_URL")
+                elif mode == "missing-media":
+                    env.pop("TEST_MEDIA_DATABASE_URL")
+                elif mode == "shared-db":
+                    env["TEST_MEDIA_DATABASE_URL"] = env["TEST_DATABASE_URL"]
                 pids = root / (mode + ".pids")
                 env["PID_FILE"] = str(pids)
                 process = subprocess.Popen(["python3", str(SCRIPT.resolve())], cwd=root,

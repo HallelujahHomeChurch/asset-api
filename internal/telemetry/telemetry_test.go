@@ -4,13 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -228,6 +232,120 @@ func TestRemoteParentCannotOverrideLocalSampling(t *testing.T) {
 				if result.Decision != tc.want {
 					t.Fatalf("decision=%v want=%v", result.Decision, tc.want)
 				}
+			}
+		})
+	}
+}
+
+func TestAuditSpanWaitsForRealBodyEOF(t *testing.T) {
+	record := recorder(t)
+	headers, release := make(chan struct{}), make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		close(headers)
+		<-release
+		_, _ = w.Write([]byte("private-body"))
+	}))
+	defer server.Close()
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(release) })
+	ctx := propagation.TraceContext{}.Extract(context.Background(), propagation.MapCarrier{"traceparent": parent})
+	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, server.URL, nil)
+	client := http.Client{Transport: AuditTransport{}, Timeout: 3 * time.Second}
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	<-headers
+	if len(record.Ended()) != 0 {
+		t.Fatal("client span ended at headers")
+	}
+	releaseOnce.Do(func() { close(release) })
+	body, err := io.ReadAll(response.Body)
+	if err != nil || string(body) != "private-body" {
+		t.Fatalf("body semantics changed: %v", err)
+	}
+	if len(record.Ended()) != 1 {
+		t.Fatal("body EOF did not end exactly one span")
+	}
+	_ = response.Body.Close()
+	if len(record.Ended()) != 1 {
+		t.Fatal("close after EOF duplicated span")
+	}
+	raw, _ := json.Marshal(record.Ended()[0].Attributes())
+	if strings.Contains(string(raw), "private-body") {
+		t.Fatal("body exported")
+	}
+}
+
+type failingBody struct {
+	read  func([]byte) (int, error)
+	close func() error
+}
+
+func (b failingBody) Read(p []byte) (int, error) { return b.read(p) }
+func (b failingBody) Close() error               { return b.close() }
+func TestAuditBodyFailureCancellationAndClose(t *testing.T) {
+	for _, mode := range []string{"read", "cancel", "close"} {
+		t.Run(mode, func(t *testing.T) {
+			record := recorder(t)
+			ctx := propagation.TraceContext{}.Extract(context.Background(), propagation.MapCarrier{"traceparent": parent})
+			ctx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			sentinel := errors.New("private-body signed URL secret")
+			body := failingBody{read: func([]byte) (int, error) { return 0, sentinel }, close: func() error { return nil }}
+			var receivedCtx context.Context
+			if mode == "cancel" {
+				body.read = func([]byte) (int, error) {
+					<-ctx.Done()
+					if !errors.Is(receivedCtx.Err(), context.Canceled) {
+						t.Fatal("transport dropped cancellation")
+					}
+					return 0, receivedCtx.Err()
+				}
+			}
+			if mode == "close" {
+				body.close = func() error { return sentinel }
+			}
+			request := httptest.NewRequest(http.MethodGet, "http://private.invalid/?secret", nil).WithContext(ctx)
+			response, err := (AuditTransport{Base: roundTripFunc(func(received *http.Request) (*http.Response, error) {
+				receivedCtx = received.Context()
+				return &http.Response{StatusCode: 200, Body: body}, nil
+			})}).RoundTrip(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(record.Ended()) != 0 {
+				t.Fatal("headers ended span")
+			}
+			if mode == "close" {
+				err = response.Body.Close()
+			} else {
+				if mode == "cancel" {
+					cancel()
+				}
+				_, err = response.Body.Read(make([]byte, 1))
+			}
+			want := sentinel
+			if mode == "cancel" {
+				want = context.Canceled
+			}
+			if !errors.Is(err, want) {
+				t.Fatal("body error/cancellation changed")
+			}
+			_ = response.Body.Close()
+			spans := record.Ended()
+			if len(spans) != 1 {
+				t.Fatalf("ended spans=%d", len(spans))
+			}
+			if spans[0].Status().Code != codes.Error || spans[0].Status().Description != "" || len(spans[0].Events()) != 0 {
+				t.Fatal("missing bounded failure classification")
+			}
+			raw, _ := json.Marshal(spans[0].Attributes())
+			if strings.Contains(string(raw), "secret") || strings.Contains(string(raw), "private-body") {
+				t.Fatal("raw body failure exported")
 			}
 		})
 	}
