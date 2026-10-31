@@ -123,9 +123,10 @@ scan_line="$(grep -n 'name: Scan immutable images' "$workflow" | cut -d: -f1)"
 what_if_line="$(grep -n 'name: Reject destructive infrastructure changes' "$workflow" | cut -d: -f1)"
 test "$scan_line" -lt "$what_if_line"
 for image_check_workflow in .github/workflows/ci.yml "$workflow"; do
-  for binary in asset-derivative-worker asset-scan-warmer; do
-    grep -Fq "docker export \"\$(docker create asset-api:verify)\" | tar -tf - | grep -Fx '$binary' >/dev/null" "$image_check_workflow"
-  done
+  grep -Fq './scripts/test-image-binaries.sh asset-api:verify' "$image_check_workflow"
+done
+for binary in asset-derivative-worker asset-scan-warmer; do
+  grep -Fq "grep -Fx '$binary'" scripts/test-image-binaries.sh
 done
 grep -Fq 'docker run --rm --entrypoint clamscan asset-scan:verify --help' "$workflow"
 for flag in --max-filesize --max-scansize --max-files --max-recursion --alert-exceeds-max --alert-encrypted; do
@@ -460,7 +461,8 @@ grep -q 'configuration: union({' infra/main.bicep
 grep -q '}, retentionTriggerConfiguration)' infra/main.bicep
 grep -q "command: \\['/asset-retention-worker'\\]" infra/main.bicep
 grep -q "name: 'ASSET_RETENTION_APPLY_ENABLED', value: string(retentionApplyEnabled)" infra/main.bicep
-grep -q 'enableRbacAuthorization: true' infra/main.bicep
+grep -Fq 'for vault in alive-asset-runtime-kv alive-asset-migrate-kv; do' "$workflow"
+grep -Fq -- '--query properties.enableRbacAuthorization -o tsv --only-show-errors)' "$workflow"
 grep -q 'test-migration-policy-test.sh' .github/workflows/ci.yml
 grep -q 'test-what-if-policy.sh' .github/workflows/ci.yml
 grep -q 'param deployDerivativeJob bool = false' infra/main.bicep

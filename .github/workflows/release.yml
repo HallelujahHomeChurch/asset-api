@@ -306,6 +306,9 @@ jobs:
         run: bash scripts/validate-recording-event-rollout.sh
       - name: Verify isolated runtime prerequisites
         run: |
+          for vault in alive-asset-runtime-kv alive-asset-migrate-kv; do
+            [[ "$(az keyvault show -g "$RESOURCE_GROUP" -n "$vault" --query properties.enableRbacAuthorization -o tsv --only-show-errors)" == true ]]
+          done
           runtime_principal="$(az identity show -g "$RESOURCE_GROUP" -n asset-api-runtime-identity --query principalId -o tsv --only-show-errors)"
           migration_principal="$(az identity show -g "$RESOURCE_GROUP" -n asset-migrate-identity --query principalId -o tsv --only-show-errors)"
           runtime_vault="$(az keyvault show -g "$RESOURCE_GROUP" -n alive-asset-runtime-kv --query id -o tsv --only-show-errors)"
