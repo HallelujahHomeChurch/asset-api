@@ -26,16 +26,35 @@ must be configured together; leaving both empty preserves existing behavior.
 with `-race -count=1 -p=1` in two processes on the same runner. Media packages
 (recording validation, recording processing and derivatives) execute serially in
 one lane; all remaining and newly added packages execute serially in the other.
-This overlaps database waits with media work without adding another runner. Media
-worker and database integration fixtures use distinct per-test schemas.
+This overlaps database waits with media work without adding another runner.
+
+Each lane needs its own disposable logical database: serial tests use
+`TEST_DATABASE_URL`; media tests use `TEST_MEDIA_DATABASE_URL`. Per-test schemas
+remain separate but do not isolate database-scoped advisory locks. Both URLs must
+name different loopback databases; missing configuration, equal database names
+and database/routing query overrides fail before tests start. Other environment
+settings remain unchanged. Both CI and release verification create `asset_media_test`
+in their existing PostgreSQL service before launching the lanes; their shared
+workflow policy checks enforce the same setup. No production lock key, conflict
+behavior, lease or timeout is changed.
+
+Create `asset_test` and `asset_media_test` on a disposable local server, then run:
+
+```sh
+TEST_DATABASE_URL='postgres://postgres:postgres@localhost:5432/asset_test?sslmode=disable' \
+TEST_MEDIA_DATABASE_URL='postgres://postgres:postgres@localhost:5432/asset_media_test?sslmode=disable' \
+TEST_POSTGRES_DSN='postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable' \
+ASSET_ALLOW_DESTRUCTIVE_TEST=1 HHC_REQUIRE_MEDIA_TESTS=1 \
+python3 scripts/test-go-lanes.py
+```
 
 The runner publishes `.artifacts/data-governance/test-events.jsonl` only after
 both lanes succeed and every package has a terminal result. Failure or cancellation
 stops both process groups. `python3 scripts/test-go-lanes_test.py` checks package
-coverage, event integrity, failure and cancellation. The direct serial command
-`go test -race -json ./... -count=1 -p=1` remains useful for comparison; both paths
-require the same disposable PostgreSQL and media tools. Governance export still
-runs after the complete event stream is available.
+coverage, database/environment isolation, event integrity, failure and cancellation.
+The direct serial command `go test -race -json ./... -count=1 -p=1` remains useful
+for comparison; both paths require disposable PostgreSQL and media tools.
+Governance export still runs after the complete event stream is available.
 
 ## Routes
 
@@ -654,3 +673,46 @@ workflow retains its explicit preview/apply approval. They must not be changed
 to assumed central resources before reviewed import and no-op ownership proof.
 The ordinary release continues to disable shared-infrastructure and permission
 provisioning flags. This source change does not detach state or delete resources.
+
+## Application traces
+
+The API exports OpenTelemetry server spans and fixed-endpoint internal Audit
+client spans when the existing managed `OTEL_EXPORTER_OTLP_ENDPOINT` is present.
+No new credentials are needed. Without an endpoint, existing HTTP correlation
+continues and application span export stays disabled. `OTEL_TRACES_SAMPLER_ARG`
+sets root sampling between 0 and 0.1, defaulting to 0.01. Remote sampled parents also pass through this
+local ratio; remote unsampled parents remain unsampled and local sampled children
+keep their decision. Incoming remote spans may therefore be dropped by sampling
+while their trace IDs continue to propagate. This is not a hard export quota. Health/readiness
+probes do not create spans.
+
+Spans contain only fixed operation names, bounded HTTP methods/status codes and
+fixed transport error categories. The existing normalized diagnostic request ID
+is added as `hhc.request_id` only when it is exactly 32 lowercase hex characters,
+allowing Gateway lookup even when the API creates a new root trace. Diagnostic
+events prefer the active application trace/span and retain legacy context as a
+fallback, without changing persisted audit provenance. URLs, headers, object IDs, payloads, peer
+addresses and raw errors are excluded. Export buffering is bounded and failures
+do not fail application requests. Streaming interfaces and HTTP cancellation are
+preserved. Audit transport spans end once at response-body EOF or Close and classify body
+read/close failures without raw error text; existing cancellation/deadlines remain
+authoritative. Durable outbox attempts start independent traces when no live parent
+exists. Audit provenance is unchanged.
+
+Scan, derivative and recording workers/Jobs, storage SDK calls, queue continuity
+and the scan-warmer Operations client are not instrumented by this API change.
+No queue payload or schema is changed. A local collector test proves export;
+production ingestion and cross-service parent/child acceptance require a released
+revision and independently queried telemetry.
+
+The Go SDK makes the same deterministic decision for the same trace ID and ratio
+at each API, avoiding a separate 1% probability at every Go hop. An independently
+sampled 1% Sentry frontend combined with this 1% Go ratio has a theoretical
+complete-chain intersection around 0.01% under independent uniform sampling,
+not a guarantee. Cache hits, unsampled parents and async boundaries still affect
+which network spans exist. This change does not alter frontend sampling.
+
+A caller that repeatedly chooses a selected trace ID can force 100% sampling for
+that traffic. The ratio therefore cannot enforce a hard 1% resource quota.
+The platform coordinator owns quota review in the next cost-assessment phase;
+this slice deliberately retains standard deterministic SDK sampling.

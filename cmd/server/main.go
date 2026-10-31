@@ -28,6 +28,7 @@ import (
 	azurestorage "hhc/asset-api/internal/storage/azure"
 	localstorage "hhc/asset-api/internal/storage/local"
 	r2storage "hhc/asset-api/internal/storage/r2"
+	"hhc/asset-api/internal/telemetry"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -50,6 +51,14 @@ func run() error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	shutdownTelemetry := telemetry.Configure(ctx)
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if shutdownTelemetry(shutdownCtx) != nil {
+			slog.Warn("trace shutdown incomplete")
+		}
+	}()
 	db, err := sql.Open("pgx", cfg.DatabaseURL)
 	if err != nil {
 		return err
@@ -123,7 +132,7 @@ func run() error {
 			}
 		}
 	}
-	server := &http.Server{Addr: ":" + cfg.Port, Handler: handler.Routes(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 2 * time.Minute, IdleTimeout: 2 * time.Minute}
+	server := &http.Server{Addr: ":" + cfg.Port, Handler: telemetry.Server(handler.Routes()), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 2 * time.Minute, IdleTimeout: 2 * time.Minute}
 
 	lifecycleWorker := lifecycle.NewWorker(repository, blobStore)
 	if cfg.AuditDispatchEnabled {

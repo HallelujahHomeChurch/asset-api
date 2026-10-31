@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"hhc/asset-api/internal/diagnostics"
+	"hhc/asset-api/internal/telemetry"
 	"io"
 	"net"
 	"net/http"
@@ -339,7 +340,7 @@ func New(port int, appID, token string) (*Client, error) {
 	if port < 1 || port > 65535 || appID != "audit-log" && appID != "audit-log-test" || strings.TrimSpace(token) == "" || strings.ContainsAny(token, "\r\n") {
 		return nil, errors.New("invalid audit client configuration")
 	}
-	return &Client{http: &http.Client{Timeout: 3 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, endpoint: fmt.Sprintf("http://127.0.0.1:%d/v1.0/invoke/%s/method/priv/audit/events", port, appID), token: token}, nil
+	return &Client{http: &http.Client{Transport: telemetry.AuditTransport{}, Timeout: 3 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, endpoint: fmt.Sprintf("http://127.0.0.1:%d/v1.0/invoke/%s/method/priv/audit/events", port, appID), token: token}, nil
 }
 func (c *Client) Append(ctx context.Context, payload []byte) (result AppendResult) {
 	started := time.Now()

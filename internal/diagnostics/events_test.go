@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace"
 	"log/slog"
 	"math"
 	"strings"
@@ -139,5 +141,26 @@ func TestBlockedEventWriterDoesNotHoldQueueLock(t *testing.T) {
 	}
 	if r.eventSnapshot()[2] != 1 {
 		t.Fatal("sink failure not accounted")
+	}
+}
+
+func TestTransitionPrefersActiveSDKSpanIncludingUnsampledRoot(t *testing.T) {
+	for _, sampler := range []sdktrace.Sampler{sdktrace.AlwaysSample(), sdktrace.NeverSample()} {
+		provider := sdktrace.NewTracerProvider(sdktrace.WithSampler(sampler))
+		ctx, span := provider.Tracer("test").Start(WithTraceParent(context.Background(), fixtureTrace), "local")
+		active := trace.SpanContextFromContext(ctx)
+		var recorder Recorder
+		recorder.Transition(ctx, IdleCutoffCommitted, fixtureCapture, 1, 0, 0, time.Time{})
+		span.End()
+		_ = provider.Shutdown(context.Background())
+		var output bytes.Buffer
+		recorder.flushEvents(context.Background(), slog.New(slog.NewJSONHandler(&output, nil)))
+		var got map[string]any
+		if err := json.Unmarshal(output.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if got["trace_id"] != active.TraceID().String() || got["parent_span_id"] != active.SpanID().String() {
+			t.Fatal("active application span not correlated")
+		}
 	}
 }

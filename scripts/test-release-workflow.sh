@@ -84,6 +84,16 @@ grep -Fq 'fs --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-co
 grep -Fq 'image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 asset-api:verify' .github/workflows/ci.yml
 grep -Fq 'image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 asset-scan:verify' .github/workflows/ci.yml
 for candidate in .github/workflows/ci.yml "$workflow"; do
+  verify_job="$(awk '
+    /^  verify:/ { capture = 1; next }
+    capture && /^  [[:alnum:]_-]+:/ { exit }
+    capture { print }
+  ' "$candidate")"
+  printf '%s\n' "$verify_job" | grep -F 'TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/asset_test?sslmode=disable' >/dev/null
+  printf '%s\n' "$verify_job" | grep -F 'TEST_MEDIA_DATABASE_URL: postgres://postgres:postgres@localhost:5432/asset_media_test?sslmode=disable' >/dev/null
+  setup_line="$(printf '%s\n' "$verify_job" | grep -Fn 'run: docker exec "${{ job.services.postgres.id }}" createdb --username=postgres asset_media_test' | cut -d: -f1)"
+  lanes_line="$(printf '%s\n' "$verify_job" | grep -Fn 'python3 scripts/test-go-lanes.py' | cut -d: -f1)"
+  test "$setup_line" -lt "$lanes_line"
   grep -Fq 'python3 scripts/test-go-lanes_test.py' "$candidate"
   grep -Fq 'python3 scripts/test-go-lanes.py' "$candidate"
   grep -Fq "GOVERNANCE_TEST_EVENTS=\"\$PWD/.artifacts/data-governance/test-events.jsonl\"" "$candidate"
