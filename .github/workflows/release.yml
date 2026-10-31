@@ -60,6 +60,7 @@ jobs:
     outputs:
       image_artifact_id: ${{ steps.images_artifact.outputs.artifact-id }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
@@ -113,11 +114,8 @@ jobs:
             fs --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
             --skip-dirs /workspace/.git --skip-dirs /workspace/node_modules /workspace
       - name: Install media validation test tools
-        run: |
-          if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
-            sudo apt-get update
-            sudo apt-get install -y ffmpeg
-          fi
+        timeout-minutes: 15
+        run: ./scripts/install-media-test-tools.sh
       - name: Create isolated media test database
         run: docker exec "${{ job.services.postgres.id }}" createdb --username=postgres asset_media_test
       - name: Fingerprint synthetic broadcast inputs

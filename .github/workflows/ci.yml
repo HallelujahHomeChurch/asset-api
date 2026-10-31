@@ -42,6 +42,7 @@ jobs:
       scan_image_id: ${{ steps.image_fixture.outputs.scan_image_id }}
       recording_image_id: ${{ steps.image_fixture.outputs.recording_image_id }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
@@ -96,11 +97,8 @@ jobs:
       - name: Scan complete Git history
         run: ./scripts/test-gitleaks.sh
       - name: Install media validation test tools
-        run: |
-          if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
-            sudo apt-get update
-            sudo apt-get install -y ffmpeg
-          fi
+        timeout-minutes: 15
+        run: ./scripts/install-media-test-tools.sh
       - name: Create isolated media test database
         run: docker exec "${{ job.services.postgres.id }}" createdb --username=postgres asset_media_test
       - name: Fingerprint synthetic broadcast inputs
@@ -129,6 +127,7 @@ jobs:
           ./scripts/test-migration-policy-test.sh
           ./scripts/test-migration-policy.sh internal/migrations/sql/*.sql
           ./scripts/test-what-if-policy.sh
+          ./scripts/test-install-media-test-tools.sh
           bash scripts/ensure-workload-app-role.test.sh
           mkdir -p .artifacts/data-governance
           set -o pipefail
