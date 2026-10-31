@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+python3 scripts/test-image-binaries.py
 api_scale="$(awk '/^resource app / { in_api = 1; next } in_api && /^resource / { exit } in_api { print }' infra/main.bicep)"
 for expected in "name: 'DB_MAX_OPEN_CONNS', value: '8'" "name: 'DB_MAX_IDLE_CONNS', value: '4'" 'minReplicas: 1' 'maxReplicas: 8' "name: 'cpu-scaler'" "type: 'cpu'" "type: 'Utilization'" "value: '60'" "name: 'http-concurrency'" "concurrentRequests: '10'"; do
   printf '%s\n' "$api_scale" | grep -Fq "$expected"
@@ -514,3 +515,8 @@ PY
 bash scripts/test-recording-events.sh
 
 python3 scripts/test-worker-release-rollback.py
+
+for candidate in .github/workflows/ci.yml .github/workflows/release.yml; do
+  grep -Fq "./scripts/test-image-binaries.sh asset-api:verify" "$candidate"
+  if grep -Fq 'docker export "$(docker create asset-api:verify)"' "$candidate"; then exit 1; fi
+done
