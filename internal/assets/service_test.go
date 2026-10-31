@@ -1409,7 +1409,7 @@ func (r *memoryRepository) CompleteUpload(_ context.Context, asset Asset, sessio
 	}
 	r.assets[asset.ID] = asset
 	r.sessions[asset.ID] = session
-	if _, exists := r.scanRequests[request.EventID]; !exists {
+	if _, exists := r.scanRequests[request.EventID]; request.EventID != "" && !exists {
 		r.scanRequests[request.EventID] = request
 	}
 	return nil

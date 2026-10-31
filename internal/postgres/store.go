@@ -131,7 +131,8 @@ func (s *Store) FindUploadByIdempotency(ctx context.Context, caller, operation, 
 }
 
 func (s *Store) CompleteUpload(ctx context.Context, asset assets.Asset, session assets.UploadSession, request assets.ScanRequest) error {
-	if request.EventID == "" || request.AssetID != asset.ID || request.ETag == "" || request.ETag != asset.ETag || request.CreatedAt.IsZero() {
+	trusted := asset.ScanStatus == assets.ScanClean && asset.ScanSignature == assets.TrustedBulletinWatermark
+	if trusted && request != (assets.ScanRequest{}) || !trusted && (request.EventID == "" || request.AssetID != asset.ID || request.ETag == "" || request.ETag != asset.ETag || request.CreatedAt.IsZero()) {
 		return assets.ErrInvalidInput
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -153,7 +154,7 @@ func (s *Store) CompleteUpload(ctx context.Context, asset assets.Asset, session 
 	if assetStatus != string(assets.UploadCreated) || sessionStatus != string(assets.UploadCreated) {
 		return assets.ErrConflict
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE assets SET detected_mime_type=$2,size_bytes=$3,checksum_sha256=$4,etag=$5,upload_status=$6,scan_status=$7,scan_event_id=$8,updated_at=$9 WHERE id=$1`, asset.ID, asset.DetectedMIMEType, asset.SizeBytes, asset.ChecksumSHA256, asset.ETag, asset.UploadStatus, asset.ScanStatus, request.EventID, asset.UpdatedAt)
+	result, err := tx.ExecContext(ctx, `UPDATE assets SET detected_mime_type=$2,size_bytes=$3,checksum_sha256=$4,etag=$5,upload_status=$6,scan_status=$7,scan_event_id=$8,updated_at=$9,scan_signature_version=$10,scan_details=$11 WHERE id=$1`, asset.ID, asset.DetectedMIMEType, asset.SizeBytes, asset.ChecksumSHA256, asset.ETag, asset.UploadStatus, asset.ScanStatus, request.EventID, asset.UpdatedAt, asset.ScanSignature, asset.ScanDetails)
 	if err != nil {
 		return err
 	}
@@ -167,8 +168,10 @@ func (s *Store) CompleteUpload(ctx context.Context, asset assets.Asset, session 
 	if affected, _ := result.RowsAffected(); affected != 1 {
 		return assets.ErrNotFound
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO asset_scan_outbox(event_id,asset_id,asset_etag,available_at,created_at) VALUES($1,$2,$3,$4,$4)`, request.EventID, request.AssetID, request.ETag, request.CreatedAt); err != nil {
-		return err
+	if !trusted {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO asset_scan_outbox(event_id,asset_id,asset_etag,available_at,created_at) VALUES($1,$2,$3,$4,$4)`, request.EventID, request.AssetID, request.ETag, request.CreatedAt); err != nil {
+			return err
+		}
 	}
 	if metadata, audited := auditUploadMetadata(asset); audited {
 		if err := s.enqueueAuditTx(ctx, tx, "asset.upload.complete", asset.ID, metadata, asset.UpdatedAt); err != nil {

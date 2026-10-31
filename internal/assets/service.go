@@ -112,6 +112,10 @@ func (s *Service) replayUpload(ctx context.Context, input CreateUploadInput, key
 }
 
 func (s *Service) CompleteUpload(ctx context.Context, assetID string, input CompleteUploadInput) (Asset, error) {
+	return s.completeUpload(ctx, assetID, input, "")
+}
+
+func (s *Service) completeUpload(ctx context.Context, assetID string, input CompleteUploadInput, derivation string) (Asset, error) {
 	asset, err := s.repository.GetAsset(ctx, assetID)
 	if err != nil {
 		return Asset{}, err
@@ -276,6 +280,10 @@ func (s *Service) CompleteUpload(ctx context.Context, assetID string, input Comp
 	session.Status = UploadCompleted
 	session.CompletedAt = now
 	request := ScanRequest{EventID: newID(), AssetID: asset.ID, ETag: asset.ETag, CreatedAt: now}
+	if derivation != "" {
+		asset.ScanStatus, asset.ScanSignature, asset.ScanDetails = ScanClean, TrustedBulletinWatermark, derivation
+		request = ScanRequest{}
+	}
 	if err := s.repository.CompleteUpload(ctx, asset, session, request); err != nil {
 		return Asset{}, fmt.Errorf("complete upload: %w", err)
 	}
