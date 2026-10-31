@@ -496,8 +496,14 @@ grep -q 'ASSET_EXTRACTOR_WORKLOAD_OBJECT_ID' "$workflow"
 grep -Eq 'EXTRACTOR_ROLE_APPROVED:.*github.event_name.*workflow_dispatch.*inputs.approve_extractor_app_role' "$workflow"
 grep -Fq 'bash scripts/ensure-workload-app-role.sh check' "$workflow"
 grep -Fq 'bash scripts/ensure-workload-app-role.sh apply' "$workflow"
-grep -Fq "allowedApplications: concat([lineAttachmentClientId], extractorAuthEnabled ? [extractorClientId] : [])" infra/main.bicep
-grep -Fq "allowedPrincipals: { identities: concat([lineAttachmentObjectId], extractorAuthEnabled ? [extractorObjectId] : []) }" infra/main.bicep
+grep -Fq "allowedApplications: concat([lineAttachmentClientId], extractorAuthEnabled ? [extractorClientId] : [], watermarkWorkerAuthEnabled ? [watermarkWorkerClientId] : [])" infra/main.bicep
+grep -Fq "allowedPrincipals: { identities: concat([lineAttachmentObjectId], extractorAuthEnabled ? [extractorObjectId] : [], watermarkWorkerAuthEnabled ? [watermarkWorkerObjectId] : []) }" infra/main.bicep
+# W3: the watermark worker identity is wired end to end and approved separately.
+grep -q 'ASSET_WATERMARK_WORKLOAD_CLIENT_ID' "$workflow"
+grep -q 'ASSET_WATERMARK_WORKLOAD_OBJECT_ID' "$workflow"
+[ "$(grep -c 'watermarkWorkerClientId="$ASSET_WATERMARK_WORKLOAD_CLIENT_ID" watermarkWorkerObjectId="$ASSET_WATERMARK_WORKLOAD_OBJECT_ID"' "$workflow")" = 2 ]
+grep -Fq "WATERMARK_ROLE_APPROVED: \${{ github.event_name == 'workflow_dispatch' && inputs.approve_watermark_app_role && 'true' || 'false' }}" "$workflow"
+grep -Fq "{ name: 'ASSET_WATERMARK_WORKLOAD_CLIENT_ID', value: watermarkWorkerAuthEnabled ? watermarkWorkerClientId : '' }" infra/main.bicep
 
 if grep -Eiq 'migrate[[:space:]_-]*down|migration[[:space:]_-]*rollback' "$workflow"; then
   echo 'release workflow must not roll back database migrations automatically' >&2

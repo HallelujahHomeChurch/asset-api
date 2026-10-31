@@ -231,5 +231,8 @@ func workloadAuth(cfg config.Config) httpapi.WorkloadAuthConfig {
 	if cfg.ExtractorWorkloadClientID != "" {
 		callers[cfg.ExtractorWorkloadClientID] = httpapi.WorkloadCaller{ObjectID: cfg.ExtractorWorkloadObjectID, Service: "hhc-web-api"}
 	}
+	if cfg.WatermarkWorkloadClientID != "" {
+		callers[cfg.WatermarkWorkloadClientID] = httpapi.WorkloadCaller{ObjectID: cfg.WatermarkWorkloadObjectID, Service: "hhc-web-bulletin-worker"}
+	}
 	return httpapi.WorkloadAuthConfig{TenantID: cfg.WorkloadTenantID, Issuer: cfg.WorkloadIssuer, Audience: cfg.WorkloadAudience, RequiredRole: cfg.WorkloadRequiredRole, ReaderCallerAppID: cfg.ReaderCallerAppID, Callers: callers}
 }

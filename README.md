@@ -240,6 +240,19 @@ and production resource activation are still separate delivery gates.
 
 ## Scan lifecycle
 
+The exact authenticated `hhc-web-bulletin-worker` service may complete its controlled
+personalized PDF through `/priv/assets/bulletin-derivatives/{assetID}/complete`.
+The worker proves its identity either through Dapr or, without Dapr, through the
+dedicated `hhc-web-bulletin-worker-identity` Entra workload principal configured by
+`ASSET_WATERMARK_WORKLOAD_CLIENT_ID`/`_OBJECT_ID`; a valid Dapr token always takes
+precedence over any principal header. See [`docs/workload-auth.md`](docs/workload-auth.md).
+The original must be an immutable clean private bulletin with matching SHA-256
+and locale; output ownership, MIME, size, checksum and immutable Blob commit
+remain validated. This records `trusted-bulletin-watermark-v1` plus source
+provenance, without claiming a new ClamAV scan or adding a scan queue event.
+Browser uploads and ordinary completion retain the full scan lifecycle.
+Release this additive producer before the matching CMS worker consumer.
+
 After upload completion, the runtime dispatches a durable queue message. The
 queue-scaled `asset-scan-worker` Container App downloads the immutable private
 Blob and scans it with a local ClamAV process and a validated signature

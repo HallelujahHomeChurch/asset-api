@@ -283,3 +283,38 @@ func TestExtractorWorkloadPairCannotBePartialOrCollideWithLINE(t *testing.T) {
 		}
 	}
 }
+
+func TestWatermarkWorkloadPairMustBeCompleteAndDistinct(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://test")
+	t.Setenv("ASSET_ALLOW_DEV_CALLER_HEADER", "true")
+	t.Setenv("ASSET_WORKLOAD_TENANT_ID", "tenant")
+	t.Setenv("ASSET_WORKLOAD_ISSUER", "issuer")
+	t.Setenv("ASSET_WORKLOAD_AUDIENCE", "audience")
+	t.Setenv("ASSET_LINE_WORKLOAD_CLIENT_ID", "line-client")
+	t.Setenv("ASSET_LINE_WORKLOAD_OBJECT_ID", "line-object")
+	t.Setenv("ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID", "extractor-client")
+	t.Setenv("ASSET_EXTRACTOR_WORKLOAD_OBJECT_ID", "extractor-object")
+	for _, pair := range [][2]string{{"watermark-client", ""}, {"", "watermark-object"}, {"line-client", "watermark-object"}, {"watermark-client", "line-object"}, {"extractor-client", "watermark-object"}, {"watermark-client", "extractor-object"}} {
+		t.Setenv("ASSET_WATERMARK_WORKLOAD_CLIENT_ID", pair[0])
+		t.Setenv("ASSET_WATERMARK_WORKLOAD_OBJECT_ID", pair[1])
+		if _, err := Load(); err == nil {
+			t.Fatalf("incomplete or overlapping watermark identity accepted: %v", pair)
+		}
+	}
+	t.Setenv("ASSET_WATERMARK_WORKLOAD_CLIENT_ID", "watermark-client")
+	t.Setenv("ASSET_WATERMARK_WORKLOAD_OBJECT_ID", "watermark-object")
+	cfg, err := Load()
+	if err != nil || cfg.WatermarkWorkloadClientID != "watermark-client" || cfg.WatermarkWorkloadObjectID != "watermark-object" {
+		t.Fatalf("cfg=%+v err=%v", cfg.WatermarkWorkloadClientID, err)
+	}
+	t.Setenv("ASSET_WORKLOAD_AUDIENCE", "")
+	t.Setenv("ASSET_WORKLOAD_TENANT_ID", "")
+	t.Setenv("ASSET_WORKLOAD_ISSUER", "")
+	t.Setenv("ASSET_LINE_WORKLOAD_CLIENT_ID", "")
+	t.Setenv("ASSET_LINE_WORKLOAD_OBJECT_ID", "")
+	t.Setenv("ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID", "")
+	t.Setenv("ASSET_EXTRACTOR_WORKLOAD_OBJECT_ID", "")
+	if _, err := Load(); err == nil {
+		t.Fatal("watermark identity accepted without base workload authentication")
+	}
+}

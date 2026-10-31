@@ -24,6 +24,11 @@ on:
         required: false
         default: false
         type: boolean
+      approve_watermark_app_role:
+        description: Authorize the exact reviewed Asset.Invoke assignment for hhc-web-bulletin-worker-identity
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -231,6 +236,9 @@ jobs:
       ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID: ${{ vars.ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID }}
       ASSET_EXTRACTOR_WORKLOAD_OBJECT_ID: ${{ vars.ASSET_EXTRACTOR_WORKLOAD_OBJECT_ID }}
       EXTRACTOR_ROLE_APPROVED: ${{ github.event_name == 'workflow_dispatch' && inputs.approve_extractor_app_role && 'true' || 'false' }}
+      ASSET_WATERMARK_WORKLOAD_CLIENT_ID: ${{ vars.ASSET_WATERMARK_WORKLOAD_CLIENT_ID }}
+      ASSET_WATERMARK_WORKLOAD_OBJECT_ID: ${{ vars.ASSET_WATERMARK_WORKLOAD_OBJECT_ID }}
+      WATERMARK_ROLE_APPROVED: ${{ github.event_name == 'workflow_dispatch' && inputs.approve_watermark_app_role && 'true' || 'false' }}
       MEETING_API_BASE_URL: ${{ vars.MEETING_API_BASE_URL }}
       MEETING_API_AUDIENCE: ${{ vars.MEETING_API_AUDIENCE }}
       MEMBER_VIDEO_ENABLED: ${{ vars.MEMBER_VIDEO_ENABLED || 'false' }}
@@ -267,6 +275,9 @@ jobs:
           done
           if [[ -n "$ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID" || -n "$ASSET_EXTRACTOR_WORKLOAD_OBJECT_ID" ]]; then
             test -n "$ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID" && test -n "$ASSET_EXTRACTOR_WORKLOAD_OBJECT_ID" || { echo 'Extractor identity pair is incomplete' >&2; exit 1; }
+          fi
+          if [[ -n "$ASSET_WATERMARK_WORKLOAD_CLIENT_ID" || -n "$ASSET_WATERMARK_WORKLOAD_OBJECT_ID" ]]; then
+            test -n "$ASSET_WATERMARK_WORKLOAD_CLIENT_ID" && test -n "$ASSET_WATERMARK_WORKLOAD_OBJECT_ID" || { echo 'Watermark worker identity pair is incomplete' >&2; exit 1; }
           fi
           case "$MEMBER_VIDEO_ENABLED" in
             true)
@@ -461,7 +472,7 @@ jobs:
           az deployment group what-if \
             --resource-group "$RESOURCE_GROUP" \
             --template-file infra/main.bicep \
-            --parameters recordingEventsProvisioned="$RECORDING_EVENTS_PROVISIONED" recordingEventsEnabled="$RECORDING_EVENTS_ENABLED" recordingLiveCPU="$RECORDING_LIVE_CPU" recordingProcessingCPU="$RECORDING_PROCESSING_CPU" recordingPreviewCPU="$RECORDING_PREVIEW_CPU" recordingHLSEnabled="$RECORDING_HLS_ENABLED" recordingSourceEnabled="$RECORDING_SOURCE_ENABLED" storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" scanWorkerImage="$SCAN_IMAGE_REF" recordingImage="$RECORDING_IMAGE_REF" memberVideoEnabled="$MEMBER_VIDEO_ENABLED" recordingR2AccountId="$CLOUDFLARE_ACCOUNT_ID" mediaKeyId="$MEDIA_KEY_ID" deployRuntime=true deployMigrationJob=true deployScanJob=true deployScanWorker=true deployScanWarmer=true provisionScanWarmInfrastructure=false deploySignatureRefreshJob=true deployDerivativeJob=true deployRetentionJob="$DEPLOY_RETENTION_JOB" retentionScheduleEnabled="$RETENTION_SCHEDULE_ENABLED" retentionApplyEnabled="$RETENTION_APPLY_ENABLED" scanDispatchEnabled="$ACTIVATE_QUEUE_SCANNING" embeddedScanEnabled="$EMBEDDED_SCAN_ENABLED" workloadAuthClientId="$ASSET_WORKLOAD_CLIENT_ID" workloadAuthAudience="$ASSET_WORKLOAD_AUDIENCE" lineAttachmentClientId="$LINE_ATTACHMENT_CLIENT_ID" lineAttachmentObjectId="$LINE_ATTACHMENT_OBJECT_ID" extractorClientId="$ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID" extractorObjectId="$ASSET_EXTRACTOR_WORKLOAD_OBJECT_ID" readerCallerAppId="$ASSET_READER_CALLER_APP_ID" meetingApiBaseUrl="$MEETING_API_BASE_URL" meetingApiAudience="$MEETING_API_AUDIENCE" provisionPermissions=false manageSharedInfrastructure=false \
+            --parameters recordingEventsProvisioned="$RECORDING_EVENTS_PROVISIONED" recordingEventsEnabled="$RECORDING_EVENTS_ENABLED" recordingLiveCPU="$RECORDING_LIVE_CPU" recordingProcessingCPU="$RECORDING_PROCESSING_CPU" recordingPreviewCPU="$RECORDING_PREVIEW_CPU" recordingHLSEnabled="$RECORDING_HLS_ENABLED" recordingSourceEnabled="$RECORDING_SOURCE_ENABLED" storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" scanWorkerImage="$SCAN_IMAGE_REF" recordingImage="$RECORDING_IMAGE_REF" memberVideoEnabled="$MEMBER_VIDEO_ENABLED" recordingR2AccountId="$CLOUDFLARE_ACCOUNT_ID" mediaKeyId="$MEDIA_KEY_ID" deployRuntime=true deployMigrationJob=true deployScanJob=true deployScanWorker=true deployScanWarmer=true provisionScanWarmInfrastructure=false deploySignatureRefreshJob=true deployDerivativeJob=true deployRetentionJob="$DEPLOY_RETENTION_JOB" retentionScheduleEnabled="$RETENTION_SCHEDULE_ENABLED" retentionApplyEnabled="$RETENTION_APPLY_ENABLED" scanDispatchEnabled="$ACTIVATE_QUEUE_SCANNING" embeddedScanEnabled="$EMBEDDED_SCAN_ENABLED" workloadAuthClientId="$ASSET_WORKLOAD_CLIENT_ID" workloadAuthAudience="$ASSET_WORKLOAD_AUDIENCE" lineAttachmentClientId="$LINE_ATTACHMENT_CLIENT_ID" lineAttachmentObjectId="$LINE_ATTACHMENT_OBJECT_ID" extractorClientId="$ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID" extractorObjectId="$ASSET_EXTRACTOR_WORKLOAD_OBJECT_ID" watermarkWorkerClientId="$ASSET_WATERMARK_WORKLOAD_CLIENT_ID" watermarkWorkerObjectId="$ASSET_WATERMARK_WORKLOAD_OBJECT_ID" readerCallerAppId="$ASSET_READER_CALLER_APP_ID" meetingApiBaseUrl="$MEETING_API_BASE_URL" meetingApiAudience="$MEETING_API_AUDIENCE" provisionPermissions=false manageSharedInfrastructure=false \
             --validation-level Provider --result-format FullResourcePayloads --no-pretty-print --only-show-errors \
             --output json > what-if.json
           if [[ "$RECORDING_EVENTS_PROVISIONED" == true ]]; then
@@ -476,6 +487,16 @@ jobs:
         run: bash scripts/ensure-workload-app-role.sh check
       - name: Authorize reviewed exact extractor asset role
         if: env.ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID != '' && env.EXTRACTOR_ROLE_APPROVED == 'true'
+        run: bash scripts/ensure-workload-app-role.sh apply
+      - name: Verify existing watermark worker asset role
+        if: env.ASSET_WATERMARK_WORKLOAD_CLIENT_ID != '' && env.WATERMARK_ROLE_APPROVED != 'true'
+        env:
+          ROLE_SUBJECT: watermark
+        run: bash scripts/ensure-workload-app-role.sh check
+      - name: Authorize reviewed exact watermark worker asset role
+        if: env.ASSET_WATERMARK_WORKLOAD_CLIENT_ID != '' && env.WATERMARK_ROLE_APPROVED == 'true'
+        env:
+          ROLE_SUBJECT: watermark
         run: bash scripts/ensure-workload-app-role.sh apply
       - name: Update migration job
         run: |
@@ -510,7 +531,7 @@ jobs:
           az deployment group create \
             --name "asset-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --resource-group "$RESOURCE_GROUP" --template-file infra/main.bicep \
-            --parameters recordingEventsProvisioned="$RECORDING_EVENTS_PROVISIONED" recordingEventsEnabled="$RECORDING_EVENTS_ENABLED" recordingLiveCPU="$RECORDING_LIVE_CPU" recordingProcessingCPU="$RECORDING_PROCESSING_CPU" recordingPreviewCPU="$RECORDING_PREVIEW_CPU" recordingHLSEnabled="$RECORDING_HLS_ENABLED" recordingSourceEnabled="$RECORDING_SOURCE_ENABLED" storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" scanWorkerImage="$SCAN_IMAGE_REF" recordingImage="$RECORDING_IMAGE_REF" memberVideoEnabled="$MEMBER_VIDEO_ENABLED" recordingR2AccountId="$CLOUDFLARE_ACCOUNT_ID" mediaKeyId="$MEDIA_KEY_ID" deployRuntime=true deployMigrationJob=true deployScanJob=true deployScanWorker=true deployScanWarmer=true provisionScanWarmInfrastructure=false deploySignatureRefreshJob=true deployDerivativeJob=true deployRetentionJob="$DEPLOY_RETENTION_JOB" retentionScheduleEnabled="$RETENTION_SCHEDULE_ENABLED" retentionApplyEnabled="$RETENTION_APPLY_ENABLED" scanDispatchEnabled="$ACTIVATE_QUEUE_SCANNING" embeddedScanEnabled="$EMBEDDED_SCAN_ENABLED" workloadAuthClientId="$ASSET_WORKLOAD_CLIENT_ID" workloadAuthAudience="$ASSET_WORKLOAD_AUDIENCE" lineAttachmentClientId="$LINE_ATTACHMENT_CLIENT_ID" lineAttachmentObjectId="$LINE_ATTACHMENT_OBJECT_ID" extractorClientId="$ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID" extractorObjectId="$ASSET_EXTRACTOR_WORKLOAD_OBJECT_ID" readerCallerAppId="$ASSET_READER_CALLER_APP_ID" meetingApiBaseUrl="$MEETING_API_BASE_URL" meetingApiAudience="$MEETING_API_AUDIENCE" provisionPermissions=false manageSharedInfrastructure=false \
+            --parameters recordingEventsProvisioned="$RECORDING_EVENTS_PROVISIONED" recordingEventsEnabled="$RECORDING_EVENTS_ENABLED" recordingLiveCPU="$RECORDING_LIVE_CPU" recordingProcessingCPU="$RECORDING_PROCESSING_CPU" recordingPreviewCPU="$RECORDING_PREVIEW_CPU" recordingHLSEnabled="$RECORDING_HLS_ENABLED" recordingSourceEnabled="$RECORDING_SOURCE_ENABLED" storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" scanWorkerImage="$SCAN_IMAGE_REF" recordingImage="$RECORDING_IMAGE_REF" memberVideoEnabled="$MEMBER_VIDEO_ENABLED" recordingR2AccountId="$CLOUDFLARE_ACCOUNT_ID" mediaKeyId="$MEDIA_KEY_ID" deployRuntime=true deployMigrationJob=true deployScanJob=true deployScanWorker=true deployScanWarmer=true provisionScanWarmInfrastructure=false deploySignatureRefreshJob=true deployDerivativeJob=true deployRetentionJob="$DEPLOY_RETENTION_JOB" retentionScheduleEnabled="$RETENTION_SCHEDULE_ENABLED" retentionApplyEnabled="$RETENTION_APPLY_ENABLED" scanDispatchEnabled="$ACTIVATE_QUEUE_SCANNING" embeddedScanEnabled="$EMBEDDED_SCAN_ENABLED" workloadAuthClientId="$ASSET_WORKLOAD_CLIENT_ID" workloadAuthAudience="$ASSET_WORKLOAD_AUDIENCE" lineAttachmentClientId="$LINE_ATTACHMENT_CLIENT_ID" lineAttachmentObjectId="$LINE_ATTACHMENT_OBJECT_ID" extractorClientId="$ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID" extractorObjectId="$ASSET_EXTRACTOR_WORKLOAD_OBJECT_ID" watermarkWorkerClientId="$ASSET_WATERMARK_WORKLOAD_CLIENT_ID" watermarkWorkerObjectId="$ASSET_WATERMARK_WORKLOAD_OBJECT_ID" readerCallerAppId="$ASSET_READER_CALLER_APP_ID" meetingApiBaseUrl="$MEETING_API_BASE_URL" meetingApiAudience="$MEETING_API_AUDIENCE" provisionPermissions=false manageSharedInfrastructure=false \
             --only-show-errors --output none
       - name: Verify revision health
         run: |

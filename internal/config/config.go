@@ -54,6 +54,8 @@ type Config struct {
 	LineWorkloadObjectID      string
 	ExtractorWorkloadClientID string
 	ExtractorWorkloadObjectID string
+	WatermarkWorkloadClientID string
+	WatermarkWorkloadObjectID string
 	ShutdownTimeout           time.Duration
 	AuditDispatchEnabled      bool
 	AuditAppID                string
@@ -102,6 +104,8 @@ func Load() (Config, error) {
 		LineWorkloadObjectID:      strings.TrimSpace(os.Getenv("ASSET_LINE_WORKLOAD_OBJECT_ID")),
 		ExtractorWorkloadClientID: strings.TrimSpace(os.Getenv("ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID")),
 		ExtractorWorkloadObjectID: strings.TrimSpace(os.Getenv("ASSET_EXTRACTOR_WORKLOAD_OBJECT_ID")),
+		WatermarkWorkloadClientID: strings.TrimSpace(os.Getenv("ASSET_WATERMARK_WORKLOAD_CLIENT_ID")),
+		WatermarkWorkloadObjectID: strings.TrimSpace(os.Getenv("ASSET_WATERMARK_WORKLOAD_OBJECT_ID")),
 		ShutdownTimeout:           10 * time.Second,
 		AuditAppID:                value("AUDIT_APP_ID", "audit-log"),
 		AuditToken:                strings.TrimSpace(os.Getenv("AUDIT_TOKEN")),
@@ -196,6 +200,18 @@ func Load() (Config, error) {
 		}
 		if cfg.ExtractorWorkloadClientID == cfg.LineWorkloadClientID || cfg.ExtractorWorkloadObjectID == cfg.LineWorkloadObjectID {
 			return Config{}, fmt.Errorf("ASSET extractor and LINE workload identities must be distinct")
+		}
+	}
+	if cfg.WatermarkWorkloadClientID != "" || cfg.WatermarkWorkloadObjectID != "" {
+		if configured != len(workloadValues) || cfg.WatermarkWorkloadClientID == "" || cfg.WatermarkWorkloadObjectID == "" {
+			return Config{}, fmt.Errorf("ASSET watermark workload authentication configuration is incomplete")
+		}
+		// The watermark worker gets a distinct service identity that alone may
+		// attest trusted bulletin derivatives; it must never share an identity.
+		for _, other := range [][2]string{{cfg.LineWorkloadClientID, cfg.LineWorkloadObjectID}, {cfg.ExtractorWorkloadClientID, cfg.ExtractorWorkloadObjectID}} {
+			if cfg.WatermarkWorkloadClientID == other[0] || cfg.WatermarkWorkloadObjectID == other[1] {
+				return Config{}, fmt.Errorf("ASSET watermark workload identity must be distinct from LINE and extractor identities")
+			}
 		}
 	}
 	if err := positiveInt("CLAMAV_PORT", &cfg.ClamAVPort); err != nil {
