@@ -37,13 +37,14 @@ func Configure(ctx context.Context) func(context.Context) error {
 		slog.Warn("trace exporter unavailable")
 		return func(context.Context) error { return nil }
 	}
+	serviceResource := resource.NewSchemaless(
+		attribute.String("service.name", "asset-api"),
+		attribute.String("service.version", envOr("RELEASE", envOr("CONTAINER_APP_REVISION", "unknown"))),
+		attribute.String("deployment.environment.name", envOr("ENVIRONMENT", "production")),
+	)
 	provider := sdktrace.NewTracerProvider(
-		sdktrace.WithResource(resource.NewSchemaless(
-			attribute.String("service.name", "asset-api"),
-			attribute.String("service.version", envOr("RELEASE", envOr("CONTAINER_APP_REVISION", "unknown"))),
-			attribute.String("deployment.environment.name", envOr("ENVIRONMENT", "production")),
-		)),
-		sdktrace.WithBatcher(exporter, sdktrace.WithMaxQueueSize(512), sdktrace.WithMaxExportBatchSize(128), sdktrace.WithExportTimeout(3*time.Second)),
+		sdktrace.WithResource(serviceResource),
+		sdktrace.WithBatcher(resourceExporter{SpanExporter: exporter, resource: serviceResource}, sdktrace.WithMaxQueueSize(512), sdktrace.WithMaxExportBatchSize(128), sdktrace.WithExportTimeout(3*time.Second)),
 		sdktrace.WithSampler(traceSampler()),
 	)
 	otel.SetTracerProvider(provider)
@@ -132,3 +133,24 @@ func (t AuditTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	}
 	return response, err
 }
+
+// WithResource also merges environment attributes; restrict the actual export boundary.
+type resourceExporter struct {
+	sdktrace.SpanExporter
+	resource *resource.Resource
+}
+
+func (e resourceExporter) ExportSpans(ctx context.Context, spans []sdktrace.ReadOnlySpan) error {
+	safe := make([]sdktrace.ReadOnlySpan, len(spans))
+	for i, span := range spans {
+		safe[i] = resourceSpan{ReadOnlySpan: span, resource: e.resource}
+	}
+	return e.SpanExporter.ExportSpans(ctx, safe)
+}
+
+type resourceSpan struct {
+	sdktrace.ReadOnlySpan
+	resource *resource.Resource
+}
+
+func (s resourceSpan) Resource() *resource.Resource { return s.resource }

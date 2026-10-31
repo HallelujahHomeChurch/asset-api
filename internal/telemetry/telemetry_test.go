@@ -155,6 +155,7 @@ func TestConfigureExportsToOTLP(t *testing.T) {
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://"+listener.Addr().String())
 	t.Setenv("OTEL_EXPORTER_OTLP_INSECURE", "true")
 	t.Setenv("OTEL_TRACES_SAMPLER_ARG", "0.1")
+	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "member.secret=sentinel")
 	t.Setenv("RELEASE", "")
 	t.Setenv("CONTAINER_APP_REVISION", "test-revision")
 	t.Setenv("ENVIRONMENT", "test")
@@ -171,7 +172,17 @@ func TestConfigureExportsToOTLP(t *testing.T) {
 	select {
 	case req := <-received:
 		raw, _ := json.Marshal(req)
-		if strings.Contains(string(raw), "secret") || !strings.Contains(string(raw), "asset-api") || !strings.Contains(string(raw), "test-revision") {
+		for _, resourceSpan := range req.ResourceSpans {
+			if len(resourceSpan.Resource.Attributes) != 3 {
+				t.Fatalf("resource fields=%d", len(resourceSpan.Resource.Attributes))
+			}
+			for _, a := range resourceSpan.Resource.Attributes {
+				if a.Key != "service.name" && a.Key != "service.version" && a.Key != "deployment.environment.name" {
+					t.Fatalf("unexpected resource %s", a.Key)
+				}
+			}
+		}
+		if strings.Contains(string(raw), "secret") || strings.Contains(string(raw), "sentinel") || !strings.Contains(string(raw), "asset-api") || !strings.Contains(string(raw), "test-revision") {
 			t.Fatalf("invalid export: %s", raw)
 		}
 	default:
