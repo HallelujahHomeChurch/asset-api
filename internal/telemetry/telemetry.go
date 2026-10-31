@@ -51,6 +51,7 @@ func Configure(ctx context.Context) func(context.Context) error {
 	return provider.Shutdown
 }
 
+// shortcut: caller-selected trace IDs can force sampling; platform owner reviews quotas in the next cost phase.
 func traceSampler() sdktrace.Sampler {
 	root := sdktrace.TraceIDRatioBased(sampleRatio())
 	return sdktrace.ParentBased(root, sdktrace.WithRemoteParentSampled(root))

@@ -691,3 +691,8 @@ sampled 1% Sentry frontend combined with this 1% Go ratio has a theoretical
 complete-chain intersection around 0.01% under independent uniform sampling,
 not a guarantee. Cache hits, unsampled parents and async boundaries still affect
 which network spans exist. This change does not alter frontend sampling.
+
+A caller that repeatedly chooses a selected trace ID can force 100% sampling for
+that traffic. The ratio therefore cannot enforce a hard 1% resource quota.
+The platform coordinator owns quota review in the next cost-assessment phase;
+this slice deliberately retains standard deterministic SDK sampling.
