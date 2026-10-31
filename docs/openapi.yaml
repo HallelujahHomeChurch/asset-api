@@ -1007,6 +1007,34 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/Asset' }
         '400': { $ref: '#/components/responses/Error' }
+  /priv/assets/bulletin-derivatives/{assetID}/complete:
+    parameters: [ { $ref: '#/components/parameters/AssetID' } ]
+    post:
+      operationId: completeBulletinDerivative
+      summary: Complete a trusted server-generated personalized bulletin PDF
+      tags: [Private]
+      description: Only the exact Dapr-authenticated watermark worker can attest to a private bulletin_download_job output derived from a clean immutable original bulletin with matching SHA-256 and locale. Retains output size, MIME, hash and immutable commit validation; records trusted-bulletin-watermark-v1 and source provenance atomically without an antivirus queue event. Ordinary completion is unchanged.
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-bulletin-worker]
+      security: [ { daprCaller: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - { $ref: '#/components/schemas/CompleteUploadRequest' }
+                - type: object
+                  required: [sourceAssetId, sourceSha256]
+                  properties:
+                    sourceAssetId: { $ref: '#/components/schemas/OpaqueID' }
+                    sourceSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+      responses:
+        '200': { $ref: '#/components/responses/Asset' }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
   /priv/assets/{assetID}/grants:
     parameters: [ { $ref: '#/components/parameters/AssetID' } ]
     post:
