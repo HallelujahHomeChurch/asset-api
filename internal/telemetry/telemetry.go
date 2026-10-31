@@ -44,10 +44,15 @@ func Configure(ctx context.Context) func(context.Context) error {
 			attribute.String("deployment.environment.name", envOr("ENVIRONMENT", "production")),
 		)),
 		sdktrace.WithBatcher(exporter, sdktrace.WithMaxQueueSize(512), sdktrace.WithMaxExportBatchSize(128), sdktrace.WithExportTimeout(3*time.Second)),
-		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(sampleRatio()))),
+		sdktrace.WithSampler(traceSampler()),
 	)
 	otel.SetTracerProvider(provider)
 	return provider.Shutdown
+}
+
+func traceSampler() sdktrace.Sampler {
+	root := sdktrace.TraceIDRatioBased(sampleRatio())
+	return sdktrace.ParentBased(root, sdktrace.WithRemoteParentSampled(root))
 }
 
 func sampleRatio() float64 {

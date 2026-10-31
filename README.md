@@ -661,8 +661,10 @@ The API exports OpenTelemetry server spans and fixed-endpoint internal Audit
 client spans when the existing managed `OTEL_EXPORTER_OTLP_ENDPOINT` is present.
 No new credentials are needed. Without an endpoint, existing HTTP correlation
 continues and application span export stays disabled. `OTEL_TRACES_SAMPLER_ARG`
-sets root sampling between 0 and 0.1, defaulting to 0.01; parent sampling decisions
-are preserved, so this is not a hard cap on total exported spans. Health/readiness
+sets root sampling between 0 and 0.1, defaulting to 0.01. Remote sampled parents also pass through this
+local ratio; remote unsampled parents remain unsampled and local sampled children
+keep their decision. Incoming remote spans may therefore be dropped by sampling
+while their trace IDs continue to propagate. This is not a hard export quota. Health/readiness
 probes do not create spans.
 
 Spans contain only fixed operation names, bounded HTTP methods/status codes and

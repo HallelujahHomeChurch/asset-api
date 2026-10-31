@@ -19,7 +19,7 @@ import (
 	"google.golang.org/grpc"
 )
 
-const parent = "00-11111111111111111111111111111111-2222222222222222-01"
+const parent = "00-11111111111111110000000000000001-2222222222222222-01"
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
@@ -154,7 +154,7 @@ func TestConfigureExportsToOTLP(t *testing.T) {
 	defer server.Stop()
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://"+listener.Addr().String())
 	t.Setenv("OTEL_EXPORTER_OTLP_INSECURE", "true")
-	t.Setenv("OTEL_TRACES_SAMPLER_ARG", "0.01")
+	t.Setenv("OTEL_TRACES_SAMPLER_ARG", "0.1")
 	t.Setenv("RELEASE", "")
 	t.Setenv("CONTAINER_APP_REVISION", "test-revision")
 	t.Setenv("ENVIRONMENT", "test")
@@ -186,5 +186,36 @@ func TestConfigureDisabledPreservesProvider(t *testing.T) {
 	}
 	if otel.GetTracerProvider() != old {
 		t.Fatal("disabled tracing changed provider")
+	}
+}
+
+func TestRemoteParentCannotOverrideLocalSampling(t *testing.T) {
+	t.Setenv("OTEL_TRACES_SAMPLER_ARG", "0.01")
+	low, _ := trace.TraceIDFromHex("11111111111111110000000000000001")
+	high, _ := trace.TraceIDFromHex("1111111111111111ffffffffffffffff")
+	spanID, _ := trace.SpanIDFromHex("2222222222222222")
+	for _, tc := range []struct {
+		name            string
+		id              trace.TraceID
+		remote, sampled bool
+		want            sdktrace.SamplingDecision
+	}{
+		{"remote sampled selected", low, true, true, sdktrace.RecordAndSample},
+		{"remote sampled rejected", high, true, true, sdktrace.Drop},
+		{"remote unsampled", low, true, false, sdktrace.Drop},
+		{"local sampled", high, false, true, sdktrace.RecordAndSample},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			flags := trace.TraceFlags(0)
+			if tc.sampled {
+				flags = trace.FlagsSampled
+			}
+			parent := trace.NewSpanContext(trace.SpanContextConfig{TraceID: tc.id, SpanID: spanID, TraceFlags: flags, Remote: tc.remote})
+			ctx := trace.ContextWithSpanContext(context.Background(), parent)
+			result := traceSampler().ShouldSample(sdktrace.SamplingParameters{ParentContext: ctx, TraceID: tc.id})
+			if result.Decision != tc.want {
+				t.Fatalf("decision=%v want=%v", result.Decision, tc.want)
+			}
+		})
 	}
 }
