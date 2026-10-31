@@ -654,3 +654,27 @@ workflow retains its explicit preview/apply approval. They must not be changed
 to assumed central resources before reviewed import and no-op ownership proof.
 The ordinary release continues to disable shared-infrastructure and permission
 provisioning flags. This source change does not detach state or delete resources.
+
+## Application traces
+
+The API exports OpenTelemetry server spans and fixed-endpoint internal Audit
+client spans when the existing managed `OTEL_EXPORTER_OTLP_ENDPOINT` is present.
+No new credentials are needed. Without an endpoint, existing HTTP correlation
+continues and application span export stays disabled. `OTEL_TRACES_SAMPLER_ARG`
+sets root sampling between 0 and 0.1, defaulting to 0.01; parent sampling decisions
+are preserved, so this is not a hard cap on total exported spans. Health/readiness
+probes do not create spans.
+
+Spans contain only fixed operation names, bounded HTTP methods/status codes and
+fixed transport error categories. URLs, headers, object IDs, payloads, peer
+addresses and raw errors are excluded. Export buffering is bounded and failures
+do not fail application requests. Streaming interfaces and HTTP cancellation are
+preserved. Audit transport spans cover response headers, not response-body
+consumption; durable outbox attempts start independent traces when no live parent
+exists. Audit provenance is unchanged.
+
+Scan, derivative and recording workers/Jobs, storage SDK calls, queue continuity
+and the scan-warmer Operations client are not instrumented by this API change.
+No queue payload or schema is changed. A local collector test proves export;
+production ingestion and cross-service parent/child acceptance require a released
+revision and independently queried telemetry.
