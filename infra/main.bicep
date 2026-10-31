@@ -119,64 +119,32 @@ resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' existing =
   name: containerRegistryName
 }
 
-resource runtimeVault 'Microsoft.KeyVault/vaults@2026-02-01' = {
+resource runtimeVault 'Microsoft.KeyVault/vaults@2026-02-01' existing = {
   name: runtimeKeyVaultName
-  location: location
-  properties: {
-    tenantId: subscription().tenantId
-    sku: {
-      family: 'A'
-      name: 'standard'
-    }
-    accessPolicies: []
-    enablePurgeProtection: true
-    enableRbacAuthorization: true
-    enableSoftDelete: true
-    softDeleteRetentionInDays: 90
-    publicNetworkAccess: 'Enabled'
-  }
 }
 
-resource migrationVault 'Microsoft.KeyVault/vaults@2026-02-01' = {
+resource migrationVault 'Microsoft.KeyVault/vaults@2026-02-01' existing = {
   name: migrationKeyVaultName
-  location: location
-  properties: {
-    tenantId: subscription().tenantId
-    sku: {
-      family: 'A'
-      name: 'standard'
-    }
-    accessPolicies: []
-    enablePurgeProtection: true
-    enableRbacAuthorization: true
-    enableSoftDelete: true
-    softDeleteRetentionInDays: 90
-    publicNetworkAccess: 'Enabled'
-  }
 }
 
 resource auditVault 'Microsoft.KeyVault/vaults@2026-02-01' existing = {
   name: auditVaultName
 }
 
-resource pullIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+resource pullIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
   name: 'asset-api-acr-pull'
-  location: location
 }
 
-resource runtimeIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+resource runtimeIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
   name: 'asset-api-runtime-identity'
-  location: location
 }
 
-resource migrationIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+resource migrationIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
   name: 'asset-migrate-identity'
-  location: location
 }
 
-resource scanIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+resource scanIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
   name: 'asset-scan-identity'
-  location: location
 }
 
 resource scanWarmerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
@@ -184,14 +152,12 @@ resource scanWarmerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@20
   location: location
 }
 
-resource signatureRefreshIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+resource signatureRefreshIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
   name: 'asset-signature-refresh-identity'
-  location: location
 }
 
-resource derivativeIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+resource derivativeIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
   name: 'asset-derivative-identity'
-  location: location
 }
 
 resource acrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (provisionPermissions) {

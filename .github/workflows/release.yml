@@ -154,8 +154,7 @@ jobs:
           go vet ./...
           ./scripts/test-release-workflow.sh
           docker build -t asset-api:verify .
-          docker export "$(docker create asset-api:verify)" | tar -tf - | grep -Fx 'asset-derivative-worker' >/dev/null
-          docker export "$(docker create asset-api:verify)" | tar -tf - | grep -Fx 'asset-scan-warmer' >/dev/null
+          ./scripts/test-image-binaries.sh asset-api:verify
           docker build -f Dockerfile.scan -t asset-scan:verify .
           docker build -f Dockerfile.recording -t asset-recording:verify .
           docker run --rm --entrypoint ffprobe asset-recording:verify -version >/dev/null
@@ -307,6 +306,9 @@ jobs:
         run: bash scripts/validate-recording-event-rollout.sh
       - name: Verify isolated runtime prerequisites
         run: |
+          for vault in alive-asset-runtime-kv alive-asset-migrate-kv; do
+            [[ "$(az keyvault show -g "$RESOURCE_GROUP" -n "$vault" --query properties.enableRbacAuthorization -o tsv --only-show-errors)" == true ]]
+          done
           runtime_principal="$(az identity show -g "$RESOURCE_GROUP" -n asset-api-runtime-identity --query principalId -o tsv --only-show-errors)"
           migration_principal="$(az identity show -g "$RESOURCE_GROUP" -n asset-migrate-identity --query principalId -o tsv --only-show-errors)"
           runtime_vault="$(az keyvault show -g "$RESOURCE_GROUP" -n alive-asset-runtime-kv --query id -o tsv --only-show-errors)"

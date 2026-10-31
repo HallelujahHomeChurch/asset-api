@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+python3 scripts/test-image-binaries.py
 api_scale="$(awk '/^resource app / { in_api = 1; next } in_api && /^resource / { exit } in_api { print }' infra/main.bicep)"
 for expected in "name: 'DB_MAX_OPEN_CONNS', value: '8'" "name: 'DB_MAX_IDLE_CONNS', value: '4'" 'minReplicas: 1' 'maxReplicas: 8' "name: 'cpu-scaler'" "type: 'cpu'" "type: 'Utilization'" "value: '60'" "name: 'http-concurrency'" "concurrentRequests: '10'"; do
   printf '%s\n' "$api_scale" | grep -Fq "$expected"
@@ -122,9 +123,10 @@ scan_line="$(grep -n 'name: Scan immutable images' "$workflow" | cut -d: -f1)"
 what_if_line="$(grep -n 'name: Reject destructive infrastructure changes' "$workflow" | cut -d: -f1)"
 test "$scan_line" -lt "$what_if_line"
 for image_check_workflow in .github/workflows/ci.yml "$workflow"; do
-  for binary in asset-derivative-worker asset-scan-warmer; do
-    grep -Fq "docker export \"\$(docker create asset-api:verify)\" | tar -tf - | grep -Fx '$binary' >/dev/null" "$image_check_workflow"
-  done
+  grep -Fq './scripts/test-image-binaries.sh asset-api:verify' "$image_check_workflow"
+done
+for binary in asset-derivative-worker asset-scan-warmer; do
+  grep -Fq "grep -Fx '$binary'" scripts/test-image-binaries.sh
 done
 grep -Fq 'docker run --rm --entrypoint clamscan asset-scan:verify --help' "$workflow"
 for flag in --max-filesize --max-scansize --max-files --max-recursion --alert-exceeds-max --alert-encrypted; do
@@ -459,7 +461,8 @@ grep -q 'configuration: union({' infra/main.bicep
 grep -q '}, retentionTriggerConfiguration)' infra/main.bicep
 grep -q "command: \\['/asset-retention-worker'\\]" infra/main.bicep
 grep -q "name: 'ASSET_RETENTION_APPLY_ENABLED', value: string(retentionApplyEnabled)" infra/main.bicep
-grep -q 'enableRbacAuthorization: true' infra/main.bicep
+grep -Fq 'for vault in alive-asset-runtime-kv alive-asset-migrate-kv; do' "$workflow"
+grep -Fq -- '--query properties.enableRbacAuthorization -o tsv --only-show-errors)' "$workflow"
 grep -q 'test-migration-policy-test.sh' .github/workflows/ci.yml
 grep -q 'test-what-if-policy.sh' .github/workflows/ci.yml
 grep -q 'param deployDerivativeJob bool = false' infra/main.bicep
@@ -514,3 +517,15 @@ PY
 bash scripts/test-recording-events.sh
 
 python3 scripts/test-worker-release-rollback.py
+
+for candidate in .github/workflows/ci.yml .github/workflows/release.yml; do
+  grep -Fq "./scripts/test-image-binaries.sh asset-api:verify" "$candidate"
+  if grep -Fq 'docker export "$(docker create asset-api:verify)"' "$candidate"; then exit 1; fi
+done
+
+# Central owns these shared resources; normal releases must only reference them.
+for shared in runtimeVault migrationVault pullIdentity runtimeIdentity migrationIdentity scanIdentity signatureRefreshIdentity derivativeIdentity; do
+  grep -E "^resource $shared .* existing = \{" infra/main.bicep >/dev/null
+done
+# This identity still belongs to the Asset bootstrap lane, not central Terraform.
+grep -Fq "resource scanWarmerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {" infra/main.bicep

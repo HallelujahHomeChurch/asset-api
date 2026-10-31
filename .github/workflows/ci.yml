@@ -140,8 +140,7 @@ jobs:
           az bicep build --file infra/recording-source.bicep --stdout >/dev/null
           az bicep build --file infra/main.bicep --stdout >/dev/null
           docker build -t asset-api:verify .
-          docker export "$(docker create asset-api:verify)" | tar -tf - | grep -Fx 'asset-derivative-worker' >/dev/null
-          docker export "$(docker create asset-api:verify)" | tar -tf - | grep -Fx 'asset-scan-warmer' >/dev/null
+          ./scripts/test-image-binaries.sh asset-api:verify
           docker build -f Dockerfile.scan -t asset-scan:verify .
           docker build -f Dockerfile.recording -t asset-recording:verify .
           docker run --rm --entrypoint ffprobe asset-recording:verify -version >/dev/null
