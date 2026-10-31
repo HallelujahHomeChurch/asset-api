@@ -680,3 +680,10 @@ and the scan-warmer Operations client are not instrumented by this API change.
 No queue payload or schema is changed. A local collector test proves export;
 production ingestion and cross-service parent/child acceptance require a released
 revision and independently queried telemetry.
+
+The Go SDK makes the same deterministic decision for the same trace ID and ratio
+at each API, avoiding a separate 1% probability at every Go hop. An independently
+sampled 1% Sentry frontend combined with this 1% Go ratio has a theoretical
+complete-chain intersection around 0.01% under independent uniform sampling,
+not a guarantee. Cache hits, unsampled parents and async boundaries still affect
+which network spans exist. This change does not alter frontend sampling.

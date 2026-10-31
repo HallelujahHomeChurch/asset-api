@@ -19,7 +19,7 @@ import (
 	"google.golang.org/grpc"
 )
 
-const parent = "00-11111111111111110000000000000001-2222222222222222-01"
+const parent = "00-00000000000000000000000000000001-2222222222222222-01"
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
@@ -191,8 +191,8 @@ func TestConfigureDisabledPreservesProvider(t *testing.T) {
 
 func TestRemoteParentCannotOverrideLocalSampling(t *testing.T) {
 	t.Setenv("OTEL_TRACES_SAMPLER_ARG", "0.01")
-	low, _ := trace.TraceIDFromHex("11111111111111110000000000000001")
-	high, _ := trace.TraceIDFromHex("1111111111111111ffffffffffffffff")
+	low, _ := trace.TraceIDFromHex("00000000000000000000000000000001")
+	high, _ := trace.TraceIDFromHex("ffffffffffffffffffffffffffffffff")
 	spanID, _ := trace.SpanIDFromHex("2222222222222222")
 	for _, tc := range []struct {
 		name            string
@@ -212,9 +212,11 @@ func TestRemoteParentCannotOverrideLocalSampling(t *testing.T) {
 			}
 			parent := trace.NewSpanContext(trace.SpanContextConfig{TraceID: tc.id, SpanID: spanID, TraceFlags: flags, Remote: tc.remote})
 			ctx := trace.ContextWithSpanContext(context.Background(), parent)
-			result := traceSampler().ShouldSample(sdktrace.SamplingParameters{ParentContext: ctx, TraceID: tc.id})
-			if result.Decision != tc.want {
-				t.Fatalf("decision=%v want=%v", result.Decision, tc.want)
+			for range 100 {
+				result := traceSampler().ShouldSample(sdktrace.SamplingParameters{ParentContext: ctx, TraceID: tc.id})
+				if result.Decision != tc.want {
+					t.Fatalf("decision=%v want=%v", result.Decision, tc.want)
+				}
 			}
 		})
 	}
