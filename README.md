@@ -571,3 +571,70 @@ read. It performs no grant writes and never permits PDF/general owner downloads.
 Responses remain `private, no-store`. Release this additive route before the
 coordinated CMS client; no public routing, media lifecycle or runtime activation
 is changed here. Tracking: https://github.com/HallelujahHomeChurch/hhc-web-api/issues/339.
+
+## Application probes and dependency monitoring
+
+Readiness checks local application initialization only; it never pings PostgreSQL
+or Dapr. A transient dependency outage therefore does not remove an otherwise
+responsive API replica. Existing startup configuration/schema checks and all
+request authorization, persistence and payment safety remain authoritative.
+Readiness is not a database, media, payment or end-to-end acceptance test.
+
+One process-owned monitor samples `db` and `dapr_outbound` every 30 seconds.
+It emits `dependency_health` on initial observation, outcome transitions and
+five-minute heartbeats, including healthy baseline/recovery. Each dependency has its
+own two-second deadline; checks are sequential and cannot overlap. DB records
+separate `acquire` from `ping` failures and include pool counts. Dapr uses only
+loopback `/v1.0/healthz/outbound` when `DAPR_HTTP_PORT` is set, with
+`DAPR_API_TOKEN` if present; redirects are rejected. Missing dependencies are
+reported as `not_configured`, not healthy. Outcomes are bounded to `ok`,
+`deadline`, `cancelled`, `unavailable`, and `not_configured`; raw errors, DSNs,
+tokens, response bodies and request data are never logged.
+
+The monitor is cancelled and joined on shutdown before closing the DB.
+Keep `LOG_LEVEL=info` to retain healthy heartbeats; an absent heartbeat for an
+expected active replica for 6 minutes means monitoring is missing/stale, not
+healthy. Correlate platform replica lifecycle before alerting on a stopped
+replica. No alert resource or production configuration is changed here.
+For release acceptance, check these dependency events plus a representative
+protected request; a green readiness probe alone no longer proves DB health.
+
+These periodic checks can miss shorter outages and do not attribute a particular
+request failure. Pool wait counts are lifetime totals, not per-request latency.
+
+Dependency probes still sample every 30 seconds. `dependency_health` logs the
+initial result, each outcome transition, and a five-minute heartbeat per dependency;
+unchanged samples do not emit another event. Missing/stale heartbeats are unknown,
+not healthy. Allow six minutes for heartbeat detection on expected active replicas.
+
+HTTP diagnostic correlation accepts one bounded request ID and one valid W3C
+version-00 traceparent (flags 00/01); malformed values are replaced (ID) or omitted (trace).
+Response IDs and named-client diagnostic context agree. Caller audit headers
+remain independently validated; generated diagnostic IDs never establish audit
+actor provenance. Background audit dispatch does not reconstruct a request trace.
+
+## Background resource release recovery
+
+The owner release updates the scan App and existing scan, signature-refresh,
+derivative, warmer and optionally retention Job definitions as well as the API.
+Before migrations or runtime deployment, `worker-release-rollback.py capture`
+saves their prior immutable images and Job template/trigger configuration, plus
+the scan App's ready revision. It rejects missing resources and unreviewed literal
+configuration rather than creating an incomplete recovery artifact. This path
+supports the existing resource inventory, not first-time provisioning.
+
+On runtime failure, an independent recovery step attempts every captured Job and
+the scan App even if the API/recording rollback failed. Job definitions are read
+back; the scan App must reach the exact recovery revision and previous image.
+Recovery never stops or replays Job executions: existing executions can retain
+new code until they finish. The separate recording topology recovery remains
+responsible for its five Jobs and safe drain. A failed resource recovery keeps
+the release failed and retains the non-secret snapshot for seven days.
+
+This is not an atomic infrastructure or data rollback. Migrations and completed
+business writes are not reversed; App-scope identity, secret references, Dapr,
+registry and RBAC changes still require a reviewed inverse configuration through
+the owning writer. A removed prior resource is an error, never implicitly
+recreated or deleted. Run `python3 scripts/test-worker-release-rollback.py` and
+`bash scripts/test-release-workflow.sh` for the focused recovery checks; CI keeps
+the full existing verification suite.
