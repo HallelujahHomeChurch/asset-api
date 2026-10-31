@@ -539,3 +539,11 @@ for shared in runtimeVault migrationVault pullIdentity runtimeIdentity migration
 done
 # This identity still belongs to the Asset bootstrap lane, not central Terraform.
 grep -Fq "resource scanWarmerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {" infra/main.bicep
+
+# Media tool installs are bounded and retried in both verify jobs (D1).
+for media_workflow in .github/workflows/ci.yml "$workflow"; do
+  grep -Fq 'run: ./scripts/install-media-test-tools.sh' "$media_workflow"
+  if grep -Fq 'sudo apt-get install -y ffmpeg' "$media_workflow"; then echo "unbounded ffmpeg install in $media_workflow" >&2; exit 1; fi
+  awk '/^  verify:$/{v=1;next} v&&/^  [a-z_-]+:$/{exit} v&&/^    timeout-minutes: [0-9]+$/{found=1} END{exit !found}' "$media_workflow"
+done
+grep -q 'test-install-media-test-tools.sh' .github/workflows/ci.yml
