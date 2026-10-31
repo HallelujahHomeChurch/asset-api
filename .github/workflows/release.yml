@@ -382,6 +382,9 @@ jobs:
             echo "PREVIOUS_READY_REVISION=$revision"
             echo "PREVIOUS_IMAGE_REF=$(resolve_image_ref "$image")"
           } >> "$GITHUB_ENV"
+      - name: Capture existing worker recovery state
+        id: capture_workers
+        run: python3 scripts/worker-release-rollback.py capture "$RUNNER_TEMP/worker-rollback.json"
       - name: Capture recording trigger rollback
         if: env.MEMBER_VIDEO_ENABLED == 'true'
         run: python3 scripts/recording-event-topology.py capture "$RUNNER_TEMP/recording-topology.json"
@@ -583,6 +586,17 @@ jobs:
             sleep 10
           done
           exit 1
+      - name: Restore existing worker definitions on failure
+        if: ${{ failure() && steps.capture_workers.outcome == 'success' && (steps.deploy_runtime.outcome == 'success' || steps.deploy_runtime.outcome == 'failure') }}
+        run: python3 scripts/worker-release-rollback.py restore "$RUNNER_TEMP/worker-rollback.json"
+      - name: Preserve non-secret worker recovery state
+        if: ${{ failure() && steps.capture_workers.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: worker-rollback-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/worker-rollback.json
+          if-no-files-found: error
+          retention-days: 7
       - name: Preserve non-secret recording rollback topology
         if: ${{ failure() && env.RECORDING_EVENTS_PROVISIONED == 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

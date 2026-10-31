@@ -512,3 +512,5 @@ assert 'image-transport:' in ci
 PY
 
 bash scripts/test-recording-events.sh
+
+python3 scripts/test-worker-release-rollback.py
