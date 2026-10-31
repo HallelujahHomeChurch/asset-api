@@ -668,7 +668,11 @@ while their trace IDs continue to propagate. This is not a hard export quota. He
 probes do not create spans.
 
 Spans contain only fixed operation names, bounded HTTP methods/status codes and
-fixed transport error categories. URLs, headers, object IDs, payloads, peer
+fixed transport error categories. The existing normalized diagnostic request ID
+is added as `hhc.request_id` only when it is exactly 32 lowercase hex characters,
+allowing Gateway lookup even when the API creates a new root trace. Diagnostic
+events prefer the active application trace/span and retain legacy context as a
+fallback, without changing persisted audit provenance. URLs, headers, object IDs, payloads, peer
 addresses and raw errors are excluded. Export buffering is bounded and failures
 do not fail application requests. Streaming interfaces and HTTP cancellation are
 preserved. Audit transport spans cover response headers, not response-body

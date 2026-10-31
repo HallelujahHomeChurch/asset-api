@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"go.opentelemetry.io/otel/trace"
 	"log/slog"
 	"strings"
 	"time"
@@ -58,6 +59,9 @@ func (r *Recorder) Transition(ctx context.Context, kind Transition, captureID st
 	}
 	sum := sha256.Sum256([]byte("hhc.recording.capture.v1\x00" + captureID))
 	c, _ := ctx.Value(correlationKey{}).(correlation)
+	if active := trace.SpanContextFromContext(ctx); active.IsValid() {
+		c = correlation{active.TraceID().String(), active.SpanID().String()}
+	}
 	e := event{kind: kind, capture: hex.EncodeToString(sum[:]), correlation: c, epoch: epoch, revision: revision, cutoff: cutoff, deadline: deadline, at: time.Now().UTC()}
 	r.mu.Lock()
 	defer r.mu.Unlock()
