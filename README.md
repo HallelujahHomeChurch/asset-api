@@ -240,8 +240,12 @@ and production resource activation are still separate delivery gates.
 
 ## Scan lifecycle
 
-The exact Dapr-authenticated `hhc-web-bulletin-worker` may complete its controlled
+The exact authenticated `hhc-web-bulletin-worker` service may complete its controlled
 personalized PDF through `/priv/assets/bulletin-derivatives/{assetID}/complete`.
+The worker proves its identity either through Dapr or, without Dapr, through the
+dedicated `hhc-web-bulletin-worker-identity` Entra workload principal configured by
+`ASSET_WATERMARK_WORKLOAD_CLIENT_ID`/`_OBJECT_ID`; a valid Dapr token always takes
+precedence over any principal header. See [`docs/workload-auth.md`](docs/workload-auth.md).
 The original must be an immutable clean private bulletin with matching SHA-256
 and locale; output ownership, MIME, size, checksum and immutable Blob commit
 remain validated. This records `trusted-bulletin-watermark-v1` plus source

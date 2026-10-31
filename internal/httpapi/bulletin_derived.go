@@ -6,7 +6,8 @@ import (
 )
 
 func (h *Handler) completeBulletinDerivative(w http.ResponseWriter, r *http.Request) {
-	if h.daprCaller(r) != "hhc-web-bulletin-worker" {
+	// Dapr or Entra workload: either way the exact worker service identity.
+	if requestService(r) != "hhc-web-bulletin-worker" {
 		writeError(w, http.StatusForbidden, "AST_FORBIDDEN", "watermark worker identity is required")
 		return
 	}

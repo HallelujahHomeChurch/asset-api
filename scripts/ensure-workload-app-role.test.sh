@@ -19,6 +19,7 @@ const log = process.env.ROLE_LOG;
 const emit = value => console.log(JSON.stringify(value));
 if (args[0] === 'identity') {
   if (scenario === 'missing-identity') process.exit(1);
+  if (args[args.indexOf('--name') + 1] !== process.env.ROLE_EXPECTED_IDENTITY) process.exit(4);
   emit({clientId: ids.client, principalId: ids.principal, tenantId: scenario === 'wrong-tenant' ? ids.resource : ids.tenant});
 } else if (args[0] === 'account') {
   emit({tenantId: ids.tenant, user: {type: scenario === 'human-apply' ? 'user' : 'servicePrincipal', name: ids.deployment}});
@@ -46,10 +47,12 @@ if (args[0] === 'identity') {
 } else process.exit(2);
 `, {mode: 0o755});
 
-const run = (scenario, mode = 'check', approved = false) => {
+const run = (scenario, mode = 'check', approved = false, subject = 'extractor', extra = {}) => {
   const log = join(temp, 'calls');
   writeFileSync(log, '');
-  const result = spawnSync('bash', [script, mode], {encoding: 'utf8', env: {...process.env, PATH: `${temp}:${process.env.PATH}`, RESOURCE_GROUP: 'fixture', AZURE_CLIENT_ID: ids.deployment, AZURE_TENANT_ID: ids.tenant, ASSET_WORKLOAD_CLIENT_ID: ids.apiClient, ASSET_WORKLOAD_AUDIENCE: `api://${ids.apiClient}`, ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID: ids.client, ASSET_EXTRACTOR_WORKLOAD_OBJECT_ID: ids.principal, EXTRACTOR_ROLE_APPROVED: String(approved), ROLE_FIXTURE: scenario, ROLE_LOG: log}});
+  const result = spawnSync('bash', [script, mode], {encoding: 'utf8', env: {...process.env, PATH: `${temp}:${process.env.PATH}`, RESOURCE_GROUP: 'fixture', AZURE_CLIENT_ID: ids.deployment, AZURE_TENANT_ID: ids.tenant, ASSET_WORKLOAD_CLIENT_ID: ids.apiClient, ASSET_WORKLOAD_AUDIENCE: `api://${ids.apiClient}`, ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID: ids.client, ASSET_EXTRACTOR_WORKLOAD_OBJECT_ID: ids.principal, EXTRACTOR_ROLE_APPROVED: String(approved), ROLE_FIXTURE: scenario, ROLE_LOG: log,
+    ...(subject === 'watermark' ? {ROLE_SUBJECT: 'watermark', ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID: '', ASSET_EXTRACTOR_WORKLOAD_OBJECT_ID: '', EXTRACTOR_ROLE_APPROVED: 'true', ASSET_WATERMARK_WORKLOAD_CLIENT_ID: ids.client, ASSET_WATERMARK_WORKLOAD_OBJECT_ID: ids.principal, WATERMARK_ROLE_APPROVED: String(approved), ROLE_EXPECTED_IDENTITY: 'hhc-web-bulletin-worker-identity'} : {ROLE_EXPECTED_IDENTITY: 'hhc-web-api-identity'}),
+    ...extra}});
   assert.ok(!result.stdout.includes(ids.principal), 'do not log workload identity values');
   if (scenario === 'existing') assert.equal(result.status, 0, result.stderr);
   return {status: result.status, posts: readFileSync(log, 'utf8').split('POST').length - 1};
@@ -66,6 +69,18 @@ try {
     assert.notEqual(result.status, 0, scenario);
     assert.equal(result.posts, 0, scenario);
   }
-  console.log('Extractor app-role checks pass; only approved exact missing role can mutate.');
+  // Watermark subject: fixed identity name and its own approval input.
+  assert.deepEqual(run('existing', 'check', false, 'watermark'), {status: 0, posts: 0});
+  assert.notEqual(run('missing', 'check', false, 'watermark').status, 0);
+  const crossApproval = run('missing', 'apply', false, 'watermark');
+  assert.ok(crossApproval.status !== 0 && crossApproval.posts === 0, 'extractor approval must not authorize the watermark subject');
+  assert.deepEqual(run('missing', 'apply', true, 'watermark'), {status: 0, posts: 1});
+  for (const scenario of ['wrong-object', 'wrong-tenant', 'missing-identity', 'duplicate']) {
+    const result = run(scenario, 'apply', true, 'watermark');
+    assert.ok(result.status !== 0 && result.posts === 0, 'watermark ' + scenario);
+  }
+  const unknown = run('unknown-subject', 'check', false, 'extractor', {ROLE_SUBJECT: 'other'});
+  assert.notEqual(unknown.status, 0, 'unknown subject must fail');
+  console.log('Extractor and watermark app-role checks pass; only approved exact missing role can mutate.');
 } finally { rmSync(temp, {recursive: true, force: true}); }
 JS

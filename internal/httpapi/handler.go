@@ -250,14 +250,9 @@ func localUploadCORS(next http.Handler) http.Handler {
 
 func (h *Handler) internal(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		caller := ""
-		if h.allowDevCallerHeader {
-			caller = strings.TrimSpace(r.Header.Get("X-Internal-Caller-App-Id"))
-		} else if daprCaller := h.daprCaller(r); daprCaller != "" {
-			caller = daprCaller
-		} else {
-			caller = workloadCaller(r.Header.Get("X-MS-CLIENT-PRINCIPAL"), h.workloadAuth)
-		}
+		service := h.authenticatedService(r)
+		caller := service
+		// The bulletin worker owns no assets of its own; it acts for CMS.
 		if caller == "hhc-web-bulletin-worker" {
 			caller = "hhc-web-api"
 		}
@@ -266,6 +261,7 @@ func (h *Handler) internal(next http.Handler) http.Handler {
 			return
 		}
 		ctx := context.WithValue(r.Context(), callerContextKey{}, caller)
+		ctx = context.WithValue(ctx, serviceContextKey{}, service)
 		actor, request := strings.TrimSpace(r.Header.Get("X-HHC-Actor-ID")), strings.TrimSpace(r.Header.Get("X-HHC-Request-ID"))
 		if auditclient.ValidUserRequest(actor, request) {
 			ctx = auditclient.WithProvenance(ctx, "user", actor, request)
@@ -333,6 +329,34 @@ func (h *Handler) collectionTicket(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, request)
 	})
+}
+
+// authenticatedService resolves the private caller's own service identity.
+//
+// Trust order (see docs/workload-auth.md):
+//  1. Dapr: a valid app-channel token proves the request came through the
+//     local sidecar, which sets Dapr-Caller-App-Id. Dapr reaches the app over
+//     localhost and bypasses Easy Auth, so any X-MS-CLIENT-PRINCIPAL on such a
+//     request is caller-controlled and is ignored.
+//  2. Otherwise the request came through internal ingress, where Easy Auth has
+//     validated the Entra token and replaced X-MS-CLIENT-PRINCIPAL; the
+//     principal must still match a configured client/object ID and role. A
+//     Dapr-Caller-App-Id header without a valid token is caller-controlled
+//     and ignored (existing contract, kept by owner decision 2026-10-31).
+func (h *Handler) authenticatedService(r *http.Request) string {
+	if h.allowDevCallerHeader {
+		return strings.TrimSpace(r.Header.Get("X-Internal-Caller-App-Id"))
+	}
+	if caller := h.daprCaller(r); caller != "" {
+		return caller
+	}
+	return workloadCaller(r.Header.Get("X-MS-CLIENT-PRINCIPAL"), h.workloadAuth)
+}
+
+// requestService is the authenticated service before CMS aliasing.
+func requestService(r *http.Request) string {
+	service, _ := r.Context().Value(serviceContextKey{}).(string)
+	return service
 }
 
 func (h *Handler) daprCaller(r *http.Request) string {
@@ -1356,6 +1380,8 @@ func collectionReaderSubject(r *http.Request) assets.CollectionSubject {
 }
 
 type callerContextKey struct{}
+
+type serviceContextKey struct{}
 
 func workloadCaller(encoded string, config WorkloadAuthConfig) string {
 	if encoded == "" || config.TenantID == "" || config.Issuer == "" || config.Audience == "" || config.RequiredRole == "" {
