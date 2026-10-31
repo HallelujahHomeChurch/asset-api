@@ -47,7 +47,13 @@ def selected_jobs():
 
 
 def job(name):
-    return az('containerapp', 'job', 'show', '-g', 'alive', '-n', name, '--query', QUERY)
+    value = az('containerapp', 'job', 'show', '-g', 'alive', '-n', name, '--query', QUERY)
+    # Newer read APIs add this default; the pinned recovery API needs no override.
+    for container in value['template']['containers']:
+        if container.get('imageType') not in (None, 'ContainerImage'):
+            raise ValueError('unreviewed worker image type')
+        container.pop('imageType', None)
+    return value
 
 
 def validate_job(value):

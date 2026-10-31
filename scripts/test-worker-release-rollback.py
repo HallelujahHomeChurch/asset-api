@@ -86,6 +86,19 @@ class RecoveryTest(unittest.TestCase):
         self.assertEqual(self.jobs, original)
         self.assertFalse(any('execution' in call or 'stop' in call or 'delete' in call for call in self.calls))
 
+    def test_live_image_type_default_is_normalized_and_unknown_fails(self):
+        for value in self.jobs.values():
+            value['template']['containers'][0]['imageType'] = 'ContainerImage'
+        mod.capture(self.path)
+        self.assertNotIn('imageType', self.path.read_text())
+        self.deploy()
+        mod.restore(self.path)
+        self.path.unlink()
+        self.jobs['asset-scan']['template']['containers'][0]['imageType'] = 'Unknown'
+        with self.assertRaises(ValueError):
+            mod.capture(self.path)
+        self.assertFalse(self.path.exists())
+
     def test_disabled_retention_is_never_read_or_written(self):
         os.environ['DEPLOY_RETENTION_JOB'] = 'false'
         mod.capture(self.path)
