@@ -520,3 +520,10 @@ for candidate in .github/workflows/ci.yml .github/workflows/release.yml; do
   grep -Fq "./scripts/test-image-binaries.sh asset-api:verify" "$candidate"
   if grep -Fq 'docker export "$(docker create asset-api:verify)"' "$candidate"; then exit 1; fi
 done
+
+# Central owns these shared resources; normal releases must only reference them.
+for shared in runtimeVault migrationVault pullIdentity runtimeIdentity migrationIdentity scanIdentity signatureRefreshIdentity derivativeIdentity; do
+  grep -E "^resource $shared .* existing = \{" infra/main.bicep >/dev/null
+done
+# This identity still belongs to the Asset bootstrap lane, not central Terraform.
+grep -Fq "resource scanWarmerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {" infra/main.bicep

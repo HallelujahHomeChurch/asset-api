@@ -638,3 +638,19 @@ the owning writer. A removed prior resource is an error, never implicitly
 recreated or deleted. Run `python3 scripts/test-worker-release-rollback.py` and
 `bash scripts/test-release-workflow.sh` for the focused recovery checks; CI keeps
 the full existing verification suite.
+
+### Shared infrastructure release ownership
+
+Normal Asset releases reference the central `azure-infra` Key Vaults and six
+managed identities as existing resources: runtime/migration vaults, ACR pull,
+runtime, migration, scan, signature-refresh and derivative identities. They do
+not redeploy those shared resources. Existing identities, secret references,
+role assignments and workload permissions are unchanged.
+
+The scan-warmer identity, six recording event/poison queues, and isolated
+recording-source storage/lifecycle/Defender/RBAC are not currently managed by
+central Terraform. Asset remains their owner; the separate recording-source
+workflow retains its explicit preview/apply approval. They must not be changed
+to assumed central resources before reviewed import and no-op ownership proof.
+The ordinary release continues to disable shared-infrastructure and permission
+provisioning flags. This source change does not detach state or delete resources.
