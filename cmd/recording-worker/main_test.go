@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -169,4 +172,26 @@ func TestLiveOwnerServicesOptionalMediaBetweenFragments(t *testing.T) {
 			t.Fatalf("live=%d images=%d err=%v", fragments, images, err)
 		}
 	})
+}
+
+func TestObserveCleanupPreservesFailureAndCancellation(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	defer slog.SetDefault(previous)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	failure := errors.Join(context.DeadlineExceeded, errors.New("private-provider-error"))
+	calls := 0
+	if got := observeCleanup(ctx, "packages", func() error { calls++; return failure }); got != failure || calls != 1 {
+		t.Fatal("cleanup result or invocation changed")
+	}
+	if strings.Contains(logs.String(), "private-provider-error") {
+		t.Fatal("raw error logged")
+	}
+	for _, want := range []string{`"phase":"packages"`, `"failed":true`, `"deadline_exceeded":true`, `"context_expired":true`} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("missing %s", want)
+		}
+	}
 }
