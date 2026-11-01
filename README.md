@@ -654,9 +654,19 @@ after the scan worker cron rules are verified the release deletes it once (see
 [infra/README.md](infra/README.md#meeting-warm-windows)).
 Before migrations or runtime deployment, `worker-release-rollback.py capture`
 saves their prior immutable images and Job template/trigger configuration, plus
-the scan App's ready revision. It rejects missing resources and unreviewed literal
-configuration rather than creating an incomplete recovery artifact. This path
+the scan App's ready revision. The subscription comes from the existing release
+context; warmer bindings are checked against the existing identity, environment,
+Operations audience and scan queue. It rejects missing resources and unreviewed literal
+configuration rather than creating an incomplete recovery checkpoint. This path
 supports the existing resource inventory, not first-time provisioning.
+
+Capture stores the complete validated snapshot in the private Azure deployment
+parameters/outputs `worker-recovery-<run>-<attempt>` with an empty resource list; checkpoint
+failure stops before runtime mutation. The runner keeps its mode0600 snapshot
+for immediate recovery. Public failure artifacts contain only resource names,
+immutable images, trigger types and the private checkpoint name, never full
+configuration values, identity bindings or secret references. Keep the private
+deployment record available through the compatibility window.
 
 On runtime failure, an independent recovery step attempts every captured Job and
 the scan App even if the API/recording rollback failed. Job definitions are read
@@ -664,13 +674,13 @@ back; the scan App must reach the exact recovery revision and previous image.
 Recovery never stops or replays Job executions: existing executions can retain
 new code until they finish. The separate recording topology recovery remains
 responsible for its five Jobs and safe drain. A failed resource recovery keeps
-the release failed and retains the non-secret snapshot for seven days.
+the release failed and retains its public recovery summary for seven days.
 
 This is not an atomic infrastructure or data rollback. Migrations and completed
 business writes are not reversed; App-scope identity, secret references, Dapr,
 registry and RBAC changes still require a reviewed inverse configuration through
-the owning writer. A removed prior resource is an error, never implicitly
-recreated or deleted. Run `python3 scripts/test-worker-release-rollback.py` and
+the owning writer. Only the explicitly captured retired warmer can be recreated;
+other missing prior resources fail closed. Run `python3 scripts/test-worker-release-rollback.py` and
 `bash scripts/test-release-workflow.sh` for the focused recovery checks; CI keeps
 the full existing verification suite.
 
