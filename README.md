@@ -263,11 +263,23 @@ Release this additive producer before the matching CMS worker consumer.
 After upload completion, the runtime dispatches a durable queue message. The
 queue-scaled `asset-scan-worker` Container App downloads the immutable private
 Blob and scans it with a local ClamAV process and a validated signature
-snapshot. It scales from zero on scan work or a short-lived warm pulse, drains
+snapshot. It scales from zero on scan work or a configured meeting warm window, drains
 the durable scan queue until empty, then returns to zero. Clean
 results enable the existing grant checks; infected, pending, and failed assets
 remain unavailable. Transient failures use bounded retries before becoming
 `failed`.
+Before each claimed scan it rechecks the current signature manifest and its age.
+An unchanged immutable generation reuses local files; a changed generation is
+fully downloaded before the serial worker switches and removes the previous
+cache. Preparation failure refuses that scan and retains the existing retry
+policy. Results record the generation actually prepared for that claim.
+Claim, signature preparation, asset download/validation and scanning share the
+configured `CLAMAV_SCAN_TIMEOUT`. Result/retry/acknowledgement use the remaining
+bounded 30-second reserve within the unchanged timeout-plus-30-second lease.
+A shorter caller deadline remains authoritative. Work deadline expiry refuses
+clean results and records `attempt_timeout` through existing retries; the retry
+delay starts when failed work finishes. A finalization deadline leaves the
+message unacknowledged for normal fenced redelivery.
 
 Clean image uploads enqueue a versioned derivative event. The event-triggered
 Azure derivative Job processes one immutable asset version into stable 480,
@@ -305,6 +317,19 @@ first.
 `LOG_LEVEL=debug|info|warn|error` defaults to `info`; invalid values stop
 startup. This controls application slog and default standard-log output.
 Persisted audit records remain independent of this setting.
+
+Recording cleanup emits `recording_cleanup_start` / `recording_cleanup_phase`
+with the fixed phase name, elapsed time and cancellation state. R2 bulk deletion
+emits `recording_delete_attempt` for each HTTP attempt (time to response headers,
+status code; zero means no response) and `recording_delete_batch` for the whole
+SDK operation, including retries, body decoding and per-object failure count.
+These aggregate diagnostics omit object keys, bucket names, URLs and raw provider
+errors. Compare phase totals, batch totals and attempt timings before attributing
+a deadline to cumulative work, retry backoff or a stalled provider request.
+They do not establish the network/provider root cause or confirm physical absence
+of objects; declared inventory sizes and durable purge receipts are not a storage
+measurement. Existing cleanup deadlines, fences and retry schedules are unchanged.
+
 
 ## Progressive capture intake
 
@@ -666,6 +691,24 @@ context; warmer bindings are checked against the existing identity, environment,
 Operations audience and scan queue. It rejects missing resources and unreviewed literal
 configuration rather than creating an incomplete recovery checkpoint. This path
 supports the existing resource inventory, not first-time provisioning.
+Failure or cancellation recovery first settles this run's exact named ARM runtime
+deployment and the owned resources' update states. A bounded settlement failure
+refuses rollback rather than racing pending writes; the full private checkpoint
+and redacted recovery summary remain available. No recovery runs for an
+unstarted deployment unless a captured recording schedule was already paused.
+The media function restores its previous deployment only after a possible write.
+GitHub runner loss or its five-minute cancellation termination limit can still
+interrupt recovery; a cancelled run alone is never evidence of successful rollback.
+See [GitHub cancellation](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-cancellation)
+and [Azure deployment cancellation](https://learn.microsoft.com/en-us/rest/api/resources/deployments/cancel).
+
+For a non-production cancellation proof, manually dispatch CI on the reviewed
+branch with `cancellation_fixture=true`, wait for `CANCELLATION_FIXTURE_WAITING`,
+and cancel only that owned run. Require `RUNTIME_DEPLOYMENT_SETTLED` followed by
+`CANCELLATION_FIXTURE_RECOVERED` in its logs. This fixture uses synthetic local
+state and a mock Azure executable with only contents-read permission; it has no
+production credentials or provider access. Normal full PR CI remains a separate
+required gate.
 
 Capture stores the complete validated snapshot in the private Azure deployment
 parameters/outputs `worker-recovery-<run>-<attempt>` with an empty resource list; checkpoint
@@ -749,3 +792,13 @@ A caller that repeatedly chooses a selected trace ID can force 100% sampling for
 that traffic. The ratio therefore cannot enforce a hard 1% resource quota.
 The platform coordinator owns quota review in the next cost-assessment phase;
 this slice deliberately retains standard deterministic SDK sampling.
+
+Recording maintenance takes one bounded, invocation-local object listing per
+owner staging/final prefix and intersects it with the reconciler's declared,
+authorized keys. Purged attempt receipts therefore do not generate repeated
+empty delete calls. The list cannot authorize undeclared or cross-owner deletion;
+listing failure leaves the durable retry pending. Each new invocation refreshes
+the listing to preserve late-write sweeps. `recording_cleanup_inventory` reports
+only object/page counts and elapsed time. Source-attempt and cover cleanup retain
+their existing paths. Listings stop after 100 pages per prefix and never extend
+the existing cleanup deadline.

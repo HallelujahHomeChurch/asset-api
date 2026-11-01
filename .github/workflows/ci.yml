@@ -3,6 +3,11 @@ name: CI
 on:
   pull_request:
   workflow_dispatch:
+    inputs:
+      cancellation_fixture:
+        description: Run isolated cancellation recovery proof (no production access)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -13,6 +18,7 @@ concurrency:
 
 jobs:
   agent_docs:
+    if: ${{ !inputs.cancellation_fixture }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -35,7 +41,7 @@ jobs:
 
   verify:
     needs: agent_docs
-    if: ${{ !cancelled() && (needs.agent_docs.result != 'success' || needs.agent_docs.outputs.docs_only != 'true') }}
+    if: ${{ !cancelled() && !inputs.cancellation_fixture && (needs.agent_docs.result != 'success' || needs.agent_docs.outputs.docs_only != 'true') }}
     outputs:
       image_artifact_id: ${{ steps.images_artifact.outputs.artifact-id }}
       api_image_id: ${{ steps.image_fixture.outputs.api_image_id }}
@@ -223,3 +229,58 @@ jobs:
           [[ "$EXPECTED_API" =~ ^sha256:[0-9a-f]{64}$ && "$ACTUAL_API" == "$EXPECTED_API" ]]
           [[ "$EXPECTED_SCAN" =~ ^sha256:[0-9a-f]{64}$ && "$ACTUAL_SCAN" == "$EXPECTED_SCAN" ]]
           [[ "$EXPECTED_RECORDING" =~ ^sha256:[0-9a-f]{64}$ && "$ACTUAL_RECORDING" == "$EXPECTED_RECORDING" ]]
+
+  cancellation_fixture:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.cancellation_fixture }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      RESOURCE_GROUP: alive
+      AZURE_SUBSCRIPTION_ID: 00000000-0000-0000-0000-000000000001
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Capture synthetic previous state
+        id: capture_workers
+        run: |
+          mkdir .fixture-bin
+          echo previous > .fixture-previous
+          echo Running > .fixture-arm-state
+          echo PREVIOUS_READY_REVISION=fixture-ready >> "$GITHUB_ENV"
+          cat > .fixture-bin/az <<'PYTHON'
+          #!/usr/bin/env python3
+          import json, pathlib, sys
+          args = sys.argv[1:]
+          path = pathlib.Path('.fixture-arm-state')
+          if args[:3] == ['deployment', 'group', 'show']:
+              print(json.dumps(path.read_text().strip()))
+          elif args[:3] == ['deployment', 'group', 'cancel']:
+              path.write_text('Canceled')
+              print('{}')
+          elif args[:2] == ['resource', 'show']:
+              print('"Succeeded"')
+          else:
+              raise SystemExit('unexpected mock Azure operation')
+          PYTHON
+          chmod +x .fixture-bin/az
+      - name: Synthetic in-flight deployment
+        id: deploy_runtime
+        run: |
+          echo new > .fixture-current
+          echo CANCELLATION_FIXTURE_WAITING
+          sleep 600
+      - name: Settle interrupted runtime deployment
+        id: settle_runtime
+        if: ${{ (failure() || cancelled()) && (steps.deploy_runtime.outcome == 'success' || steps.deploy_runtime.outcome == 'failure' || steps.deploy_runtime.outcome == 'cancelled') }}
+        run: |
+          export PATH="$PWD/.fixture-bin:$PATH"
+          python3 scripts/worker-release-rollback.py settle "asset-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+      - name: Roll back failed runtime
+        if: ${{ (failure() || cancelled()) && env.PREVIOUS_READY_REVISION != '' && ((steps.deploy_runtime.outcome == 'success' || steps.deploy_runtime.outcome == 'failure' || steps.deploy_runtime.outcome == 'cancelled') || steps.quiesce_recording.outputs.paused == 'true') && (steps.settle_runtime.outcome == 'success' || steps.deploy_runtime.outcome == 'skipped') }}
+        run: |
+          cp .fixture-previous .fixture-current
+          test "$(cat .fixture-current)" = previous
+          echo CANCELLATION_FIXTURE_RECOVERED

@@ -603,8 +603,12 @@ jobs:
         run: |
           echo "commit=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
           echo "image=$IMAGE_REF" >> "$GITHUB_OUTPUT"
+      - name: Settle interrupted runtime deployment
+        id: settle_runtime
+        if: ${{ (failure() || cancelled()) && (steps.deploy_runtime.outcome == 'success' || steps.deploy_runtime.outcome == 'failure' || steps.deploy_runtime.outcome == 'cancelled') }}
+        run: python3 scripts/worker-release-rollback.py settle "asset-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
       - name: Roll back failed runtime
-        if: ${{ failure() && (steps.deploy_runtime.outcome != 'skipped' || steps.quiesce_recording.outputs.paused == 'true') }}
+        if: ${{ (failure() || cancelled()) && env.PREVIOUS_READY_REVISION != '' && ((steps.deploy_runtime.outcome == 'success' || steps.deploy_runtime.outcome == 'failure' || steps.deploy_runtime.outcome == 'cancelled') || steps.quiesce_recording.outputs.paused == 'true') && (steps.settle_runtime.outcome == 'success' || steps.deploy_runtime.outcome == 'skipped') }}
         run: |
           if [[ "$MEMBER_VIDEO_ENABLED" == true && "$RECORDING_EVENTS_PROVISIONED" == true ]]; then
             python3 scripts/recording-event-topology.py pause "$RUNNER_TEMP/recording-topology.json"
@@ -629,13 +633,13 @@ jobs:
           done
           exit 1
       - name: Restore existing worker definitions on failure
-        if: ${{ failure() && steps.capture_workers.outcome == 'success' && (steps.deploy_runtime.outcome == 'success' || steps.deploy_runtime.outcome == 'failure') }}
+        if: ${{ (failure() || cancelled()) && steps.capture_workers.outcome == 'success' && steps.settle_runtime.outcome == 'success' && (steps.deploy_runtime.outcome == 'success' || steps.deploy_runtime.outcome == 'failure' || steps.deploy_runtime.outcome == 'cancelled') }}
         run: python3 scripts/worker-release-rollback.py restore "$RUNNER_TEMP/worker-rollback.json"
       - name: Summarize worker recovery without configuration values
-        if: ${{ failure() && steps.capture_workers.outcome == 'success' }}
+        if: ${{ (failure() || cancelled()) && steps.capture_workers.outcome == 'success' }}
         run: python3 scripts/worker-release-rollback.py summary "$RUNNER_TEMP/worker-rollback.json" > "$RUNNER_TEMP/worker-rollback-summary.json"
       - name: Preserve worker recovery summary
-        if: ${{ failure() && steps.capture_workers.outcome == 'success' }}
+        if: ${{ (failure() || cancelled()) && steps.capture_workers.outcome == 'success' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: worker-rollback-summary-${{ github.run_id }}-${{ github.run_attempt }}
@@ -643,7 +647,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - name: Preserve non-secret recording rollback topology
-        if: ${{ failure() && env.RECORDING_EVENTS_PROVISIONED == 'true' }}
+        if: ${{ (failure() || cancelled()) && env.RECORDING_EVENTS_PROVISIONED == 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: recording-rollback-${{ github.run_id }}-${{ github.run_attempt }}
@@ -692,6 +696,7 @@ jobs:
           fi
           echo "PREVIOUS_MEDIA_DEPLOYMENT=$previous" >> "$GITHUB_ENV"
       - name: Deploy verified private media function
+        id: deploy_media_function
         working-directory: workers/member-media
         run: |
           test -n "$CLOUDFLARE_API_TOKEN" && test -n "$CLOUDFLARE_ACCOUNT_ID"
@@ -712,7 +717,7 @@ jobs:
             [[ "$status" == 401 ]]
           done
       - name: Restore previous media deployment on failure
-        if: ${{ failure() && env.PREVIOUS_MEDIA_DEPLOYMENT != '' }}
+        if: ${{ (failure() || cancelled()) && env.PREVIOUS_MEDIA_DEPLOYMENT != '' && (steps.deploy_media_function.outcome == 'success' || steps.deploy_media_function.outcome == 'failure' || steps.deploy_media_function.outcome == 'cancelled') }}
         run: |
           api="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/hhc-member-media"
           rollback="$(curl --silent --show-error --fail --request POST --header "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" "$api/deployments/${PREVIOUS_MEDIA_DEPLOYMENT}/rollback")"
