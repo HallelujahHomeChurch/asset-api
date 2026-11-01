@@ -160,6 +160,8 @@ def validate_warmer(value):
         raise ValueError('unexpected warmer container')
     image(c['image'])
     env = c['env']
+    if not c['image'].startswith('alive.azurecr.io/alive/asset-api@'):
+        raise ValueError('warmer requires the API image containing its binary')
     expected_names = {'AZURE_CLIENT_ID', 'MEETING_API_BASE_URL', 'MEETING_API_AUDIENCE', 'ASSET_SCAN_WARM_QUEUE_URL', 'ASSET_SCAN_WARM_LEAD', 'ASSET_SCAN_WARM_TAIL', 'ASSET_SCAN_WARM_HTTP_TIMEOUT'}
     if len(env) != len(expected_names) or any(set(e) != {'name', 'value'} for e in env) or {e['name'] for e in env} != expected_names:
         raise ValueError('unexpected warmer environment variables')
@@ -249,9 +251,13 @@ def restore(path):
     try:
         # Keep cron warming unless its old queue producer is restored first.
         restore_warmer(snapshot['warmer'])
-        restore_scan(scan)
     except Exception:
-        failures.append(APP)
+        failures.append(WARMER)
+    else:
+        try:
+            restore_scan(scan)
+        except Exception:
+            failures.append(APP)
     if failures:
         raise RuntimeError('Worker rollback incomplete: ' + ', '.join(failures))
 

@@ -244,7 +244,7 @@ class RecoveryTest(unittest.TestCase):
         self.warmer = None
         self.fail.add(mod.WARMER)
         self.calls.clear()
-        with self.assertRaisesRegex(RuntimeError, 'asset-scan-worker'):
+        with self.assertRaisesRegex(RuntimeError, 'asset-scan-warmer'):
             mod.restore(self.path)
         self.assertFalse(any(c[:3] == ('containerapp','revision','copy') for c in self.calls))
         self.assertEqual(self.jobs['asset-derivative']['template']['containers'][0]['image'], OLD)
@@ -259,6 +259,17 @@ class RecoveryTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 mod.capture(self.path)
             self.assertFalse(self.path.exists())
+
+    def test_tampered_warmer_snapshot_fails_before_any_mutation(self):
+        self.warmer = self.prior_warmer()
+        mod.capture(self.path)
+        value = json.loads(self.path.read_text())
+        value['warmer']['properties']['environmentId'] = mod.ROOT + 'Microsoft.App/managedEnvironments/another'
+        self.path.write_text(json.dumps(value))
+        self.calls.clear()
+        with self.assertRaises(ValueError):
+            mod.restore(self.path)
+        self.assertEqual(self.calls, [])
 
     def test_workflow_attempts_workers_even_if_prior_rollback_failed(self):
         workflow = Path('.github/workflows/release.yml').read_text()
