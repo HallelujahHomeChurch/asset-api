@@ -71,8 +71,8 @@ class TopologyTest(unittest.TestCase):
         mod.restore(self.path, 'alive')
         self.assertEqual(self.payloads()[0][1]['properties']['configuration']['triggerType'], 'Event')
 
-    def test_live_resource_rollback_preserves_both_tiers(self):
-        for cpu, memory in [(2, '4Gi'), (4, '8Gi')]:
+    def test_live_resource_rollback_preserves_all_tiers(self):
+        for cpu, memory in [(1.5, '3Gi'), (2, '4Gi'), (4, '8Gi')]:
             with self.subTest(cpu=cpu):
                 self.calls.clear()
                 self.path.unlink(missing_ok=True)
@@ -90,8 +90,8 @@ import os, sys
 args = sys.argv
 name = args[args.index('-n')+1]
 query = args[args.index('--query')+1]
-cpu = {'live': int(os.environ['ACTUAL_LIVE_CPU']), 'processing': 2, 'preview': 1, 'maintenance': .5}.get(name.removeprefix('asset-recording-'), 4)
-memory = {4:'8Gi', 2:'4Gi', 1:'2Gi', .5:'1Gi'}[cpu]
+cpu = {'live': float(os.environ['ACTUAL_LIVE_CPU']), 'processing': 2, 'preview': 1, 'maintenance': .5}.get(name.removeprefix('asset-recording-'), 4)
+memory = {4:'8Gi', 2:'4Gi', 1.5:'3Gi', 1:'2Gi', .5:'1Gi'}[cpu]
 values = {'properties.configuration.triggerType': 'Schedule' if name.endswith('maintenance') else 'Manual' if name.endswith('validation') else 'Event',
 'properties.template.containers[0].image': 'fixture@sha256:abc',
 'properties.template.containers[0].resources.cpu': cpu,
@@ -103,7 +103,7 @@ values = {'properties.configuration.triggerType': 'Schedule' if name.endswith('m
 print(values[query])
 ''')
         az.chmod(0o755)
-        for selected, actual, success in [('2', '2', True), ('4', '4', True), ('4', '2', False), ('2', '4', False)]:
+        for selected, actual, success in [('1.5', '1.5', True), ('2', '2', True), ('4', '4', True), ('4', '2', False), ('2', '4', False), ('1.5', '2', False), ('2', '1.5', False)]:
             with self.subTest(selected=selected, actual=actual):
                 env = {**os.environ, 'PATH': self.temp.name+os.pathsep+os.environ['PATH'], 'RESOURCE_GROUP': 'fixture',
                        'RECORDING_EVENTS_PROVISIONED': 'true', 'RECORDING_EVENTS_ENABLED': 'true',

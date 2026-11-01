@@ -478,8 +478,8 @@ across every lane. `maxExecutions` is not a global container concurrency guarant
 The candidate worker modes are `live`, `processing`, `preview`, and `maintenance`;
 `legacy` remains the default rollback mode and refuses to run when event mode is
 enabled. Media Event Jobs use `minExecutions=0`, visible-message scaling, and one
-execution target per lane. Live supports a target 2 CPU/4 GiB through
-`RECORDING_LIVE_CPU=2`; its staged default remains 4 CPU/8 GiB until the reviewed
+execution target per lane. Live supports target 1.5 CPU/3 GiB or 2 CPU/4 GiB through
+`RECORDING_LIVE_CPU=1.5` or `2`; its staged default remains 4 CPU/8 GiB until the reviewed
 rollout selects the reduced tier. Processing is a candidate 2 CPU/4 GiB;
 previews are a candidate 1 CPU/2 GiB. Each reduced tier can be reset
 to 4 CPU/8 GiB independently of trigger mode. No validation or image-quality
