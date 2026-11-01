@@ -161,6 +161,8 @@ grep -q 'cooldownPeriod: 120' infra/main.bicep
 grep -q 'minReplicas: 0' infra/main.bicep
 grep -q 'maxReplicas: 5' infra/main.bicep
 scan_worker_block="$(sed -n '/^resource scanWorker /,/^}/p' infra/main.bicep)"
+printf '%s\n' "$scan_worker_block" | grep -Fq "resources: { cpu: json('1.5'), memory: '3Gi' }"
+grep -Fq '.cpu == 1.5 and .memory == "3Gi" and .ephemeralStorage == "8Gi"' "$workflow"
 printf '%s\n' "$scan_worker_block" | grep -q 'pollingInterval: 5$'
 grep -Fq 'properties.template.scale.pollingInterval -o tsv --only-show-errors)" == "5"' "$workflow"
 printf '%s\n' "$scan_worker_block" | grep -q "queueName: 'asset-scan'$"

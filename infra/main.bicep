@@ -831,7 +831,7 @@ resource scanWorker 'Microsoft.App/containerApps@2025-01-01' = if (deployScanWor
             { name: 'CLAMAV_MAX_RECURSION', value: '32' }
             { name: 'CLAMAV_MAX_RETRIES', value: '5' }
           ]
-          resources: { cpu: json('2.0'), memory: '4Gi' }
+          resources: { cpu: json('1.5'), memory: '3Gi' }
         }
       ]
       scale: {
