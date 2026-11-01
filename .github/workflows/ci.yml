@@ -142,10 +142,8 @@ jobs:
           ./scripts/test-release-workflow.sh
           az bicep build --file infra/recording-source.bicep --stdout >/dev/null
           az bicep build --file infra/main.bicep --stdout >/dev/null
-          docker build -t asset-api:verify .
+          python3 scripts/build-release-images.py
           ./scripts/test-image-binaries.sh asset-api:verify
-          docker build -f Dockerfile.scan -t asset-scan:verify .
-          docker build -f Dockerfile.recording -t asset-recording:verify .
           docker run --rm --entrypoint ffprobe asset-recording:verify -version >/dev/null
           docker run --rm \
             -v /var/run/docker.sock:/var/run/docker.sock \
