@@ -91,7 +91,8 @@ application health probes, permissions, resource allocations or scale limits.
 Production scanning runs through the `asset-scan-worker` Container App. It
 scales from zero on the `asset-scan` queue, polls every five seconds (the
 app-level `pollingInterval`, shared by every scale rule), and returns to zero
-after the 120-second cooldown. The legacy `asset-scan` Job remains
+after the 120-second cooldown. The app uses 1.5 CPU/3 GiB; the release verifies
+the 8 GiB ephemeral-storage tier in the deployed resource readback. The legacy `asset-scan` Job remains
 Manual with its queue trigger disabled for one compatibility release.
 
 ### Meeting warm windows
