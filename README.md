@@ -57,8 +57,9 @@ for comparison; both paths require disposable PostgreSQL and media tools.
 Governance export still runs after the complete event stream is available.
 
 The fixed API, scan and recording image builds overlap at most two Docker
-clients on the existing verify runner. Failure or cancellation stops and joins
-owned build process groups; no completion is reported until all three builds
+clients on the existing verify runner. API builds first to populate the shared
+Go cache; scan and recording then build together. Failure or cancellation stops
+and joins owned build process groups; no completion is reported until all three builds
 succeed. Existing binary/media/security checks and immutable image handoff run
 afterward. Build elapsed times are logged; runner count and required-check names
 are unchanged. Runtime deployment never rebuilds these verified images.

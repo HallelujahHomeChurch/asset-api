@@ -73,6 +73,9 @@ def main():
                 active.remove((process, role, began))
                 print(f'image_build_completed role={role} elapsed_ms={int((time.monotonic()-began)*1000)}', flush=True)
             while pending and len(active) < 2 and not interrupted:
+                # Populate the shared Go cache before overlapping the smaller worker builds.
+                if any(role == 'api' for _, role, _ in active):
+                    break
                 role, dockerfile = pending.pop(0)
                 print(f'image_build_started role={role}', flush=True)
                 process = subprocess.Popen(['docker', 'build', '-f', dockerfile, '-t', f'asset-{role}:verify', '.'], start_new_session=True)
