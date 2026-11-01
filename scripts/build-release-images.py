@@ -9,29 +9,31 @@ BUILDS = [('api', 'Dockerfile'), ('scan', 'Dockerfile.scan'), ('recording', 'Doc
 
 
 def stop(processes):
-    for process, _, _ in processes:
+    groups = {process.pid: process for process, _, _ in processes}
+    for pid in list(groups):
         try:
-            os.killpg(process.pid, signal.SIGTERM)
+            os.killpg(pid, signal.SIGTERM)
         except ProcessLookupError:
-            pass
+            groups.pop(pid)
     deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        pending = False
-        for process, _, _ in processes:
+    while groups and time.monotonic() < deadline:
+        for pid, process in list(groups.items()):
             process.poll()
             try:
-                os.killpg(process.pid, 0)
-                pending = True
+                os.killpg(pid, 0)
             except ProcessLookupError:
+                groups.pop(pid)
+            except PermissionError:
+                # A group can disappear while macOS checks its permissions; retry without assuming it is gone.
                 pass
-        if not pending:
-            break
-        time.sleep(0.05)
-    for process, _, _ in processes:
+        if groups:
+            time.sleep(0.05)
+    for pid in groups:
         try:
-            os.killpg(process.pid, signal.SIGKILL)
+            os.killpg(pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+    for process, _, _ in processes:
         process.wait(timeout=5)
 
 
