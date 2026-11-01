@@ -89,7 +89,7 @@ Dapr uses `info` logging so managed-sidecar startup can be correlated with probe
 failures during scaling. This does not enable Dapr API request logging or change
 application health probes, permissions, resource allocations or scale limits.
 Production scanning runs through the `asset-scan-worker` Container App. It
-scales from zero on the `asset-scan` queue, polls once per second (the
+scales from zero on the `asset-scan` queue, polls every five seconds (the
 app-level `pollingInterval`, shared by every scale rule), and returns to zero
 after the 120-second cooldown. The legacy `asset-scan` Job remains
 Manual with its queue trigger disabled for one compatibility release.
