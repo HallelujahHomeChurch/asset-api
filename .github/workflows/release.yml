@@ -547,6 +547,8 @@ jobs:
         run: |
           worker_image="$(az containerapp show -g "$RESOURCE_GROUP" -n "$SCAN_WORKER_APP_NAME" --query properties.template.containers[0].image -o tsv --only-show-errors)"
           [[ "$worker_image" == "$SCAN_IMAGE_REF" ]]
+          az containerapp show -g "$RESOURCE_GROUP" -n "$SCAN_WORKER_APP_NAME" --query 'properties.template.containers[0].resources' -o json --only-show-errors \
+            | jq -e '.cpu == 1.5 and .memory == "3Gi" and .ephemeralStorage == "8Gi"' >/dev/null
           [[ "$(az containerapp show -g "$RESOURCE_GROUP" -n "$SCAN_WORKER_APP_NAME" --query properties.template.scale.minReplicas -o tsv --only-show-errors)" == "0" ]]
           [[ "$(az containerapp show -g "$RESOURCE_GROUP" -n "$SCAN_WORKER_APP_NAME" --query properties.template.scale.maxReplicas -o tsv --only-show-errors)" == "5" ]]
           [[ "$(az containerapp show -g "$RESOURCE_GROUP" -n "$SCAN_WORKER_APP_NAME" --query properties.template.scale.pollingInterval -o tsv --only-show-errors)" == "5" ]]

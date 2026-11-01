@@ -13,6 +13,7 @@ if [[ "${RECORDING_EVENTS_PROVISIONED:-false}" == true ]]; then
   [[ "$(get "$name" 'properties.template.containers[0].image')" == "$RECORDING_IMAGE_REF" ]]
   cpu=4; memory=8Gi
   if [[ "$lane" == live && "${RECORDING_LIVE_CPU:-4}" == 2 ]]; then cpu=2; memory=4Gi; fi
+  if [[ "$lane" == live && "${RECORDING_LIVE_CPU:-4}" == 1.5 ]]; then cpu=1.5; memory=3Gi; fi
   if [[ "$lane" == processing && "${RECORDING_PROCESSING_CPU:-2}" == 2 ]]; then cpu=2; memory=4Gi; fi
   if [[ "$lane" == preview && "${RECORDING_PREVIEW_CPU:-1}" == 1 ]]; then cpu=1; memory=2Gi; fi
   actual_cpu="$(get "$name" 'properties.template.containers[0].resources.cpu')"
