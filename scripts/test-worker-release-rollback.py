@@ -219,10 +219,10 @@ class RecoveryTest(unittest.TestCase):
     def test_deleted_warmer_recreated_before_old_scan_revision(self):
         self.warmer = self.prior_warmer()
         mod.capture(self.path)
-        original = copy.deepcopy(self.warmer)
+        original = mod.warmer()
         self.warmer = None
         mod.restore(self.path)
-        self.assertEqual(self.warmer, original)
+        self.assertEqual(mod.warmer(), original)
         put = next(i for i,c in enumerate(self.calls) if c[:3] == ('rest','--method','put'))
         scan = next(i for i,c in enumerate(self.calls) if c[:3] == ('containerapp','revision','copy'))
         self.assertLess(put, scan)
@@ -236,6 +236,14 @@ class RecoveryTest(unittest.TestCase):
             mod.restore(self.path)
             self.assertFalse(any(c[:3] == ('rest','--method','put') for c in self.calls))
             self.assertEqual(bool(self.warmer), present)
+
+    def test_provider_location_format_is_semantically_stable(self):
+        self.warmer = self.prior_warmer()
+        mod.capture(self.path)
+        self.warmer['location'] = 'eastasia'
+        self.calls.clear()
+        mod.restore(self.path)
+        self.assertFalse(any(c[:3] == ('rest','--method','put') for c in self.calls))
 
     def test_failed_warmer_recreation_preserves_cron_app(self):
         self.warmer = self.prior_warmer()

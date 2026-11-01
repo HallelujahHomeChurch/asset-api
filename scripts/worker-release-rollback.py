@@ -130,6 +130,7 @@ def warmer():
         'environmentId': raw['environmentId'], 'configuration': {k: config.get(k) for k in (*CONFIG, 'registries')},
         'template': raw['template']}}
     validate_warmer(value)
+    value['location'] = value['location'].replace(' ', '').lower()
     return value
 
 
