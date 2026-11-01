@@ -15,6 +15,8 @@ def stop(processes):
             os.killpg(pid, signal.SIGTERM)
         except ProcessLookupError:
             groups.pop(pid)
+        except PermissionError:
+            pass
     deadline = time.monotonic() + 5
     while groups and time.monotonic() < deadline:
         for pid, process in list(groups.items()):
@@ -24,17 +26,25 @@ def stop(processes):
             except ProcessLookupError:
                 groups.pop(pid)
             except PermissionError:
-                # A group can disappear while macOS checks its permissions; retry without assuming it is gone.
+                # Retry without treating a permission failure as proof that the group exited.
                 pass
         if groups:
             time.sleep(0.05)
+    failed = False
     for pid in groups:
         try:
             os.killpg(pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+        except PermissionError:
+            failed = True
     for process, _, _ in processes:
-        process.wait(timeout=5)
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            failed = True
+    if failed:
+        raise RuntimeError('could not stop all owned image builds')
 
 
 def main():

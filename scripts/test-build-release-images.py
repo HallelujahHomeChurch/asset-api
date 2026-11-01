@@ -1,5 +1,6 @@
 """Test the build supervisor with owned fake Docker processes, never a daemon."""
 import json
+import importlib.util
 import os
 from pathlib import Path
 import signal
@@ -8,6 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import Mock, patch
 
 HELPER = Path('scripts/build-release-images.py').resolve()
 FAKE = '''#!/usr/bin/env python3
@@ -110,6 +112,38 @@ class BuildSupervisor(unittest.TestCase):
         self.assertEqual(self.process.returncode,143,err)
         self.assertNotIn('image_builds_completed=3',out)
         self.assert_children_stopped()
+
+
+class CleanupBoundaries(unittest.TestCase):
+    def setUp(self):
+        spec=importlib.util.spec_from_file_location('build_images',HELPER)
+        self.mod=importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.mod)
+        self.process=Mock(pid=12345)
+        self.process.poll.return_value=0
+
+    def test_transient_permission_probe_is_retried_and_absent_group_is_not_killed(self):
+        probes=0
+        calls=[]
+        def kill(pid,number):
+            nonlocal probes
+            self.assertEqual(pid,12345)
+            calls.append(number)
+            if number==0:
+                probes+=1
+                if probes==1:raise PermissionError('fixture race')
+                raise ProcessLookupError()
+        with patch.object(self.mod.os,'killpg',side_effect=kill),patch.object(self.mod.time,'sleep'):
+            self.mod.stop([(self.process,'api',0)])
+        self.assertEqual(probes,2)
+        self.assertNotIn(signal.SIGKILL,calls)
+        self.process.wait.assert_called_once_with(timeout=5)
+
+    def test_persistent_permission_failure_is_visible_after_bounded_cleanup(self):
+        with patch.object(self.mod.os,'killpg',side_effect=PermissionError('fixture denial')),patch.object(self.mod.time,'monotonic',side_effect=[0,1,6]),patch.object(self.mod.time,'sleep'):
+            with self.assertRaisesRegex(RuntimeError,'could not stop'):
+                self.mod.stop([(self.process,'api',0)])
+        self.process.wait.assert_called_once_with(timeout=5)
 
 
 if __name__=='__main__':unittest.main()
