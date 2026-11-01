@@ -169,8 +169,24 @@ func (s *Store) Open(ctx context.Context, key string) (io.ReadCloser, error) {
 // DeletePackageObjects is bounded to one server-owned staging/attempt scope.
 // A successful HTTP response may still contain per-object deletion failures.
 func (s *Store) DeletePackageObjects(ctx context.Context, keys []string) error {
+	_, objects, err := packageDeleteBatch(keys)
+	if err != nil {
+		return err
+	}
+
+	result, err := s.deleteObjects(ctx, objects)
+	if err != nil {
+		return fmt.Errorf("delete R2 package objects: %w", err)
+	}
+	if len(result.Errors) > 0 {
+		return errors.New("R2 package delete incomplete")
+	}
+	return nil
+}
+
+func packageDeleteBatch(keys []string) (string, []types.ObjectIdentifier, error) {
 	if len(keys) == 0 || len(keys) > 1000 {
-		return errors.New("invalid package delete batch")
+		return "", nil, errors.New("invalid package delete batch")
 	}
 	var scope string
 	seen := map[string]bool{}
@@ -185,23 +201,16 @@ func (s *Store) DeletePackageObjects(ctx context.Context, keys []string) error {
 		} else if liveDeleteKey.MatchString(key) || livePreviewKey.MatchString(key) {
 			current = strings.Join(parts[:4], "/") + "/"
 		} else {
-			return errors.New("invalid package delete key")
+			return "", nil, errors.New("invalid package delete key")
 		}
 		if seen[key] || scope != "" && current != scope {
-			return errors.New("mixed package delete scope")
+			return "", nil, errors.New("mixed package delete scope")
 		}
 		seen[key] = true
 		scope = current
 		objects = append(objects, types.ObjectIdentifier{Key: aws.String(key)})
 	}
-	result, err := s.client.DeleteObjects(ctx, &s3.DeleteObjectsInput{Bucket: aws.String(s.bucket), Delete: &types.Delete{Objects: objects, Quiet: aws.Bool(true)}})
-	if err != nil {
-		return fmt.Errorf("delete R2 package objects: %w", err)
-	}
-	if len(result.Errors) > 0 {
-		return errors.New("R2 package delete incomplete")
-	}
-	return nil
+	return scope, objects, nil
 }
 
 // Failed source encoding has no complete inventory. List only that durable
