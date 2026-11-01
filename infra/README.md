@@ -130,8 +130,13 @@ warmer Job" logs its last image reference and deletes it if it still exists
 (incremental Bicep deployments never delete it); rerunning is a no-op. The
 `asset-scan-warm` queue, its RBAC, `asset-scan-warmer-identity` and the
 worker's pulse draining remain until a follow-up cleanup; nothing enqueues
-pulses any more. To restore the warmer, revert the change and release: the
-previous template recreates the Job with the then-current runtime image.
+pulses any more. Before deployment the release captures the existing warmer's
+validated, non-secret settings and immutable image. On failure it recreates
+that exact Job before restoring the old scan App revision. If recreation fails,
+the cron App is retained and rollback reports failure. Later releases whose
+baseline already has no warmer never recreate it. Keep the warmer image, its
+identity/RBAC and Operations admission available through the rollback window;
+removing these requires a separate compatibility cleanup.
 Clean supported images are processed only through the queue-triggered
 `asset-derivative` Job. Terraform owns its stable queues, identity, RBAC, and
 job configuration; the service release updates the job to the same immutable

@@ -649,8 +649,8 @@ actor provenance. Background audit dispatch does not reconstruct a request trace
 
 The owner release updates the scan App and existing scan, signature-refresh,
 derivative and optionally retention Job definitions as well as the API.
-The retired `asset-scan-warmer` Job is not captured; after the scan worker cron
-rules are verified the release deletes it once (see
+The existing `asset-scan-warmer` Job is captured separately for cutover recovery;
+after the scan worker cron rules are verified the release deletes it once (see
 [infra/README.md](infra/README.md#meeting-warm-windows)).
 Before migrations or runtime deployment, `worker-release-rollback.py capture`
 saves their prior immutable images and Job template/trigger configuration, plus
