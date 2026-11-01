@@ -99,11 +99,12 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	manifest, signatureDirectory, cleanup, err := signatures.PrepareCurrent(ctx, time.Now().UTC(), maxAge)
+	cache := clamav.NewSignatureCache(signatures)
+	defer cache.Close()
+	_, _, err = cache.Prepare(ctx, time.Now().UTC(), maxAge)
 	if err != nil {
 		return err
 	}
-	defer cleanup()
 	db, err := sql.Open("pgx", databaseURL)
 	if err != nil {
 		return err
@@ -127,8 +128,14 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	scanner := clamav.NewLocalScanner(signatureDirectory, timeout, maxFileSize, maxScanSize, maxFiles, maxRecursion)
-	job := scanqueue.NewScanJob(postgres.New(db), blobs, scanner, queue, manifest.SignatureVersion, maxSize, maxAttempts, timeout)
+	prepareScanner := func(ctx context.Context) (scanqueue.FileScanner, string, error) {
+		manifest, directory, err := cache.Prepare(ctx, time.Now().UTC(), maxAge)
+		if err != nil {
+			return nil, "", err
+		}
+		return clamav.NewLocalScanner(directory, timeout, maxFileSize, maxScanSize, maxFiles, maxRecursion), manifest.SignatureVersion, nil
+	}
+	job := scanqueue.NewScanJob(postgres.New(db), blobs, prepareScanner, queue, maxSize, maxAttempts, timeout)
 	return runLoop(ctx, job.RunOnce, warmPulseConsumer(warmQueue), idle)
 }
 

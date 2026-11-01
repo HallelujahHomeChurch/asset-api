@@ -29,19 +29,26 @@ func LoadManifest(path string, now time.Time, maxAge time.Duration) (Manifest, s
 	if err != nil {
 		return Manifest{}, "", fmt.Errorf("read ClamAV manifest: %w", err)
 	}
+	manifest, err := parseManifest(data, now, maxAge)
+	if err != nil {
+		return Manifest{}, "", err
+	}
+	return manifest, filepath.Join(filepath.Dir(path), filepath.FromSlash(manifest.DatabaseDirectory)), nil
+}
+
+func parseManifest(data []byte, now time.Time, maxAge time.Duration) (Manifest, error) {
 	var manifest Manifest
 	if err := json.Unmarshal(data, &manifest); err != nil {
-		return Manifest{}, "", fmt.Errorf("decode ClamAV manifest: %w", err)
+		return Manifest{}, fmt.Errorf("decode ClamAV manifest: %w", err)
 	}
 	updatedAt, err := time.Parse(time.RFC3339Nano, manifest.LastSuccessfulAt)
 	if err != nil || manifest.Version != 1 || !signatureName.MatchString(manifest.SignatureVersion) || manifest.DatabaseDirectory != "sets/"+manifest.SignatureVersion || !validSignatureFiles(manifest.Files) {
-		return Manifest{}, "", errors.New("invalid ClamAV manifest")
+		return Manifest{}, errors.New("invalid ClamAV manifest")
 	}
 	if updatedAt.After(now) || now.Sub(updatedAt) > maxAge {
-		return Manifest{}, "", ErrStaleSignatures
+		return Manifest{}, ErrStaleSignatures
 	}
-	database := filepath.Join(filepath.Dir(path), filepath.FromSlash(manifest.DatabaseDirectory))
-	return manifest, database, nil
+	return manifest, nil
 }
 
 func validSignatureFiles(files []string) bool {

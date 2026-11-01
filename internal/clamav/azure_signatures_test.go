@@ -45,11 +45,12 @@ func TestAzureSignaturesRoundTripImmutableGeneration(t *testing.T) {
 	if _, err := store.Publish(context.Background(), root, manifest); err != nil {
 		t.Fatal(err)
 	}
-	prepared, database, cleanup, err := store.PrepareCurrent(context.Background(), now.Add(time.Hour), 24*time.Hour)
+	cache := NewSignatureCache(store)
+	defer cache.Close()
+	prepared, database, err := cache.Prepare(context.Background(), now.Add(time.Hour), 24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cleanup()
 	if prepared.SignatureVersion != manifest.SignatureVersion {
 		t.Fatalf("manifest=%+v", prepared)
 	}

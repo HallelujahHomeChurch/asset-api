@@ -261,6 +261,11 @@ the durable scan queue until empty, then returns to zero. Clean
 results enable the existing grant checks; infected, pending, and failed assets
 remain unavailable. Transient failures use bounded retries before becoming
 `failed`.
+Before each claimed scan it rechecks the current signature manifest and its age.
+An unchanged immutable generation reuses local files; a changed generation is
+fully downloaded before the serial worker switches and removes the previous
+cache. Preparation failure refuses that scan and retains the existing retry
+policy. Results record the generation actually prepared for that claim.
 
 Clean image uploads enqueue a versioned derivative event. The event-triggered
 Azure derivative Job processes one immutable asset version into stable 480,
