@@ -6,13 +6,16 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 import time
 from urllib.parse import urlsplit
 
 JOBS = ('asset-scan', 'asset-clamav-signature-refresh', 'asset-derivative')
 APP = 'asset-scan-worker'
 WARMER = 'asset-scan-warmer'
-ROOT = '/subscriptions/3765a72c-2c30-492c-8b88-7a26522903f8/resourceGroups/alive/providers/'
+SUBSCRIPTION = os.environ.get('AZURE_SUBSCRIPTION_ID', '')
+ROOT = f'/subscriptions/{SUBSCRIPTION}/resourceGroups/alive/providers/'
+UUID = r'[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}'
 WARMER_ID = ROOT + 'Microsoft.App/jobs/' + WARMER
 WARMER_QUERY = '{id:id,location:location,identity:identity,environmentId:properties.environmentId,configuration:properties.configuration,template:properties.template}'
 CONFIG = ('triggerType', 'manualTriggerConfig', 'scheduleTriggerConfig', 'eventTriggerConfig',
@@ -107,8 +110,32 @@ def capture(path):
     image(app['image'])
     snapshot['scan'] = app
     snapshot['warmer'] = warmer()
+    verify_warmer_bindings(snapshot['warmer'])
     with open(path, 'x', opener=lambda p, flags: os.open(p, flags, 0o600)) as out:
         json.dump(snapshot, out)
+    # Object parameters keep configuration literal in the private control plane.
+    template = {'$schema': 'https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#',
+                'contentVersion': '1.0.0.0', 'resources': [],
+                'parameters': {'workerRecoverySnapshot': {'type': 'object'}},
+                'outputs': {'workerRecoverySnapshot': {'type': 'object', 'value': "[parameters('workerRecoverySnapshot')]"}}}
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.json') as checkpoint, tempfile.NamedTemporaryFile(mode='w', suffix='.json') as parameters:
+        json.dump(template, checkpoint)
+        json.dump({'parameters': {'workerRecoverySnapshot': {'value': snapshot}}}, parameters)
+        checkpoint.flush()
+        parameters.flush()
+        result = az('deployment', 'group', 'create', '-g', 'alive', '-n', checkpoint_name(), '--mode', 'Incremental', '--template-file', checkpoint.name, '--parameters', '@' + parameters.name)
+    if result.get('properties', {}).get('provisioningState') != 'Succeeded':
+        raise RuntimeError('private worker recovery checkpoint failed')
+    stored = az('deployment', 'group', 'show', '-g', 'alive', '-n', checkpoint_name(), '--query', 'properties.outputs.workerRecoverySnapshot.value')
+    if stored != snapshot:
+        raise RuntimeError('private worker recovery checkpoint readback mismatch')
+
+
+def checkpoint_name():
+    name = f"worker-recovery-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}"
+    if not re.fullmatch(r'worker-recovery-[0-9]+-[0-9]+', name):
+        raise ValueError('invalid workflow run identity')
+    return name
 
 
 def warmer():
@@ -164,20 +191,40 @@ def validate_warmer(value):
     if not c['image'].startswith('alive.azurecr.io/alive/asset-api@'):
         raise ValueError('warmer requires the API image containing its binary')
     expected_names = {'AZURE_CLIENT_ID', 'MEETING_API_BASE_URL', 'MEETING_API_AUDIENCE', 'ASSET_SCAN_WARM_QUEUE_URL', 'ASSET_SCAN_WARM_LEAD', 'ASSET_SCAN_WARM_TAIL', 'ASSET_SCAN_WARM_HTTP_TIMEOUT'}
-    if len(env) != len(expected_names) or any(set(e) != {'name', 'value'} for e in env) or {e['name'] for e in env} != expected_names:
+    if len(env) != len(expected_names) or any(set(e) != {'name', 'value'} or not isinstance(e['value'], str) for e in env) or {e['name'] for e in env} != expected_names:
         raise ValueError('unexpected warmer environment variables')
     values = {e['name']: e['value'] for e in env}
-    if values['AZURE_CLIENT_ID'] != '1c9c4b5a-927d-48fb-9f01-1d1e66e281a4' or values['MEETING_API_AUDIENCE'] != 'api://63e5ac29-f5b4-462d-ab8d-9029b78fcc58' or [values[k] for k in ('ASSET_SCAN_WARM_LEAD', 'ASSET_SCAN_WARM_TAIL', 'ASSET_SCAN_WARM_HTTP_TIMEOUT')] != ['5m', '10m', '10s']:
+    if not re.fullmatch(UUID, values['AZURE_CLIENT_ID'], re.I) or not re.fullmatch('api://' + UUID, values['MEETING_API_AUDIENCE'], re.I) or [values[k] for k in ('ASSET_SCAN_WARM_LEAD', 'ASSET_SCAN_WARM_TAIL', 'ASSET_SCAN_WARM_HTTP_TIMEOUT')] != ['5m', '10m', '10s']:
         raise ValueError('unexpected warmer settings')
-    for name, host, path in [('MEETING_API_BASE_URL', 'operations-api.internal.gentleriver-81abd7bc.eastasia.azurecontainerapps.io', ''), ('ASSET_SCAN_WARM_QUEUE_URL', 'alivestoragebb99ee6e.queue.core.windows.net', '/asset-scan-warm')]:
+    for name, host, path in [('MEETING_API_BASE_URL', r'operations-api\.internal\.[a-z0-9-]+\.eastasia\.azurecontainerapps\.io', ''), ('ASSET_SCAN_WARM_QUEUE_URL', r'[a-z0-9]{3,24}\.queue\.core\.windows\.net', '/asset-scan-warm')]:
         uri = urlsplit(values[name])
-        if uri.scheme != 'https' or uri.netloc != host or uri.path != path or uri.query or uri.fragment:
+        if uri.scheme != 'https' or not re.fullmatch(host, uri.netloc) or uri.path != path or uri.query or uri.fragment:
             raise ValueError('unexpected warmer endpoint')
+
+
+def verify_warmer_bindings(value):
+    if value is None:
+        return
+    values = {e['name']: e['value'] for e in value['properties']['template']['containers'][0]['env']}
+    identity = az('identity', 'show', '-g', 'alive', '-n', WARMER + '-identity', '--query', '{id:id,clientId:clientId}')
+    domain = az('containerapp', 'env', 'show', '-g', 'alive', '-n', 'alive-env', '--query', 'properties.defaultDomain')
+    audience = az('containerapp', 'show', '-g', 'alive', '-n', 'operations-api', '--query', "properties.template.containers[0].env[?name=='SYNC_WINDOWS_WORKLOAD_AUDIENCE'].value | [0]")
+    queue = az('containerapp', 'show', '-g', 'alive', '-n', APP, '--query', "properties.template.containers[0].env[?name=='ASSET_SCAN_WARM_QUEUE_URL'].value | [0]")
+    matches = (
+        identity['id'].lower() == (ROOT + 'Microsoft.ManagedIdentity/userAssignedIdentities/' + WARMER + '-identity').lower(),
+        values['AZURE_CLIENT_ID'].lower() == identity['clientId'].lower(),
+        values['MEETING_API_BASE_URL'] == 'https://operations-api.internal.' + domain,
+        values['MEETING_API_AUDIENCE'] == audience,
+        values['ASSET_SCAN_WARM_QUEUE_URL'] == queue,
+    )
+    if not all(matches):
+        raise ValueError('warmer recovery binding mismatch')
 
 
 def restore_warmer(value):
     if value is None:
         return
+    verify_warmer_bindings(value)
     if warmer() != value:
         az('rest', '--method', 'put', '--url', WARMER_ID + '?api-version=2025-07-01',
            '--body', json.dumps({k: v for k, v in value.items() if k != 'id'}))
@@ -263,13 +310,31 @@ def restore(path):
         raise RuntimeError('Worker rollback incomplete: ' + ', '.join(failures))
 
 
+def summary(path):
+    snapshot = json.loads(path.read_text())
+    if set(snapshot) != {'jobs', 'scan', 'warmer'} or set(snapshot['jobs']) != set(selected_jobs()):
+        raise ValueError('recovery inventory mismatch')
+    for value in snapshot['jobs'].values():
+        validate_job(value)
+    validate_warmer(snapshot['warmer'])
+    scan = snapshot['scan']
+    image(scan['image'])
+    if not re.fullmatch(r'asset-scan-worker--[a-z0-9-]+', scan['revision']):
+        raise ValueError('invalid prior scan revision')
+    print(json.dumps({'checkpoint': checkpoint_name(), 'jobs': {name: {'image': value['template']['containers'][0]['image'], 'triggerType': value['configuration']['triggerType']} for name, value in snapshot['jobs'].items()},
+                      'scan': {k: scan[k] for k in ('revision', 'image')},
+                      'warmer': {'present': snapshot['warmer'] is not None, 'image': snapshot['warmer']['properties']['template']['containers'][0]['image'] if snapshot['warmer'] else None}}))
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=('capture', 'restore'))
+    parser.add_argument('action', choices=('capture', 'restore', 'summary'))
     parser.add_argument('path', type=Path)
     args = parser.parse_args()
     if os.environ.get('RESOURCE_GROUP') != 'alive':
         raise SystemExit('unexpected resource group')
+    if not re.fullmatch(UUID, SUBSCRIPTION, re.I):
+        raise SystemExit('valid release subscription required')
     try:
         globals()[args.action](args.path)
     except Exception as error:

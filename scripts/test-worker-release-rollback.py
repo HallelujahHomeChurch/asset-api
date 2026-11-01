@@ -1,4 +1,6 @@
 import copy
+import contextlib
+import io
 import importlib.util
 import json
 import os
@@ -9,9 +11,14 @@ from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('rollback', Path(__file__).with_name('worker-release-rollback.py'))
 mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
+with patch.dict(os.environ, {'AZURE_SUBSCRIPTION_ID': '00000000-0000-0000-0000-000000000001'}):
+    spec.loader.exec_module(mod)
 OLD = 'alive.azurecr.io/alive/asset-api@sha256:' + 'a'*64
 NEW = 'alive.azurecr.io/alive/asset-api@sha256:' + 'b'*64
+CLIENT = '00000000-0000-0000-0000-000000000002'
+AUDIENCE = 'api://00000000-0000-0000-0000-000000000003'
+DOMAIN = 'example-env.eastasia.azurecontainerapps.io'
+QUEUE = 'https://fixturestorage.queue.core.windows.net/asset-scan-warm'
 
 
 class RecoveryTest(unittest.TestCase):
@@ -34,6 +41,8 @@ class RecoveryTest(unittest.TestCase):
         self.sleep.start()
         self.scan_ready = True
         self.warmer = None
+        self.bindings = {'client': CLIENT, 'audience': AUDIENCE, 'domain': DOMAIN, 'queue': QUEUE}
+        self.checkpoints = []
 
     def tearDown(self):
         self.sleep.stop()
@@ -43,6 +52,24 @@ class RecoveryTest(unittest.TestCase):
 
     def az(self, *args):
         self.calls.append(args)
+        if args[:3] == ('deployment', 'group', 'create'):
+            self.assertEqual(args[args.index('--mode')+1], 'Incremental')
+            if 'checkpoint' in self.fail:
+                raise RuntimeError('checkpoint failed')
+            self.checkpoints.append({'template':json.loads(Path(args[args.index('--template-file')+1]).read_text()),
+                'parameters':json.loads(Path(args[args.index('--parameters')+1].removeprefix('@')).read_text())})
+            return {'properties': {'provisioningState':'Succeeded'}}
+        if args[:3] == ('deployment', 'group', 'show'):
+            return self.checkpoints[-1]['parameters']['parameters']['workerRecoverySnapshot']['value'] if 'checkpoint-readback' not in self.fail else {}
+        if args[:2] == ('identity', 'show'):
+            return {'id':mod.ROOT+'Microsoft.ManagedIdentity/userAssignedIdentities/asset-scan-warmer-identity','clientId':self.bindings['client']}
+        if args[:3] == ('containerapp', 'env', 'show'):
+            return self.bindings['domain']
+        if args[:2] == ('containerapp', 'show'):
+            if args[args.index('-n')+1] == 'operations-api':
+                return self.bindings['audience']
+            if 'ASSET_SCAN_WARM_QUEUE_URL' in args[-1]:
+                return self.bindings['queue']
         if args[:3] == ('containerapp', 'job', 'list'):
             return [mod.WARMER] if self.warmer else []
         if args[:3] == ('containerapp', 'job', 'show'):
@@ -209,9 +236,9 @@ class RecoveryTest(unittest.TestCase):
             scheduleTriggerConfig={'cronExpression':'*/1 * * * *','parallelism':1,'replicaCompletionCount':1},
             registries=[{'server':'alive.azurecr.io','identity':mod.ROOT+'Microsoft.ManagedIdentity/userAssignedIdentities/asset-api-acr-pull'}])
         props['template']['containers'][0].update(name=mod.WARMER, command=['/asset-scan-warmer'], resources={'cpu':0.25,'memory':'0.5Gi'}, env=[{'name':k,'value':v} for k,v in {
-            'AZURE_CLIENT_ID':'1c9c4b5a-927d-48fb-9f01-1d1e66e281a4','MEETING_API_AUDIENCE':'api://63e5ac29-f5b4-462d-ab8d-9029b78fcc58',
-            'MEETING_API_BASE_URL':'https://operations-api.internal.gentleriver-81abd7bc.eastasia.azurecontainerapps.io',
-            'ASSET_SCAN_WARM_QUEUE_URL':'https://alivestoragebb99ee6e.queue.core.windows.net/asset-scan-warm',
+            'AZURE_CLIENT_ID':CLIENT,'MEETING_API_AUDIENCE':AUDIENCE,
+            'MEETING_API_BASE_URL':'https://operations-api.internal.'+DOMAIN,
+            'ASSET_SCAN_WARM_QUEUE_URL':QUEUE,
             'ASSET_SCAN_WARM_LEAD':'5m','ASSET_SCAN_WARM_TAIL':'10m','ASSET_SCAN_WARM_HTTP_TIMEOUT':'10s'}.items()])
         return {**props,'id':mod.WARMER_ID,'location':'East Asia','environmentId':mod.ROOT+'Microsoft.App/managedEnvironments/alive-env',
                 'identity':{'type':'UserAssigned','userAssignedIdentities':{mod.ROOT+'Microsoft.ManagedIdentity/userAssignedIdentities/'+n:{} for n in ('asset-api-acr-pull','asset-scan-warmer-identity')}}}
@@ -278,6 +305,64 @@ class RecoveryTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             mod.restore(self.path)
         self.assertEqual(self.calls, [])
+
+    def test_live_binding_mismatch_blocks_capture_before_checkpoint(self):
+        for key in self.bindings:
+            with self.subTest(key=key):
+                self.warmer = self.prior_warmer()
+                old = self.bindings[key]
+                self.bindings[key] = 'mismatched-metadata'
+                with self.assertRaisesRegex(ValueError, 'binding mismatch'):
+                    mod.capture(self.path)
+                self.assertFalse(self.path.exists())
+                self.assertEqual(self.checkpoints, [])
+                self.bindings[key] = old
+
+    def test_binding_drift_preserves_cron_app_and_restores_other_jobs(self):
+        self.warmer = self.prior_warmer()
+        mod.capture(self.path)
+        self.deploy()
+        self.warmer = None
+        self.bindings['domain'] = 'mismatched-metadata'
+        self.calls.clear()
+        with self.assertRaisesRegex(RuntimeError, mod.WARMER):
+            mod.restore(self.path)
+        self.assertFalse(any(c[:3] == ('containerapp','revision','copy') or c[:3] == ('rest','--method','put') for c in self.calls))
+        self.assertEqual(self.jobs['asset-derivative']['template']['containers'][0]['image'], OLD)
+
+    def test_private_checkpoint_has_no_resources_and_public_summary_has_no_config(self):
+        self.warmer = self.prior_warmer()
+        mod.capture(self.path)
+        snapshot = json.loads(self.path.read_text())
+        self.assertEqual(self.checkpoints[0]['template']['resources'], [])
+        self.assertEqual(self.checkpoints[0]['parameters']['parameters']['workerRecoverySnapshot']['value'], snapshot)
+        self.calls.clear()
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            mod.summary(self.path)
+        public = output.getvalue()
+        value = json.loads(public)
+        self.assertEqual(value['checkpoint'], 'worker-recovery-123-2')
+        self.assertEqual(value['warmer'], {'present':True,'image':OLD})
+        for private in (mod.ROOT, CLIENT, AUDIENCE, DOMAIN, QUEUE, 'env', 'secretRef', 'database-url'):
+            self.assertNotIn(private, public)
+        self.assertEqual(self.calls, [])
+        workflow = Path('.github/workflows/release.yml').read_text()
+        upload = workflow.split('      - name: Preserve worker recovery summary')[1].split('      - name:')[0]
+        self.assertIn('worker-rollback-summary.json', upload)
+        self.assertNotIn('/worker-rollback.json', upload)
+
+    def test_checkpoint_failure_prevents_capture_success(self):
+        self.fail.add('checkpoint')
+        with self.assertRaisesRegex(RuntimeError, 'checkpoint failed'):
+            mod.capture(self.path)
+        self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
+        self.assertFalse(any(c[:3] == ('containerapp','revision','copy') or c[:1] == ('rest',) for c in self.calls))
+
+    def test_checkpoint_readback_drift_blocks_capture_success(self):
+        self.fail.add('checkpoint-readback')
+        with self.assertRaisesRegex(RuntimeError, 'checkpoint readback mismatch'):
+            mod.capture(self.path)
 
     def test_workflow_attempts_workers_even_if_prior_rollback_failed(self):
         workflow = Path('.github/workflows/release.yml').read_text()
