@@ -648,7 +648,10 @@ actor provenance. Background audit dispatch does not reconstruct a request trace
 ## Background resource release recovery
 
 The owner release updates the scan App and existing scan, signature-refresh,
-derivative, warmer and optionally retention Job definitions as well as the API.
+derivative and optionally retention Job definitions as well as the API.
+The existing `asset-scan-warmer` Job is captured separately for cutover recovery;
+after the scan worker cron rules are verified the release deletes it once (see
+[infra/README.md](infra/README.md#meeting-warm-windows)).
 Before migrations or runtime deployment, `worker-release-rollback.py capture`
 saves their prior immutable images and Job template/trigger configuration, plus
 the scan App's ready revision. It rejects missing resources and unreviewed literal
@@ -679,7 +682,7 @@ runtime, migration, scan, signature-refresh and derivative identities. They do
 not redeploy those shared resources. Existing identities, secret references,
 role assignments and workload permissions are unchanged.
 
-The scan-warmer identity, six recording event/poison queues, and isolated
+The retained (now unused) scan-warmer identity, six recording event/poison queues, and isolated
 recording-source storage/lifecycle/Defender/RBAC are not currently managed by
 central Terraform. Asset remains their owner; the separate recording-source
 workflow retains its explicit preview/apply approval. They must not be changed
@@ -713,7 +716,7 @@ authoritative. Durable outbox attempts start independent traces when no live par
 exists. Audit provenance is unchanged.
 
 Scan, derivative and recording workers/Jobs, storage SDK calls, queue continuity
-and the scan-warmer Operations client are not instrumented by this API change.
+are not instrumented by this API change.
 No queue payload or schema is changed. A local collector test proves export;
 production ingestion and cross-service parent/child acceptance require a released
 revision and independently queried telemetry.

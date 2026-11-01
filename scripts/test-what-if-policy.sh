@@ -32,7 +32,6 @@ printf '%s\n' '{"changes":[
   {"resourceId":"/subscriptions/test/resourceGroups/alive/providers/Microsoft.App/jobs/asset-clamav-signature-refresh","changeType":"Create","delta":[]},
   {"resourceId":"/subscriptions/test/resourceGroups/alive/providers/Microsoft.App/jobs/asset-retention","changeType":"Create","delta":[]},
   {"resourceId":"/subscriptions/test/resourceGroups/alive/providers/Microsoft.App/jobs/asset-recording-validation","changeType":"Create","delta":[]},
-  {"resourceId":"/subscriptions/test/resourceGroups/alive/providers/Microsoft.App/jobs/asset-scan-warmer","changeType":"Create","delta":[]},
   {"resourceId":"/subscriptions/test/resourceGroups/alive/providers/Microsoft.ManagedIdentity/userAssignedIdentities/asset-scan-warmer-identity","changeType":"Create","delta":[]},
   {"resourceId":"/subscriptions/test/resourceGroups/alive/providers/Microsoft.App/containerApps/asset-scan-worker","changeType":"Create","delta":[]},
   {"resourceId":"/subscriptions/test/resourceGroups/alive/providers/Microsoft.Storage/storageAccounts/alive/queueServices/default/queues/asset-scan-warm","changeType":"Create","delta":[]},

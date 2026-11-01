@@ -239,8 +239,6 @@ jobs:
       ASSET_WATERMARK_WORKLOAD_CLIENT_ID: ${{ vars.ASSET_WATERMARK_WORKLOAD_CLIENT_ID }}
       ASSET_WATERMARK_WORKLOAD_OBJECT_ID: ${{ vars.ASSET_WATERMARK_WORKLOAD_OBJECT_ID }}
       WATERMARK_ROLE_APPROVED: ${{ github.event_name == 'workflow_dispatch' && inputs.approve_watermark_app_role && 'true' || 'false' }}
-      MEETING_API_BASE_URL: ${{ vars.MEETING_API_BASE_URL }}
-      MEETING_API_AUDIENCE: ${{ vars.MEETING_API_AUDIENCE }}
       MEMBER_VIDEO_ENABLED: ${{ vars.MEMBER_VIDEO_ENABLED || 'false' }}
       RECORDING_HLS_ENABLED: ${{ vars.RECORDING_HLS_ENABLED || 'false' }}
       RECORDING_EVENTS_PROVISIONED: ${{ vars.RECORDING_EVENTS_PROVISIONED || 'false' }}
@@ -264,7 +262,7 @@ jobs:
         run: |
           [[ "$GITHUB_REF" == "refs/heads/main" ]]
           [[ "$RELEASE_CONFIRMATION" == "deploy-asset-api-production" ]]
-          for name in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID ASSET_WORKLOAD_CLIENT_ID ASSET_WORKLOAD_AUDIENCE LINE_ATTACHMENT_CLIENT_ID LINE_ATTACHMENT_OBJECT_ID MEETING_API_BASE_URL MEETING_API_AUDIENCE; do
+          for name in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID ASSET_WORKLOAD_CLIENT_ID ASSET_WORKLOAD_AUDIENCE LINE_ATTACHMENT_CLIENT_ID LINE_ATTACHMENT_OBJECT_ID; do
             test -n "${!name:-}" || { echo "Missing repository variable: ${name}" >&2; exit 1; }
           done
           for name in RETENTION_SCHEDULE_ENABLED RETENTION_APPLY_ENABLED RECORDING_HLS_ENABLED RECORDING_SOURCE_ENABLED; do
@@ -472,7 +470,7 @@ jobs:
           az deployment group what-if \
             --resource-group "$RESOURCE_GROUP" \
             --template-file infra/main.bicep \
-            --parameters recordingEventsProvisioned="$RECORDING_EVENTS_PROVISIONED" recordingEventsEnabled="$RECORDING_EVENTS_ENABLED" recordingLiveCPU="$RECORDING_LIVE_CPU" recordingProcessingCPU="$RECORDING_PROCESSING_CPU" recordingPreviewCPU="$RECORDING_PREVIEW_CPU" recordingHLSEnabled="$RECORDING_HLS_ENABLED" recordingSourceEnabled="$RECORDING_SOURCE_ENABLED" storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" scanWorkerImage="$SCAN_IMAGE_REF" recordingImage="$RECORDING_IMAGE_REF" memberVideoEnabled="$MEMBER_VIDEO_ENABLED" recordingR2AccountId="$CLOUDFLARE_ACCOUNT_ID" mediaKeyId="$MEDIA_KEY_ID" deployRuntime=true deployMigrationJob=true deployScanJob=true deployScanWorker=true deployScanWarmer=true provisionScanWarmInfrastructure=false deploySignatureRefreshJob=true deployDerivativeJob=true deployRetentionJob="$DEPLOY_RETENTION_JOB" retentionScheduleEnabled="$RETENTION_SCHEDULE_ENABLED" retentionApplyEnabled="$RETENTION_APPLY_ENABLED" scanDispatchEnabled="$ACTIVATE_QUEUE_SCANNING" embeddedScanEnabled="$EMBEDDED_SCAN_ENABLED" workloadAuthClientId="$ASSET_WORKLOAD_CLIENT_ID" workloadAuthAudience="$ASSET_WORKLOAD_AUDIENCE" lineAttachmentClientId="$LINE_ATTACHMENT_CLIENT_ID" lineAttachmentObjectId="$LINE_ATTACHMENT_OBJECT_ID" extractorClientId="$ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID" extractorObjectId="$ASSET_EXTRACTOR_WORKLOAD_OBJECT_ID" watermarkWorkerClientId="$ASSET_WATERMARK_WORKLOAD_CLIENT_ID" watermarkWorkerObjectId="$ASSET_WATERMARK_WORKLOAD_OBJECT_ID" readerCallerAppId="$ASSET_READER_CALLER_APP_ID" meetingApiBaseUrl="$MEETING_API_BASE_URL" meetingApiAudience="$MEETING_API_AUDIENCE" provisionPermissions=false manageSharedInfrastructure=false \
+            --parameters recordingEventsProvisioned="$RECORDING_EVENTS_PROVISIONED" recordingEventsEnabled="$RECORDING_EVENTS_ENABLED" recordingLiveCPU="$RECORDING_LIVE_CPU" recordingProcessingCPU="$RECORDING_PROCESSING_CPU" recordingPreviewCPU="$RECORDING_PREVIEW_CPU" recordingHLSEnabled="$RECORDING_HLS_ENABLED" recordingSourceEnabled="$RECORDING_SOURCE_ENABLED" storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" scanWorkerImage="$SCAN_IMAGE_REF" recordingImage="$RECORDING_IMAGE_REF" memberVideoEnabled="$MEMBER_VIDEO_ENABLED" recordingR2AccountId="$CLOUDFLARE_ACCOUNT_ID" mediaKeyId="$MEDIA_KEY_ID" deployRuntime=true deployMigrationJob=true deployScanJob=true deployScanWorker=true provisionScanWarmInfrastructure=false deploySignatureRefreshJob=true deployDerivativeJob=true deployRetentionJob="$DEPLOY_RETENTION_JOB" retentionScheduleEnabled="$RETENTION_SCHEDULE_ENABLED" retentionApplyEnabled="$RETENTION_APPLY_ENABLED" scanDispatchEnabled="$ACTIVATE_QUEUE_SCANNING" embeddedScanEnabled="$EMBEDDED_SCAN_ENABLED" workloadAuthClientId="$ASSET_WORKLOAD_CLIENT_ID" workloadAuthAudience="$ASSET_WORKLOAD_AUDIENCE" lineAttachmentClientId="$LINE_ATTACHMENT_CLIENT_ID" lineAttachmentObjectId="$LINE_ATTACHMENT_OBJECT_ID" extractorClientId="$ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID" extractorObjectId="$ASSET_EXTRACTOR_WORKLOAD_OBJECT_ID" watermarkWorkerClientId="$ASSET_WATERMARK_WORKLOAD_CLIENT_ID" watermarkWorkerObjectId="$ASSET_WATERMARK_WORKLOAD_OBJECT_ID" readerCallerAppId="$ASSET_READER_CALLER_APP_ID" provisionPermissions=false manageSharedInfrastructure=false \
             --validation-level Provider --result-format FullResourcePayloads --no-pretty-print --only-show-errors \
             --output json > what-if.json
           if [[ "$RECORDING_EVENTS_PROVISIONED" == true ]]; then
@@ -531,7 +529,7 @@ jobs:
           az deployment group create \
             --name "asset-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --resource-group "$RESOURCE_GROUP" --template-file infra/main.bicep \
-            --parameters recordingEventsProvisioned="$RECORDING_EVENTS_PROVISIONED" recordingEventsEnabled="$RECORDING_EVENTS_ENABLED" recordingLiveCPU="$RECORDING_LIVE_CPU" recordingProcessingCPU="$RECORDING_PROCESSING_CPU" recordingPreviewCPU="$RECORDING_PREVIEW_CPU" recordingHLSEnabled="$RECORDING_HLS_ENABLED" recordingSourceEnabled="$RECORDING_SOURCE_ENABLED" storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" scanWorkerImage="$SCAN_IMAGE_REF" recordingImage="$RECORDING_IMAGE_REF" memberVideoEnabled="$MEMBER_VIDEO_ENABLED" recordingR2AccountId="$CLOUDFLARE_ACCOUNT_ID" mediaKeyId="$MEDIA_KEY_ID" deployRuntime=true deployMigrationJob=true deployScanJob=true deployScanWorker=true deployScanWarmer=true provisionScanWarmInfrastructure=false deploySignatureRefreshJob=true deployDerivativeJob=true deployRetentionJob="$DEPLOY_RETENTION_JOB" retentionScheduleEnabled="$RETENTION_SCHEDULE_ENABLED" retentionApplyEnabled="$RETENTION_APPLY_ENABLED" scanDispatchEnabled="$ACTIVATE_QUEUE_SCANNING" embeddedScanEnabled="$EMBEDDED_SCAN_ENABLED" workloadAuthClientId="$ASSET_WORKLOAD_CLIENT_ID" workloadAuthAudience="$ASSET_WORKLOAD_AUDIENCE" lineAttachmentClientId="$LINE_ATTACHMENT_CLIENT_ID" lineAttachmentObjectId="$LINE_ATTACHMENT_OBJECT_ID" extractorClientId="$ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID" extractorObjectId="$ASSET_EXTRACTOR_WORKLOAD_OBJECT_ID" watermarkWorkerClientId="$ASSET_WATERMARK_WORKLOAD_CLIENT_ID" watermarkWorkerObjectId="$ASSET_WATERMARK_WORKLOAD_OBJECT_ID" readerCallerAppId="$ASSET_READER_CALLER_APP_ID" meetingApiBaseUrl="$MEETING_API_BASE_URL" meetingApiAudience="$MEETING_API_AUDIENCE" provisionPermissions=false manageSharedInfrastructure=false \
+            --parameters recordingEventsProvisioned="$RECORDING_EVENTS_PROVISIONED" recordingEventsEnabled="$RECORDING_EVENTS_ENABLED" recordingLiveCPU="$RECORDING_LIVE_CPU" recordingProcessingCPU="$RECORDING_PROCESSING_CPU" recordingPreviewCPU="$RECORDING_PREVIEW_CPU" recordingHLSEnabled="$RECORDING_HLS_ENABLED" recordingSourceEnabled="$RECORDING_SOURCE_ENABLED" storageAccountName="$STORAGE_ACCOUNT_NAME" migrationImage="$IMAGE_REF" runtimeImage="$IMAGE_REF" scanWorkerImage="$SCAN_IMAGE_REF" recordingImage="$RECORDING_IMAGE_REF" memberVideoEnabled="$MEMBER_VIDEO_ENABLED" recordingR2AccountId="$CLOUDFLARE_ACCOUNT_ID" mediaKeyId="$MEDIA_KEY_ID" deployRuntime=true deployMigrationJob=true deployScanJob=true deployScanWorker=true provisionScanWarmInfrastructure=false deploySignatureRefreshJob=true deployDerivativeJob=true deployRetentionJob="$DEPLOY_RETENTION_JOB" retentionScheduleEnabled="$RETENTION_SCHEDULE_ENABLED" retentionApplyEnabled="$RETENTION_APPLY_ENABLED" scanDispatchEnabled="$ACTIVATE_QUEUE_SCANNING" embeddedScanEnabled="$EMBEDDED_SCAN_ENABLED" workloadAuthClientId="$ASSET_WORKLOAD_CLIENT_ID" workloadAuthAudience="$ASSET_WORKLOAD_AUDIENCE" lineAttachmentClientId="$LINE_ATTACHMENT_CLIENT_ID" lineAttachmentObjectId="$LINE_ATTACHMENT_OBJECT_ID" extractorClientId="$ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID" extractorObjectId="$ASSET_EXTRACTOR_WORKLOAD_OBJECT_ID" watermarkWorkerClientId="$ASSET_WATERMARK_WORKLOAD_CLIENT_ID" watermarkWorkerObjectId="$ASSET_WATERMARK_WORKLOAD_OBJECT_ID" readerCallerAppId="$ASSET_READER_CALLER_APP_ID" provisionPermissions=false manageSharedInfrastructure=false \
             --only-show-errors --output none
       - name: Verify revision health
         run: |
@@ -554,18 +552,9 @@ jobs:
           [[ "$(az containerapp show -g "$RESOURCE_GROUP" -n "$SCAN_WORKER_APP_NAME" --query properties.template.scale.pollingInterval -o tsv --only-show-errors)" == "1" ]]
           [[ "$(az containerapp show -g "$RESOURCE_GROUP" -n "$SCAN_WORKER_APP_NAME" --query properties.template.scale.cooldownPeriod -o tsv --only-show-errors)" == "120" ]]
           [[ "$(az containerapp job show -g "$RESOURCE_GROUP" -n asset-scan --query properties.configuration.triggerType -o tsv --only-show-errors)" == "Manual" ]]
-          warmer_object_id="$(az identity show -g "$RESOURCE_GROUP" -n asset-scan-warmer-identity --query principalId -o tsv --only-show-errors)"
-          storage_id="$(az storage account show -g "$RESOURCE_GROUP" -n "$STORAGE_ACCOUNT_NAME" --query id -o tsv --only-show-errors)"
-          warm_scope="${storage_id}/queueServices/default/queues/asset-scan-warm"
-          [[ "$(az role assignment list --scope "$warm_scope" --assignee-object-id "$warmer_object_id" --query "[?roleDefinitionName=='Storage Queue Data Message Sender'] | length(@)" -o tsv --only-show-errors)" == "1" ]]
-      - name: Verify scan warmer release
-        run: |
-          warmer_image="$(az containerapp job show -g "$RESOURCE_GROUP" -n asset-scan-warmer --query properties.template.containers[0].image -o tsv --only-show-errors)"
-          [[ "$warmer_image" == "$IMAGE_REF" ]]
-          [[ "$(az containerapp job show -g "$RESOURCE_GROUP" -n asset-scan-warmer --query properties.configuration.triggerType -o tsv --only-show-errors)" == "Schedule" ]]
-          [[ "$(az containerapp job show -g "$RESOURCE_GROUP" -n asset-scan-warmer --query properties.configuration.scheduleTriggerConfig.cronExpression -o tsv --only-show-errors)" == "*/1 * * * *" ]]
-          [[ "$(az containerapp job show -g "$RESOURCE_GROUP" -n asset-scan-warmer --query "properties.template.containers[0].env[?name=='MEETING_API_BASE_URL'].value | [0]" -o tsv --only-show-errors)" == "$MEETING_API_BASE_URL" ]]
-          [[ "$(az containerapp job show -g "$RESOURCE_GROUP" -n asset-scan-warmer --query "properties.template.containers[0].env[?name=='MEETING_API_AUDIENCE'].value | [0]" -o tsv --only-show-errors)" == "$MEETING_API_AUDIENCE" ]]
+          # Meeting warm windows are the cron rules declared in infra/main.bicep.
+          az containerapp show -g "$RESOURCE_GROUP" -n "$SCAN_WORKER_APP_NAME" --query properties.template.scale.rules -o json --only-show-errors \
+            | python3 scripts/verify-scan-worker-scale.py
       - name: Verify derivative job release
         run: |
           derivative_image="$(az containerapp job show -g "$RESOURCE_GROUP" -n "$DERIVATIVE_JOB_NAME" --query properties.template.containers[0].image -o tsv --only-show-errors)"
@@ -580,6 +569,35 @@ jobs:
           if [[ "$RECORDING_EVENTS_ENABLED" != true ]]; then
             [[ "$(az containerapp job show -g "$RESOURCE_GROUP" -n asset-recording-validation --query properties.configuration.scheduleTriggerConfig.cronExpression -o tsv --only-show-errors)" == '*/1 * * * *' ]]
           fi
+      - name: Retire scan warmer Job
+        # Planned deletion: the scan worker cron rules (verified above) replace the
+        # per-minute warmer, and incremental Bicep deployments never delete a Job
+        # the template stopped declaring. Idempotent; the last image reference is
+        # logged for rollback and ACR retention before deletion.
+        run: |
+          job=asset-scan-warmer
+          count() {
+            az containerapp job list -g "$RESOURCE_GROUP" --query "length([?name=='${job}'])" -o tsv --only-show-errors
+          }
+          present="$(count)"
+          if [[ "$present" == 0 ]]; then
+            echo "${job} is already absent"
+            exit 0
+          fi
+          [[ "$present" == 1 ]]
+          image="$(az containerapp job show -g "$RESOURCE_GROUP" -n "$job" --query properties.template.containers[0].image -o tsv --only-show-errors)"
+          echo "Retiring ${job}; last image: ${image}"
+          echo "- Retired \`${job}\`; last image \`${image}\`" >> "$GITHUB_STEP_SUMMARY"
+          az containerapp job delete -g "$RESOURCE_GROUP" -n "$job" --yes --only-show-errors --output none
+          for attempt in {1..30}; do
+            if [[ "$(count)" == 0 ]]; then
+              echo "${job} deleted"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "${job} still exists after deletion" >&2
+          exit 1
       - name: Capture healthy release
         id: release_outputs
         run: |

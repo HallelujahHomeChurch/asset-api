@@ -135,9 +135,12 @@ test "$scan_line" -lt "$what_if_line"
 for image_check_workflow in .github/workflows/ci.yml "$workflow"; do
   grep -Fq './scripts/test-image-binaries.sh asset-api:verify' "$image_check_workflow"
 done
-for binary in asset-derivative-worker asset-scan-warmer; do
-  grep -Fq "grep -Fx '$binary'" scripts/test-image-binaries.sh
-done
+grep -Fq "grep -Fx 'asset-derivative-worker'" scripts/test-image-binaries.sh
+# The per-minute scan warmer is retired; the image must not ship it again.
+if grep -Fq 'asset-scan-warmer' Dockerfile scripts/test-image-binaries.sh; then
+  echo 'retired asset-scan-warmer binary must not return to the image' >&2
+  exit 1
+fi
 grep -Fq 'docker run --rm --entrypoint clamscan asset-scan:verify --help' "$workflow"
 for flag in --max-filesize --max-scansize --max-files --max-recursion --alert-exceeds-max --alert-encrypted; do
   grep -Fq -- "$flag" "$workflow"
@@ -146,17 +149,46 @@ grep -q "replicaTimeout: 720" infra/main.bicep
 grep -q 'param deployScanWorker bool = false' infra/main.bicep
 grep -q 'param provisionScanWarmInfrastructure bool = false' infra/main.bicep
 grep -q "name: 'asset-scan-worker'" infra/main.bicep
-grep -q "name: 'asset-scan-warmer'" infra/main.bicep
 grep -q "name: 'asset-scan-warmer-identity'" infra/main.bicep
-grep -A15 "name: 'asset-scan-warmer'" infra/main.bicep | grep -q "replicaTimeout: 120"
-grep -q "cronExpression: '\*/1 \* \* \* \*'" infra/main.bicep
-test "$(grep -c 'deployScanWarmer=true' "$workflow")" = 2
+# The per-minute warmer Job is retired in favour of scan worker cron rules.
+if grep -Eq "name: 'asset-scan-warmer'|deployScanWarmer|meetingApi" infra/main.bicep ||
+  grep -Eq 'deployScanWarmer|meetingApi|MEETING_API|Verify scan warmer release' "$workflow"; then
+  echo 'retired asset-scan-warmer Job must not be redeployed' >&2
+  exit 1
+fi
 grep -q "name: 'ASSET_SCAN_IDLE_POLL', value: '1s'" infra/main.bicep
 grep -q 'pollingInterval: 1' infra/main.bicep
 grep -q 'cooldownPeriod: 120' infra/main.bicep
 grep -q 'minReplicas: 0' infra/main.bicep
 grep -q 'maxReplicas: 5' infra/main.bicep
-grep -q "queueName: 'asset-scan-warm'" infra/main.bicep
+scan_worker_block="$(sed -n '/^resource scanWorker /,/^}/p' infra/main.bicep)"
+printf '%s\n' "$scan_worker_block" | grep -q "queueName: 'asset-scan'$"
+if printf '%s\n' "$scan_worker_block" | grep -Eq "name: 'asset-scan-warm'|queueName: 'asset-scan-warm'"; then
+  echo 'scan worker must warm through cron rules, not the asset-scan-warm queue rule' >&2
+  exit 1
+fi
+test "$(printf '%s\n' "$scan_worker_block" | grep -c "type: 'cron'")" = 5
+test "$(printf '%s\n' "$scan_worker_block" | grep -c "timezone: 'Asia/Taipei'")" = 5
+test "$(printf '%s\n' "$scan_worker_block" | grep -c "desiredReplicas: '1'")" = 5
+grep -Fq 'python3 scripts/verify-scan-worker-scale.py' "$workflow"
+grep -Fq 'python3 scripts/meeting-cron-drift.test.py' .github/workflows/ci.yml
+retire_line="$(grep -n 'name: Retire scan warmer Job' "$workflow" | cut -d: -f1)"
+verify_worker_line="$(grep -n 'name: Verify scan worker release' "$workflow" | cut -d: -f1)"
+healthy_line="$(grep -n 'name: Capture healthy release' "$workflow" | cut -d: -f1)"
+test "$verify_worker_line" -lt "$retire_line"
+test "$retire_line" -lt "$healthy_line"
+retire_step="$(sed -n "${retire_line},${healthy_line}p" "$workflow")"
+for expected in 'job=asset-scan-warmer' 'az containerapp job delete -g "$RESOURCE_GROUP" -n "$job" --yes' 'last image: ${image}' 'already absent' 'still exists after deletion'; do
+  printf '%s\n' "$retire_step" | grep -Fq "$expected"
+done
+drift_workflow=.github/workflows/meeting-cron-drift.yml
+for expected in 'workflow_dispatch:' 'contents: read' 'issues: write' 'python3 scripts/meeting-cron-drift.py --report' 'ISSUE_TITLE: "Meeting cron drift: asset-scan-worker"'; do
+  grep -Fq "$expected" "$drift_workflow"
+done
+if grep -Eq 'azure/login|id-token|AZURE_' "$drift_workflow"; then
+  echo 'meeting cron drift check must not use Azure credentials' >&2
+  exit 1
+fi
 scan_job_block="$(sed -n '/resource scanJob /,/^}/p' infra/main.bicep)"
 printf '%s\n' "$scan_job_block" | grep -q "triggerType: 'Manual'"
 if printf '%s\n' "$scan_job_block" | grep -q 'eventTriggerConfig'; then
@@ -188,12 +220,7 @@ test "$(grep -c 'deployRetentionJob="$DEPLOY_RETENTION_JOB"' "$workflow")" = 2
 test "$(grep -c 'deployDerivativeJob=true' "$workflow")" = 2
 test "$(grep -c 'deployScanWorker=true' "$workflow")" = 2
 test "$(grep -c 'provisionScanWarmInfrastructure=false' "$workflow")" = 2
-test "$(grep -c 'meetingApiBaseUrl="$MEETING_API_BASE_URL"' "$workflow")" = 2
-test "$(grep -c 'meetingApiAudience="$MEETING_API_AUDIENCE"' "$workflow")" = 2
-grep -Fq 'MEETING_API_BASE_URL: ${{ vars.MEETING_API_BASE_URL }}' "$workflow"
-grep -Fq 'MEETING_API_AUDIENCE: ${{ vars.MEETING_API_AUDIENCE }}' "$workflow"
-grep -Fq 'ASSET_WORKLOAD_AUDIENCE LINE_ATTACHMENT_CLIENT_ID LINE_ATTACHMENT_OBJECT_ID MEETING_API_BASE_URL MEETING_API_AUDIENCE' "$workflow"
-grep -q 'name: Verify scan warmer release' "$workflow"
+grep -Fq 'ASSET_WORKLOAD_AUDIENCE LINE_ATTACHMENT_CLIENT_ID LINE_ATTACHMENT_OBJECT_ID; do' "$workflow"
 test "$(grep -c 'retentionScheduleEnabled="$RETENTION_SCHEDULE_ENABLED"' "$workflow")" = 2
 test "$(grep -c 'retentionApplyEnabled="$RETENTION_APPLY_ENABLED"' "$workflow")" = 2
 grep -Fq 'for name in RETENTION_SCHEDULE_ENABLED RETENTION_APPLY_ENABLED RECORDING_HLS_ENABLED RECORDING_SOURCE_ENABLED; do' "$workflow"

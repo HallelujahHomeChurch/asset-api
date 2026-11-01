@@ -89,16 +89,54 @@ Dapr uses `info` logging so managed-sidecar startup can be correlated with probe
 failures during scaling. This does not enable Dapr API request logging or change
 application health probes, permissions, resource allocations or scale limits.
 Production scanning runs through the `asset-scan-worker` Container App. It
-scales from zero on either `asset-scan` or `asset-scan-warm`, polls once per
-second while active, and returns to zero after the 120-second cooldown. The
-worker deletes warm pulses after the scan queue is empty so the queue scaler
-does not retain a stale approximate count. Warm messages also expire after
-120 seconds. The legacy `asset-scan` Job remains
+scales from zero on the `asset-scan` queue, polls once per second (the
+app-level `pollingInterval`, shared by every scale rule), and returns to zero
+after the 120-second cooldown. The legacy `asset-scan` Job remains
 Manual with its queue trigger disabled for one compatibility release.
-The `asset-scan-warmer` scheduled Job runs once per minute, reads meeting windows
-through Operations internal ingress using its dedicated managed identity, and
-can only enqueue the warm queue. It has no Dapr app-channel secret, database,
-Blob, business queue, or Azure management-plane access.
+
+### Meeting warm windows
+
+During meetings the scan worker is held at one replica by five KEDA cron scale
+rules on `asset-scan-worker` (`desiredReplicas: '1'`, `timezone: 'Asia/Taipei'`).
+Each window runs from 5 minutes before the meeting starts to 10 minutes after it
+ends. KEDA uses the highest rule, so the replica count is
+max(cron, `asset-scan` queue); uploads outside a window still scale from zero.
+
+| rule | start | end | meetingKey (start) |
+|---|---|---|---|
+| `tue-fri-0625` | `25 6 * * 2,5` | `40 8 * * 2,5` | `morning-prayer` (06:30) |
+| `thu-1155` | `55 11 * * 4` | `10 14 * * 4` | `gospel-meal` (12:00) |
+| `fri-1855` | `55 18 * * 5` | `40 21 * * 5` | `discipleship-prayer` (19:00) |
+| `sat-0855` | `55 8 * * 6` | `40 11 * * 6` | `kingdom-prayer` (09:00) |
+| `sun-0855` | `55 8 * * 0` | `10 12 * * 0` | `sunday` (09:00) |
+
+The windows are hard-coded in `main.bicep`. They do not follow meeting edits in
+Operations: a meeting-time change requires editing these rules (and the
+expected list in `scripts/meeting-cron-drift.test.py`) and releasing. The
+release verifies the deployed rules against the template with
+`scripts/verify-scan-worker-scale.py`.
+
+`.github/workflows/meeting-cron-drift.yml` runs every Monday 01:00 UTC and on
+demand without Azure credentials. It reads the public
+`https://www.alive.org.tw/api/meeting-occurrences` and fails when any
+`scheduled` occurrence in the next 28 days is not covered (5 minutes before
+start to 10 minutes after end, Asia/Taipei) by one cron rule. A failure opens
+or updates the issue "Meeting cron drift: asset-scan-worker" with a suggested
+rule; a clean run closes it. Run it locally with
+`python3 scripts/meeting-cron-drift.py` (exit 0 covered, 1 gap, 2 invalid input).
+
+The per-minute `asset-scan-warmer` Job is retired. The release step "Retire scan
+warmer Job" logs its last image reference and deletes it if it still exists
+(incremental Bicep deployments never delete it); rerunning is a no-op. The
+`asset-scan-warm` queue, its RBAC, `asset-scan-warmer-identity` and the
+worker's pulse draining remain until a follow-up cleanup; nothing enqueues
+pulses any more. Before deployment the release captures the existing warmer's
+validated, non-secret settings and immutable image. On failure it recreates
+that exact Job before restoring the old scan App revision. If recreation fails,
+the cron App is retained and rollback reports failure. Later releases whose
+baseline already has no warmer never recreate it. Keep the warmer image, its
+identity/RBAC and Operations admission available through the rollback window;
+removing these requires a separate compatibility cleanup.
 Clean supported images are processed only through the queue-triggered
 `asset-derivative` Job. Terraform owns its stable queues, identity, RBAC, and
 job configuration; the service release updates the job to the same immutable

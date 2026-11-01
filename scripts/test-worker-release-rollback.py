@@ -33,6 +33,7 @@ class RecoveryTest(unittest.TestCase):
         self.sleep = patch.object(mod.time, 'sleep')
         self.sleep.start()
         self.scan_ready = True
+        self.warmer = None
 
     def tearDown(self):
         self.sleep.stop()
@@ -42,8 +43,14 @@ class RecoveryTest(unittest.TestCase):
 
     def az(self, *args):
         self.calls.append(args)
+        if args[:3] == ('containerapp', 'job', 'list'):
+            return [mod.WARMER] if self.warmer else []
         if args[:3] == ('containerapp', 'job', 'show'):
             name = args[args.index('-n')+1]
+            if name == mod.WARMER:
+                if args[-1] == 'properties.provisioningState':
+                    return 'Succeeded'
+                return copy.deepcopy(self.warmer)
             if name not in self.jobs:
                 raise RuntimeError('missing resource')
             if args[-1] == 'properties.provisioningState':
@@ -56,6 +63,10 @@ class RecoveryTest(unittest.TestCase):
             name = args[args.index('--url')+1].split('/')[-1].split('?')[0]
             if name in self.fail:
                 raise RuntimeError('patch failed')
+            if name == mod.WARMER:
+                value = json.loads(args[args.index('--body')+1])
+                self.warmer = {**value['properties'], 'identity': value['identity'], 'location': value['location'], 'id': mod.WARMER_ID}
+                return {}
             if name not in self.drift:
                 self.jobs[name] = json.loads(args[args.index('--body')+1])['properties']
             return {}
@@ -186,6 +197,82 @@ class RecoveryTest(unittest.TestCase):
         mod.capture(self.path)
         value = json.loads(self.path.read_text())
         value['jobs']['another-job'] = value['jobs'].pop('asset-scan')
+        self.path.write_text(json.dumps(value))
+        self.calls.clear()
+        with self.assertRaises(ValueError):
+            mod.restore(self.path)
+        self.assertEqual(self.calls, [])
+
+    def prior_warmer(self):
+        props = copy.deepcopy(self.jobs['asset-scan'])
+        props['configuration'].update(triggerType='Schedule', replicaTimeout=120, replicaRetryLimit=1,
+            scheduleTriggerConfig={'cronExpression':'*/1 * * * *','parallelism':1,'replicaCompletionCount':1},
+            registries=[{'server':'alive.azurecr.io','identity':mod.ROOT+'Microsoft.ManagedIdentity/userAssignedIdentities/asset-api-acr-pull'}])
+        props['template']['containers'][0].update(name=mod.WARMER, command=['/asset-scan-warmer'], resources={'cpu':0.25,'memory':'0.5Gi'}, env=[{'name':k,'value':v} for k,v in {
+            'AZURE_CLIENT_ID':'1c9c4b5a-927d-48fb-9f01-1d1e66e281a4','MEETING_API_AUDIENCE':'api://63e5ac29-f5b4-462d-ab8d-9029b78fcc58',
+            'MEETING_API_BASE_URL':'https://operations-api.internal.gentleriver-81abd7bc.eastasia.azurecontainerapps.io',
+            'ASSET_SCAN_WARM_QUEUE_URL':'https://alivestoragebb99ee6e.queue.core.windows.net/asset-scan-warm',
+            'ASSET_SCAN_WARM_LEAD':'5m','ASSET_SCAN_WARM_TAIL':'10m','ASSET_SCAN_WARM_HTTP_TIMEOUT':'10s'}.items()])
+        return {**props,'id':mod.WARMER_ID,'location':'East Asia','environmentId':mod.ROOT+'Microsoft.App/managedEnvironments/alive-env',
+                'identity':{'type':'UserAssigned','userAssignedIdentities':{mod.ROOT+'Microsoft.ManagedIdentity/userAssignedIdentities/'+n:{} for n in ('asset-api-acr-pull','asset-scan-warmer-identity')}}}
+
+    def test_deleted_warmer_recreated_before_old_scan_revision(self):
+        self.warmer = self.prior_warmer()
+        mod.capture(self.path)
+        original = mod.warmer()
+        self.warmer = None
+        mod.restore(self.path)
+        self.assertEqual(mod.warmer(), original)
+        put = next(i for i,c in enumerate(self.calls) if c[:3] == ('rest','--method','put'))
+        scan = next(i for i,c in enumerate(self.calls) if c[:3] == ('containerapp','revision','copy'))
+        self.assertLess(put, scan)
+
+    def test_present_warmer_needs_no_write_and_absent_baseline_stays_absent(self):
+        for present in (True, False):
+            self.path.unlink(missing_ok=True)
+            self.warmer = self.prior_warmer() if present else None
+            mod.capture(self.path)
+            self.calls.clear()
+            mod.restore(self.path)
+            self.assertFalse(any(c[:3] == ('rest','--method','put') for c in self.calls))
+            self.assertEqual(bool(self.warmer), present)
+
+    def test_provider_location_format_is_semantically_stable(self):
+        self.warmer = self.prior_warmer()
+        mod.capture(self.path)
+        self.warmer['location'] = 'eastasia'
+        self.calls.clear()
+        mod.restore(self.path)
+        self.assertFalse(any(c[:3] == ('rest','--method','put') for c in self.calls))
+
+    def test_failed_warmer_recreation_preserves_cron_app(self):
+        self.warmer = self.prior_warmer()
+        mod.capture(self.path)
+        self.deploy()
+        self.warmer = None
+        self.fail.add(mod.WARMER)
+        self.calls.clear()
+        with self.assertRaisesRegex(RuntimeError, 'asset-scan-warmer'):
+            mod.restore(self.path)
+        self.assertFalse(any(c[:3] == ('containerapp','revision','copy') for c in self.calls))
+        self.assertEqual(self.jobs['asset-derivative']['template']['containers'][0]['image'], OLD)
+
+    def test_unsafe_warmer_snapshots_fail_before_persistence_or_mutation(self):
+        for mutate in (lambda w:w['configuration'].update(secrets=[{'name':'bad','value':'secret'}]),
+                       lambda w:w['configuration']['registries'][0].update(passwordSecretRef='bad'),
+                       lambda w:w['template']['containers'][0]['env'][0].update(value='unexpected'),
+                       lambda w:w['template']['containers'][0].update(image='alive.azurecr.io/alive/asset-api:latest')):
+            self.warmer = self.prior_warmer()
+            mutate(self.warmer)
+            with self.assertRaises(ValueError):
+                mod.capture(self.path)
+            self.assertFalse(self.path.exists())
+
+    def test_tampered_warmer_snapshot_fails_before_any_mutation(self):
+        self.warmer = self.prior_warmer()
+        mod.capture(self.path)
+        value = json.loads(self.path.read_text())
+        value['warmer']['properties']['environmentId'] = mod.ROOT + 'Microsoft.App/managedEnvironments/another'
         self.path.write_text(json.dumps(value))
         self.calls.clear()
         with self.assertRaises(ValueError):

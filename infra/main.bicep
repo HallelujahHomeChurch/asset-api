@@ -19,7 +19,6 @@ param scanDispatchEnabled bool = true
 param embeddedScanEnabled bool = false
 param deployScanJob bool = false
 param deployScanWorker bool = false
-param deployScanWarmer bool = false
 param provisionScanWarmInfrastructure bool = false
 param deploySignatureRefreshJob bool = false
 param deployRetentionJob bool = false
@@ -50,8 +49,6 @@ param extractorObjectId string = ''
 param watermarkWorkerClientId string = ''
 param watermarkWorkerObjectId string = ''
 param readerCallerAppId string = 'api-gateway'
-param meetingApiBaseUrl string = ''
-param meetingApiAudience string = ''
 
 param publicBaseUrl string = 'https://www.alive.org.tw/assets'
 param uploadAllowedOrigins array = [
@@ -855,16 +852,68 @@ resource scanWorker 'Microsoft.App/containerApps@2025-01-01' = if (deployScanWor
               identity: scanIdentity.id
             }
           }
+          // Meeting warm windows (Asia/Taipei): 5 minutes before start to 10
+          // minutes after end. Hard-coded; a meeting-time change requires editing
+          // these rules and releasing. .github/workflows/meeting-cron-drift.yml
+          // checks them weekly against the public meeting occurrences.
           {
-            name: 'asset-scan-warm'
+            name: 'tue-fri-0625'
             custom: {
-              type: 'azure-queue'
+              type: 'cron'
               metadata: {
-                accountName: storageAccount.name
-                queueName: 'asset-scan-warm'
-                queueLength: '20'
+                timezone: 'Asia/Taipei'
+                start: '25 6 * * 2,5'
+                end: '40 8 * * 2,5'
+                desiredReplicas: '1'
               }
-              identity: scanIdentity.id
+            }
+          }
+          {
+            name: 'thu-1155'
+            custom: {
+              type: 'cron'
+              metadata: {
+                timezone: 'Asia/Taipei'
+                start: '55 11 * * 4'
+                end: '10 14 * * 4'
+                desiredReplicas: '1'
+              }
+            }
+          }
+          {
+            name: 'fri-1855'
+            custom: {
+              type: 'cron'
+              metadata: {
+                timezone: 'Asia/Taipei'
+                start: '55 18 * * 5'
+                end: '40 21 * * 5'
+                desiredReplicas: '1'
+              }
+            }
+          }
+          {
+            name: 'sat-0855'
+            custom: {
+              type: 'cron'
+              metadata: {
+                timezone: 'Asia/Taipei'
+                start: '55 8 * * 6'
+                end: '40 11 * * 6'
+                desiredReplicas: '1'
+              }
+            }
+          }
+          {
+            name: 'sun-0855'
+            custom: {
+              type: 'cron'
+              metadata: {
+                timezone: 'Asia/Taipei'
+                start: '55 8 * * 0'
+                end: '10 12 * * 0'
+                desiredReplicas: '1'
+              }
             }
           }
         ]
@@ -872,55 +921,6 @@ resource scanWorker 'Microsoft.App/containerApps@2025-01-01' = if (deployScanWor
     }
   }
   dependsOn: [acrPull, scanSecretAccess, scanQueueProcessor, scanQueueReader, scanWarmQueueReader, scanWarmQueueProcessor, scanPoisonQueueContributor, scanBlobReader, scanSignatureReader]
-}
-
-resource scanWarmer 'Microsoft.App/jobs@2025-07-01' = if (deployScanWarmer) {
-  name: 'asset-scan-warmer'
-  location: location
-  identity: {
-    type: 'UserAssigned'
-    userAssignedIdentities: {
-      '${pullIdentity.id}': {}
-      '${scanWarmerIdentity.id}': {}
-    }
-  }
-  properties: {
-    environmentId: environment.id
-    workloadProfileName: 'Consumption'
-    configuration: {
-      triggerType: 'Schedule'
-      replicaTimeout: 120
-      replicaRetryLimit: 1
-      scheduleTriggerConfig: {
-        cronExpression: '*/1 * * * *'
-        parallelism: 1
-        replicaCompletionCount: 1
-      }
-      registries: [
-        { server: registry.properties.loginServer, identity: pullIdentity.id }
-      ]
-    }
-    template: {
-      containers: [
-        {
-          name: 'asset-scan-warmer'
-          image: runtimeImage
-          command: ['/asset-scan-warmer']
-          env: [
-            { name: 'AZURE_CLIENT_ID', value: scanWarmerIdentity.properties.clientId }
-            { name: 'MEETING_API_BASE_URL', value: meetingApiBaseUrl }
-            { name: 'MEETING_API_AUDIENCE', value: meetingApiAudience }
-            { name: 'ASSET_SCAN_WARM_QUEUE_URL', value: 'https://${storageAccount.name}.queue.${az.environment().suffixes.storage}/asset-scan-warm' }
-            { name: 'ASSET_SCAN_WARM_LEAD', value: '5m' }
-            { name: 'ASSET_SCAN_WARM_TAIL', value: '10m' }
-            { name: 'ASSET_SCAN_WARM_HTTP_TIMEOUT', value: '10s' }
-          ]
-          resources: { cpu: json('0.25'), memory: '0.5Gi' }
-        }
-      ]
-    }
-  }
-  dependsOn: [acrPull, scanWarmQueueSender]
 }
 
 resource signatureRefreshJob 'Microsoft.App/jobs@2025-07-01' = if (deploySignatureRefreshJob) {
@@ -1194,7 +1194,6 @@ output scanPoisonQueueName string = 'asset-scan-poison'
 output scanWarmQueueName string = 'asset-scan-warm'
 output scanJobName string = 'asset-scan'
 output scanWorkerAppName string = 'asset-scan-worker'
-output scanWarmerJobName string = 'asset-scan-warmer'
 output scanWarmerClientId string = scanWarmerIdentity.properties.clientId
 output scanWarmerObjectId string = scanWarmerIdentity.properties.principalId
 output signatureRefreshJobName string = 'asset-clamav-signature-refresh'

@@ -133,6 +133,7 @@ jobs:
           set -o pipefail
           python3 scripts/test-go-lanes_test.py
           python3 scripts/test-go-lanes.py
+          python3 scripts/meeting-cron-drift.test.py
           GOVERNANCE_TEST_EVENTS="$PWD/.artifacts/data-governance/test-events.jsonl" \
           GOVERNANCE_OUTPUT_DIR="$PWD/.artifacts/data-governance/export" \
             go test ./internal/governance -run '^TestDataGovernanceExport$' -count=1
