@@ -583,3 +583,5 @@ for media_workflow in .github/workflows/ci.yml "$workflow"; do
   awk '/^  verify:$/{v=1;next} v&&/^  [a-z_-]+:$/{exit} v&&/^    timeout-minutes: [0-9]+$/{found=1} END{exit !found}' "$media_workflow"
 done
 grep -q 'test-install-media-test-tools.sh' .github/workflows/ci.yml
+
+python3 scripts/test-cancellation-conditions.py

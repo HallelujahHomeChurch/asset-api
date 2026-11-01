@@ -32,9 +32,9 @@ ENV = {
 QUERY = "{configuration:{" + ','.join(f'{k}:properties.configuration.{k}' for k in CONFIG) + "},template:properties.template}"
 
 
-def az(*args):
+def az(*args, timeout=120):
     result = subprocess.run(['az', *args, '--only-show-errors', '-o', 'json'],
-                            capture_output=True, text=True, timeout=120)
+                            capture_output=True, text=True, timeout=timeout)
     if result.returncode:
         raise RuntimeError('Azure worker recovery operation failed (response suppressed)')
     return json.loads(result.stdout or '{}')
@@ -310,6 +310,55 @@ def restore(path):
         raise RuntimeError('Worker rollback incomplete: ' + ', '.join(failures))
 
 
+def settle(path):
+    expected = checkpoint_name().replace('worker-recovery-', 'asset-runtime-', 1)
+    if str(path) != expected:
+        raise ValueError('unexpected runtime deployment')
+    deadline = time.monotonic() + 90
+
+    def read(*args):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError('runtime settlement timed out; recovery must not race pending writes')
+        return az(*args, timeout=min(15, remaining))
+
+    terminal = {'Succeeded', 'Failed', 'Canceled'}
+    state = read('deployment', 'group', 'show', '-g', 'alive', '-n', expected,
+                 '--query', 'properties.provisioningState')
+    if state in {'Accepted', 'Running'}:
+        try:
+            read('deployment', 'group', 'cancel', '-g', 'alive', '-n', expected)
+        except RuntimeError:
+            # Cancellation can race successful completion; only a terminal readback permits recovery.
+            state = read('deployment', 'group', 'show', '-g', 'alive', '-n', expected,
+                         '--query', 'properties.provisioningState')
+            if state not in terminal:
+                raise
+    elif state not in terminal:
+        raise RuntimeError('unknown runtime deployment state; recovery refused')
+
+    names = [('containerApps', 'asset-api'), ('containerApps', APP), ('jobs', 'asset-migrate')]
+    names += [('jobs', name) for name in selected_jobs()]
+    if os.environ.get('RECORDING_EVENTS_PROVISIONED') == 'true':
+        names += [('jobs', 'asset-recording-' + lane) for lane in ('live', 'processing', 'preview', 'maintenance')]
+    if os.environ.get('MEMBER_VIDEO_ENABLED') == 'true':
+        names.append(('jobs', 'asset-recording-validation'))
+    while True:
+        state = read('deployment', 'group', 'show', '-g', 'alive', '-n', expected,
+                     '--query', 'properties.provisioningState')
+        if state not in terminal | {'Accepted', 'Running', 'Canceling'}:
+            raise RuntimeError('unknown runtime deployment state; recovery refused')
+        if state in terminal:
+            states = [read('resource', 'show', '--ids', ROOT + 'Microsoft.App/' + kind + '/' + name,
+                           '--query', 'properties.provisioningState') for kind, name in names]
+            if all(value in terminal for value in states):
+                print('RUNTIME_DEPLOYMENT_SETTLED')
+                return
+            if any(value not in terminal | {'Accepted', 'Running', 'Updating', 'Creating', 'Deleting'} for value in states):
+                raise RuntimeError('unknown resource update state; recovery refused')
+        time.sleep(2)
+
+
 def summary(path):
     snapshot = json.loads(path.read_text())
     if set(snapshot) != {'jobs', 'scan', 'warmer'} or set(snapshot['jobs']) != set(selected_jobs()):
@@ -328,7 +377,7 @@ def summary(path):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=('capture', 'restore', 'summary'))
+    parser.add_argument('action', choices=('capture', 'restore', 'summary', 'settle'))
     parser.add_argument('path', type=Path)
     args = parser.parse_args()
     if os.environ.get('RESOURCE_GROUP') != 'alive':

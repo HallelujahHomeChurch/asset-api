@@ -174,7 +174,7 @@ print(values[query])
     def test_failed_drain_snapshot_survives_runner_cleanup(self):
         workflow = Path('.github/workflows/release.yml').read_text()
         section = workflow[workflow.index('      - name: Preserve non-secret recording rollback topology'):workflow.index('  deploy_media:')]
-        self.assertIn("failure() && env.RECORDING_EVENTS_PROVISIONED == 'true'", section)
+        self.assertIn("(failure() || cancelled()) && env.RECORDING_EVENTS_PROVISIONED == 'true'", section)
         self.assertIn('recording-topology.json', section)
         self.assertIn('retention-days: 7', section)
 

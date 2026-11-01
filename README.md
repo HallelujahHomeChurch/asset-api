@@ -659,6 +659,24 @@ context; warmer bindings are checked against the existing identity, environment,
 Operations audience and scan queue. It rejects missing resources and unreviewed literal
 configuration rather than creating an incomplete recovery checkpoint. This path
 supports the existing resource inventory, not first-time provisioning.
+Failure or cancellation recovery first settles this run's exact named ARM runtime
+deployment and the owned resources' update states. A bounded settlement failure
+refuses rollback rather than racing pending writes; the full private checkpoint
+and redacted recovery summary remain available. No recovery runs for an
+unstarted deployment unless a captured recording schedule was already paused.
+The media function restores its previous deployment only after a possible write.
+GitHub runner loss or its five-minute cancellation termination limit can still
+interrupt recovery; a cancelled run alone is never evidence of successful rollback.
+See [GitHub cancellation](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-cancellation)
+and [Azure deployment cancellation](https://learn.microsoft.com/en-us/rest/api/resources/deployments/cancel).
+
+For a non-production cancellation proof, manually dispatch CI on the reviewed
+branch with `cancellation_fixture=true`, wait for `CANCELLATION_FIXTURE_WAITING`,
+and cancel only that owned run. Require `RUNTIME_DEPLOYMENT_SETTLED` followed by
+`CANCELLATION_FIXTURE_RECOVERED` in its logs. This fixture uses synthetic local
+state and a mock Azure executable with only contents-read permission; it has no
+production credentials or provider access. Normal full PR CI remains a separate
+required gate.
 
 Capture stores the complete validated snapshot in the private Azure deployment
 parameters/outputs `worker-recovery-<run>-<attempt>` with an empty resource list; checkpoint

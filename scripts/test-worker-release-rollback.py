@@ -374,5 +374,89 @@ class RecoveryTest(unittest.TestCase):
         self.assertLess(workflow.index('worker-release-rollback.py capture'), workflow.index('      - name: Deploy API'))
 
 
+
+class SettlementTest(unittest.TestCase):
+    def setUp(self):
+        self.env = patch.dict(os.environ, {'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '2', 'DEPLOY_RETENTION_JOB': 'true', 'RECORDING_EVENTS_PROVISIONED': 'true', 'MEMBER_VIDEO_ENABLED': 'true'})
+        self.env.start()
+        self.calls = []
+
+    def tearDown(self):
+        self.env.stop()
+
+    def test_rejects_other_run_without_any_azure_call(self):
+        with patch.object(mod, 'az') as az:
+            with self.assertRaisesRegex(ValueError, 'unexpected runtime'):
+                mod.settle(Path('asset-runtime-999-2'))
+            az.assert_not_called()
+
+    def test_cancels_only_owned_running_deployment_then_joins_resource_updates(self):
+        reads = 0
+        resources = 0
+        def az(*args, timeout=120):
+            nonlocal reads, resources
+            self.assertGreater(timeout, 0)
+            self.assertLessEqual(timeout, 15)
+            self.calls.append(args)
+            if args[:3] == ('deployment', 'group', 'show'):
+                reads += 1
+                return 'Running' if reads == 1 else 'Canceled'
+            if args[:3] == ('deployment', 'group', 'cancel'):
+                self.assertEqual(args[args.index('-n')+1], 'asset-runtime-123-2')
+                return {}
+            self.assertEqual(args[:2], ('resource', 'show'))
+            resources += 1
+            return 'Updating' if resources == 1 else 'Succeeded'
+        with patch.object(mod, 'az', az), patch.object(mod.time, 'sleep') as sleep:
+            mod.settle(Path('asset-runtime-123-2'))
+        self.assertEqual(sum(c[:3] == ('deployment', 'group', 'cancel') for c in self.calls), 1)
+        self.assertEqual(resources, 24)
+        sleep.assert_called_once_with(2)
+
+    def test_cancel_race_requires_terminal_readback(self):
+        for after, success in [('Succeeded', True), ('Running', False)]:
+            with self.subTest(after=after):
+                reads = 0
+                def az(*args, timeout=120):
+                    nonlocal reads
+                    if args[:3] == ('deployment', 'group', 'cancel'):
+                        raise RuntimeError('fixture cancel conflict')
+                    if args[:3] == ('deployment', 'group', 'show'):
+                        reads += 1
+                        return 'Running' if reads == 1 else after
+                    self.assertTrue(success, 'resource reads permitted before parent settled')
+                    return 'Succeeded'
+                with patch.object(mod, 'az', az):
+                    if success:
+                        mod.settle(Path('asset-runtime-123-2'))
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, 'cancel conflict'):
+                            mod.settle(Path('asset-runtime-123-2'))
+
+    def test_unknown_or_missing_deployment_refuses_recovery(self):
+        for state in [None, 'Unknown']:
+            with self.subTest(state=state), patch.object(mod, 'az', return_value=state) as az:
+                with self.assertRaisesRegex(RuntimeError, 'unknown runtime'):
+                    mod.settle(Path('asset-runtime-123-2'))
+                self.assertEqual(az.call_count, 1)
+
+    def test_resource_updates_have_a_shared_bounded_deadline(self):
+        import itertools
+        def az(*args, timeout=120):
+            self.calls.append(args)
+            return 'Failed' if args[:3] == ('deployment', 'group', 'show') else 'Updating'
+        with patch.object(mod, 'az', az), patch.object(mod.time, 'monotonic', side_effect=itertools.count()), patch.object(mod.time, 'sleep'):
+            with self.assertRaisesRegex(RuntimeError, 'settlement timed out'):
+                mod.settle(Path('asset-runtime-123-2'))
+        self.assertTrue(self.calls)
+        self.assertFalse(any(c[:3] == ('deployment', 'group', 'cancel') for c in self.calls))
+
+    def test_unknown_resource_state_refuses_recovery(self):
+        def az(*args, timeout=120):
+            return 'Succeeded' if args[:3] == ('deployment', 'group', 'show') else 'Unknown'
+        with patch.object(mod, 'az', az):
+            with self.assertRaisesRegex(RuntimeError, 'unknown resource'):
+                mod.settle(Path('asset-runtime-123-2'))
+
 if __name__ == '__main__':
     unittest.main()
