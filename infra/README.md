@@ -89,9 +89,10 @@ Dapr uses `info` logging so managed-sidecar startup can be correlated with probe
 failures during scaling. This does not enable Dapr API request logging or change
 application health probes, permissions, resource allocations or scale limits.
 Production scanning runs through the `asset-scan-worker` Container App. It
-scales from zero on the `asset-scan` queue, polls once per second (the
+scales from zero on the `asset-scan` queue, polls every five seconds (the
 app-level `pollingInterval`, shared by every scale rule), and returns to zero
-after the 120-second cooldown. The legacy `asset-scan` Job remains
+after the 120-second cooldown. The app uses 1.5 CPU/3 GiB; the release verifies
+the 8 GiB ephemeral-storage tier in the deployed resource readback. The legacy `asset-scan` Job remains
 Manual with its queue trigger disabled for one compatibility release.
 
 ### Meeting warm windows
@@ -307,12 +308,12 @@ See [the ordered cutover and rollback](../docs/reviews/recording-event-cutover-2
 ## Live Event Job resources
 
 The live Event Job tier is selected by `RECORDING_LIVE_CPU` in the normal release:
-`2` maps to 2 CPU/4 GiB; `4` maps to 4 CPU/8 GiB. The staged default remains `4`.
+`1.5` maps to 1.5 CPU/3 GiB; `2` maps to 2 CPU/4 GiB; `4` maps to 4 CPU/8 GiB. The staged default remains `4`.
 The same value reaches Provider what-if, Bicep deployment and Job resource
 readback. Processing/preview tiers and trigger configuration are independent.
 Changing the repository variable or Azure resources requires a separately
 reviewed what-if and rollout; this source change does not select the target in
-production. Roll back through the release path with `4`; the existing topology
+production. Roll back through the release path with the previous tier (`2` or `4`); the existing topology
 snapshot also retains the exact previous resources. Do not switch while active
 media claims are draining. See [handoff verification and rollout gates](../docs/reviews/recording-live-handoff-2026-10-25.md).
 

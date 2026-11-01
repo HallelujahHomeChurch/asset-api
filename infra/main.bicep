@@ -31,8 +31,8 @@ param recordingHLSEnabled bool = false
 param recordingSourceEnabled bool = false
 param recordingEventsProvisioned bool = false
 param recordingEventsEnabled bool = false
-@allowed([2, 4])
-param recordingLiveCPU int = 4
+@allowed(['1.5', '2', '4'])
+param recordingLiveCPU string = '4'
 @allowed([2, 4])
 param recordingProcessingCPU int = 2
 @allowed([1, 4])
@@ -831,11 +831,11 @@ resource scanWorker 'Microsoft.App/containerApps@2025-01-01' = if (deployScanWor
             { name: 'CLAMAV_MAX_RECURSION', value: '32' }
             { name: 'CLAMAV_MAX_RETRIES', value: '5' }
           ]
-          resources: { cpu: json('2.0'), memory: '4Gi' }
+          resources: { cpu: json('1.5'), memory: '3Gi' }
         }
       ]
       scale: {
-        pollingInterval: 1
+        pollingInterval: 5
         cooldownPeriod: 120
         minReplicas: 0
         maxReplicas: 5
