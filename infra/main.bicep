@@ -835,7 +835,7 @@ resource scanWorker 'Microsoft.App/containerApps@2025-01-01' = if (deployScanWor
         }
       ]
       scale: {
-        pollingInterval: 1
+        pollingInterval: 5
         cooldownPeriod: 120
         minReplicas: 0
         maxReplicas: 5

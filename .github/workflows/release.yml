@@ -549,7 +549,7 @@ jobs:
           [[ "$worker_image" == "$SCAN_IMAGE_REF" ]]
           [[ "$(az containerapp show -g "$RESOURCE_GROUP" -n "$SCAN_WORKER_APP_NAME" --query properties.template.scale.minReplicas -o tsv --only-show-errors)" == "0" ]]
           [[ "$(az containerapp show -g "$RESOURCE_GROUP" -n "$SCAN_WORKER_APP_NAME" --query properties.template.scale.maxReplicas -o tsv --only-show-errors)" == "5" ]]
-          [[ "$(az containerapp show -g "$RESOURCE_GROUP" -n "$SCAN_WORKER_APP_NAME" --query properties.template.scale.pollingInterval -o tsv --only-show-errors)" == "1" ]]
+          [[ "$(az containerapp show -g "$RESOURCE_GROUP" -n "$SCAN_WORKER_APP_NAME" --query properties.template.scale.pollingInterval -o tsv --only-show-errors)" == "5" ]]
           [[ "$(az containerapp show -g "$RESOURCE_GROUP" -n "$SCAN_WORKER_APP_NAME" --query properties.template.scale.cooldownPeriod -o tsv --only-show-errors)" == "120" ]]
           [[ "$(az containerapp job show -g "$RESOURCE_GROUP" -n asset-scan --query properties.configuration.triggerType -o tsv --only-show-errors)" == "Manual" ]]
           # Meeting warm windows are the cron rules declared in infra/main.bicep.
