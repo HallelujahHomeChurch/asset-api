@@ -1,5 +1,13 @@
 #!/bin/sh
 set -eu
+for candidate in .github/workflows/ci.yml .github/workflows/release.yml; do
+  grep -Fq 'python3 scripts/build-release-images.py' "$candidate"
+  if grep -q 'docker build ' "$candidate"; then
+    echo 'release images must use the bounded shared builder' >&2
+    exit 1
+  fi
+done
+python3 scripts/test-build-release-images.py
 python3 scripts/test-image-binaries.py
 api_scale="$(awk '/^resource app / { in_api = 1; next } in_api && /^resource / { exit } in_api { print }' infra/main.bicep)"
 for expected in "name: 'DB_MAX_OPEN_CONNS', value: '8'" "name: 'DB_MAX_IDLE_CONNS', value: '4'" 'minReplicas: 1' 'maxReplicas: 8' "name: 'cpu-scaler'" "type: 'cpu'" "type: 'Utilization'" "value: '60'" "name: 'http-concurrency'" "concurrentRequests: '10'"; do
@@ -75,7 +83,7 @@ grep -q 'name: Restore previous media deployment on failure' "$workflow"
 grep -q 'deployments/${PREVIOUS_MEDIA_DEPLOYMENT}/rollback' "$workflow"
 grep -q 'param memberVideoEnabled bool = false' infra/main.bicep
 grep -q "name: 'asset-recording-validation'" infra/main.bicep
-grep -q 'Dockerfile.scan' "$workflow"
+grep -Fq 'python3 scripts/build-release-images.py' "$workflow"
 trivy_image='ghcr.io/aquasecurity/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969'
 grep -Fq "$trivy_image" .github/workflows/ci.yml
 grep -Fq "$trivy_image" "$workflow"
