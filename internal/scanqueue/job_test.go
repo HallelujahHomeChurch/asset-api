@@ -46,7 +46,7 @@ func TestScanJobAcceptsVerifiedOfficeArchiveMIME(t *testing.T) {
 	repo := &jobRepository{asset: asset}
 	queue := &jobQueue{message: scanMessage(1)}
 	scanner := &jobScanner{}
-	job := NewScanJob(repo, jobBlobs{body: payload}, scanner, queue, "sig-1", 1024, 5, time.Minute)
+	job := NewScanJob(repo, jobBlobs{body: payload}, fixedScanner(scanner), queue, 1024, 5, time.Minute)
 	if _, err := job.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestScanJobRevalidatesCanonicalMediaAndCleansTemporaryFile(t *testing.T) {
 			repo := &jobRepository{asset: asset}
 			queue := &jobQueue{message: scanMessage(1)}
 			scanner := &jobScanner{}
-			job := NewScanJob(repo, jobBlobs{body: test.payload}, scanner, queue, "sig-1", 200<<20, 5, time.Minute)
+			job := NewScanJob(repo, jobBlobs{body: test.payload}, fixedScanner(scanner), queue, 200<<20, 5, time.Minute)
 			if _, err := job.RunOnce(context.Background()); err != nil {
 				t.Fatal(err)
 			}
@@ -108,7 +108,7 @@ func TestScanJobPoisonsCanonicalMediaMismatchWithoutScanning(t *testing.T) {
 			repo := &jobRepository{asset: asset}
 			queue := &jobQueue{message: scanMessage(1)}
 			scanner := &jobScanner{}
-			job := NewScanJob(repo, jobBlobs{body: test.payload}, scanner, queue, "sig-1", 200<<20, 5, time.Minute)
+			job := NewScanJob(repo, jobBlobs{body: test.payload}, fixedScanner(scanner), queue, 200<<20, 5, time.Minute)
 			if _, err := job.RunOnce(context.Background()); err != nil {
 				t.Fatal(err)
 			}
@@ -126,13 +126,14 @@ func TestScanJobTerminalAndRetryFlows(t *testing.T) {
 		asset                          assets.Asset
 		scanErr                        error
 		scanName                       string
+		wantSignature                  string
 		wantStatus                     assets.ScanStatus
 		wantAck, wantRetry, wantPoison bool
 	}{
-		{name: "clean", message: scanMessage(1), asset: queuedAsset(), wantStatus: assets.ScanClean, wantAck: true},
-		{name: "infected", message: scanMessage(1), asset: queuedAsset(), scanErr: clamav.ErrInfected, scanName: "Eicar-Signature", wantStatus: assets.ScanInfected, wantAck: true},
-		{name: "limit", message: scanMessage(1), asset: queuedAsset(), scanErr: clamav.ErrLimitExceeded, scanName: "Heuristics.Limits.Exceeded.MaxFiles", wantStatus: assets.ScanFailed, wantAck: true, wantPoison: true},
-		{name: "encrypted", message: scanMessage(1), asset: queuedAsset(), scanErr: clamav.ErrEncrypted, scanName: "Heuristics.Encrypted.PDF", wantStatus: assets.ScanFailed, wantAck: true, wantPoison: true},
+		{name: "clean", message: scanMessage(1), asset: queuedAsset(), wantSignature: "sig-1", wantStatus: assets.ScanClean, wantAck: true},
+		{name: "infected", message: scanMessage(1), asset: queuedAsset(), scanErr: clamav.ErrInfected, scanName: "Eicar-Signature", wantSignature: "sig-1", wantStatus: assets.ScanInfected, wantAck: true},
+		{name: "limit", message: scanMessage(1), asset: queuedAsset(), scanErr: clamav.ErrLimitExceeded, scanName: "Heuristics.Limits.Exceeded.MaxFiles", wantSignature: "sig-1", wantStatus: assets.ScanFailed, wantAck: true, wantPoison: true},
+		{name: "encrypted", message: scanMessage(1), asset: queuedAsset(), scanErr: clamav.ErrEncrypted, scanName: "Heuristics.Encrypted.PDF", wantSignature: "sig-1", wantStatus: assets.ScanFailed, wantAck: true, wantPoison: true},
 		{name: "transient", message: scanMessage(1), asset: queuedAsset(), scanErr: errors.New("scanner down"), wantRetry: true},
 		{name: "fifth delivery", message: scanMessage(5), asset: attemptedAsset(5), wantStatus: assets.ScanFailed, wantAck: true, wantPoison: true},
 	}
@@ -140,7 +141,7 @@ func TestScanJobTerminalAndRetryFlows(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			repo := &jobRepository{asset: test.asset}
 			queue := &jobQueue{message: test.message}
-			job := NewScanJob(repo, jobBlobs{body: []byte("clean")}, &jobScanner{name: test.scanName, err: test.scanErr}, queue, "sig-1", 100, 5, time.Minute)
+			job := NewScanJob(repo, jobBlobs{body: []byte("clean")}, fixedScanner(&jobScanner{name: test.scanName, err: test.scanErr}), queue, 100, 5, time.Minute)
 			job.now = func() time.Time { return time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC) }
 			if processed, err := job.RunOnce(context.Background()); err != nil || !processed {
 				t.Fatalf("RunOnce = %v %v", processed, err)
@@ -151,7 +152,7 @@ func TestScanJobTerminalAndRetryFlows(t *testing.T) {
 			if queue.acked != test.wantAck || queue.retried != test.wantRetry || queue.poisoned != test.wantPoison {
 				t.Fatalf("queue = ack:%v retry:%v poison:%v", queue.acked, queue.retried, queue.poisoned)
 			}
-			if test.wantStatus != "" && repo.result.Signature != "sig-1" {
+			if repo.result.Signature != test.wantSignature {
 				t.Fatalf("signature = %q", repo.result.Signature)
 			}
 		})
@@ -164,7 +165,7 @@ func TestScanJobAcksDuplicateOrStaleEventWithoutScanning(t *testing.T) {
 	repo := &jobRepository{asset: asset, claimSet: true, claim: false}
 	queue := &jobQueue{message: scanMessage(2)}
 	scanner := &jobScanner{}
-	job := NewScanJob(repo, jobBlobs{body: []byte("clean")}, scanner, queue, "sig-1", 100, 5, time.Minute)
+	job := NewScanJob(repo, jobBlobs{body: []byte("clean")}, fixedScanner(scanner), queue, 100, 5, time.Minute)
 	if _, err := job.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +181,7 @@ func TestScanJobForwardsDurablePoisonAfterPreviousQueueSendFailed(t *testing.T) 
 	asset.ScanFailure = "retry_exhausted"
 	repo := &jobRepository{asset: asset, claimSet: true, claim: false}
 	queue := &jobQueue{message: scanMessage(6)}
-	job := NewScanJob(repo, jobBlobs{}, &jobScanner{}, queue, "sig-1", 100, 5, time.Minute)
+	job := NewScanJob(repo, jobBlobs{}, fixedScanner(&jobScanner{}), queue, 100, 5, time.Minute)
 	if _, err := job.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +192,7 @@ func TestScanJobForwardsDurablePoisonAfterPreviousQueueSendFailed(t *testing.T) 
 
 func TestScanJobPoisonsInvalidPayloadAndIntegrityFailure(t *testing.T) {
 	queue := &jobQueue{message: Message{ID: "m", PopReceipt: "p", Body: `{}`, DequeueCount: 1}}
-	job := NewScanJob(&jobRepository{}, jobBlobs{}, &jobScanner{}, queue, "sig-1", 100, 5, time.Minute)
+	job := NewScanJob(&jobRepository{}, jobBlobs{}, fixedScanner(&jobScanner{}), queue, 100, 5, time.Minute)
 	if _, err := job.RunOnce(context.Background()); err != nil || !queue.poisoned {
 		t.Fatalf("invalid payload: poison=%v err=%v", queue.poisoned, err)
 	}
@@ -200,7 +201,7 @@ func TestScanJobPoisonsInvalidPayloadAndIntegrityFailure(t *testing.T) {
 	asset.ChecksumSHA256 = "wrong"
 	repo := &jobRepository{asset: asset}
 	queue = &jobQueue{message: scanMessage(1)}
-	job = NewScanJob(repo, jobBlobs{body: []byte("clean")}, &jobScanner{}, queue, "sig-1", 100, 5, time.Minute)
+	job = NewScanJob(repo, jobBlobs{body: []byte("clean")}, fixedScanner(&jobScanner{}), queue, 100, 5, time.Minute)
 	if _, err := job.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -318,4 +319,44 @@ func testScanZIP(t *testing.T, names ...string) []byte {
 
 func bmffScan(brand string) []byte {
 	return append([]byte{0, 0, 0, 20}, append([]byte("ftyp"+brand), make([]byte, 8)...)...)
+}
+
+func fixedScanner(scanner FileScanner) func(context.Context) (FileScanner, string, error) {
+	return func(context.Context) (FileScanner, string, error) { return scanner, "sig-1", nil }
+}
+
+func TestScanJobUsesPreparedGenerationForEachClaim(t *testing.T) {
+	repo := &jobRepository{asset: queuedAsset()}
+	queue := &jobQueue{message: scanMessage(1)}
+	scanner := &jobScanner{}
+	version := "first"
+	prepare := func(context.Context) (FileScanner, string, error) { return scanner, version, nil }
+	job := NewScanJob(repo, jobBlobs{body: []byte("clean")}, prepare, queue, 100, 5, time.Minute)
+	for _, next := range []string{"first", "second"} {
+		version, queue.received = next, false
+		if _, err := job.RunOnce(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if repo.result.Status != assets.ScanClean || repo.result.Signature != next {
+			t.Fatalf("wrong prepared generation: %+v", repo.result)
+		}
+	}
+}
+
+func TestScanJobDoesNotDownloadOrScanWhenSignaturePreparationFails(t *testing.T) {
+	for _, failure := range []error{clamav.ErrStaleSignatures, context.Canceled} {
+		t.Run(failure.Error(), func(t *testing.T) {
+			repo := &jobRepository{asset: queuedAsset()}
+			queue := &jobQueue{message: scanMessage(1)}
+			prepare := func(context.Context) (FileScanner, string, error) { return nil, "", failure }
+			// A nil blob store would panic if a download were attempted.
+			job := NewScanJob(repo, nil, prepare, queue, 100, 5, time.Minute)
+			if _, err := job.RunOnce(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if !queue.retried || queue.acked || repo.result.Status != "" || repo.retry == "" {
+				t.Fatalf("unsafe preparation failure: result=%+v queue=%+v", repo.result, queue)
+			}
+		})
+	}
 }

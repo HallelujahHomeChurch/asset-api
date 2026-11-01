@@ -66,42 +66,37 @@ func NewAzureSignatures(accountURL, container string) (*AzureSignatures, error) 
 	return store, nil
 }
 
-func (s *AzureSignatures) PrepareCurrent(ctx context.Context, now time.Time, maxAge time.Duration) (Manifest, string, func(), error) {
+func (s *AzureSignatures) currentManifest(ctx context.Context, now time.Time, maxAge time.Duration) (Manifest, error) {
 	data, err := s.download(ctx, "current.json")
 	if err != nil {
-		return Manifest{}, "", nil, fmt.Errorf("download current signature manifest: %w", err)
+		return Manifest{}, fmt.Errorf("download current signature manifest: %w", err)
 	}
+	return parseManifest(data, now, maxAge)
+}
+
+func (s *AzureSignatures) prepare(ctx context.Context, manifest Manifest) (string, func(), error) {
 	root, err := os.MkdirTemp("", "clamav-signatures-")
 	if err != nil {
-		return Manifest{}, "", nil, err
+		return "", nil, err
 	}
 	cleanup := func() { _ = os.RemoveAll(root) }
-	manifestPath := filepath.Join(root, "manifest.json")
-	if err := os.WriteFile(manifestPath, data, 0o600); err != nil {
-		cleanup()
-		return Manifest{}, "", nil, err
-	}
-	manifest, database, err := LoadManifest(manifestPath, now, maxAge)
-	if err != nil {
-		cleanup()
-		return Manifest{}, "", nil, err
-	}
+	database := filepath.Join(root, filepath.FromSlash(manifest.DatabaseDirectory))
 	if err := os.MkdirAll(database, 0o700); err != nil {
 		cleanup()
-		return Manifest{}, "", nil, err
+		return "", nil, err
 	}
 	for _, file := range manifest.Files {
 		data, err := s.download(ctx, manifest.DatabaseDirectory+"/"+file)
 		if err != nil {
 			cleanup()
-			return Manifest{}, "", nil, fmt.Errorf("download signature %s: %w", file, err)
+			return "", nil, fmt.Errorf("download signature %s: %w", file, err)
 		}
 		if err := os.WriteFile(filepath.Join(database, file), data, 0o600); err != nil {
 			cleanup()
-			return Manifest{}, "", nil, err
+			return "", nil, err
 		}
 	}
-	return manifest, database, cleanup, nil
+	return database, cleanup, nil
 }
 
 func (s *AzureSignatures) Publish(ctx context.Context, localRoot string, manifest Manifest) (Manifest, error) {

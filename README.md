@@ -256,11 +256,23 @@ Release this additive producer before the matching CMS worker consumer.
 After upload completion, the runtime dispatches a durable queue message. The
 queue-scaled `asset-scan-worker` Container App downloads the immutable private
 Blob and scans it with a local ClamAV process and a validated signature
-snapshot. It scales from zero on scan work or a short-lived warm pulse, drains
+snapshot. It scales from zero on scan work or a configured meeting warm window, drains
 the durable scan queue until empty, then returns to zero. Clean
 results enable the existing grant checks; infected, pending, and failed assets
 remain unavailable. Transient failures use bounded retries before becoming
 `failed`.
+Before each claimed scan it rechecks the current signature manifest and its age.
+An unchanged immutable generation reuses local files; a changed generation is
+fully downloaded before the serial worker switches and removes the previous
+cache. Preparation failure refuses that scan and retains the existing retry
+policy. Results record the generation actually prepared for that claim.
+Claim, signature preparation, asset download/validation and scanning share the
+configured `CLAMAV_SCAN_TIMEOUT`. Result/retry/acknowledgement use the remaining
+bounded 30-second reserve within the unchanged timeout-plus-30-second lease.
+A shorter caller deadline remains authoritative. Work deadline expiry refuses
+clean results and records `attempt_timeout` through existing retries; the retry
+delay starts when failed work finishes. A finalization deadline leaves the
+message unacknowledged for normal fenced redelivery.
 
 Clean image uploads enqueue a versioned derivative event. The event-triggered
 Azure derivative Job processes one immutable asset version into stable 480,

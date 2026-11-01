@@ -42,26 +42,34 @@ type MessageQueue interface {
 	ForwardPoison(context.Context, Message, *Event, string, time.Time) error
 }
 
+const scanCommitReserve = 30 * time.Second
+
 type ScanJob struct {
-	repository  AssetRepository
-	blobs       AssetBlobs
-	scanner     FileScanner
-	queue       MessageQueue
-	signature   string
-	maxSize     int64
-	maxAttempts int64
-	lease       time.Duration
-	now         func() time.Time
+	repository     AssetRepository
+	blobs          AssetBlobs
+	prepareScanner func(context.Context) (FileScanner, string, error)
+	queue          MessageQueue
+	maxSize        int64
+	maxAttempts    int64
+	lease          time.Duration
+	now            func() time.Time
 }
 
-func NewScanJob(repository AssetRepository, blobs AssetBlobs, scanner FileScanner, queue MessageQueue, signature string, maxSize int64, maxAttempts int, timeout time.Duration) *ScanJob {
-	return &ScanJob{repository: repository, blobs: blobs, scanner: scanner, queue: queue, signature: signature, maxSize: maxSize, maxAttempts: int64(maxAttempts), lease: timeout + 30*time.Second, now: time.Now}
+func NewScanJob(repository AssetRepository, blobs AssetBlobs, prepareScanner func(context.Context) (FileScanner, string, error), queue MessageQueue, maxSize int64, maxAttempts int, timeout time.Duration) *ScanJob {
+	return &ScanJob{repository: repository, blobs: blobs, prepareScanner: prepareScanner, queue: queue, maxSize: maxSize, maxAttempts: int64(maxAttempts), lease: timeout + scanCommitReserve, now: time.Now}
 }
 
 func (j *ScanJob) RunOnce(ctx context.Context) (bool, error) {
 	message, ok, err := j.queue.Receive(ctx, j.lease)
 	if err != nil || !ok {
 		return false, err
+	}
+	ctx, cancelAttempt := context.WithTimeout(ctx, j.lease)
+	defer cancelAttempt()
+	workCtx, cancelWork := context.WithTimeout(ctx, j.lease-scanCommitReserve)
+	defer cancelWork()
+	if err := ctx.Err(); err != nil {
+		return true, err
 	}
 	now := j.now().UTC()
 	event, err := decodeEvent(message.Body)
@@ -71,7 +79,7 @@ func (j *ScanJob) RunOnce(ctx context.Context) (bool, error) {
 		return true, j.poison(ctx, message, nil, poison, now, false, assets.ScanResult{})
 	}
 	slog.Debug("asset scan dequeued", "asset_id", event.AssetID, "event_id", event.EventID, "dequeue_count", message.DequeueCount)
-	asset, claim, err := j.repository.ClaimAssetScan(ctx, event.EventID, event.AssetID, event.ETag, now, j.lease)
+	asset, claim, err := j.repository.ClaimAssetScan(workCtx, event.EventID, event.AssetID, event.ETag, now, j.lease)
 	if err != nil {
 		return true, err
 	}
@@ -92,20 +100,33 @@ func (j *ScanJob) RunOnce(ctx context.Context) (bool, error) {
 		return true, j.queue.Ack(ctx, message)
 	}
 	if int64(asset.ScanAttempts) >= j.maxAttempts {
-		result := j.result(event, asset, assets.ScanFailed, "scan retry limit reached", "retry_exhausted")
+		result := j.result(event, asset, "", assets.ScanFailed, "scan retry limit reached", "retry_exhausted")
 		poison := poisonRecord(message, &event, "retry_exhausted", result.Details)
 		return true, j.poison(ctx, message, &event, poison, now, true, result)
 	}
 
-	filePath, category, err := j.download(ctx, asset)
+	scanner, signature, err := j.prepareScanner(workCtx)
+	filePath, category := "", "signature_unavailable"
+	if err == nil {
+		err = workCtx.Err()
+	}
+	if err == nil {
+		filePath, category, err = j.download(workCtx, asset)
+	}
 	if filePath != "" {
 		defer os.Remove(filePath)
 	}
 	if err == nil {
+		err = workCtx.Err()
+	}
+	if err == nil {
 		var name string
-		name, err = j.scanner.ScanFile(ctx, filePath)
+		name, err = scanner.ScanFile(workCtx, filePath)
+		if workCtx.Err() != nil {
+			err = workCtx.Err()
+		}
 		if errors.Is(err, clamav.ErrInfected) {
-			result := j.result(event, asset, assets.ScanInfected, name, "malware")
+			result := j.result(event, asset, signature, assets.ScanInfected, name, "malware")
 			if _, applyErr := j.repository.ApplyScanResult(ctx, result, now); applyErr != nil {
 				return true, applyErr
 			}
@@ -117,28 +138,35 @@ func (j *ScanJob) RunOnce(ctx context.Context) (bool, error) {
 			if errors.Is(err, clamav.ErrEncrypted) {
 				category = "encrypted"
 			}
-			result := j.result(event, asset, assets.ScanFailed, name, category)
+			result := j.result(event, asset, signature, assets.ScanFailed, name, category)
 			poison := poisonRecord(message, &event, category, name)
 			return true, j.poison(ctx, message, &event, poison, now, true, result)
 		}
 		category = "scanner_unavailable"
 	}
+	if err := ctx.Err(); err != nil {
+		return true, err
+	}
 	if err == nil {
-		result := j.result(event, asset, assets.ScanClean, "", "")
+		result := j.result(event, asset, signature, assets.ScanClean, "", "")
 		if _, err := j.repository.ApplyScanResult(ctx, result, now); err != nil {
 			return true, err
 		}
 		slog.Info("asset scan completed", "asset_id", asset.ID, "status", assets.ScanClean)
 		return true, j.queue.Ack(ctx, message)
 	}
+	if errors.Is(workCtx.Err(), context.DeadlineExceeded) {
+		category = "attempt_timeout"
+	}
 	details := safeError(err)
 	if category == "integrity" {
-		result := j.result(event, asset, assets.ScanFailed, details, category)
+		result := j.result(event, asset, signature, assets.ScanFailed, details, category)
 		poison := poisonRecord(message, &event, category, details)
 		return true, j.poison(ctx, message, &event, poison, now, true, result)
 	}
 	delay := retryDelay(asset.ScanAttempts)
-	if err := j.repository.ScheduleAssetScanRetry(ctx, asset.ID, asset.ScanAttempts, details, category, now.Add(delay), now); err != nil {
+	retryAt := j.now().UTC()
+	if err := j.repository.ScheduleAssetScanRetry(ctx, asset.ID, asset.ScanAttempts, details, category, retryAt.Add(delay), retryAt); err != nil {
 		return true, err
 	}
 	slog.Warn("asset scan retry scheduled", "asset_id", asset.ID, "category", category, "delay", delay)
@@ -176,8 +204,8 @@ func poisonRecord(message Message, event *Event, reason, details string) assets.
 	return value
 }
 
-func (j *ScanJob) result(event Event, asset assets.Asset, status assets.ScanStatus, details, category string) assets.ScanResult {
-	return assets.ScanResult{EventID: event.EventID, AssetID: asset.ID, Status: status, Details: details, Signature: j.signature, FailureCategory: category, ETag: asset.ETag, ExpectedAttempt: asset.ScanAttempts}
+func (j *ScanJob) result(event Event, asset assets.Asset, signature string, status assets.ScanStatus, details, category string) assets.ScanResult {
+	return assets.ScanResult{EventID: event.EventID, AssetID: asset.ID, Status: status, Details: details, Signature: signature, FailureCategory: category, ETag: asset.ETag, ExpectedAttempt: asset.ScanAttempts}
 }
 
 func (j *ScanJob) download(ctx context.Context, asset assets.Asset) (string, string, error) {
