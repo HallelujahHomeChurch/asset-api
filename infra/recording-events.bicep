@@ -12,8 +12,8 @@ param secrets array
 param processingEnv array
 param r2Env array
 param enabled bool = false
-@allowed([2, 4])
-param liveCPU int = 4
+@allowed(['1.5', '2', '4'])
+param liveCPU string = '4'
 @allowed([2, 4])
 param processingCPU int = 2
 @allowed([1, 4])
@@ -70,8 +70,8 @@ resource jobs 'Microsoft.App/jobs@2025-07-01' = [for lane in lanes: {
     image: image
     env: concat(jobEnv,[{name:'ASSET_RECORDING_WORKER_MODE',value:lane}])
     resources: {
-     cpu: lane=='live' ? json(string(liveCPU)) : lane=='processing' ? json(string(processingCPU)) : json(string(previewCPU))
-     memory: lane=='preview' && previewCPU==1 ? '2Gi' : (lane=='live' && liveCPU==2) || (lane=='processing' && processingCPU==2) ? '4Gi' : '8Gi'
+     cpu: lane=='live' ? json(liveCPU) : lane=='processing' ? json(string(processingCPU)) : json(string(previewCPU))
+     memory: lane=='live' && liveCPU=='1.5' ? '3Gi' : lane=='preview' && previewCPU==1 ? '2Gi' : (lane=='live' && liveCPU=='2') || (lane=='processing' && processingCPU==2) ? '4Gi' : '8Gi'
     }
    }]
   }
