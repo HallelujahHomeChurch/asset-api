@@ -10,7 +10,7 @@ grep -Fq 'maxExecutions: 1' infra/recording-events.bicep
 grep -Fq "cronExpression: '17 * * * *'" infra/recording-events.bicep
 grep -Fq 'processingCPU' infra/recording-events.bicep
 grep -Fq "? '4Gi' : '8Gi'" infra/recording-events.bicep
-grep -Fq "json('0.5')" infra/recording-events.bicep
+grep -Fq "json('0.25')" infra/recording-events.bicep
 grep -Fq 'verify-recording-jobs.sh' .github/workflows/release.yml
 
 bash scripts/validate-recording-event-rollout.sh
