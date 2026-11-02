@@ -90,8 +90,8 @@ import os, sys
 args = sys.argv
 name = args[args.index('-n')+1]
 query = args[args.index('--query')+1]
-cpu = {'live': float(os.environ['ACTUAL_LIVE_CPU']), 'processing': 2, 'preview': 1, 'maintenance': .5}.get(name.removeprefix('asset-recording-'), 4)
-memory = {4:'8Gi', 2:'4Gi', 1.5:'3Gi', 1:'2Gi', .5:'1Gi'}[cpu]
+cpu = {'live': float(os.environ['ACTUAL_LIVE_CPU']), 'processing': 2, 'preview': 1, 'maintenance': .25}.get(name.removeprefix('asset-recording-'), 4)
+memory = {4:'8Gi', 2:'4Gi', 1.5:'3Gi', 1:'2Gi', .5:'1Gi', .25:'0.5Gi'}[cpu]
 values = {'properties.configuration.triggerType': 'Schedule' if name.endswith('maintenance') else 'Manual' if name.endswith('validation') else 'Event',
 'properties.template.containers[0].image': 'fixture@sha256:abc',
 'properties.template.containers[0].resources.cpu': cpu,

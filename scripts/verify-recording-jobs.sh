@@ -31,6 +31,6 @@ if [[ "${RECORDING_EVENTS_PROVISIONED:-false}" == true ]]; then
  if [[ "$expected" == Schedule ]]; then
   [[ "$(get asset-recording-maintenance properties.configuration.scheduleTriggerConfig.cronExpression)" == '17 * * * *' ]]
  fi
- [[ "$(get asset-recording-maintenance 'properties.template.containers[0].resources.cpu')" == 0.5 ]]
- [[ "$(get asset-recording-maintenance 'properties.template.containers[0].resources.memory')" == 1Gi ]]
+ [[ "$(get asset-recording-maintenance 'properties.template.containers[0].resources.cpu')" == 0.25 ]]
+ [[ "$(get asset-recording-maintenance 'properties.template.containers[0].resources.memory')" == 0.5Gi ]]
 fi

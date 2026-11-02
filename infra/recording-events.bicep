@@ -98,7 +98,7 @@ resource maintenance 'Microsoft.App/jobs@2025-07-01' = {
    name:'recording-maintenance'
    image:image
    env:concat(jobEnv,[{name:'ASSET_RECORDING_WORKER_MODE',value:'maintenance'}])
-   resources:{cpu:json('0.5'),memory:'1Gi'}
+   resources:{cpu:json('0.25'),memory:'0.5Gi'}
   }]}
  }
 }
