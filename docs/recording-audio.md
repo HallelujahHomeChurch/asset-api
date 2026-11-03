@@ -46,10 +46,52 @@ CPU/wall time and output bytes before proposing a production backfill budget.
 The existing two slots are a global cap, not permission to consume both during
 live workloads.
 
-No historical apply/enqueue command is delivered in this slice. A separately
-reviewed bounded idempotent backfill operation and concrete production preview
-must receive explicit approval before any historical scheduling. Do not use SQL
-mass inserts or table defaults to bypass this gate.
+### Approved bounded enqueue
+
+After root has received explicit production approval for the current count/cost
+preview, use the same accepted released immutable migration image and existing
+Job execution-only override with `/asset-migrate --recording-audio-apply --recording-audio-limit=1` for an approved one-package pilot.
+The optional limit defaults to 100 and accepts only integers 1..100; specify the
+approved maximum explicitly. It is valid only with apply, never plan or normal
+schema migration. The database repository independently enforces this bound.
+After measuring actual pilot bytes, CPU/wall time and higher-priority media
+impact, obtain a fresh plan and approval for the remaining bounded budget.
+Neither audio flag runs schema migrations; specifying both flags, unknown flags
+or positional arguments fails closed. Never execute apply merely to obtain a
+preview, and never use an unmerged local binary against production.
+
+One invocation inserts at most the requested limit (never above 100) pending
+rows in one transaction. Output for a default-limit batch is
+`{"enqueued":100,"remaining":{"packages":150,"inputBytes":...,"segments":...,"durationSeconds":...}}`.
+These numbers illustrate a synthetic 250-candidate fixture, not production data.
+Each candidate must still be ready, unexpired, undeleted, unrevoked, have a valid
+immutable source prefix/digest and have no audio state. Existing pending,
+processing, ready and failed rows are all untouched. This tool does not retry
+failed derivatives or replace completed output.
+
+Explicit batch commands serialize with each other; each candidate acquires the
+existing owner-authority fence before its package row. Eligibility and source
+identity are rechecked after waiting, preventing a concurrent revoke, delete,
+expiry or source change from crossing the preview/insert boundary. An enqueue transaction
+error rolls back the whole batch. If commit succeeds but the remaining-plan query
+or response fails, existing rows remain excluded and the primary key prevents
+duplication, but another apply can enqueue the NEXT batch. Do not blindly retry
+a lost response: inspect execution evidence and obtain a fresh plan, then
+confirm the remaining approved budget before issuing another apply. The limit
+is per invocation, not a cumulative campaign cap or a retry idempotency key.
+
+Run one batch, inspect its aggregate result and existing live/validation backlog,
+and obtain a fresh plan before continuing within the approved budget. Do not
+loop automatically or create a new schedule. Stop when a fresh plan reports zero;
+a zero inserted batch alone may reflect concurrently changed candidates.
+Apply only enqueues into the existing preview lane: no media job is directly
+started and the existing two-slot cap, video priority and three-attempt policy
+remain unchanged. No new infrastructure or permanent Job config is required.
+
+A rollback may keep queued rows while old video playback remains available;
+do not delete state or clear failures to force processing. Retain the producer
+and Worker contract until consumers no longer depend on audio. No production
+apply was performed as part of implementation or local validation.
 
 ## Consumer contract and verification
 
@@ -68,3 +110,31 @@ falling through the broadcast raw-capture video rewrite. MPEG-TS responses use
 Local synthetic media, PostgreSQL and Worker tests do not prove production
 integration, browser background behavior or physical iOS/Android continuity.
 Those remain controlled release and consumer/device acceptance gates.
+
+## Pilot measurement
+
+A claim emits `recording_audio_claim` and `recording_audio_claim_exit` with
+`claim_id`, `recording_id` and elapsed milliseconds. The exit reports
+`finish_committed` and `ready`; only a committed ready result establishes
+successful publication. `recording_audio_generate` reports elapsed time,
+`success`, `input_bytes`, `output_bytes` and successful `segments` even when
+processing partially fails. Generate success alone is not ready publication.
+
+Input bytes are actual `io.Copy` counts into local processing, including each
+repeated init read. Output bytes count successful segment/playlist PUT payloads;
+failed or ambiguous PUTs and the final pointer are excluded. These are logical
+application bytes, not SDK retry traffic, wire bytes or billing receipts. The
+logs contain no media URL, object key, raw error or credentials. Sum separate
+claim attempts for actual retry costs; do not add overlapping durations to infer
+wall time. Per-claim CPU is not recorded. Existing Azure execution CPU/network
+metrics may provide coarse corroboration, but include startup/cleanup and other
+work and are not per-claim CPU or object billing proof.
+
+For an approved single pilot, retain the one apply execution's numeric result
+and correlate subsequent audio claim/generate/exit events by claim ID and their
+ContainerGroupName/execution. Verify the committed-ready event and current
+member authorization before sharing the matching recording's public canonical
+URL. Never share grant credentials, private object paths or session URLs.
+If concurrent new-ready work makes the selected historical recording ambiguous,
+use existing authorized read-only metadata to resolve it; do not infer identity
+from time proximity alone. No production configuration changes are required.
