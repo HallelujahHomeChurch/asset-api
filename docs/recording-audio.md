@@ -46,10 +46,43 @@ CPU/wall time and output bytes before proposing a production backfill budget.
 The existing two slots are a global cap, not permission to consume both during
 live workloads.
 
-No historical apply/enqueue command is delivered in this slice. A separately
-reviewed bounded idempotent backfill operation and concrete production preview
-must receive explicit approval before any historical scheduling. Do not use SQL
-mass inserts or table defaults to bypass this gate.
+### Approved bounded enqueue
+
+After root has received explicit production approval for the current count/cost
+preview, use the same accepted released immutable migration image and existing
+Job execution-only override with `/asset-migrate --recording-audio-apply`.
+Neither audio flag runs schema migrations; specifying both flags, unknown flags
+or positional arguments fails closed. Never execute apply merely to obtain a
+preview, and never use an unmerged local binary against production.
+
+One invocation inserts at most 100 pending rows in one transaction. Output is
+`{"enqueued":100,"remaining":{"packages":150,"inputBytes":...,"segments":...,"durationSeconds":...}}`.
+These numbers illustrate a synthetic 250-candidate fixture, not production data.
+Each candidate must still be ready, unexpired, undeleted, unrevoked, have a valid
+immutable source prefix/digest and have no audio state. Existing pending,
+processing, ready and failed rows are all untouched. This tool does not retry
+failed derivatives or replace completed output.
+
+Explicit batch commands serialize with each other; each candidate acquires the
+existing owner-authority fence before its package row. Eligibility and source
+identity are rechecked after waiting, preventing a concurrent revoke, delete,
+expiry or source change from crossing the preview/insert boundary. An enqueue transaction
+error rolls back the whole batch. If commit succeeds but the remaining-plan query
+or response fails, a retry is safe: existing rows are excluded and the primary
+key also prevents duplication. A lost successful response is safe to repeat.
+
+Run one batch, inspect its aggregate result and existing live/validation backlog,
+and obtain a fresh plan before continuing within the approved budget. Do not
+loop automatically or create a new schedule. Stop when a fresh plan reports zero;
+a zero inserted batch alone may reflect concurrently changed candidates.
+Apply only enqueues into the existing preview lane: no media job is directly
+started and the existing two-slot cap, video priority and three-attempt policy
+remain unchanged. No new infrastructure or permanent Job config is required.
+
+A rollback may keep queued rows while old video playback remains available;
+do not delete state or clear failures to force processing. Retain the producer
+and Worker contract until consumers no longer depend on audio. No production
+apply was performed as part of implementation or local validation.
 
 ## Consumer contract and verification
 

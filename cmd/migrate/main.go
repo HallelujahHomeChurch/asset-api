@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"hhc/asset-api/internal/postgres"
+	"io"
 	"log/slog"
 	"os"
 	"strings"
@@ -18,8 +20,11 @@ import (
 )
 
 func main() {
-	audioPlan := flag.Bool("recording-audio-plan", false, "read-only historical audio count/cost inputs; no migrations or enqueue")
-	flag.Parse()
+	operation, err := parseOperation(os.Args[1:])
+	if err != nil {
+		slog.Error("invalid operation", "error", err)
+		os.Exit(2)
+	}
 	if err := logging.Init(); err != nil {
 		slog.Error("invalid logging configuration", "error", err)
 		os.Exit(1)
@@ -38,13 +43,29 @@ func main() {
 	db.SetMaxOpenConns(1)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if *audioPlan {
-		plan, err := postgres.NewRecordingPackageStore(db).PlanRecordingAudio(ctx)
+	if operation == "plan" || operation == "apply" {
+		store := postgres.NewRecordingPackageStore(db)
+		var enqueued int64
+		if operation == "apply" {
+			enqueued, err = store.EnqueueRecordingAudio(ctx)
+			if err != nil {
+				slog.Error("audio enqueue failed", "error", err)
+				os.Exit(1)
+			}
+		}
+		plan, err := store.PlanRecordingAudio(ctx)
 		if err != nil {
 			slog.Error("audio plan failed", "error", err)
 			os.Exit(1)
 		}
-		if err := json.NewEncoder(os.Stdout).Encode(plan); err != nil {
+		var output any = plan
+		if operation == "apply" {
+			output = struct {
+				Enqueued  int64                       `json:"enqueued"`
+				Remaining postgres.RecordingAudioPlan `json:"remaining"`
+			}{enqueued, plan}
+		}
+		if err := json.NewEncoder(os.Stdout).Encode(output); err != nil {
 			os.Exit(1)
 		}
 		return
@@ -54,4 +75,24 @@ func main() {
 		os.Exit(1)
 	}
 	slog.Info("migrations complete")
+}
+
+func parseOperation(args []string) (string, error) {
+	flags := flag.NewFlagSet("asset-migrate", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	plan := flags.Bool("recording-audio-plan", false, "read-only historical audio count/cost inputs; no migrations or enqueue")
+	apply := flags.Bool("recording-audio-apply", false, "enqueue at most 100 eligible historical packages; requires approved plan; no migrations")
+	if err := flags.Parse(args); err != nil {
+		return "", err
+	}
+	if flags.NArg() != 0 || flags.NFlag() > 1 || len(args) > 0 && !*plan && !*apply {
+		return "", fmt.Errorf("select only one audio operation and no positional arguments")
+	}
+	if *plan {
+		return "plan", nil
+	}
+	if *apply {
+		return "apply", nil
+	}
+	return "", nil
 }
