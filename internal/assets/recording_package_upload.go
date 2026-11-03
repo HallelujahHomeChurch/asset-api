@@ -11,6 +11,7 @@ import (
 )
 
 type RecordingPackage struct {
+	Audio              *RecordingAudio              `json:"audio,omitempty"`
 	ID                 string                       `json:"packageId"`
 	SessionID          string                       `json:"sessionId"`
 	OwnerService       string                       `json:"-"`
@@ -42,6 +43,7 @@ type CreateRecordingPackageInput struct {
 }
 
 type RecordingPackageStatus struct {
+	Audio              *RecordingAudio              `json:"audio,omitempty"`
 	ProcessingProgress *RecordingProcessingProgress `json:"processingProgress,omitempty"`
 	PackageID          string                       `json:"packageId"`
 	SessionID          string                       `json:"sessionId"`
@@ -273,7 +275,7 @@ func (s *RecordingPackageService) Status(ctx context.Context, id, actor, cursor 
 		start = index + 1
 	}
 	end := min(start+limit, len(objects))
-	page := RecordingPackageStatus{ProcessingProgress: p.ProcessingProgress, PackageID: p.ID, SessionID: p.SessionID, RecordingID: p.RecordingID, State: p.State, SizeBytes: p.SizeBytes, ExpiresAt: p.ExpiresAt, ConfirmedObjects: []string{}}
+	page := RecordingPackageStatus{Audio: p.Audio, ProcessingProgress: p.ProcessingProgress, PackageID: p.ID, SessionID: p.SessionID, RecordingID: p.RecordingID, State: p.State, SizeBytes: p.SizeBytes, ExpiresAt: p.ExpiresAt, ConfirmedObjects: []string{}}
 	page.ReadyAt, page.MediaExpiresAt = p.ReadyAt, p.MediaExpiresAt
 	page.UploadedAt, page.RetentionRevision = p.UploadedAt, p.RetentionRevision
 	if p.State == "ready" {

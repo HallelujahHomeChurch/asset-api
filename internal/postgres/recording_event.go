@@ -30,7 +30,7 @@ func (s *RecordingEventStore) workReady(ctx context.Context, lane string) (bool,
 			query = `SELECT 1 WHERE EXISTS (` + sourceWakeCandidate + `) OR EXISTS (` + query + `) OR EXISTS (SELECT 1 FROM recording_sources WHERE state IN ('finalizing','queued','processing') AND processing_attempts=3 AND claimed_until<=now())`
 		}
 	case "preview":
-		query = `SELECT 1 WHERE EXISTS (` + coverWakeCandidate + `) OR EXISTS (` + previewWakeCandidate + `) OR EXISTS (SELECT 1 FROM recording_covers WHERE state='processing' AND attempts=3 AND claimed_until<=now()) OR EXISTS (SELECT 1 FROM recording_packages WHERE preview_state='processing' AND preview_attempts=3 AND preview_claimed_until<=now())`
+		query = `SELECT 1 WHERE EXISTS (` + audioWakeCandidate + `) OR EXISTS(SELECT 1 FROM recording_audio WHERE state='processing' AND attempts=3 AND claimed_until<=now()) OR EXISTS (` + coverWakeCandidate + `) OR EXISTS (` + previewWakeCandidate + `) OR EXISTS (SELECT 1 FROM recording_covers WHERE state='processing' AND attempts=3 AND claimed_until<=now()) OR EXISTS (SELECT 1 FROM recording_packages WHERE preview_state='processing' AND preview_attempts=3 AND preview_claimed_until<=now())`
 	default:
 		return false, assets.ErrInvalidInput
 	}

@@ -499,6 +499,43 @@ datasets:
     legal_basis: {status: pending_legal, reference: null}
     retention: {status: pending_legal, rule: null, action: none}
     cleanup: {mode: none, implementation: [], evidence: []}
+  - id: asset.recording-audio
+    owner: asset-api
+    purpose: Fence versioned optional AAC derivatives to immutable package bytes without changing original video availability.
+    necessity: required
+    storage: {kind: postgres, resource: recording_audio, sources: [{path: internal/postgres/recording_audio.go, symbol: RecordingPackageStore.ClaimPackageAudio}]}
+    subject_keys: []
+    data_classes: [security, activity]
+    fields:
+      - {name: recording_audio.package_id, purpose: Bind and fence optional derivative processing and cleanup, necessity: required, data_classes: [security, activity]}
+      - {name: recording_audio.version, purpose: Bind and fence optional derivative processing and cleanup, necessity: required, data_classes: [security, activity]}
+      - {name: recording_audio.source_prefix, purpose: Bind and fence optional derivative processing and cleanup, necessity: required, data_classes: [security, activity]}
+      - {name: recording_audio.source_digest, purpose: Bind and fence optional derivative processing and cleanup, necessity: required, data_classes: [security, activity]}
+      - {name: recording_audio.state, purpose: Bind and fence optional derivative processing and cleanup, necessity: required, data_classes: [security, activity]}
+      - {name: recording_audio.attempts, purpose: Bind and fence optional derivative processing and cleanup, necessity: required, data_classes: [security, activity]}
+      - {name: recording_audio.claim_id, purpose: Bind and fence optional derivative processing and cleanup, necessity: required, data_classes: [security, activity]}
+      - {name: recording_audio.claimed_until, purpose: Bind and fence optional derivative processing and cleanup, necessity: required, data_classes: [security, activity]}
+      - {name: recording_audio.next_attempt_at, purpose: Bind and fence optional derivative processing and cleanup, necessity: required, data_classes: [security, activity]}
+      - {name: recording_audio.created_at, purpose: Bind and fence optional derivative processing and cleanup, necessity: required, data_classes: [security, activity]}
+    attribution: {mode: manual, explanation: Package actor provenance does not identify video participants; source identities and claims bind private derivatives to the original package.}
+    legal_basis: {status: pending_legal, reference: null}
+    retention: {status: pending_legal, rule: null, action: none}
+    cleanup: {mode: none, implementation: [], evidence: []}
+  - id: asset.recording-audio-attempts
+    owner: asset-api
+    purpose: Retain bounded audio attempt prefixes for expiry cleanup and ambiguous publication recovery.
+    necessity: required
+    storage: {kind: postgres, resource: recording_audio_attempts, sources: [{path: internal/postgres/recording_audio.go, symbol: RecordingPackageStore.ClaimPackageAudio}]}
+    subject_keys: []
+    data_classes: [security, activity]
+    fields:
+      - {name: recording_audio_attempts.claim_id, purpose: Bind and fence optional derivative processing and cleanup, necessity: required, data_classes: [security, activity]}
+      - {name: recording_audio_attempts.package_id, purpose: Bind and fence optional derivative processing and cleanup, necessity: required, data_classes: [security, activity]}
+      - {name: recording_audio_attempts.created_at, purpose: Bind and fence optional derivative processing and cleanup, necessity: required, data_classes: [security, activity]}
+    attribution: {mode: manual, explanation: Package actor provenance does not identify video participants; source identities and claims bind private derivatives to the original package.}
+    legal_basis: {status: pending_legal, reference: null}
+    retention: {status: pending_legal, rule: null, action: none}
+    cleanup: {mode: none, implementation: [], evidence: []}
   - id: asset.account-artifact-content
     owner: asset-api
     purpose: Store Account avatar Blob bytes; physically delete them idempotently only after Store.ClaimPurge finds an eligible asset.

@@ -38,13 +38,14 @@ func (s *RecordingPackageStore) WithBroadcastObjects(objects assets.RecordingBro
 }
 
 const recordingPackageColumns = `id,session_id,owner_service,actor_id,recording_id,idempotency_key,state,size_bytes,created_at,expires_at,inventory`
-const recordingPackageSelectColumns = recordingPackageColumns + `,COALESCE(final_prefix,''),ready_at,media_expires_at,completed_at,retention_revision,processing_progress`
+const recordingPackageSelectColumns = recordingPackageColumns + `,COALESCE(final_prefix,''),ready_at,media_expires_at,completed_at,retention_revision,processing_progress,(SELECT jsonb_build_object('version',a.version,'state',a.state,'playlistPath',CASE WHEN a.state='ready' THEN 'audio/aac-hls-v1/index.m3u8' ELSE '' END) FROM recording_audio a WHERE a.package_id=recording_packages.id AND recording_packages.state='ready' AND recording_packages.media_expires_at>clock_timestamp())`
 
 func scanRecordingPackage(row *sql.Row) (assets.RecordingPackage, error) {
 	var p assets.RecordingPackage
 	var inventory []byte
 	var progress []byte
-	err := row.Scan(&p.ID, &p.SessionID, &p.OwnerService, &p.ActorID, &p.RecordingID, &p.IdempotencyKey, &p.State, &p.SizeBytes, &p.CreatedAt, &p.ExpiresAt, &inventory, &p.FinalPrefix, &p.ReadyAt, &p.MediaExpiresAt, &p.UploadedAt, &p.RetentionRevision, &progress)
+	var audio []byte
+	err := row.Scan(&p.ID, &p.SessionID, &p.OwnerService, &p.ActorID, &p.RecordingID, &p.IdempotencyKey, &p.State, &p.SizeBytes, &p.CreatedAt, &p.ExpiresAt, &inventory, &p.FinalPrefix, &p.ReadyAt, &p.MediaExpiresAt, &p.UploadedAt, &p.RetentionRevision, &progress, &audio)
 	if errors.Is(err, sql.ErrNoRows) {
 		return p, assets.ErrNotFound
 	}
@@ -53,6 +54,11 @@ func scanRecordingPackage(row *sql.Row) (assets.RecordingPackage, error) {
 	}
 	if err := json.Unmarshal(inventory, &p.Inventory); err != nil {
 		return p, err
+	}
+	if len(audio) > 0 {
+		if err := json.Unmarshal(audio, &p.Audio); err != nil {
+			return p, err
+		}
 	}
 	p.ProcessingProgress, err = decodeRecordingProgress(progress)
 	return p, err
@@ -244,6 +250,9 @@ func (s *RecordingPackageStore) FinishPackageValidation(ctx context.Context, id,
 		if ready {
 			prefix := "recordings/packages/" + id + "/final/" + claimID + "/"
 			if _, err := tx.ExecContext(ctx, `UPDATE recording_packages SET state='ready',final_prefix=$2,ready_at=now(),media_expires_at=(SELECT CASE WHEN activated_at IS NULL THEN now()+interval '30 days' ELSE completed_at+(retention_days*interval '24 hours') END FROM recording_retention_policy WHERE singleton),retention_revision=(SELECT revision FROM recording_retention_policy WHERE singleton),claim_id=NULL,claimed_until=NULL,validation_error=NULL,cleanup_after=now() WHERE id=$1`, id, prefix); err != nil {
+				return err
+			}
+			if err := enqueueRecordingAudio(ctx, tx, id); err != nil {
 				return err
 			}
 			if _, err := tx.ExecContext(ctx, `INSERT INTO recording_covers(id,package_id,recording_id,actor_id,idempotency_key,kind,state,expires_at) SELECT $2,id,recording_id,actor_id,'auto','auto','pending',media_expires_at FROM recording_packages WHERE id=$1 ON CONFLICT DO NOTHING`, id, newStoreID()); err != nil {

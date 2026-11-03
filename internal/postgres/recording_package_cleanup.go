@@ -166,6 +166,50 @@ func (s *RecordingPackageStore) CleanupPackage(ctx context.Context, id string, d
 				return err
 			}
 		}
+
+		// Keep bounded attempts through grant grace, including ambiguous pointer
+		// publication, then repeat the declared-key sweep to catch late writes.
+		if gracePassed && p.FinalPrefix != "" {
+			rows, err := conn.QueryContext(ctx, `SELECT claim_id FROM recording_audio_attempts WHERE package_id=$1`, id)
+			if err != nil {
+				return err
+			}
+			var attempts []string
+			for rows.Next() {
+				var claim string
+				if err := rows.Scan(&claim); err != nil {
+					rows.Close()
+					return err
+				}
+				attempts = append(attempts, claim)
+			}
+			err = rows.Err()
+			rows.Close()
+			if err != nil {
+				return err
+			}
+			for _, claim := range attempts {
+				prefix := p.FinalPrefix + "audio/aac-hls-v1/" + claim + "/"
+				keys := []string{prefix + "index.m3u8"}
+				for i := 0; i < p.Inventory.Renditions[0].SegmentCount; i++ {
+					keys = append(keys, fmt.Sprintf("%sseg-%06d.ts", prefix, i))
+					if len(keys) == 1000 {
+						if err := deleteObjects(ctx, keys); err != nil {
+							return err
+						}
+						keys = nil
+					}
+				}
+				if len(keys) > 0 {
+					if err := deleteObjects(ctx, keys); err != nil {
+						return err
+					}
+				}
+			}
+			if err := deleteObjects(ctx, []string{p.FinalPrefix + "audio/aac-hls-v1/current.json"}); err != nil {
+				return err
+			}
+		}
 		// ponytail: daily declared-key sweep retains metadata; add bounded metadata
 		// compaction only after retention policy and provider late-write bounds agree.
 		_, err = conn.ExecContext(ctx, `UPDATE recording_packages SET cleanup_after=CASE WHEN state='expired' AND GREATEST(media_expires_at+interval '1 hour',grant_cleanup_after)>clock_timestamp() THEN GREATEST(media_expires_at+interval '1 hour',grant_cleanup_after) ELSE clock_timestamp()+interval '24 hours' END WHERE id=$1`, id)

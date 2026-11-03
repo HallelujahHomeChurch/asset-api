@@ -803,3 +803,22 @@ the listing to preserve late-write sweeps. `recording_cleanup_inventory` reports
 only object/page counts and elapsed time. Source-attempt and cover cleanup retain
 their existing paths. Listings stop after 100 pages per prefix and never extend
 the existing cleanup deadline.
+
+## Optional recording audio
+
+Ready transitions enqueue a bounded `aac-hls-v1` derivative independently of video
+publication. The recording preview lane uses existing fenced processing slots,
+finite retries and validated immutable package fragments; it copies AAC-LC into
+MPEG-TS HLS without re-encoding. Original package inventory/media is unchanged.
+
+The private package status has optional `audio: {version, state, playlistPath?}`.
+Only ready audio exposes the exact relative `audio/aac-hls-v1/index.m3u8` path.
+Member-media accepts that playlist and exact `seg-NNNNNN.ts` children under the
+existing package/session cookie. One-hour grant limits, broadcast ranges,
+revocation and per-request authorization before cache reads remain unchanged.
+Audio is VOD-only; consumers must omit activation until producer release/smoke.
+
+Migration049 creates empty state/attempt tables. It does not enqueue old ready
+packages. The released migration executable's `--recording-audio-plan` flag
+performs counts and input-byte/duration/segment estimates only, without running
+schema migrations or scheduling work. See [audio operations](docs/recording-audio.md).
