@@ -254,6 +254,12 @@ func processRecording(ctx context.Context, mode string, db *sql.DB, objects *r2.
 			return errors.Join(cleanupErr, previewErr)
 		}
 	}
+	if mode == "legacy" || mode == "preview" {
+		processed, audioErr := recordingvalidation.RunPackageAudio(ctx, packages, objects, probe)
+		if processed || audioErr != nil {
+			return errors.Join(cleanupErr, audioErr)
+		}
+	}
 	if mode == "preview" {
 		return cleanupErr
 	}

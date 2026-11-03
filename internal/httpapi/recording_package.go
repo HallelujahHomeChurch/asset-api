@@ -133,7 +133,7 @@ func (h *Handler) getReadyRecordingPackage(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	w.Header().Set("Cache-Control", "private, no-store")
-	writeJSON(w, http.StatusOK, assets.RecordingPackageStatus{PackageID: p.ID, SessionID: p.SessionID, RecordingID: p.RecordingID, State: p.State, SizeBytes: p.SizeBytes, ExpiresAt: p.ExpiresAt, ReadyAt: p.ReadyAt, MediaExpiresAt: p.MediaExpiresAt, UploadedAt: p.UploadedAt, RetentionRevision: p.RetentionRevision, Renditions: p.Inventory.Renditions, ConfirmedObjects: []string{}})
+	writeJSON(w, http.StatusOK, assets.RecordingPackageStatus{Audio: p.Audio, PackageID: p.ID, SessionID: p.SessionID, RecordingID: p.RecordingID, State: p.State, SizeBytes: p.SizeBytes, ExpiresAt: p.ExpiresAt, ReadyAt: p.ReadyAt, MediaExpiresAt: p.MediaExpiresAt, UploadedAt: p.UploadedAt, RetentionRevision: p.RetentionRevision, Renditions: p.Inventory.Renditions, ConfirmedObjects: []string{}})
 }
 
 func (h *Handler) signRecordingPackage(w http.ResponseWriter, r *http.Request) {

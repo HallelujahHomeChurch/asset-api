@@ -28,6 +28,8 @@ var operationalColumnExclusions = map[string]string{
 }
 
 var governedTables = map[string]bool{
+	"recording_audio":                  true,
+	"recording_audio_attempts":         true,
 	"recording_broadcast_ranges":       true,
 	"recording_live_covers":            true,
 	"recording_live_cover_references":  true,
@@ -79,6 +81,7 @@ func TestDataGovernanceManifest(t *testing.T) {
 		"asset.recording-sources", "asset.recording-source-attempts",
 		"asset.recording-packages",
 		"asset.recording-processing-slots", "asset.recording-package-attempts", "asset.recording-live-previews", "asset.recording-preview-attempts",
+		"asset.recording-audio", "asset.recording-audio-attempts",
 		"asset.account-artifact-content", "asset.account-artifact-metadata", "asset.account-upload-sessions",
 		"asset.account-grants", "asset.account-scan-and-derivative-state", "asset.account-poison-events", "asset.account-purge-lifecycle",
 		"asset.account-cleanup-receipts",
@@ -273,6 +276,7 @@ func migratedColumns(t *testing.T) (map[string]struct{}, map[string]bool) {
 		t.Fatal(err)
 	}
 	tableNames := []string{
+		"recording_audio", "recording_audio_attempts",
 		"recording_broadcast_ranges",
 		"recording_live_covers", "recording_live_cover_references", "recording_live_cover_attempts",
 		"recording_retention_policy", "recording_retention_previews",

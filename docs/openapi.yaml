@@ -3580,11 +3580,20 @@ components:
         retentionDays: {type: integer, minimum: 1, maximum: 365}
         expectedRevision: {type: integer, format: int64, minimum: 1}
         previewId: {type: string, minLength: 1}
+    RecordingAudio:
+      type: object
+      additionalProperties: false
+      required: [version, state]
+      properties:
+        version: {type: string, enum: [aac-hls-v1]}
+        state: {type: string, enum: [pending, processing, ready, failed]}
+        playlistPath: {type: string, enum: [audio/aac-hls-v1/index.m3u8], description: Relative to the existing authenticated package session; present only when ready.}
     RecordingPackage:
       type: object
       additionalProperties: false
       required: [packageId, sessionId, recordingId, state, sizeBytes, createdAt, expiresAt, inventory]
       properties:
+        audio: {$ref: '#/components/schemas/RecordingAudio'}
         packageId: { type: string }
         sessionId: { type: string, description: Same identifier as packageId; one immutable inventory per upload session. }
         recordingId: { type: string }
@@ -3602,6 +3611,7 @@ components:
       additionalProperties: false
       required: [packageId, sessionId, recordingId, state, sizeBytes, expiresAt, confirmedObjects, nextCursor]
       properties:
+        audio: {$ref: '#/components/schemas/RecordingAudio'}
         processingProgress: {$ref: '#/components/schemas/RecordingProcessingProgress'}
         packageId: { type: string }
         sessionId: { type: string }

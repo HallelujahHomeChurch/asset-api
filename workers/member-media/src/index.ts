@@ -36,7 +36,7 @@ type Claims = {
 };
 
 const cookieName = 'hhc_media';
-const packageRoute = /^\/videos\/([a-zA-Z0-9-]{1,80})\/packages\/([a-f0-9]{32})\/sessions\/([a-zA-Z0-9-]{1,80})\/(cookie|master\.m3u8|previews\/(?:index\.vtt|seg-\d{6}\.jpg)|(?:480p|720p|1080p)\/(?:index\.m3u8|init\.mp4|seg-\d{6}\.m4s))$/;
+const packageRoute = /^\/videos\/([a-zA-Z0-9-]{1,80})\/packages\/([a-f0-9]{32})\/sessions\/([a-zA-Z0-9-]{1,80})\/(cookie|audio\/aac-hls-v1\/(?:index\.m3u8|seg-\d{6}\.ts)|master\.m3u8|previews\/(?:index\.vtt|seg-\d{6}\.jpg)|(?:480p|720p|1080p)\/(?:index\.m3u8|init\.mp4|seg-\d{6}\.m4s))$/;
 const finalPrefix = /^recordings\/packages\/([a-f0-9]{32})\/final\/[a-zA-Z0-9-]{1,80}\/$/;
 const liveRoute = /^\/videos\/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\/captures\/([a-f0-9]{32})\/sessions\/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\/(cookie|master\.m3u8|previews\/(?:index\.vtt|seg-\d{6}\.jpg)|(?:480p|720p|1080p)\/(?:index\.m3u8|init\.mp4|seg-\d{6}\.m4s))$/;
 const previewRoute = new RegExp(liveRoute.source.replace('sessions', 'previews'));
@@ -72,22 +72,23 @@ async function broadcastPolicy(env: Env, capture: string): Promise<BroadcastPoli
   return p;
 }
 
-function playlistSegments(raw: string): {sequence: number; duration: number}[] {
+function playlistSegments(raw: string, audio = false): {sequence: number; duration: number}[] {
   if (!raw.startsWith('#EXTM3U\n')) throw new Error('Invalid playlist');
-  const segments = [...raw.matchAll(/#EXTINF:(\d+(?:\.\d+)?),\nseg-(\d{6})\.m4s\n/g)].map(m => ({duration:Number(m[1]),sequence:Number(m[2])}));
+  const pattern = audio ? /#EXTINF:(\d+(?:\.\d+)?),\nseg-(\d{6})\.ts\n/g : /#EXTINF:(\d+(?:\.\d+)?),\nseg-(\d{6})\.m4s\n/g;
+  const segments = [...raw.matchAll(pattern)].map(m => ({duration:Number(m[1]),sequence:Number(m[2])}));
   if (!segments.length || segments.length > 4320 || segments.some((s,i) => s.sequence !== i || s.duration <= 0 || s.duration > 31)) throw new Error('Invalid playlist timeline');
   return segments;
 }
 
-function projectPlaylist(raw: string, policy: BroadcastPolicy): string {
-  const segments = playlistSegments(raw);
+function projectPlaylist(raw: string, policy: BroadcastPolicy, audio = false): string {
+  const segments = playlistSegments(raw, audio);
   const start = policy.startSequence!; const end = Math.min(policy.endSequenceExclusive ?? segments.length, segments.length);
   if (start >= end) throw new Error('Unverified broadcast range');
   const ended = policy.endSequenceExclusive !== null && policy.endSequenceExclusive <= segments.length;
   const target = Number(raw.match(/^#EXT-X-TARGETDURATION:(\d+)$/m)?.[1]);
   if (!Number.isInteger(target) || target < 1 || target > 31 || segments.some(s => Math.round(s.duration) > target)) throw new Error("Invalid target duration");
-  let out = `#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:${target}\n#EXT-X-MEDIA-SEQUENCE:${start}\n#EXT-X-PLAYLIST-TYPE:${ended ? 'VOD' : 'EVENT'}\n#EXT-X-MAP:URI="init.mp4"\n`;
-  for (const segment of segments.slice(start,end)) out += `#EXTINF:${segment.duration.toFixed(6)},\nseg-${String(segment.sequence).padStart(6,'0')}.m4s\n`;
+  let out = `#EXTM3U\n#EXT-X-VERSION:${audio ? 3 : 7}\n#EXT-X-TARGETDURATION:${target}\n#EXT-X-MEDIA-SEQUENCE:${start}\n#EXT-X-PLAYLIST-TYPE:${ended ? 'VOD' : 'EVENT'}\n${audio ? '' : '#EXT-X-MAP:URI="init.mp4"\n'}`;
+  for (const segment of segments.slice(start,end)) out += `#EXTINF:${segment.duration.toFixed(6)},\nseg-${String(segment.sequence).padStart(6,'0')}.${audio ? 'ts' : 'm4s'}\n`;
   if (ended) out += '#EXT-X-ENDLIST\n';
   return out;
 }
@@ -265,15 +266,30 @@ async function handle(request: Request, env: Env, ctx?: ExecutionContext): Promi
         !live && policy.memberState !== 'vod' || playback.purpose !== 'member' ||
         !Number.isSafeInteger(playback.rangeRevision) || playback.rangeRevision! < 1 ||
         playback.rangeRevision! > policy.rangeRevision || policy.startSequence === null)) return failure(403);
-    const segment = /seg-(\d{6})\.(?:m4s|jpg)$/.exec(match[4]);
+    const segment = /seg-(\d{6})\.(?:m4s|jpg|ts)$/.exec(match[4]);
     if (!preview && segment && (Number(segment[1]) < policy.startSequence! || policy.endSequenceExclusive !== null && Number(segment[1]) >= policy.endSequenceExclusive)) return failure(404);
   }
+  const audio = match[4].startsWith('audio/aac-hls-v1/');
   let objectKey = playback.prefix! + match[4];
-  if (live || policy) {
+  if (audio) {
+    const raw = await boundedText(env, playback.prefix! + 'audio/aac-hls-v1/current.json', 128);
+    if (raw === null) return failure(404);
+    const pointer = JSON.parse(raw);
+    if (!pointer || Object.keys(pointer).join(',') !== 'attempt' || typeof pointer.attempt !== 'string' || !/^[a-zA-Z0-9-]{1,80}$/.test(pointer.attempt)) return failure(503);
+    objectKey = playback.prefix! + 'audio/aac-hls-v1/' + pointer.attempt + '/' + match[4].slice('audio/aac-hls-v1/'.length);
+    if (policy && match[4].endsWith('.m3u8')) {
+      const playlist = await boundedText(env, objectKey, 1 << 20);
+      if (playlist === null) return failure(404);
+      const body = projectPlaylist(playlist, policy, true);
+      const response = new Response(request.method === 'HEAD' ? null : body, {headers: {'Cache-Control':'private, no-store','Content-Type':'application/vnd.apple.mpegurl','X-Content-Type-Options':'nosniff'}});
+      return origin ? withCors(response, origin) : response;
+    }
+  }
+  if (!audio && (live || policy)) {
     const rawPrefix = policy ? `recordings/captures/${ids[1]}/final/` : playback.prefix!;
     const pointer = await livePointer(env, rawPrefix);
     if (!pointer) return failure(404);
-    const sequence = /seg-(\d{6})\.(?:m4s|jpg)$/.exec(match[4]);
+    const sequence = /seg-(\d{6})\.(?:m4s|jpg|ts)$/.exec(match[4]);
     if (sequence && Number(sequence[1]) > pointer.lastSequence) return failure(404);
     if (policy && !preview && policy.startSequence! > pointer.lastSequence) return failure(503);
     if (!match[4].startsWith('previews/')) objectKey = rawPrefix + match[4];
@@ -336,7 +352,7 @@ async function handle(request: Request, env: Env, ctx?: ExecutionContext): Promi
   const object = await env.MEDIA_BUCKET.head(objectKey);
   if (!object) return failure(404);
   if (!Number.isSafeInteger(object.size) || object.size <= 0 || object.size > (match[4].endsWith('.vtt') ? 2 << 20 : match[4].endsWith('.m3u8') || match[4].startsWith('previews/') ? 1 << 20 : 128 << 20)) return failure(503);
-  const mime = match[4].endsWith('.vtt') ? 'text/vtt' : match[4].endsWith('.jpg') ? 'image/jpeg' : match[4].endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : match[4].endsWith('.m4s') ? 'video/iso.segment' : 'video/mp4';
+  const mime = audio && match[4].endsWith('.ts') ? 'video/mp2t' : match[4].endsWith('.vtt') ? 'text/vtt' : match[4].endsWith('.jpg') ? 'image/jpeg' : match[4].endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : match[4].endsWith('.m4s') ? 'video/iso.segment' : 'video/mp4';
   const headers = new Headers({ 'Cache-Control': 'private, no-store', 'Content-Type': mime, 'X-Content-Type-Options': 'nosniff', 'Accept-Ranges': 'bytes', ETag: object.httpEtag });
   if (request.headers.get('If-None-Match') === object.httpEtag) {
     const response = new Response(null, { status: 304, headers });
