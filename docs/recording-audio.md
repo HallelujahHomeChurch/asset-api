@@ -110,3 +110,31 @@ falling through the broadcast raw-capture video rewrite. MPEG-TS responses use
 Local synthetic media, PostgreSQL and Worker tests do not prove production
 integration, browser background behavior or physical iOS/Android continuity.
 Those remain controlled release and consumer/device acceptance gates.
+
+## Pilot measurement
+
+A claim emits `recording_audio_claim` and `recording_audio_claim_exit` with
+`claim_id`, `recording_id` and elapsed milliseconds. The exit reports
+`finish_committed` and `ready`; only a committed ready result establishes
+successful publication. `recording_audio_generate` reports elapsed time,
+`success`, `input_bytes`, `output_bytes` and successful `segments` even when
+processing partially fails. Generate success alone is not ready publication.
+
+Input bytes are actual `io.Copy` counts into local processing, including each
+repeated init read. Output bytes count successful segment/playlist PUT payloads;
+failed or ambiguous PUTs and the final pointer are excluded. These are logical
+application bytes, not SDK retry traffic, wire bytes or billing receipts. The
+logs contain no media URL, object key, raw error or credentials. Sum separate
+claim attempts for actual retry costs; do not add overlapping durations to infer
+wall time. Per-claim CPU is not recorded. Existing Azure execution CPU/network
+metrics may provide coarse corroboration, but include startup/cleanup and other
+work and are not per-claim CPU or object billing proof.
+
+For an approved single pilot, retain the one apply execution's numeric result
+and correlate subsequent audio claim/generate/exit events by claim ID and their
+ContainerGroupName/execution. Verify the committed-ready event and current
+member authorization before sharing the matching recording's public canonical
+URL. Never share grant credentials, private object paths or session URLs.
+If concurrent new-ready work makes the selected historical recording ambiguous,
+use existing authorized read-only metadata to resolve it; do not infer identity
+from time proximity alone. No production configuration changes are required.

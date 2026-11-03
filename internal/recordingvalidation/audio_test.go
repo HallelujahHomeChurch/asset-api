@@ -1,10 +1,14 @@
 package recordingvalidation
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"hhc/asset-api/internal/assets"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +23,11 @@ func TestAudioRemuxPreservesTimelineWithoutSourceUpload(t *testing.T) {
 	}
 }
 func testAudioRemux(t *testing.T, seconds int) {
+	var logs bytes.Buffer
+	originalLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	defer slog.SetDefault(originalLogger)
+
 	ffmpeg, err := exec.LookPath("ffmpeg")
 	if err != nil {
 		if os.Getenv("HHC_REQUIRE_MEDIA_TESTS") == "1" {
@@ -71,6 +80,15 @@ func testAudioRemux(t *testing.T, seconds int) {
 		t.Fatal(err)
 	}
 	prefix := pkg.FinalPrefix + "audio/aac-hls-v1/attempt/"
+	var inputBytes, outputBytes int64
+	for i := 0; i < segments; i++ {
+		inputBytes += int64(len(objects.bytes[pkg.FinalPrefix+"720p/init.mp4"]) + len(objects.bytes[pkg.FinalPrefix+fmt.Sprintf("720p/seg-%06d.m4s", i)]))
+	}
+	for _, data := range writes {
+		outputBytes += int64(len(data))
+	}
+	assertAudioLog(t, logs.Bytes(), pkg.RecordingID, true, inputBytes, outputBytes, segments)
+
 	if len(writes) != segments+1 || !strings.Contains(string(writes[prefix+"index.m3u8"]), fmt.Sprintf("seg-%06d.ts\n#EXT-X-ENDLIST", segments-1)) {
 		t.Fatal("incomplete audio manifest")
 	}
@@ -101,8 +119,49 @@ func testAudioRemux(t *testing.T, seconds int) {
 	if output, err := exec.Command(ffmpeg, "-nostdin", "-v", "error", "-xerror", "-protocol_whitelist", "file,crypto,data", "-i", filepath.Join(hlsDir, "index.m3u8"), "-map", "0:a:0", "-f", "null", "-").CombinedOutput(); err != nil {
 		t.Fatalf("complete audio HLS decode: %v %s", err, output)
 	}
+
+	logs.Reset()
+	puts := 0
+	var firstOutput int64
+	err = probe.GenerateAudio(context.Background(), pkg, "attempt", func(_ context.Context, _ string, data []byte) error {
+		puts++
+		if puts == 2 {
+			return errors.New("https://private.invalid/key?token=do-not-log")
+		}
+		firstOutput = int64(len(data))
+		return nil
+	})
+	if err == nil || puts != 2 {
+		t.Fatalf("expected second PUT failure: %d %v", puts, err)
+	}
+	partialInput := int64(2*len(objects.bytes[pkg.FinalPrefix+"720p/init.mp4"]) + len(objects.bytes[pkg.FinalPrefix+"720p/seg-000000.m4s"]) + len(objects.bytes[pkg.FinalPrefix+"720p/seg-000001.m4s"]))
+	assertAudioLog(t, logs.Bytes(), pkg.RecordingID, false, partialInput, firstOutput, 1)
 	objects.bytes[pkg.FinalPrefix+"720p/seg-000000.m4s"][0] ^= 1
 	if err := probe.GenerateAudio(context.Background(), pkg, "corrupt", func(context.Context, string, []byte) error { t.Fatal("published corrupted source"); return nil }); err == nil {
 		t.Fatal("accepted source hash mismatch")
+	}
+}
+
+func assertAudioLog(t *testing.T, data []byte, recordingID string, success bool, input, output int64, segments int) {
+	t.Helper()
+	var entry map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(data), &entry); err != nil {
+		t.Fatal(err)
+	}
+	if entry["msg"] != "recording_audio_generate" || entry["claim_id"] != "attempt" || entry["recording_id"] != recordingID || entry["success"] != success || entry["input_bytes"] != float64(input) || entry["output_bytes"] != float64(output) || entry["segments"] != float64(segments) {
+		t.Fatalf("unexpected aggregate log: %v", entry)
+	}
+	if ms, ok := entry["elapsed_ms"].(float64); !ok || ms < 0 {
+		t.Fatal("missing elapsed time")
+	}
+	for key := range entry {
+		switch key {
+		case "time", "level", "msg", "claim_id", "recording_id", "input_bytes", "output_bytes", "segments", "elapsed_ms", "success":
+		default:
+			t.Fatalf("unexpected log field %s", key)
+		}
+	}
+	if bytes.Contains(data, []byte("private.invalid")) || bytes.Contains(data, []byte("do-not-log")) || bytes.Contains(data, []byte("recordings/packages/")) {
+		t.Fatal("sensitive media data leaked into log")
 	}
 }

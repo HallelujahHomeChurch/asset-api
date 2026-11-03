@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"os"
 	"os/exec"
@@ -67,6 +68,15 @@ func audioBounds(data []byte) (float64, float64, error) {
 // GenerateAudio losslessly remuxes validated AAC into bounded MPEG-TS fragments.
 // Original sequence numbers and packet timestamps preserve broadcast range fences.
 func (p PackageMediaProbe) GenerateAudio(ctx context.Context, pkg assets.RecordingPackage, attempt string, put func(context.Context, string, []byte) error) (result error) {
+	started := time.Now()
+	var inputBytes, outputBytes int64
+	var segments int
+	defer func() {
+		slog.Info("recording_audio_generate", "claim_id", attempt, "recording_id", pkg.RecordingID,
+			"input_bytes", inputBytes, "output_bytes", outputBytes, "segments", segments,
+			"elapsed_ms", time.Since(started).Milliseconds(), "success", result == nil)
+	}()
+
 	if p.Objects == nil || !filepath.IsAbs(p.FFmpeg) || !filepath.IsAbs(p.FFprobe) || pkg.State != "ready" || !packageIDPattern.MatchString(attempt) || (!audioSourcePrefix.MatchString(pkg.FinalPrefix) || !strings.HasPrefix(pkg.FinalPrefix, "recordings/packages/"+pkg.ID+"/final/")) || put == nil {
 		return assets.ErrInvalidInput
 	}
@@ -121,6 +131,7 @@ func (p PackageMediaProbe) GenerateAudio(ctx context.Context, pkg assets.Recordi
 				}
 				hash := sha256.New()
 				n, e := io.Copy(io.MultiWriter(f, hash), io.LimitReader(body, o.SizeBytes+1))
+				inputBytes += n
 				e = errors.Join(e, body.Close())
 				if e != nil {
 					return e
@@ -178,6 +189,8 @@ func (p PackageMediaProbe) GenerateAudio(ctx context.Context, pkg assets.Recordi
 		if err := put(ctx, prefix+name, payload); err != nil {
 			return err
 		}
+		outputBytes += int64(len(payload))
+		segments++
 		fmt.Fprintf(&playlist, "#EXTINF:%.6f,\n%s\n", end-start, name)
 	}
 	// Permit only the AAC frame rounding already present in the source package.
@@ -185,5 +198,9 @@ func (p PackageMediaProbe) GenerateAudio(ctx context.Context, pkg assets.Recordi
 		return assets.ErrInvalidUpload
 	}
 	playlist.WriteString("#EXT-X-ENDLIST\n")
-	return put(ctx, prefix+"index.m3u8", []byte(playlist.String()))
+	if err := put(ctx, prefix+"index.m3u8", []byte(playlist.String())); err != nil {
+		return err
+	}
+	outputBytes += int64(playlist.Len())
+	return nil
 }
