@@ -8,7 +8,7 @@ uploads are unnecessary: only the ready immutable package is read.
 
 A claim snapshots source final prefix and inventory digest. Publication and
 heartbeats recheck source identity, package readiness/expiry, deletion tombstone
-and revocation under slot/package locks. Output lives below the package final
+and revocation under the existing recording-owner authority fence before slot/package locks. This serializes publication with SetBroadcastRange and deletion without reversing their lock order. Output lives below the package final
 prefix in `audio/aac-hls-v1/{attempt}/`; a create-only `current.json` commits the
 first complete attempt. The public session route never accepts attempt IDs or
 pointers. Video readiness does not depend on the optional derivative.
@@ -41,7 +41,7 @@ It excludes expired/deleted/revoked and already scheduled packages. Input bytes
 sum the lowest-bitrate rendition init and fragments, not all video renditions.
 No package IDs, URLs or object keys are printed. To estimate retry cost, account
 for three attempts and repeated init reads per segment; output nominal AAC
-payload is about57.6 MB/hour at128 kbps, plus measured TS overhead. Measure actual
+payload is about57.6 MB/hour at128 kbps, plus measured TS overhead. A31.2-second synthetic sample produced630552 TS bytes with standard0.7-second mux buffering versus822124 bytes with zero buffering; timestamps remained unchanged. This small artificial sample is not production capacity evidence. Measure actual
 CPU/wall time and output bytes before proposing a production backfill budget.
 The existing two slots are a global cap, not permission to consume both during
 live workloads.

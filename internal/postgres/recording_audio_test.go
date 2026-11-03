@@ -3,9 +3,13 @@ package postgres
 import (
 	"context"
 	"errors"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 	"hhc/asset-api/internal/assets"
 	"hhc/asset-api/internal/migrations"
+	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -156,5 +160,109 @@ func TestRecordingAudioRetryBudgetAndSourceFence(t *testing.T) {
 	got, err := store.Get(ctx, p.ID)
 	if err != nil || got.State != "ready" || got.Audio.State != "failed" || got.Audio.PlaylistPath != "" {
 		t.Fatalf("video affected or failed audio playable %+v %v", got, err)
+	}
+}
+
+func TestRecordingAudioPublicationSerializesBroadcastRevocation(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	db, captures, objects, c, policy := broadcastRevocationFixture(t)
+	packages := NewRecordingPackageStore(db)
+	p := testRecordingPackage(t, c.ID, c.ActorID, "audio-publication-fixture")
+	if err := packages.Create(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := packages.Freeze(ctx, p.ID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	claim, err := packages.ClaimPackageValidation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := packages.FinishPackageValidation(ctx, p.ID, claim.ClaimID, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE recording_packages SET recording_id=$2 WHERE id=$1`, p.ID, c.RecordingID); err != nil {
+		t.Fatal(err)
+	}
+	claim, err = packages.ClaimPackageAudio(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema string
+	if err := db.QueryRowContext(ctx, `SELECT current_schema()`).Scan(&schema); err != nil {
+		t.Fatal(err)
+	}
+	config, err := pgx.ParseConfig(os.Getenv("TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.RuntimeParams["search_path"] = schema
+	revokeDB := stdlib.OpenDB(*config)
+	defer revokeDB.Close()
+	revokeDB.SetMaxOpenConns(1)
+	var pid int
+	if err := revokeDB.QueryRowContext(ctx, `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
+		t.Fatal(err)
+	}
+	revoker := NewRecordingCaptureStore(revokeDB).WithBroadcastObjects(objects)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	defer unblock()
+	published, revoked := make(chan error, 1), make(chan error, 1)
+	go func() {
+		published <- packages.FinishPackageAudio(ctx, p.ID, claim.ClaimID, true, func(ctx context.Context) error {
+			close(entered)
+			select {
+			case <-release:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		})
+	}()
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	policy.RangeRevision++
+	policy.Revoked = true
+	policy.MemberState = "blocked"
+	go func() { _, err := revoker.SetBroadcastRange(ctx, c.ID, policy); revoked <- err }()
+	for {
+		var waiting bool
+		if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid=$1 AND wait_event_type='Lock' AND wait_event='advisory')`, pid).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting {
+			break
+		}
+		select {
+		case err := <-revoked:
+			t.Fatalf("revoke crossed publication fence: %v", err)
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(time.Millisecond * 10):
+		}
+	}
+	unblock()
+	if err := <-published; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-revoked; err != nil {
+		t.Fatal(err)
+	}
+	got, err := captures.GetBroadcastRange(ctx, c.ID)
+	if err != nil || !got.Revoked {
+		t.Fatalf("revocation not converged %+v %v", got, err)
+	}
+	// The opposite ordering denies publication before its callback can run.
+	if _, err := db.Exec(`UPDATE recording_audio SET state='pending',next_attempt_at=now(),attempts=0 WHERE package_id=$1`, p.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := packages.ClaimPackageAudio(ctx); !errors.Is(err, assets.ErrNotFound) {
+		t.Fatalf("revoked parent claimed: %v", err)
 	}
 }

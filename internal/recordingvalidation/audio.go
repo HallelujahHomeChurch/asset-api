@@ -135,7 +135,7 @@ func (p PackageMediaProbe) GenerateAudio(ctx context.Context, pkg assets.Recordi
 			return err
 		}
 		segmentCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-		err = exec.CommandContext(segmentCtx, p.FFmpeg, "-nostdin", "-y", "-v", "error", "-xerror", "-protocol_whitelist", "file", "-enable_drefs", "0", "-use_absolute_path", "0", "-copyts", "-i", input, "-map", "0:a:0", "-vn", "-c:a", "copy", "-mpegts_copyts", "1", "-muxdelay", "0", "-fs", strconv.Itoa(audioMaxBytes), "-f", "mpegts", output).Run()
+		err = exec.CommandContext(segmentCtx, p.FFmpeg, "-nostdin", "-y", "-v", "error", "-xerror", "-protocol_whitelist", "file", "-enable_drefs", "0", "-use_absolute_path", "0", "-copyts", "-i", input, "-map", "0:a:0", "-vn", "-c:a", "copy", "-mpegts_copyts", "1", "-muxdelay", "0.7", "-fs", strconv.Itoa(audioMaxBytes), "-f", "mpegts", output).Run()
 		if err != nil {
 			cancel()
 			return err

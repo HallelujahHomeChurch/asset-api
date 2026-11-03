@@ -56,3 +56,11 @@ test('cached audio still checks revocation and epoch before any cache access',as
  f.setPolicy({...f.policy,memberState:'blocked'});assert.equal((await f.get(audio+'index.m3u8')).status,403);
  }finally{globalThis.caches=previous}
 });
+
+test('ordinary uploaded VOD audio uses the same session without broadcast policy',async()=>{
+ const f=await fixture();f.setPolicy(null);
+ const token=await f.sign({...f.claims,broadcastEpoch:undefined,rangeRevision:undefined,purpose:undefined});
+ const response=await f.get(audio+'index.m3u8',token);assert.equal(response.status,200);assert.ok((await response.text()).includes('seg-000000.ts'));
+ assert.equal((await f.get(audio+'seg-000000.ts',token)).status,200);
+ assert.equal((await f.get(audio+'seg-000000.ts',f.token)).status,503);
+});

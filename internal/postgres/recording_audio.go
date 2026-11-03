@@ -67,6 +67,18 @@ func (s *RecordingPackageStore) audioTransaction(ctx context.Context, id, claim 
 		return err
 	}
 	defer tx.Rollback()
+	// Match revocation/deletion: owner authority precedes every slot/package lock.
+	// The identity is immutable; recheck parent eligibility after acquiring the fence.
+	var recordingID string
+	if err := tx.QueryRowContext(ctx, `SELECT recording_id FROM recording_packages WHERE id=$1`, id).Scan(&recordingID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return assets.ErrConflict
+		}
+		return err
+	}
+	if err := checkRecordingNotDeleted(ctx, tx, recordingID); err != nil {
+		return err
+	}
 	var slot int
 	err = tx.QueryRowContext(ctx, `SELECT slot FROM recording_processing_slots WHERE job_id=$1 AND claim_id=$2 AND leased_until>clock_timestamp() FOR UPDATE`, id, claim).Scan(&slot)
 	if errors.Is(err, sql.ErrNoRows) {
