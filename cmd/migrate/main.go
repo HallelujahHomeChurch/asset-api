@@ -20,7 +20,7 @@ import (
 )
 
 func main() {
-	operation, err := parseOperation(os.Args[1:])
+	operation, limit, err := parseOperation(os.Args[1:])
 	if err != nil {
 		slog.Error("invalid operation", "error", err)
 		os.Exit(2)
@@ -47,7 +47,7 @@ func main() {
 		store := postgres.NewRecordingPackageStore(db)
 		var enqueued int64
 		if operation == "apply" {
-			enqueued, err = store.EnqueueRecordingAudio(ctx)
+			enqueued, err = store.EnqueueRecordingAudio(ctx, limit)
 			if err != nil {
 				slog.Error("audio enqueue failed", "error", err)
 				os.Exit(1)
@@ -77,22 +77,34 @@ func main() {
 	slog.Info("migrations complete")
 }
 
-func parseOperation(args []string) (string, error) {
+func parseOperation(args []string) (string, int, error) {
 	flags := flag.NewFlagSet("asset-migrate", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	plan := flags.Bool("recording-audio-plan", false, "read-only historical audio count/cost inputs; no migrations or enqueue")
 	apply := flags.Bool("recording-audio-apply", false, "enqueue at most 100 eligible historical packages; requires approved plan; no migrations")
+	limit := flags.Int("recording-audio-limit", 100, "maximum packages in this approved apply batch (1..100); apply only")
 	if err := flags.Parse(args); err != nil {
-		return "", err
+		return "", 0, err
 	}
-	if flags.NArg() != 0 || flags.NFlag() > 1 || len(args) > 0 && !*plan && !*apply {
-		return "", fmt.Errorf("select only one audio operation and no positional arguments")
+	var hasPlan, hasApply, hasLimit bool
+	flags.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "recording-audio-plan":
+			hasPlan = true
+		case "recording-audio-apply":
+			hasApply = true
+		case "recording-audio-limit":
+			hasLimit = true
+		}
+	})
+	if flags.NArg() != 0 || hasPlan && hasApply || len(args) > 0 && !*plan && !*apply || hasLimit && !*apply || *limit < 1 || *limit > 100 {
+		return "", 0, fmt.Errorf("select one audio operation with no positional arguments; audio limit requires apply and must be 1..100")
 	}
 	if *plan {
-		return "plan", nil
+		return "plan", *limit, nil
 	}
 	if *apply {
-		return "apply", nil
+		return "apply", *limit, nil
 	}
-	return "", nil
+	return "", *limit, nil
 }

@@ -50,12 +50,18 @@ live workloads.
 
 After root has received explicit production approval for the current count/cost
 preview, use the same accepted released immutable migration image and existing
-Job execution-only override with `/asset-migrate --recording-audio-apply`.
+Job execution-only override with `/asset-migrate --recording-audio-apply --recording-audio-limit=1` for an approved one-package pilot.
+The optional limit defaults to 100 and accepts only integers 1..100; specify the
+approved maximum explicitly. It is valid only with apply, never plan or normal
+schema migration. The database repository independently enforces this bound.
+After measuring actual pilot bytes, CPU/wall time and higher-priority media
+impact, obtain a fresh plan and approval for the remaining bounded budget.
 Neither audio flag runs schema migrations; specifying both flags, unknown flags
 or positional arguments fails closed. Never execute apply merely to obtain a
 preview, and never use an unmerged local binary against production.
 
-One invocation inserts at most 100 pending rows in one transaction. Output is
+One invocation inserts at most the requested limit (never above 100) pending
+rows in one transaction. Output for a default-limit batch is
 `{"enqueued":100,"remaining":{"packages":150,"inputBytes":...,"segments":...,"durationSeconds":...}}`.
 These numbers illustrate a synthetic 250-candidate fixture, not production data.
 Each candidate must still be ready, unexpired, undeleted, unrevoked, have a valid
@@ -68,8 +74,11 @@ existing owner-authority fence before its package row. Eligibility and source
 identity are rechecked after waiting, preventing a concurrent revoke, delete,
 expiry or source change from crossing the preview/insert boundary. An enqueue transaction
 error rolls back the whole batch. If commit succeeds but the remaining-plan query
-or response fails, a retry is safe: existing rows are excluded and the primary
-key also prevents duplication. A lost successful response is safe to repeat.
+or response fails, existing rows remain excluded and the primary key prevents
+duplication, but another apply can enqueue the NEXT batch. Do not blindly retry
+a lost response: inspect execution evidence and obtain a fresh plan, then
+confirm the remaining approved budget before issuing another apply. The limit
+is per invocation, not a cumulative campaign cap or a retry idempotency key.
 
 Run one batch, inspect its aggregate result and existing live/validation backlog,
 and obtain a fresh plan before continuing within the approved budget. Do not

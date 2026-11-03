@@ -42,7 +42,7 @@ func TestAudioEnqueueBoundedResumablePreservesExistingStates(t *testing.T) {
 		t.Fatal(before, err)
 	}
 	for _, want := range []int64{100, 100, 50, 0} {
-		n, err := store.EnqueueRecordingAudio(ctx)
+		n, err := store.EnqueueRecordingAudio(ctx, 100)
 		if err != nil || n != want {
 			t.Fatalf("enqueue=%d want=%d error=%v", n, want, err)
 		}
@@ -73,7 +73,7 @@ func TestAudioEnqueueConcurrentBatchesDoNotDuplicate(t *testing.T) {
 	}
 	done := make(chan result, 2)
 	for range 2 {
-		go func() { n, err := store.EnqueueRecordingAudio(ctx); done <- result{n, err} }()
+		go func() { n, err := store.EnqueueRecordingAudio(ctx, 100); done <- result{n, err} }()
 	}
 	for range 2 {
 		r := <-done
@@ -85,7 +85,7 @@ func TestAudioEnqueueConcurrentBatchesDoNotDuplicate(t *testing.T) {
 	if err != nil || plan.Packages != 1 {
 		t.Fatal(plan, err)
 	}
-	n, err := store.EnqueueRecordingAudio(ctx)
+	n, err := store.EnqueueRecordingAudio(ctx, 100)
 	if err != nil || n != 1 {
 		t.Fatal(n, err)
 	}
@@ -112,7 +112,7 @@ func TestAudioEnqueueRejectsExpiredDeletedAndInvalidSources(t *testing.T) {
 	if err != nil || plan.Packages != 1 {
 		t.Fatal(plan, err)
 	}
-	n, err := store.EnqueueRecordingAudio(ctx)
+	n, err := store.EnqueueRecordingAudio(ctx, 100)
 	if err != nil || n != 1 {
 		t.Fatal(n, err)
 	}
@@ -136,7 +136,7 @@ func TestAudioEnqueueRechecksExpiryAfterPackageLock(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() {
-		n, err := store.EnqueueRecordingAudio(ctx)
+		n, err := store.EnqueueRecordingAudio(ctx, 100)
 		if err == nil && n != 0 {
 			err = fmt.Errorf("expired candidate enqueued: %d", n)
 		}
@@ -196,7 +196,7 @@ func TestAudioEnqueueRechecksRevocationAfterAuthorityFence(t *testing.T) {
 		t.Fatal(ctx.Err())
 	}
 	go func() {
-		n, err := NewRecordingPackageStore(db).EnqueueRecordingAudio(ctx)
+		n, err := NewRecordingPackageStore(db).EnqueueRecordingAudio(ctx, 100)
 		if err == nil && n != 0 {
 			err = fmt.Errorf("revoked candidate enqueued: %d", n)
 		}
@@ -228,5 +228,30 @@ func TestAudioEnqueueRechecksRevocationAfterAuthorityFence(t *testing.T) {
 	plan, err := NewRecordingPackageStore(db).PlanRecordingAudio(ctx)
 	if err != nil || plan.Packages != 0 {
 		t.Fatal(plan, err)
+	}
+}
+
+func TestAudioEnqueueSmallBatchAndInvalidLimit(t *testing.T) {
+	ctx := context.Background()
+	for _, limit := range []int{-1, 0, 101} {
+		if n, err := NewRecordingPackageStore(nil).EnqueueRecordingAudio(ctx, limit); err == nil || n != 0 {
+			t.Fatalf("invalid limit %d: %d %v", limit, n, err)
+		}
+	}
+	db := isolatedIntegrationDB(t)
+	if err := migrations.Run(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	store := NewRecordingPackageStore(db)
+	seedHistoricalAudio(t, db, "pilot-", 3)
+	for _, remaining := range []int64{2, 1, 0} {
+		n, err := store.EnqueueRecordingAudio(ctx, 1)
+		if err != nil || n != 1 {
+			t.Fatalf("pilot enqueue=%d error=%v", n, err)
+		}
+		plan, err := store.PlanRecordingAudio(ctx)
+		if err != nil || plan.Packages != remaining {
+			t.Fatal(plan, err)
+		}
 	}
 }

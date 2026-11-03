@@ -822,6 +822,7 @@ Migration049 creates empty state/attempt tables. It does not enqueue old ready
 packages. The released migration executable's `--recording-audio-plan` flag
 performs counts and input-byte/duration/segment estimates only, without running
 schema migrations or scheduling work. After explicit approval of that preview,
-`--recording-audio-apply` enqueues at most 100 eligible historical packages per
+`--recording-audio-apply --recording-audio-limit=1` can enqueue an approved
+one-package pilot. The apply-only limit accepts 1..100 (default 100) packages per
 invocation without resetting any existing audio state. Neither flag implicitly
 runs migrations. See [audio operations](docs/recording-audio.md).

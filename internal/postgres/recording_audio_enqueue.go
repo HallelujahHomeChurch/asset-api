@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"fmt"
 )
 
 const audioEnqueueEligible = `p.owner_service='hhc-web-api' AND p.state='ready' AND p.ready_at IS NOT NULL AND p.media_expires_at>clock_timestamp()
@@ -14,7 +15,10 @@ const audioEnqueueEligible = `p.owner_service='hhc-web-api' AND p.state='ready' 
 
 // EnqueueRecordingAudio schedules one bounded batch without resetting any state.
 // The owner fence precedes package locks, matching deletion and revocation.
-func (s *RecordingPackageStore) EnqueueRecordingAudio(ctx context.Context) (int64, error) {
+func (s *RecordingPackageStore) EnqueueRecordingAudio(ctx context.Context, limit int) (int64, error) {
+	if limit < 1 || limit > 100 {
+		return 0, fmt.Errorf("audio enqueue limit must be 1..100")
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
@@ -24,7 +28,7 @@ func (s *RecordingPackageStore) EnqueueRecordingAudio(ctx context.Context) (int6
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('recording-audio-enqueue',0))`); err != nil {
 		return 0, err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT p.id,p.recording_id,p.final_prefix,p.inventory->>'inventoryDigest' FROM recording_packages p WHERE `+audioEnqueueEligible+` ORDER BY p.recording_id,p.id LIMIT 100`)
+	rows, err := tx.QueryContext(ctx, `SELECT p.id,p.recording_id,p.final_prefix,p.inventory->>'inventoryDigest' FROM recording_packages p WHERE `+audioEnqueueEligible+` ORDER BY p.recording_id,p.id LIMIT $1`, limit)
 	if err != nil {
 		return 0, err
 	}
