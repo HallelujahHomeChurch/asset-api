@@ -8,7 +8,9 @@ RUN --mount=type=cache,id=asset-go-build,target=/root/.cache/go-build CGO_ENABLE
 
 FROM debian:bookworm-slim
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates ffmpeg libpcre2-8-0 perl-base \
+ && apt-get install -y --no-install-recommends apt libapt-pkg6.0 ca-certificates ffmpeg libpcre2-8-0 perl-base \
+ && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' apt)" ge '2.6.2' \
+ && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libapt-pkg6.0)" ge '2.6.2' \
  && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' perl-base)" ge '5.36.0-7+deb12u4' \
  && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libpcre2-8-0)" ge '10.42-1+deb12u2' \
  && rm -rf /var/lib/apt/lists/*
