@@ -20,7 +20,12 @@ import (
 )
 
 func main() {
-	operation, limit, err := parseOperation(os.Args[1:])
+	recovery, recovering, err := parseAudioRecovery(os.Args[1:])
+	var operation string
+	var limit int
+	if err == nil && !recovering {
+		operation, limit, err = parseOperation(os.Args[1:])
+	}
 	if err != nil {
 		slog.Error("invalid operation", "error", err)
 		os.Exit(2)
@@ -43,6 +48,27 @@ func main() {
 	db.SetMaxOpenConns(1)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+	if recovering {
+		store := postgres.NewRecordingPackageStore(db)
+		var output any
+		if recovery.apply {
+			err = store.RetryRecordingAudio(ctx, recovery.packageID, recovery.lastClaim)
+			output = struct {
+				Enqueued           int `json:"enqueued"`
+				AdditionalAttempts int `json:"additionalAttempts"`
+			}{1, 1}
+		} else {
+			output, err = store.PlanRecordingAudioRetry(ctx, recovery.packageID)
+		}
+		if err != nil {
+			slog.Error("audio recovery failed", "error", err)
+			os.Exit(1)
+		}
+		if err = json.NewEncoder(os.Stdout).Encode(output); err != nil {
+			os.Exit(1)
+		}
+		return
+	}
 	if operation == "plan" || operation == "apply" {
 		store := postgres.NewRecordingPackageStore(db)
 		var enqueued int64

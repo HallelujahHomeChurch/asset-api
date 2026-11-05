@@ -138,3 +138,24 @@ URL. Never share grant credentials, private object paths or session URLs.
 If concurrent new-ready work makes the selected historical recording ambiguous,
 use existing authorized read-only metadata to resolve it; do not infer identity
 from time proximity alone. No production configuration changes are required.
+
+## One failed-package recovery
+
+Fix and release the producer cause first. Then run the released migration binary
+with `--recording-audio-retry-plan=<packageId>` to obtain the exact failed claim,
+source digest and bounded input estimates. The preview does not enqueue work.
+After explicit approval, run `--recording-audio-retry-apply=<packageId>
+--recording-audio-last-claim=<lastClaim>` once. The operation rechecks source
+identity, expiry, deletion/revocation, failed state and the last-claim fence under
+locks; it leaves exactly one attempt available on the existing preview lane.
+All prior attempt records remain. Replaying the same approved claim is rejected
+while pending/processing and after the new attempt finishes. Do not request a
+new fence merely to repeat a failed recovery; investigate and obtain a new
+bounded approval first. Original video/package data is unchanged.
+
+AAC remux retains each source packet timestamp, including gaps declared in the
+validated fragment sample durations. Each AAC packet gets its own PES envelope
+to prevent transport grouping from moving a gap to a later packet. This retains
+stream copy but increases transport overhead; existing ready derivatives are
+not regenerated. Source/output packet counts and timestamps must match, while
+hashes, bounded metadata, full decode and cross-segment fences remain enforced.

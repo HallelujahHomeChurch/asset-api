@@ -826,3 +826,12 @@ schema migrations or scheduling work. After explicit approval of that preview,
 one-package pilot. The apply-only limit accepts 1..100 (default 100) packages per
 invocation without resetting any existing audio state. Neither flag implicitly
 runs migrations. See [audio operations](docs/recording-audio.md).
+
+After fixing a failed derivative's cause, `--recording-audio-retry-plan=<packageId>`
+previews that one failed package's source digest, last claim and cost inputs.
+Only after approval, use `--recording-audio-retry-apply=<packageId>` with
+`--recording-audio-last-claim=<lastClaim>` from that preview. This allows exactly
+one additional attempt through the existing worker and retains every attempt
+record. Repeating the same apply is rejected, including after that attempt fails.
+Changed, expired, deleted, revoked or non-failed sources are ineligible. These
+operations do not run migrations or change the original video.
