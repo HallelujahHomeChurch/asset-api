@@ -32,6 +32,9 @@ type audioPacketProbe struct {
 		CodecType  string `json:"codec_type"`
 		Profile    string `json:"profile"`
 		SampleRate string `json:"sample_rate"`
+		ID         string `json:"id"`
+		TimeBase   string `json:"time_base"`
+		Channels   int    `json:"channels"`
 	} `json:"streams"`
 	Packets []struct {
 		PTS      string `json:"pts_time"`
@@ -39,30 +42,70 @@ type audioPacketProbe struct {
 	} `json:"packets"`
 }
 
-func audioBounds(data []byte) (float64, float64, error) {
+// sourceAudioTimeline uses the fragment's declared sample durations rather than
+// ffprobe's nominal AAC frame durations. A declared duration can include a gap;
+// stream-copy must retain that gap without inventing or dropping packets.
+func sourceAudioTimeline(data []byte, durations map[uint32][]uint32) ([]audioTiming, error) {
 	var probe audioPacketProbe
-	if err := json.Unmarshal(data, &probe); err != nil {
+	if err := json.Unmarshal(data, &probe); err != nil || !validAudioProbe(probe) {
+		return nil, assets.ErrInvalidUpload
+	}
+	stream := probe.Streams[0]
+	track, err := strconv.ParseUint(stream.ID, 0, 32)
+	parts := strings.Split(stream.TimeBase, "/")
+	if err != nil || len(parts) != 2 || stream.Channels < 1 || stream.Channels > 2 {
+		return nil, assets.ErrInvalidUpload
+	}
+	n, e1 := strconv.ParseFloat(parts[0], 64)
+	d, e2 := strconv.ParseFloat(parts[1], 64)
+	if e1 != nil || e2 != nil || !finite(n) || !finite(d) || n <= 0 || d <= 0 {
+		return nil, assets.ErrInvalidUpload
+	}
+	declared := durations[uint32(track)]
+	if len(declared) != len(probe.Packets) {
+		return nil, assets.ErrInvalidUpload
+	}
+	timeline := make([]audioTiming, len(probe.Packets))
+	for i, p := range probe.Packets {
+		pts, e := strconv.ParseFloat(p.PTS, 64)
+		duration := float64(declared[i]) * n / d
+		if e != nil || !finite(pts) || pts < 0 || !finite(duration) || duration <= 0 || duration > 1 || i > 0 && math.Abs(pts-timeline[i-1].end) > 0.00001 {
+			return nil, assets.ErrInvalidUpload
+		}
+		timeline[i] = audioTiming{pts, pts + duration}
+	}
+	if timeline[len(timeline)-1].end-timeline[0].pts > 31 {
+		return nil, assets.ErrInvalidUpload
+	}
+	return timeline, nil
+}
+
+type audioTiming struct{ pts, end float64 }
+
+func validAudioProbe(probe audioPacketProbe) bool {
+	return len(probe.Streams) == 1 && probe.Streams[0].CodecName == "aac" && probe.Streams[0].CodecType == "audio" && probe.Streams[0].Profile == "LC" && probe.Streams[0].SampleRate == "48000" && len(probe.Packets) > 0 && len(probe.Packets) <= 2000
+}
+
+func audioBoundsForSource(data []byte, source []audioTiming, finalSegment bool) (float64, float64, error) {
+	var probe audioPacketProbe
+	if err := json.Unmarshal(data, &probe); err != nil || !validAudioProbe(probe) || len(probe.Packets) != len(source) {
 		return 0, 0, assets.ErrInvalidUpload
 	}
-	if len(probe.Streams) != 1 || probe.Streams[0].CodecName != "aac" || probe.Streams[0].CodecType != "audio" || probe.Streams[0].Profile != "LC" || probe.Streams[0].SampleRate != "48000" || len(probe.Packets) == 0 || len(probe.Packets) > 2000 {
-		return 0, 0, assets.ErrInvalidUpload
-	}
-	var start, end float64
 	for i, p := range probe.Packets {
 		pts, e := strconv.ParseFloat(p.PTS, 64)
 		duration, d := strconv.ParseFloat(p.Duration, 64)
-		if e != nil || d != nil || math.IsNaN(pts) || math.IsInf(pts, 0) || pts < 0 || math.IsNaN(duration) || math.IsInf(duration, 0) || duration <= 0 || duration > 0.022 || i > 0 && math.Abs(pts-end) > 0.00001 {
+		if e != nil || d != nil || !finite(pts) || !finite(duration) || duration <= 0 || duration > .022 || math.Abs(pts-source[i].pts) > .00001 {
 			return 0, 0, assets.ErrInvalidUpload
 		}
-		if i == 0 {
-			start = pts
+		// MPEG-TS stream-copy cannot represent a partial AAC frame. Only the
+		// recording's final packet may retain the complete frame when MP4
+		// declares an end trim; no internal or cross-segment overlap is allowed.
+		if pts+duration > source[i].end+.00001 && !(finalSegment && i == len(source)-1) {
+			return 0, 0, assets.ErrInvalidUpload
 		}
-		end = pts + duration
 	}
-	if end-start > 31 {
-		return 0, 0, assets.ErrInvalidUpload
-	}
-	return start, end, nil
+	// Include a declared final-sample gap in EXTINF and the next segment fence.
+	return source[0].pts, source[len(source)-1].end, nil
 }
 
 // GenerateAudio losslessly remuxes validated AAC into bounded MPEG-TS fragments.
@@ -146,7 +189,24 @@ func (p PackageMediaProbe) GenerateAudio(ctx context.Context, pkg assets.Recordi
 			return err
 		}
 		segmentCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-		err = exec.CommandContext(segmentCtx, p.FFmpeg, "-nostdin", "-y", "-v", "error", "-xerror", "-protocol_whitelist", "file", "-enable_drefs", "0", "-use_absolute_path", "0", "-copyts", "-i", input, "-map", "0:a:0", "-vn", "-c:a", "copy", "-mpegts_copyts", "1", "-muxdelay", "0.7", "-fs", strconv.Itoa(audioMaxBytes), "-f", "mpegts", output).Run()
+		declared, err := fragmentSampleDurations(input)
+		if err != nil {
+			cancel()
+			return err
+		}
+		sourceData, err := ProbeCommand(segmentCtx, p.FFprobe, "-v", "error", "-protocol_whitelist", "file", "-enable_drefs", "0", "-use_absolute_path", "0", "-select_streams", "a", "-show_streams", "-show_packets", "-show_entries", "stream=codec_name,codec_type,profile,sample_rate,id,time_base,channels:packet=pts_time", "-of", "json", input)
+		if err != nil {
+			cancel()
+			return err
+		}
+		source, err := sourceAudioTimeline(sourceData, declared)
+		if err != nil {
+			cancel()
+			return err
+		}
+		// One AAC packet per PES retains each source PTS; batching moves declared
+		// gaps to a later PES boundary even when stream-copy uses -copyts.
+		err = exec.CommandContext(segmentCtx, p.FFmpeg, "-nostdin", "-y", "-v", "error", "-xerror", "-protocol_whitelist", "file", "-enable_drefs", "0", "-use_absolute_path", "0", "-copyts", "-i", input, "-map", "0:a:0", "-vn", "-c:a", "copy", "-mpegts_copyts", "1", "-pes_payload_size", "0", "-muxdelay", "0.7", "-fs", strconv.Itoa(audioMaxBytes), "-f", "mpegts", output).Run()
 		if err != nil {
 			cancel()
 			return err
@@ -156,7 +216,7 @@ func (p PackageMediaProbe) GenerateAudio(ctx context.Context, pkg assets.Recordi
 			cancel()
 			return err
 		}
-		start, end, err := audioBounds(data)
+		start, end, err := audioBoundsForSource(data, source, i == r.SegmentCount-1)
 		if err != nil {
 			cancel()
 			return err
