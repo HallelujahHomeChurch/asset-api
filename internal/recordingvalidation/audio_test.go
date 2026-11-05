@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"hhc/asset-api/internal/assets"
 	"log/slog"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,10 +20,12 @@ import (
 
 func TestAudioRemuxPreservesTimelineWithoutSourceUpload(t *testing.T) {
 	for _, seconds := range []int{30, 10} {
-		t.Run(strconv.Itoa(seconds), func(t *testing.T) { testAudioRemux(t, seconds) })
+		t.Run(strconv.Itoa(seconds), func(t *testing.T) { testAudioRemux(t, seconds, false) })
 	}
 }
-func testAudioRemux(t *testing.T, seconds int) {
+func TestAudioRemuxPreservesDeclaredAACGap(t *testing.T) { testAudioRemux(t, 30, true) }
+
+func testAudioRemux(t *testing.T, seconds int, declaredGap bool) {
 	var logs bytes.Buffer
 	originalLogger := slog.Default()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
@@ -41,6 +44,9 @@ func testAudioRemux(t *testing.T, seconds int) {
 	}
 	dir := t.TempDir()
 	args := []string{"-v", "error", "-f", "lavfi", "-i", "testsrc2=size=160x90:rate=30", "-f", "lavfi", "-i", "sine=sample_rate=48000", "-t", "31.2", "-c:v", "libx264", "-threads", "2", "-preset", "ultrafast", "-g", strconv.Itoa(seconds * 30), "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-f", "hls", "-hls_time", strconv.Itoa(seconds), "-hls_playlist_type", "vod", "-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", "init.mp4", "-hls_segment_filename", filepath.Join(dir, "seg-%06d.m4s"), filepath.Join(dir, "index.m3u8")}
+	if declaredGap {
+		args = append(args[:len(args)-1], "-af", "aselect=not(eq(n\\,50))", args[len(args)-1])
+	}
 	if data, err := exec.Command(ffmpeg, args...).CombinedOutput(); err != nil {
 		t.Fatalf("fixture: %v %s", err, data)
 	}
@@ -102,7 +108,11 @@ func testAudioRemux(t *testing.T, seconds int) {
 			t.Fatal(err)
 		}
 		start, _, err := audioBounds(data)
-		if err != nil {
+		if declaredGap && i == 0 {
+			if err == nil {
+				t.Fatal("fixture did not retain a declared AAC gap")
+			}
+		} else if err != nil {
 			t.Fatal(err)
 		}
 		if i == 1 && start < float64(seconds) {
@@ -164,4 +174,32 @@ func assertAudioLog(t *testing.T, data []byte, recordingID string, success bool,
 	if bytes.Contains(data, []byte("private.invalid")) || bytes.Contains(data, []byte("do-not-log")) || bytes.Contains(data, []byte("recordings/packages/")) {
 		t.Fatal("sensitive media data leaked into log")
 	}
+}
+
+// Strict nominal-duration comparison makes the gap fixture prove that source
+// timing, rather than relaxed output continuity, is required.
+func audioBounds(data []byte) (float64, float64, error) {
+	var probe audioPacketProbe
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return 0, 0, assets.ErrInvalidUpload
+	}
+	if len(probe.Streams) != 1 || probe.Streams[0].CodecName != "aac" || probe.Streams[0].CodecType != "audio" || probe.Streams[0].Profile != "LC" || probe.Streams[0].SampleRate != "48000" || len(probe.Packets) == 0 || len(probe.Packets) > 2000 {
+		return 0, 0, assets.ErrInvalidUpload
+	}
+	var start, end float64
+	for i, p := range probe.Packets {
+		pts, e := strconv.ParseFloat(p.PTS, 64)
+		duration, d := strconv.ParseFloat(p.Duration, 64)
+		if e != nil || d != nil || math.IsNaN(pts) || math.IsInf(pts, 0) || pts < 0 || math.IsNaN(duration) || math.IsInf(duration, 0) || duration <= 0 || duration > 0.022 || i > 0 && math.Abs(pts-end) > 0.00001 {
+			return 0, 0, assets.ErrInvalidUpload
+		}
+		if i == 0 {
+			start = pts
+		}
+		end = pts + duration
+	}
+	if end-start > 31 {
+		return 0, 0, assets.ErrInvalidUpload
+	}
+	return start, end, nil
 }
