@@ -147,6 +147,44 @@ func TestSourceJobsShareGlobalSlotsAndFenceStaleWorkers(t *testing.T) {
 	}
 }
 
+func TestSourceReadyAutomaticallyQueuesAudio(t *testing.T) {
+	ctx := context.Background()
+	db := isolatedIntegrationDB(t)
+	if err := migrations.Run(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	store := NewRecordingSourceStore(db)
+	svc := assets.NewRecordingSourceService(store, &sourceBlobFixture{}, time.Now)
+	p, err := svc.Create(ctx, assets.CreateRecordingSourceInput{ActorID: "actor-a", RecordingID: "recording-a", FileName: "source.mp4", SizeBytes: 5, ChecksumSHA256: strings.Repeat("a", 64), IdempotencyKey: "source-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Complete(ctx, p.ID, p.ActorID); err != nil {
+		t.Fatal(err)
+	}
+	claim, err := store.ClaimSourceProcessing(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copy := assets.RecordingSourceCopy{Key: "recording-sources/" + p.ID + "/final/" + claim.ClaimID + "/source", State: "success", SizeBytes: 5, ETag: "verified-etag"}
+	if err := store.CheckpointSourceCopy(ctx, p.ID, claim.ClaimID, copy); err != nil {
+		t.Fatal(err)
+	}
+	inv := testRecordingPackage(t, p.ID, p.ActorID, p.RecordingID).Inventory
+	if err := store.FinishSourceProcessing(ctx, p.ID, claim.ClaimID, inv); err != nil {
+		t.Fatal(err)
+	}
+	packages := NewRecordingPackageStore(db)
+	ready, err := packages.Get(ctx, claim.ClaimID)
+	if err != nil || ready.Audio == nil || ready.Audio.State != "pending" || ready.Audio.Version != assets.RecordingAudioVersion || ready.Audio.PlaylistPath != "" {
+		t.Fatalf("source ready without pending audio: %+v %v", ready.Audio, err)
+	}
+	audio, err := packages.ClaimPackageAudio(ctx)
+	if err != nil || audio.Package.ID != ready.ID || audio.Package.RecordingID != p.RecordingID {
+		t.Fatalf("source audio not claimable: package=%s recording=%s error=%v", audio.Package.ID, audio.Package.RecordingID, err)
+	}
+}
+
 func TestSourceRetryBudgetAndDeadlineCannotBeReset(t *testing.T) {
 	ctx := context.Background()
 	db := isolatedIntegrationDB(t)

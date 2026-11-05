@@ -282,4 +282,12 @@ func TestCaptureFullPackageValidationProjectsVerifiedObjects(t *testing.T) {
 			t.Fatalf("normal ready projection still %s", o.State)
 		}
 	}
+	ready, err := packages.Get(ctx, p.ID)
+	if err != nil || ready.Audio == nil || ready.Audio.State != "pending" || ready.Audio.Version != assets.RecordingAudioVersion || ready.Audio.PlaylistPath != "" {
+		t.Fatalf("archived capture ready without pending audio: %+v %v", ready.Audio, err)
+	}
+	audio, err := packages.ClaimPackageAudio(ctx)
+	if err != nil || audio.Package.ID != p.ID || audio.Package.RecordingID != c.RecordingID {
+		t.Fatalf("archived capture audio not claimable: package=%s recording=%s error=%v", audio.Package.ID, audio.Package.RecordingID, err)
+	}
 }
