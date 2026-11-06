@@ -290,6 +290,11 @@ grep -q 'workloadAuthAudience="$ASSET_WORKLOAD_AUDIENCE"' "$workflow"
 grep -q 'workloadAuthClientId="$ASSET_WORKLOAD_CLIENT_ID"' "$workflow"
 grep -q 'ASSET_READER_CALLER_APP_ID: api-gateway' "$workflow"
 test "$(grep -c 'readerCallerAppId="$ASSET_READER_CALLER_APP_ID"' "$workflow")" = 2
+test "$(grep -c 'daprEnabled="$ASSET_DAPR_ENABLED"' "$workflow")" = 2
+grep -Fq 'retire_dapr_revision:' "$workflow"
+grep -Fq '"$revision" == "$RETIRE_DAPR_REVISION"' "$workflow"
+grep -Fq 'az containerapp dapr enable -g "$RESOURCE_GROUP" -n "$API_APP_NAME" --dapr-app-id asset-api --dapr-app-port 8080' "$workflow"
+grep -Fq 'param daprEnabled bool = true' infra/main.bicep
 grep -q "param readerCallerAppId string = 'api-gateway'" infra/main.bicep
 grep -q "name: 'ASSET_READER_CALLER_APP_ID', value: readerCallerAppId" infra/main.bicep
 if grep -q "ASSET_ALLOWED_CALLERS.*api-gateway" infra/main.bicep; then
@@ -535,6 +540,7 @@ grep -Eq 'EXTRACTOR_ROLE_APPROVED:.*github.event_name.*workflow_dispatch.*inputs
 grep -Fq 'bash scripts/ensure-workload-app-role.sh check' "$workflow"
 grep -Fq 'bash scripts/ensure-workload-app-role.sh apply' "$workflow"
 for binding in 'lineAttachmentClientId' 'lineAttachmentObjectId' \
+  'lineAPIWorkloadAuthEnabled ? [lineAPIWorkloadClientId] : []' 'lineAPIWorkloadAuthEnabled ? [lineAPIWorkloadObjectId] : []' \
   'extractorAuthEnabled ? [extractorClientId] : []' 'extractorAuthEnabled ? [extractorObjectId] : []' \
   'watermarkWorkerAuthEnabled ? [watermarkWorkerClientId] : []' 'watermarkWorkerAuthEnabled ? [watermarkWorkerObjectId] : []' \
   'accountWorkloadAuthEnabled ? [accountWorkloadClientId] : []' 'accountWorkloadAuthEnabled ? [accountWorkloadObjectId] : []' \
@@ -542,7 +548,7 @@ for binding in 'lineAttachmentClientId' 'lineAttachmentObjectId' \
   sed -n '/defaultAuthorizationPolicy: {/,/^          }/p' infra/main.bicep | grep -Fq "$binding"
 done
 ! sed -n '/excludedPaths: \[/,/^      ]/p' infra/main.bicep | grep -Fq '/_gateway'
-for subject in account gateway; do
+for subject in account gateway line-api; do
   grep -Fq "ROLE_SUBJECT=$subject bash scripts/ensure-workload-app-role.sh check" "$workflow"
 done
 # W3: the watermark worker identity is wired end to end and approved separately.

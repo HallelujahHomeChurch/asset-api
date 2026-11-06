@@ -14,3 +14,16 @@ func TestExtractorWorkloadUsesExistingWebsiteOwner(t *testing.T) {
 		t.Fatal("existing LINE mapping or role changed")
 	}
 }
+
+func TestLINEWorkloadKeepsSeparateExactIdentities(t *testing.T) {
+	auth := workloadAuth(config.Config{
+		LineWorkloadClientID: "worker-client", LineWorkloadObjectID: "worker-object",
+		LineAPIWorkloadClientID: "api-client", LineAPIWorkloadObjectID: "api-object",
+	})
+	for client, object := range map[string]string{"worker-client": "worker-object", "api-client": "api-object"} {
+		caller := auth.Callers[client]
+		if caller.Service != "hhc-line-function-bot" || caller.ObjectID != object {
+			t.Fatalf("unexpected LINE workload identity for %s", client)
+		}
+	}
+}

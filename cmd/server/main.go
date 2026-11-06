@@ -67,7 +67,11 @@ func run() error {
 	db.SetMaxIdleConns(cfg.DBMaxIdleConns)
 	db.SetConnMaxLifetime(cfg.DBConnMaxLifetime)
 	defer db.Close()
-	stopDependencyHealth := dependencyhealth.Start(ctx, db, os.Getenv("DAPR_HTTP_PORT"), os.Getenv("DAPR_API_TOKEN"), slog.Default())
+	var daprPort, daprToken string
+	if cfg.DaprEnabled {
+		daprPort, daprToken = os.Getenv("DAPR_HTTP_PORT"), os.Getenv("DAPR_API_TOKEN")
+	}
+	stopDependencyHealth := dependencyhealth.Start(ctx, db, daprPort, daprToken, slog.Default())
 	defer stopDependencyHealth()
 	diagnosticsCtx, diagnosticsCancel := context.WithCancel(ctx)
 	diagnosticsDone := make(chan struct{})
@@ -233,6 +237,9 @@ func workloadAuth(cfg config.Config) httpapi.WorkloadAuthConfig {
 	callers := map[string]httpapi.WorkloadCaller{}
 	if cfg.LineWorkloadClientID != "" {
 		callers[cfg.LineWorkloadClientID] = httpapi.WorkloadCaller{ObjectID: cfg.LineWorkloadObjectID, Service: "hhc-line-function-bot"}
+	}
+	if cfg.LineAPIWorkloadClientID != "" {
+		callers[cfg.LineAPIWorkloadClientID] = httpapi.WorkloadCaller{ObjectID: cfg.LineAPIWorkloadObjectID, Service: "hhc-line-function-bot"}
 	}
 	if cfg.ExtractorWorkloadClientID != "" {
 		callers[cfg.ExtractorWorkloadClientID] = httpapi.WorkloadCaller{ObjectID: cfg.ExtractorWorkloadObjectID, Service: "hhc-web-api"}

@@ -181,6 +181,37 @@ func TestAuditDispatchDefaultsDarkAndValidatesEnabledConfig(t *testing.T) {
 	}
 }
 
+func TestAssetWithoutDaprRequiresAllPrivateDependencies(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://test")
+	t.Setenv("APP_API_TOKEN", "")
+	t.Setenv("ASSET_ALLOW_DEV_CALLER_HEADER", "false")
+	t.Setenv("ASSET_DAPR_ENABLED", "false")
+	if _, err := Load(); err == nil {
+		t.Fatal("accepted missing workload configuration")
+	}
+	t.Setenv("ASSET_WORKLOAD_TENANT_ID", "tenant")
+	t.Setenv("ASSET_WORKLOAD_ISSUER", "issuer")
+	t.Setenv("ASSET_WORKLOAD_AUDIENCE", "audience")
+	for _, service := range []string{"LINE", "LINE_API", "EXTRACTOR", "WATERMARK", "ACCOUNT", "GATEWAY"} {
+		t.Setenv("ASSET_"+service+"_WORKLOAD_CLIENT_ID", service+"-client")
+		t.Setenv("ASSET_"+service+"_WORKLOAD_OBJECT_ID", service+"-object")
+	}
+	t.Setenv("AUDIT_DISPATCH_ENABLED", "true")
+	t.Setenv("AUDIT_TOKEN", "audit-test-only")
+	if _, err := Load(); err == nil {
+		t.Fatal("accepted Dapr Audit transport with Dapr disabled")
+	}
+	t.Setenv("AUDIT_PRIVATE_HTTPS", "true")
+	cfg, err := Load()
+	if err != nil || cfg.DaprEnabled || cfg.AppAPIToken != "" {
+		t.Fatalf("sidecar-free config was not accepted: %v", err)
+	}
+	t.Setenv("ASSET_ALLOW_DEV_CALLER_HEADER", "true")
+	if _, err := Load(); err == nil {
+		t.Fatal("accepted development identity header without Dapr")
+	}
+}
+
 func TestLoadRequiresDerivativeQueueForAzureStorage(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://test")
 	t.Setenv("ASSET_ALLOW_DEV_CALLER_HEADER", "true")

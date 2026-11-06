@@ -7,6 +7,7 @@ param storageAccountName string
 param runtimeKeyVaultName string = 'alive-asset-runtime-kv'
 param migrationKeyVaultName string = 'alive-asset-migrate-kv'
 param auditVaultName string = 'alive-vault'
+param daprEnabled bool = true
 @minLength(1)
 param runtimeImage string
 @minLength(1)
@@ -44,6 +45,8 @@ param workloadAuthClientId string = ''
 param workloadAuthAudience string = ''
 param lineAttachmentClientId string = ''
 param lineAttachmentObjectId string = ''
+param lineAPIWorkloadClientId string = ''
+param lineAPIWorkloadObjectId string = ''
 param extractorClientId string = ''
 param extractorObjectId string = ''
 param watermarkWorkerClientId string = ''
@@ -62,6 +65,7 @@ param uploadAllowedOrigins array = [
 
 var keyVaultSecretsUserRole = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
 var workloadAuthEnabled = workloadAuthClientId != '' && workloadAuthAudience != '' && lineAttachmentClientId != '' && lineAttachmentObjectId != ''
+var lineAPIWorkloadAuthEnabled = workloadAuthEnabled && lineAPIWorkloadClientId != '' && lineAPIWorkloadObjectId != ''
 var extractorAuthEnabled = workloadAuthEnabled && extractorClientId != '' && extractorObjectId != ''
 var watermarkWorkerAuthEnabled = workloadAuthEnabled && watermarkWorkerClientId != '' && watermarkWorkerObjectId != ''
 var accountWorkloadAuthEnabled = workloadAuthEnabled && accountWorkloadClientId != '' && accountWorkloadObjectId != ''
@@ -383,7 +387,7 @@ resource app 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
       activeRevisionsMode: 'Single'
       maxInactiveRevisions: 100
       dapr: {
-        enabled: true
+        enabled: daprEnabled
         appId: 'asset-api'
         httpMaxRequestSize: 210
         appPort: 8080
@@ -429,6 +433,7 @@ resource app 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
           image: runtimeImage
           env: concat([
             { name: 'PORT', value: '8080' }
+            { name: 'ASSET_DAPR_ENABLED', value: string(daprEnabled) }
             { name: 'DATABASE_URL', secretRef: 'database-url' }
             { name: 'DB_MAX_OPEN_CONNS', value: '8' }
             { name: 'DB_MAX_IDLE_CONNS', value: '4' }
@@ -450,6 +455,8 @@ resource app 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
             { name: 'ASSET_WORKLOAD_REQUIRED_ROLE', value: 'Asset.Invoke' }
             { name: 'ASSET_LINE_WORKLOAD_CLIENT_ID', value: workloadAuthEnabled ? lineAttachmentClientId : '' }
             { name: 'ASSET_LINE_WORKLOAD_OBJECT_ID', value: workloadAuthEnabled ? lineAttachmentObjectId : '' }
+            { name: 'ASSET_LINE_API_WORKLOAD_CLIENT_ID', value: lineAPIWorkloadAuthEnabled ? lineAPIWorkloadClientId : '' }
+            { name: 'ASSET_LINE_API_WORKLOAD_OBJECT_ID', value: lineAPIWorkloadAuthEnabled ? lineAPIWorkloadObjectId : '' }
             { name: 'ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID', value: workloadAuthEnabled ? extractorClientId : '' }
             { name: 'ASSET_EXTRACTOR_WORKLOAD_OBJECT_ID', value: workloadAuthEnabled ? extractorObjectId : '' }
             { name: 'ASSET_WATERMARK_WORKLOAD_CLIENT_ID', value: watermarkWorkerAuthEnabled ? watermarkWorkerClientId : '' }
@@ -551,6 +558,7 @@ resource workloadAuth 'Microsoft.App/containerApps/authConfigs@2025-01-01' = if 
           defaultAuthorizationPolicy: {
             allowedApplications: concat(
               [lineAttachmentClientId],
+              lineAPIWorkloadAuthEnabled ? [lineAPIWorkloadClientId] : [],
               extractorAuthEnabled ? [extractorClientId] : [],
               watermarkWorkerAuthEnabled ? [watermarkWorkerClientId] : [],
               accountWorkloadAuthEnabled ? [accountWorkloadClientId] : [],
@@ -559,6 +567,7 @@ resource workloadAuth 'Microsoft.App/containerApps/authConfigs@2025-01-01' = if 
             allowedPrincipals: {
               identities: concat(
                 [lineAttachmentObjectId],
+                lineAPIWorkloadAuthEnabled ? [lineAPIWorkloadObjectId] : [],
                 extractorAuthEnabled ? [extractorObjectId] : [],
                 watermarkWorkerAuthEnabled ? [watermarkWorkerObjectId] : [],
                 accountWorkloadAuthEnabled ? [accountWorkloadObjectId] : [],

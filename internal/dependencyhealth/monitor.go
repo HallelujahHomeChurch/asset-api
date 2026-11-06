@@ -30,7 +30,9 @@ func Start(parent context.Context, db *sql.DB, daprPort, token string, logger *s
 			if ctx.Err() != nil {
 				return
 			}
-			checkDapr(ctx, client, daprPort, token, logger, &daprObservation)
+			if daprPort != "" {
+				checkDapr(ctx, client, daprPort, token, logger, &daprObservation)
+			}
 			select {
 			case <-ctx.Done():
 				return
