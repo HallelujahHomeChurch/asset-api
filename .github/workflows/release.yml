@@ -39,7 +39,7 @@ on:
         required: false
         type: string
       recovery_run:
-        description: Failed owner run that verified and published its three images before what-if failed
+        description: Failed owner run ID, optionally followed by :attempt, that verified and published its three images
         type: string
       recovery_image_digests:
         description: Exact published SHA256 digests for Asset API, scan, and recording images in that order
@@ -395,15 +395,20 @@ jobs:
           run_id="$GITHUB_RUN_ID"
           if [[ -n "$RECOVERY_RUN$RECOVERY_IMAGE_DIGESTS" ]]; then
             [[ "$GITHUB_REPOSITORY" == 'HallelujahHomeChurch/asset-api' && "$GITHUB_EVENT_NAME" == workflow_dispatch ]]
-            [[ "$RECOVERY_RUN" =~ ^[1-9][0-9]*$ && "$RECOVERY_RUN" != "$run_id" ]]
+            [[ "$RECOVERY_RUN" =~ ^([1-9][0-9]*)(:([1-9][0-9]*))?$ ]]
+            run_id="${BASH_REMATCH[1]}"
+            attempt="${BASH_REMATCH[3]:-}"
+            [[ "$run_id" != "$GITHUB_RUN_ID" ]]
             [[ "$RECOVERY_IMAGE_DIGESTS" =~ ^sha256:[0-9a-f]{64}\ sha256:[0-9a-f]{64}\ sha256:[0-9a-f]{64}$ ]]
             [[ "$MEMBER_VIDEO_ENABLED" == true && "$EXTRACTOR_ROLE_APPROVED" == false && "$WATERMARK_ROLE_APPROVED" == false ]]
-            run_id="$RECOVERY_RUN"
             endpoint="repos/$GITHUB_REPOSITORY/actions/runs/$run_id"
-            metadata="$(gh api "$endpoint")"
-            jq -e --arg repo "$GITHUB_REPOSITORY" '.path == ".github/workflows/release.yml" and .head_branch == "main" and .head_repository.full_name == $repo and (.event == "push" or .event == "workflow_dispatch") and .status == "completed" and .conclusion == "failure"' <<< "$metadata" >/dev/null
+            if [[ -z "$attempt" ]]; then
+              attempt="$(gh api "$endpoint" --jq .run_attempt)"
+            fi
+            [[ "$attempt" =~ ^[1-9][0-9]*$ ]]
+            metadata="$(gh api "$endpoint/attempts/$attempt")"
+            jq -e --arg repo "$GITHUB_REPOSITORY" --arg run "$run_id" --arg attempt "$attempt" '(.id|tostring) == $run and (.run_attempt|tostring) == $attempt and .path == ".github/workflows/release.yml" and .head_branch == "main" and .head_repository.full_name == $repo and (.event == "push" or .event == "workflow_dispatch") and .status == "completed" and .conclusion == "failure"' <<< "$metadata" >/dev/null
             commit="$(jq -er '.head_sha | select(test("^[0-9a-f]{40}$"))' <<< "$metadata")"
-            attempt="$(jq -er '.run_attempt | tostring | select(test("^[1-9][0-9]*$"))' <<< "$metadata")"
             gh api "$endpoint/attempts/$attempt/jobs?per_page=100" | jq -e '
               def job($name): [.jobs[] | select(.name == $name)] | select(length == 1) | .[0];
               def step($name; $status): [.steps[] | select(.name == $name and .conclusion == $status)] | length == 1;
