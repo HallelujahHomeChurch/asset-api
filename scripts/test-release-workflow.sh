@@ -41,6 +41,8 @@ grep -Fq 'bash scripts/check-release-dapr-config-delta.sh "$commit" "$GITHUB_SHA
   reject_delta "$base" "$base" exact-fix
 
   printf "%s\n" "            { name: 'ASSET_DAPR_ENABLED', value: daprEnabled ? 'true' : 'false' }" > infra/main.bicep
+  mkdir scripts
+  touch scripts/recording-event-topology.py scripts/test-recording-event-topology.py
   git add . && git commit -qm 'Exact fix'
   fixed="$(git rev-parse HEAD)"
   bash "$check" "$base" "$fixed"

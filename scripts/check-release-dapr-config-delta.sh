@@ -10,7 +10,8 @@ git merge-base --is-ancestor "$base" "$head"
 git diff --quiet "$base" "$head" -- . \
   ':(exclude).github/workflows/release.yml' ':(exclude)scripts/check-what-if.sh' \
   ':(exclude)scripts/test-what-if-policy.sh' ':(exclude)scripts/test-release-workflow.sh' \
-  ':(exclude)scripts/check-release-dapr-config-delta.sh' ':(exclude)infra/main.bicep'
+  ':(exclude)scripts/check-release-dapr-config-delta.sh' ':(exclude)infra/main.bicep' \
+  ':(exclude)scripts/recording-event-topology.py' ':(exclude)scripts/test-recording-event-topology.py'
 
 if git diff --quiet "$base" "$head" -- infra/main.bicep; then
   [[ "$mode" == compatible ]]
