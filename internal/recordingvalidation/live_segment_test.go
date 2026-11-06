@@ -107,10 +107,30 @@ func testLiveSegmentFrameRate(t *testing.T, rate string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	probe.LiveInitEvidence = map[string]assets.RecordingLiveValidation{}
+	for name, fragment := range batch {
+		evidence := *fragment.Validation
+		evidence.InitETag = "etag"
+		probe.LiveInitEvidence[name] = evidence
+		objects.bytes["recordings/captures/"+p.ID+"/final/"+evidence.Init.Path] = bytes.Clone(objects.bytes[p.StagingKey(evidence.Init.Path)])
+	}
+	beforeCopies := objects.copies
+	expectedCopies := int64(3)
+	if rate == "30" {
+		probe.Objects = missingLiveInitObjects{objects, "recordings/captures/" + p.ID + "/final/1080p/init.mp4"}
+		expectedCopies = 4
+	}
 	tail, err := probe.ValidateLiveSegment(context.Background(), p.ID, "claim-tail", 1, declarations[1])
+	if objects.copies-beforeCopies != expectedCopies {
+		t.Fatalf("repeated immutable init copies: %d", objects.copies-beforeCopies)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
+	if rate == "30" && tail["1080p"].Validation.InitETag != "" {
+		t.Fatal("recovered init retained stale storage identity")
+	}
+	probe.Objects = objects
 	if _, err = assets.AppendLiveSegment(history, tail, false, profile); (duration == "35" || profile == 300) && !errors.Is(err, assets.ErrCaptureMissingObjects) {
 		t.Fatalf("unsealed tail: %v", err)
 	}

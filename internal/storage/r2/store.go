@@ -16,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
 )
 
 var ErrNotFound = errors.New("R2 object not found")
@@ -161,6 +162,10 @@ func (s *Store) Open(ctx context.Context, key string) (io.ReadCloser, error) {
 	}
 	result, err := s.client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key)})
 	if err != nil {
+		var failure smithy.APIError
+		if errors.As(err, &failure) && (failure.ErrorCode() == "NoSuchKey" || failure.ErrorCode() == "NotFound") {
+			err = errors.Join(ErrNotFound, err)
+		}
 		return nil, fmt.Errorf("open R2 object: %w", err)
 	}
 	return result.Body, nil
