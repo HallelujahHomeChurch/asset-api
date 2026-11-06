@@ -16,6 +16,44 @@ done
 
 workflow=.github/workflows/release.yml
 grep -Fq -- '--validation-level Provider' .github/workflows/recording-source.yml
+grep -Fq "{ name: 'ASSET_DAPR_ENABLED', value: daprEnabled ? 'true' : 'false' }" infra/main.bicep
+grep -Fq 'bash scripts/check-release-dapr-config-delta.sh "$BASE_SHA" "$HEAD_SHA" exact-fix' "$workflow"
+grep -Fq 'bash scripts/check-release-dapr-config-delta.sh "$commit" "$GITHUB_SHA"' "$workflow"
+(
+  check="$(pwd)/scripts/check-release-dapr-config-delta.sh"
+  fixture="$(mktemp -d)"
+  trap 'rm -rf "$fixture"' EXIT
+  cd "$fixture"
+  git init -q
+  git config user.name 'Release fixture'
+  git config user.email 'release-fixture@example.invalid'
+  reject_delta() {
+    if bash "$check" "$@"; then
+      echo 'Recovery accepted an unexpected change' >&2
+      exit 1
+    fi
+  }
+  mkdir infra
+  printf "%s\n" "            { name: 'ASSET_DAPR_ENABLED', value: string(daprEnabled) }" > infra/main.bicep
+  git add . && git commit -qm 'Original infrastructure'
+  base="$(git rev-parse HEAD)"
+  bash "$check" "$base" "$base"
+  reject_delta "$base" "$base" exact-fix
+
+  printf "%s\n" "            { name: 'ASSET_DAPR_ENABLED', value: daprEnabled ? 'true' : 'false' }" > infra/main.bicep
+  git add . && git commit -qm 'Exact fix'
+  fixed="$(git rev-parse HEAD)"
+  bash "$check" "$base" "$fixed"
+  bash "$check" "$base" "$fixed" exact-fix
+
+  printf '\n' >> infra/main.bicep
+  git add . && git commit -qm 'Other Bicep change'
+  reject_delta "$base" "$(git rev-parse HEAD)"
+  git reset --hard -q "$fixed"
+  touch infra/another.bicep
+  git add . && git commit -qm 'Unrelated infrastructure'
+  reject_delta "$base" "$(git rev-parse HEAD)" exact-fix
+)
 
 grep -Fq 'recovery_run:' "$workflow"
 grep -Fq 'recovery_image_digests:' "$workflow"
@@ -33,7 +71,8 @@ expected_paths="'**'
 '!.github/workflows/release.yml'
 '!scripts/check-what-if.sh'
 '!scripts/test-what-if-policy.sh'
-'!scripts/test-release-workflow.sh'"
+'!scripts/test-release-workflow.sh'
+'!scripts/check-release-dapr-config-delta.sh'"
 actual_paths="$(awk '
   $0 == "    paths:" { in_paths_ignore = 1; next }
   in_paths_ignore && /^      - / { sub(/^      - /, ""); print; next }
