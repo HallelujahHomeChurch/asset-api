@@ -41,6 +41,29 @@ printf '%s\n' '{"changes":[
 ]}' >"$tmp/safe.json"
 ./scripts/check-what-if.sh "$tmp/safe.json"
 
+asset_api='/subscriptions/test/resourceGroups/alive/providers/Microsoft.App/containerApps/asset-api'
+jq -n --arg asset_api "$asset_api" '{changes:[{
+  resourceId:$asset_api,changeType:"Modify",
+  before:{properties:{template:{containers:[{name:"asset-api",env:[{name:"DATABASE_URL",secretRef:"db"},{name:"DB_MAX_OPEN_CONNS",value:"8"}]}]}}},
+  after:{properties:{template:{containers:[{name:"asset-api",env:[{name:"ASSET_DAPR_ENABLED",value:"true"},{name:"DATABASE_URL",secretRef:"db"},{name:"DB_MAX_OPEN_CONNS",value:"8"}]}]}}},
+  delta:[{path:"properties.template.containers",propertyChangeType:"Array",children:[{path:"0",children:[{path:"env",propertyChangeType:"Array",children:[
+    {path:"0",children:[{path:"secretRef",propertyChangeType:"Delete"}]},
+    {path:"1",children:[{path:"value",propertyChangeType:"Delete"}]}
+  ]}]}]}]
+}]}' >"$tmp/asset-env-reordered.json"
+./scripts/check-what-if.sh "$tmp/asset-env-reordered.json"
+for modification in \
+  '.changes[0].after.properties.template.containers[0].env[1].secretRef = "other"' \
+  '.changes[0].after.properties.template.containers[0].env[2].value = "6"' \
+  'del(.changes[0].after.properties.template.containers[0].env[1])' \
+  '.changes[0].after.properties.template.containers[0].env += [{name:"DATABASE_URL",secretRef:"other"}]'; do
+  jq "$modification" "$tmp/asset-env-reordered.json" >"$tmp/asset-env-unsafe.json"
+  if ./scripts/check-what-if.sh "$tmp/asset-env-unsafe.json"; then
+    echo 'Asset what-if accepted a changed or ambiguous database environment entry' >&2
+    exit 1
+  fi
+done
+
 printf '%s\n' '{"changes":[{"resourceId":"/subscriptions/test/resourceGroups/alive/providers/Microsoft.App/containerApps/asset-api/authConfigs/current","changeType":"Modify","delta":[{"path":"properties.identityProviders.azureActiveDirectory.validation.defaultAuthorizationPolicy.allowedApplications","propertyChangeType":"Array","before":["line"],"after":["line","cms"]}]}]}' >"$tmp/extractor-auth.json"
 ./scripts/check-what-if.sh "$tmp/extractor-auth.json"
 for resource in Microsoft.ManagedIdentity/userAssignedIdentities/bulletin-extractor-identity Microsoft.Authorization/roleAssignments/extractor-owner; do

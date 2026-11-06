@@ -17,6 +17,11 @@ done
 workflow=.github/workflows/release.yml
 grep -Fq -- '--validation-level Provider' .github/workflows/recording-source.yml
 
+grep -Fq 'recovery_run:' "$workflow"
+grep -Fq 'recovery_image_digests:' "$workflow"
+grep -Fq 'run-id: ${{ steps.source.outputs.run }}' "$workflow"
+grep -Fq 'if: ${{ !cancelled() && needs.deploy.result == '\''success'\'' }}' "$workflow"
+
 grep -q 'workflow_dispatch:' "$workflow"
 grep -q 'fail_openapi_before_pointer:' "$workflow"
 grep -q '^  push:' "$workflow"
@@ -24,7 +29,11 @@ grep -q 'branches: \[main\]' "$workflow"
 expected_paths="'**'
 '!docs/**'
 'docs/data-governance.yaml'
-'!.github/workflows/ci.yml'"
+'!.github/workflows/ci.yml'
+'!.github/workflows/release.yml'
+'!scripts/check-what-if.sh'
+'!scripts/test-what-if-policy.sh'
+'!scripts/test-release-workflow.sh'"
 actual_paths="$(awk '
   $0 == "    paths:" { in_paths_ignore = 1; next }
   in_paths_ignore && /^      - / { sub(/^      - /, ""); print; next }
@@ -292,7 +301,7 @@ grep -q 'ASSET_READER_CALLER_APP_ID: api-gateway' "$workflow"
 test "$(grep -c 'readerCallerAppId="$ASSET_READER_CALLER_APP_ID"' "$workflow")" = 2
 test "$(grep -c 'daprEnabled="$ASSET_DAPR_ENABLED"' "$workflow")" = 2
 grep -Fq 'retire_dapr_revision:' "$workflow"
-grep -Fq "github.event_name != 'workflow_dispatch' || inputs.retire_dapr_revision == ''" "$workflow"
+grep -Fq "github.event_name != 'workflow_dispatch' || (inputs.retire_dapr_revision == '' && inputs.recovery_run == '' && inputs.recovery_image_digests == '')" "$workflow"
 retirement_job="$(sed -n '/^  retire_dapr:/,/^  agent_docs:/p' "$workflow")"
 printf '%s\n' "$retirement_job" | grep -Fq 'run: python3 scripts/retire-dapr.py'
 ! printf '%s\n' "$retirement_job" | grep -Eq 'docker build|build-release-images|deploy_media|az deployment|az acr'
@@ -347,7 +356,7 @@ printf '%s\n' "$publish_job" | grep -Fq 'digest-mismatch: error'
 printf '%s\n' "$publish_job" | grep -Fq 'SERVICE: asset-api'
 printf '%s\n' "$publish_job" | grep -Fq 'GOVERNANCE_DIR: ${{ github.workspace }}/.artifacts/data-governance/export'
 printf '%s\n' "$publish_job" | grep -Fq 'run: bash scripts/publish-data-governance.sh'
-printf '%s\n' "$publish_job" | grep -q 'specs/${GITHUB_SHA}/openapi.yaml'
+printf '%s\n' "$publish_job" | grep -q 'specs/${RELEASE_COMMIT}/openapi.yaml'
 printf '%s\n' "$publish_job" | grep -q 'inputs.fail_openapi_before_pointer && github.run_attempt == 1'
 printf '%s\n' "$publish_job" | grep -q -- '--overwrite false'
 printf '%s\n' "$publish_job" | grep -q -- '--name current.json'

@@ -8,6 +8,10 @@ on:
       - '!docs/**'
       - 'docs/data-governance.yaml'
       - '!.github/workflows/ci.yml'
+      - '!.github/workflows/release.yml'
+      - '!scripts/check-what-if.sh'
+      - '!scripts/test-what-if-policy.sh'
+      - '!scripts/test-release-workflow.sh'
   workflow_dispatch:
     inputs:
       confirmation:
@@ -33,6 +37,12 @@ on:
         description: Exact healthy Asset revision after all production callers have switched to HTTPS
         required: false
         type: string
+      recovery_run:
+        description: Failed owner run that verified and published its three images before what-if failed
+        type: string
+      recovery_image_digests:
+        description: Exact published SHA256 digests for Asset API, scan, and recording images in that order
+        type: string
 
 permissions:
   contents: read
@@ -43,7 +53,7 @@ concurrency:
 
 jobs:
   retire_dapr:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.retire_dapr_revision != '' && github.repository == 'HallelujahHomeChurch/asset-api' && github.ref == 'refs/heads/main' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.retire_dapr_revision != '' && inputs.recovery_run == '' && inputs.recovery_image_digests == '' && github.repository == 'HallelujahHomeChurch/asset-api' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     environment: production
@@ -94,7 +104,7 @@ jobs:
         run: python3 scripts/retire-dapr.py
 
   agent_docs:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.retire_dapr_revision == '' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.retire_dapr_revision == '' && inputs.recovery_run == '' && inputs.recovery_image_digests == '') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -257,16 +267,18 @@ jobs:
 
   deploy:
     needs: [verify, deploy_media]
-    if: ${{ !cancelled() && needs.verify.result == 'success' && (needs.deploy_media.result == 'success' || (needs.deploy_media.result == 'skipped' && vars.MEMBER_VIDEO_ENABLED != 'true')) }}
+    if: ${{ !cancelled() && ((needs.verify.result == 'success' && (needs.deploy_media.result == 'success' || (needs.deploy_media.result == 'skipped' && vars.MEMBER_VIDEO_ENABLED != 'true'))) || (github.event_name == 'workflow_dispatch' && inputs.retire_dapr_revision == '' && (inputs.recovery_run != '' || inputs.recovery_image_digests != '') && needs.verify.result == 'skipped' && needs.deploy_media.result == 'skipped')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: production
     outputs:
       commit: ${{ steps.release_outputs.outputs.commit }}
       image: ${{ steps.release_outputs.outputs.image }}
+      source_run: ${{ steps.source.outputs.run }}
     permissions:
       contents: read
       id-token: write
+      actions: read
     env:
       ACR_NAME: alive
       ACR_LOGIN_SERVER: alive.azurecr.io
@@ -311,6 +323,8 @@ jobs:
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       MEDIA_KEY_ID: ${{ vars.ASSET_MEDIA_KEY_ID }}
       RELEASE_CONFIRMATION: ${{ github.event_name == 'push' && 'deploy-asset-api-production' || inputs.confirmation }}
+      RECOVERY_RUN: ${{ inputs.recovery_run }}
+      RECOVERY_IMAGE_DIGESTS: ${{ inputs.recovery_image_digests }}
       ACTIVATE_QUEUE_SCANNING: "true"
       EMBEDDED_SCAN_ENABLED: "false"
       DEPLOY_RETENTION_JOB: "true"
@@ -318,6 +332,8 @@ jobs:
       RETENTION_APPLY_ENABLED: "true"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: ${{ inputs.recovery_run != '' && '0' || '1' }}
       - name: Validate release configuration
         run: |
           [[ "$GITHUB_REF" == "refs/heads/main" ]]
@@ -357,21 +373,66 @@ jobs:
           if [[ "$RECORDING_SOURCE_ENABLED" == true ]]; then
             [[ "$RECORDING_HLS_ENABLED" == true ]] || { echo 'Source processing requires HLS' >&2; exit 1; }
           fi
-      - name: Set image tag
-        run: echo "IMAGE_TAG=main-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+      - name: Verify immutable release source
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          commit="$GITHUB_SHA"
+          run_id="$GITHUB_RUN_ID"
+          if [[ -n "$RECOVERY_RUN$RECOVERY_IMAGE_DIGESTS" ]]; then
+            [[ "$GITHUB_REPOSITORY" == 'HallelujahHomeChurch/asset-api' && "$GITHUB_EVENT_NAME" == workflow_dispatch ]]
+            [[ "$RECOVERY_RUN" =~ ^[1-9][0-9]*$ && "$RECOVERY_RUN" != "$run_id" ]]
+            [[ "$RECOVERY_IMAGE_DIGESTS" =~ ^sha256:[0-9a-f]{64}\ sha256:[0-9a-f]{64}\ sha256:[0-9a-f]{64}$ ]]
+            [[ "$MEMBER_VIDEO_ENABLED" == true && "$EXTRACTOR_ROLE_APPROVED" == false && "$WATERMARK_ROLE_APPROVED" == false ]]
+            run_id="$RECOVERY_RUN"
+            endpoint="repos/$GITHUB_REPOSITORY/actions/runs/$run_id"
+            metadata="$(gh api "$endpoint")"
+            jq -e --arg repo "$GITHUB_REPOSITORY" '.path == ".github/workflows/release.yml" and .head_branch == "main" and .head_repository.full_name == $repo and (.event == "push" or .event == "workflow_dispatch") and .status == "completed" and .conclusion == "failure"' <<< "$metadata" >/dev/null
+            commit="$(jq -er '.head_sha | select(test("^[0-9a-f]{40}$"))' <<< "$metadata")"
+            attempt="$(jq -er '.run_attempt | tostring | select(test("^[1-9][0-9]*$"))' <<< "$metadata")"
+            gh api "$endpoint/attempts/$attempt/jobs?per_page=100" | jq -e '
+              def job($name): [.jobs[] | select(.name == $name)] | select(length == 1) | .[0];
+              def step($name; $status): [.steps[] | select(.name == $name and .conclusion == $status)] | length == 1;
+              (job("verify").conclusion == "success") and (job("deploy_media").conclusion == "success") and
+              (job("deploy") | .conclusion == "failure" and step("Publish verified images"; "success") and
+                step("Verify published image identities"; "success") and step("Scan immutable images"; "success") and
+                step("Scan immutable recording image"; "success") and step("Reject destructive infrastructure changes"; "failure") and
+                step("Update migration job"; "skipped") and step("Deploy API"; "skipped"))
+            ' >/dev/null
+            git merge-base --is-ancestor "$commit" "$GITHUB_SHA"
+            git diff --quiet "$commit" "$GITHUB_SHA" -- . \
+              ':(exclude).github/workflows/release.yml' ':(exclude)scripts/check-what-if.sh' \
+              ':(exclude)scripts/test-what-if-policy.sh' ':(exclude)scripts/test-release-workflow.sh'
+            echo "artifact=release-images-$commit-$run_id-$attempt" >> "$GITHUB_OUTPUT"
+          fi
+          echo "run=$run_id" >> "$GITHUB_OUTPUT"
+          echo "SOURCE_COMMIT=$commit" >> "$GITHUB_ENV"
+          echo "IMAGE_TAG=main-${commit::7}" >> "$GITHUB_ENV"
       - name: Require immutable image artifact ID
+        if: inputs.recovery_run == ''
         env:
           IMAGE_ARTIFACT_ID: ${{ needs.verify.outputs.image_artifact_id }}
         run: '[[ "$IMAGE_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]'
       - name: Download verified release images
+        if: inputs.recovery_run == ''
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           artifact-ids: ${{ needs.verify.outputs.image_artifact_id }}
           path: ${{ runner.temp }}/release-images
           digest-mismatch: error
+      - name: Download original verified release images for recovery
+        if: inputs.recovery_run != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ steps.source.outputs.artifact }}
+          run-id: ${{ steps.source.outputs.run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/release-images
+          digest-mismatch: error
       - name: Verify and load release images
         id: images
-        run: bash scripts/release-image-artifact.sh load "$RUNNER_TEMP/release-images" "$GITHUB_SHA"
+        run: bash scripts/release-image-artifact.sh load "$RUNNER_TEMP/release-images" "$SOURCE_COMMIT"
       - name: Sign in to Azure with OIDC
         uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
         with:
@@ -487,6 +548,7 @@ jobs:
         if: env.MEMBER_VIDEO_ENABLED == 'true'
         run: python3 scripts/recording-event-topology.py capture "$RUNNER_TEMP/recording-topology.json"
       - name: Publish verified images
+        if: inputs.recovery_run == ''
         env:
           API_IMAGE_ID: ${{ steps.images.outputs.api_image_id }}
           SCAN_IMAGE_ID: ${{ steps.images.outputs.scan_image_id }}
@@ -512,6 +574,7 @@ jobs:
           if [[ "$MEMBER_VIDEO_ENABLED" == true ]]; then
             recording_digest="$(az acr repository show --name "$ACR_NAME" --image "${RECORDING_IMAGE_REPOSITORY}:${IMAGE_TAG}" --query digest -o tsv --only-show-errors)"
             [[ "$recording_digest" == sha256:* ]]
+            [[ -z "$RECOVERY_RUN" || "$digest $scan_digest $recording_digest" == "$RECOVERY_IMAGE_DIGESTS" ]]
             echo "RECORDING_IMAGE_REF=${ACR_LOGIN_SERVER}/${RECORDING_IMAGE_REPOSITORY}@${recording_digest}" >> "$GITHUB_ENV"
           else
             echo "RECORDING_IMAGE_REF=${ACR_LOGIN_SERVER}/${IMAGE_REPOSITORY}@${digest}" >> "$GITHUB_ENV"
@@ -522,6 +585,9 @@ jobs:
           SCAN_IMAGE_ID: ${{ steps.images.outputs.scan_image_id }}
           RECORDING_IMAGE_ID: ${{ steps.images.outputs.recording_image_id }}
         run: |
+          if [[ -n "$RECOVERY_RUN" ]]; then
+            az acr login --name "$ACR_NAME" --only-show-errors
+          fi
           docker pull "$IMAGE_REF"
           docker pull "$SCAN_IMAGE_REF"
           [[ "$(docker image inspect --format '{{.Id}}' "$IMAGE_REF")" == "$API_IMAGE_ID" ]]
@@ -531,6 +597,7 @@ jobs:
             [[ "$(docker image inspect --format '{{.Id}}' "$RECORDING_IMAGE_REF")" == "$RECORDING_IMAGE_ID" ]]
           fi
       - name: Scan immutable images
+        if: inputs.recovery_run == ''
         run: |
           set -euo pipefail
           az acr login --name "$ACR_NAME" --only-show-errors
@@ -543,7 +610,7 @@ jobs:
             ghcr.io/aquasecurity/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 \
             version --format json | jq -r '"- Trivy: " + .Version, "- Vulnerability DB updated: " + .VulnerabilityDB.UpdatedAt' >> "$GITHUB_STEP_SUMMARY"
       - name: Scan immutable recording image
-        if: env.MEMBER_VIDEO_ENABLED == 'true'
+        if: inputs.recovery_run == '' && env.MEMBER_VIDEO_ENABLED == 'true'
         run: |
           docker pull "$RECORDING_IMAGE_REF"
           docker run --rm \
@@ -690,7 +757,7 @@ jobs:
       - name: Capture healthy release
         id: release_outputs
         run: |
-          echo "commit=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          echo "commit=$SOURCE_COMMIT" >> "$GITHUB_OUTPUT"
           echo "image=$IMAGE_REF" >> "$GITHUB_OUTPUT"
       - name: Settle interrupted runtime deployment
         id: settle_runtime
@@ -814,11 +881,13 @@ jobs:
 
   publish_openapi:
     needs: deploy
+    if: ${{ !cancelled() && needs.deploy.result == 'success' }}
     runs-on: ubuntu-latest
     environment: production
     permissions:
       contents: read
       id-token: write
+      actions: read
     env:
       STORAGE_ACCOUNT: hhcapidocsprod
       CONTAINER: api-docs-asset-api
@@ -830,15 +899,19 @@ jobs:
       FAIL_OPENAPI_BEFORE_POINTER: ${{ inputs.fail_openapi_before_pointer && github.run_attempt == 1 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.deploy.outputs.commit }}
       - name: Download verified governance manifest
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: data-governance-${{ needs.deploy.outputs.commit }}
+          run-id: ${{ needs.deploy.outputs.source_run }}
+          github-token: ${{ github.token }}
           path: .artifacts/data-governance/export
           digest-mismatch: error
       - name: Validate publication configuration
         run: |
-          [[ "$RELEASE_COMMIT" == "$GITHUB_SHA" ]]
+          [[ "$RELEASE_COMMIT" == "$(git rev-parse HEAD)" ]]
           [[ "$RELEASE_IMAGE" == *@sha256:* ]]
           for name in API_DOCS_AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID; do
             test -n "${!name:-}" || { echo "Missing repository variable: ${name}" >&2; exit 1; }
@@ -851,7 +924,7 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       - name: Publish production OpenAPI contract
         run: |
-          spec_blob="specs/${GITHUB_SHA}/openapi.yaml"
+          spec_blob="specs/${RELEASE_COMMIT}/openapi.yaml"
           spec_sha256="$(sha256sum docs/openapi.yaml | cut -d " " -f 1)"
           is_canonical_run_id() { [[ "$1" =~ ^[1-9][0-9]*$ ]]; }
           if ! is_canonical_run_id "$GITHUB_RUN_ID"; then
