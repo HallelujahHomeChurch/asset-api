@@ -16,9 +16,84 @@ done
 
 workflow=.github/workflows/release.yml
 grep -Fq -- '--validation-level Provider' .github/workflows/recording-source.yml
+grep -Fq "{ name: 'ASSET_DAPR_ENABLED', value: daprEnabled ? 'true' : 'false' }" infra/main.bicep
+grep -Fq 'bash scripts/check-release-dapr-config-delta.sh "$BASE_SHA" "$HEAD_SHA" exact-fix' "$workflow"
+grep -Fq 'bash scripts/check-release-dapr-config-delta.sh "$commit" "$GITHUB_SHA"' "$workflow"
+(
+  check="$(pwd)/scripts/check-release-dapr-config-delta.sh"
+  source_step="$(sed -n '/^      - name: Verify immutable release source$/,/^      - name: Require immutable image artifact ID$/p' "$workflow" |
+    sed -n '/^        run: |$/,$p' | sed '1d;$d;s/^          //')"
+  fixture="$(mktemp -d)"
+  trap 'rm -rf "$fixture"' EXIT
+  cd "$fixture"
+  git init -q
+  git config user.name 'Release fixture'
+  git config user.email 'release-fixture@example.invalid'
+  reject_delta() {
+    if bash "$check" "$@"; then
+      echo 'Recovery accepted an unexpected change' >&2
+      exit 1
+    fi
+  }
+  mkdir infra
+  printf "%s\n" "            { name: 'ASSET_DAPR_ENABLED', value: string(daprEnabled) }" > infra/main.bicep
+  git add . && git commit -qm 'Original infrastructure'
+  base="$(git rev-parse HEAD)"
+  bash "$check" "$base" "$base"
+  reject_delta "$base" "$base" exact-fix
+
+  printf "%s\n" "            { name: 'ASSET_DAPR_ENABLED', value: daprEnabled ? 'true' : 'false' }" > infra/main.bicep
+  mkdir scripts
+  touch scripts/recording-event-topology.py scripts/test-recording-event-topology.py
+  git add . && git commit -qm 'Exact fix'
+  fixed="$(git rev-parse HEAD)"
+  bash "$check" "$base" "$fixed"
+  bash "$check" "$base" "$fixed" exact-fix
+
+  printf '\n' >> infra/main.bicep
+  git add . && git commit -qm 'Other Bicep change'
+  reject_delta "$base" "$(git rev-parse HEAD)"
+  git reset --hard -q "$fixed"
+  touch infra/another.bicep
+  git add . && git commit -qm 'Unrelated infrastructure'
+  reject_delta "$base" "$(git rev-parse HEAD)" exact-fix
+
+  cp "$check" scripts/check-release-dapr-config-delta.sh
+  cat > gh <<'GH'
+#!/bin/sh
+case "$2" in
+  */runs/123) echo 2 ;;
+  */runs/123/attempts/1) conclusion=failure; attempt=1 ;;
+  */runs/123/attempts/2) conclusion=cancelled; attempt=2 ;;
+  */runs/123/attempts/1/jobs*)
+    jq -n '{jobs:[{name:"verify",conclusion:"success"},{name:"deploy_media",conclusion:"success"},{name:"deploy",conclusion:"failure",steps:((
+      ["Publish verified images","Verify published image identities","Scan immutable images","Scan immutable recording image"] | map({name:.,conclusion:"success"})) +
+      [{name:"Reject destructive infrastructure changes",conclusion:"failure"},{name:"Update migration job",conclusion:"skipped"},{name:"Deploy API",conclusion:"skipped"}])}]}' ;;
+  *) exit 1 ;;
+esac
+if [ -n "${attempt:-}" ]; then
+  jq -n --arg sha "$SOURCE_FIXTURE_BASE" --arg conclusion "$conclusion" --argjson attempt "$attempt" '{id:123,run_attempt:$attempt,head_sha:$sha,head_branch:"main",head_repository:{full_name:"HallelujahHomeChurch/asset-api"},event:"push",path:".github/workflows/release.yml",status:"completed",conclusion:$conclusion}'
+fi
+GH
+  chmod +x gh
+  export PATH="$fixture:$PATH" SOURCE_FIXTURE_BASE="$base"
+  export GITHUB_SHA="$fixed" GITHUB_RUN_ID=456 GITHUB_REPOSITORY=HallelujahHomeChurch/asset-api GITHUB_EVENT_NAME=workflow_dispatch
+  export GITHUB_OUTPUT="$fixture/output" GITHUB_ENV="$fixture/env"
+  export MEMBER_VIDEO_ENABLED=true EXTRACTOR_ROLE_APPROVED=false WATERMARK_ROLE_APPROVED=false
+  digest="sha256:$(printf '%064d' 1)"
+  export RECOVERY_IMAGE_DIGESTS="$digest $digest $digest"
+  RECOVERY_RUN=123:1 bash -eo pipefail -c "$source_step"
+  grep -Fxq "artifact=release-images-$base-123-1" "$GITHUB_OUTPUT"
+  if RECOVERY_RUN=123 bash -eo pipefail -c "$source_step"; then
+    echo 'Recovery accepted a cancelled latest attempt' >&2
+    exit 1
+  fi
+)
 
 grep -Fq 'recovery_run:' "$workflow"
 grep -Fq 'recovery_image_digests:' "$workflow"
+grep -Fq 'metadata="$(gh api "$endpoint/attempts/$attempt")"' "$workflow"
+grep -Fq 'gh api "$endpoint/attempts/$attempt/jobs?per_page=100"' "$workflow"
 grep -Fq 'run-id: ${{ steps.source.outputs.run }}' "$workflow"
 grep -Fq 'if: ${{ !cancelled() && needs.deploy.result == '\''success'\'' }}' "$workflow"
 
@@ -33,7 +108,8 @@ expected_paths="'**'
 '!.github/workflows/release.yml'
 '!scripts/check-what-if.sh'
 '!scripts/test-what-if-policy.sh'
-'!scripts/test-release-workflow.sh'"
+'!scripts/test-release-workflow.sh'
+'!scripts/check-release-dapr-config-delta.sh'"
 actual_paths="$(awk '
   $0 == "    paths:" { in_paths_ignore = 1; next }
   in_paths_ignore && /^      - / { sub(/^      - /, ""); print; next }

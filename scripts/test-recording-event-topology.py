@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 import tempfile
 import os
@@ -70,6 +71,24 @@ class TopologyTest(unittest.TestCase):
         mod.capture(self.path, 'alive')
         mod.restore(self.path, 'alive')
         self.assertEqual(self.payloads()[0][1]['properties']['configuration']['triggerType'], 'Event')
+
+    def test_recording_image_type_omitted_from_capture_and_legacy_restore(self):
+        self.jobs[0]['properties']['template']['containers'][0]['imageType'] = 'ContainerImage'
+        mod.capture(self.path, 'alive')
+        snapshot = json.loads(self.path.read_text())
+        container = snapshot[0]['properties']['template']['containers'][0]
+        self.assertNotIn('imageType', container)
+        container['imageType'] = 'ContainerImage'
+        self.path.write_text(json.dumps(snapshot))
+        mod.restore(self.path, 'alive')
+        restored = self.payloads()[0][1]['properties']['template']['containers'][0]
+        self.assertEqual(restored, {key: value for key, value in container.items() if key != 'imageType'})
+
+    def test_unsupported_recording_image_type_rejected(self):
+        self.jobs[0]['properties']['template']['containers'][0]['imageType'] = 'Artifact'
+        with self.assertRaisesRegex(ValueError, 'recording image type'):
+            mod.capture(self.path, 'alive')
+        self.assertFalse(self.path.exists())
 
     def test_live_resource_rollback_preserves_all_tiers(self):
         for cpu, memory in [(1.5, '3Gi'), (2, '4Gi'), (4, '8Gi')]:

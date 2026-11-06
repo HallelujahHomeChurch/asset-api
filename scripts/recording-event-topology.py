@@ -40,6 +40,14 @@ def active_executions(group, current):
     return False
 
 
+def omit_read_only_image_type(template):
+    # ARM returns imageType on read but rejects it on Job PATCH.
+    for kind in ('containers', 'initContainers'):
+        for container in template.get(kind) or []:
+            if container.pop('imageType', None) not in (None, 'ContainerImage'):
+                raise ValueError('unsupported recording image type')
+
+
 def capture(path, group):
     current = jobs(group)
     provisioned = os.environ.get('RECORDING_EVENTS_PROVISIONED', 'false') == 'true'
@@ -54,6 +62,7 @@ def capture(path, group):
     for job in current:
         props = job['properties']
         template = props['template']
+        omit_read_only_image_type(template)
         for container in template['containers']:
             if not re.fullmatch(r'[^\s]+@sha256:[0-9a-f]{64}', container['image']):
                 raise ValueError('rollback requires immutable worker images')
@@ -108,9 +117,12 @@ def quiesce(path, group):
 def restore(path, group):
     wait_idle(group)
     current_ids = {j['id'] for j in jobs(group)}
-    for job in json.loads(path.read_text()):
+    prior = json.loads(path.read_text())
+    for job in prior:
         if job['id'] not in current_ids:
             raise ValueError('prior recording Job missing; refusing incomplete topology restore')
+        omit_read_only_image_type(job['properties']['template'])
+    for job in prior:
         patch(job['id'], job['properties'])
 
 

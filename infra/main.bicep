@@ -433,7 +433,7 @@ resource app 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
           image: runtimeImage
           env: concat([
             { name: 'PORT', value: '8080' }
-            { name: 'ASSET_DAPR_ENABLED', value: string(daprEnabled) }
+            { name: 'ASSET_DAPR_ENABLED', value: daprEnabled ? 'true' : 'false' }
             { name: 'DATABASE_URL', secretRef: 'database-url' }
             { name: 'DB_MAX_OPEN_CONNS', value: '8' }
             { name: 'DB_MAX_IDLE_CONNS', value: '4' }
