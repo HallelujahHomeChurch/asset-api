@@ -292,8 +292,11 @@ grep -q 'ASSET_READER_CALLER_APP_ID: api-gateway' "$workflow"
 test "$(grep -c 'readerCallerAppId="$ASSET_READER_CALLER_APP_ID"' "$workflow")" = 2
 test "$(grep -c 'daprEnabled="$ASSET_DAPR_ENABLED"' "$workflow")" = 2
 grep -Fq 'retire_dapr_revision:' "$workflow"
-grep -Fq '"$revision" == "$RETIRE_DAPR_REVISION"' "$workflow"
-grep -Fq 'az containerapp dapr enable -g "$RESOURCE_GROUP" -n "$API_APP_NAME" --dapr-app-id asset-api --dapr-app-port 8080' "$workflow"
+grep -Fq "github.event_name != 'workflow_dispatch' || inputs.retire_dapr_revision == ''" "$workflow"
+retirement_job="$(sed -n '/^  retire_dapr:/,/^  agent_docs:/p' "$workflow")"
+printf '%s\n' "$retirement_job" | grep -Fq 'run: python3 scripts/retire-dapr.py'
+! printf '%s\n' "$retirement_job" | grep -Eq 'docker build|build-release-images|deploy_media|az deployment|az acr'
+python3 scripts/test-retire-dapr.py
 grep -Fq 'param daprEnabled bool = true' infra/main.bicep
 grep -q "param readerCallerAppId string = 'api-gateway'" infra/main.bicep
 grep -q "name: 'ASSET_READER_CALLER_APP_ID', value: readerCallerAppId" infra/main.bicep

@@ -42,7 +42,59 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  retire_dapr:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.retire_dapr_revision != '' && github.repository == 'HallelujahHomeChurch/asset-api' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      RESOURCE_GROUP: alive
+      RELEASE_CONFIRMATION: ${{ inputs.confirmation }}
+      RETIRE_DAPR_REVISION: ${{ inputs.retire_dapr_revision }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ASSET_WORKLOAD_CLIENT_ID: ${{ vars.ASSET_WORKLOAD_CLIENT_ID }}
+      ASSET_WORKLOAD_AUDIENCE: ${{ vars.ASSET_WORKLOAD_AUDIENCE }}
+      LINE_ATTACHMENT_CLIENT_ID: ${{ vars.LINE_ATTACHMENT_CLIENT_ID }}
+      LINE_ATTACHMENT_OBJECT_ID: ${{ vars.LINE_ATTACHMENT_OBJECT_ID }}
+      ASSET_ACCOUNT_WORKLOAD_CLIENT_ID: ${{ vars.ASSET_ACCOUNT_WORKLOAD_CLIENT_ID }}
+      ASSET_ACCOUNT_WORKLOAD_OBJECT_ID: ${{ vars.ASSET_ACCOUNT_WORKLOAD_OBJECT_ID }}
+      ASSET_GATEWAY_WORKLOAD_CLIENT_ID: ${{ vars.ASSET_GATEWAY_WORKLOAD_CLIENT_ID }}
+      ASSET_GATEWAY_WORKLOAD_OBJECT_ID: ${{ vars.ASSET_GATEWAY_WORKLOAD_OBJECT_ID }}
+      ASSET_LINE_API_WORKLOAD_CLIENT_ID: ${{ vars.ASSET_LINE_API_WORKLOAD_CLIENT_ID }}
+      ASSET_LINE_API_WORKLOAD_OBJECT_ID: ${{ vars.ASSET_LINE_API_WORKLOAD_OBJECT_ID }}
+      ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID: ${{ vars.ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID }}
+      ASSET_EXTRACTOR_WORKLOAD_OBJECT_ID: ${{ vars.ASSET_EXTRACTOR_WORKLOAD_OBJECT_ID }}
+      ASSET_WATERMARK_WORKLOAD_CLIENT_ID: ${{ vars.ASSET_WATERMARK_WORKLOAD_CLIENT_ID }}
+      ASSET_WATERMARK_WORKLOAD_OBJECT_ID: ${{ vars.ASSET_WATERMARK_WORKLOAD_OBJECT_ID }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify isolated retirement request
+        env:
+          MIXED_RELEASE_INPUTS: ${{ inputs.approve_extractor_app_role || inputs.approve_watermark_app_role || inputs.fail_openapi_before_pointer }}
+        run: |
+          [[ "$RELEASE_CONFIRMATION" == deploy-asset-api-production && "$MIXED_RELEASE_INPUTS" == false ]]
+          [[ "$RETIRE_DAPR_REVISION" =~ ^asset-api--[a-z0-9-]+$ ]]
+      - uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - run: az extension add --name containerapp --upgrade --yes
+      - name: Verify the existing exact Asset caller roles
+        run: |
+          for subject in account gateway line-api extractor watermark; do
+            ROLE_SUBJECT="$subject" bash scripts/ensure-workload-app-role.sh check
+          done
+      - name: Retire only the Asset sidecar using the serving image
+        run: python3 scripts/retire-dapr.py
+
   agent_docs:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.retire_dapr_revision == '' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -233,7 +285,6 @@ jobs:
       ASSET_WORKLOAD_CLIENT_ID: ${{ vars.ASSET_WORKLOAD_CLIENT_ID }}
       ASSET_WORKLOAD_AUDIENCE: ${{ vars.ASSET_WORKLOAD_AUDIENCE }}
       ASSET_READER_CALLER_APP_ID: api-gateway
-      RETIRE_DAPR_REVISION: ${{ github.event_name == 'workflow_dispatch' && inputs.retire_dapr_revision || '' }}
       ASSET_ACCOUNT_WORKLOAD_CLIENT_ID: ${{ vars.ASSET_ACCOUNT_WORKLOAD_CLIENT_ID }}
       ASSET_ACCOUNT_WORKLOAD_OBJECT_ID: ${{ vars.ASSET_ACCOUNT_WORKLOAD_OBJECT_ID }}
       ASSET_GATEWAY_WORKLOAD_CLIENT_ID: ${{ vars.ASSET_GATEWAY_WORKLOAD_CLIENT_ID }}
@@ -415,20 +466,9 @@ jobs:
           }
           revision="$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_APP_NAME" --query properties.latestReadyRevisionName -o tsv --only-show-errors)"
           image="$(az containerapp revision show -g "$RESOURCE_GROUP" -n "$API_APP_NAME" --revision "$revision" --query properties.template.containers[0].image -o tsv --only-show-errors)"
-          previous_dapr="$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_APP_NAME" --query properties.configuration.dapr.enabled -o tsv --only-show-errors)"
-          [[ "$previous_dapr" == true || "$previous_dapr" == false ]]
-          desired_dapr="$previous_dapr"
-          if [[ -n "$RETIRE_DAPR_REVISION" ]]; then
-            [[ "$RETIRE_DAPR_REVISION" =~ ^asset-api--[a-z0-9-]+$ && "$revision" == "$RETIRE_DAPR_REVISION" && "$previous_dapr" == true ]]
-            [[ "$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_APP_NAME" --query properties.latestRevisionName -o tsv --only-show-errors)" == "$revision" ]]
-            az containerapp revision show -g "$RESOURCE_GROUP" -n "$API_APP_NAME" --revision "$revision" \
-              --query '{active:properties.active,health:properties.healthState,audit:properties.template.containers[0].env[?name==`AUDIT_PRIVATE_HTTPS`].value | [0],dapr:properties.template.containers[0].env[?name==`ASSET_DAPR_ENABLED`].value | [0]}' -o json --only-show-errors \
-              | jq -e '.active == true and .health == "Healthy" and .audit == "true" and .dapr == "true"' >/dev/null
-            az containerapp show -g "$RESOURCE_GROUP" -n "$API_APP_NAME" --query properties.configuration.dapr -o json --only-show-errors \
-              | jq -e '.enabled == true and .appId == "asset-api" and .appPort == 8080 and .appProtocol == "http" and .httpMaxRequestSize == 210 and .logLevel == "info" and .enableApiLogging == false and .appHealth == null and .httpReadBufferSize == null and .maxConcurrency == null' >/dev/null
-            desired_dapr=false
-          fi
-          if [[ "$desired_dapr" == false ]]; then
+          current_dapr="$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_APP_NAME" --query properties.configuration.dapr.enabled -o tsv --only-show-errors)"
+          [[ "$current_dapr" == true || "$current_dapr" == false ]]
+          if [[ "$current_dapr" == false ]]; then
             for subject in ACCOUNT GATEWAY LINE_API EXTRACTOR WATERMARK; do
               client="ASSET_${subject}_WORKLOAD_CLIENT_ID"
               object="ASSET_${subject}_WORKLOAD_OBJECT_ID"
@@ -438,8 +478,7 @@ jobs:
           {
             echo "PREVIOUS_READY_REVISION=$revision"
             echo "PREVIOUS_IMAGE_REF=$(resolve_image_ref "$image")"
-            echo "PREVIOUS_DAPR_ENABLED=$previous_dapr"
-            echo "ASSET_DAPR_ENABLED=$desired_dapr"
+            echo "ASSET_DAPR_ENABLED=$current_dapr"
           } >> "$GITHUB_ENV"
       - name: Capture existing worker recovery state
         id: capture_workers
@@ -660,13 +699,6 @@ jobs:
       - name: Roll back failed runtime
         if: ${{ (failure() || cancelled()) && env.PREVIOUS_READY_REVISION != '' && ((steps.deploy_runtime.outcome == 'success' || steps.deploy_runtime.outcome == 'failure' || steps.deploy_runtime.outcome == 'cancelled') || steps.quiesce_recording.outputs.paused == 'true') && (steps.settle_runtime.outcome == 'success' || steps.deploy_runtime.outcome == 'skipped') }}
         run: |
-          if [[ "$PREVIOUS_DAPR_ENABLED" == true && "$ASSET_DAPR_ENABLED" == false ]]; then
-            dapr="$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_APP_NAME" --query properties.configuration.dapr.enabled -o tsv --only-show-errors)"
-            if [[ "$dapr" == false ]]; then
-              az containerapp dapr enable -g "$RESOURCE_GROUP" -n "$API_APP_NAME" --dapr-app-id asset-api --dapr-app-port 8080 --dapr-app-protocol http --dapr-http-max-request-size 210 --dapr-log-level info --only-show-errors -o none
-            fi
-            [[ "$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_APP_NAME" --query properties.configuration.dapr.enabled -o tsv --only-show-errors)" == true ]]
-          fi
           if [[ "$MEMBER_VIDEO_ENABLED" == true && "$RECORDING_EVENTS_PROVISIONED" == true ]]; then
             python3 scripts/recording-event-topology.py pause "$RUNNER_TEMP/recording-topology.json"
           fi
