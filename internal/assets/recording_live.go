@@ -8,11 +8,19 @@ import (
 )
 
 type RecordingLiveFragment struct {
-	VideoFrames int     `json:"videoFrames,omitempty"`
-	FrameRate   float64 `json:"frameRate,omitempty"`
-	Start       float64 `json:"start"`
-	End         float64 `json:"end"`
-	Codecs      string  `json:"codecs"`
+	Validation  *RecordingLiveValidation `json:"validation,omitempty"`
+	VideoFrames int                      `json:"videoFrames,omitempty"`
+	FrameRate   float64                  `json:"frameRate,omitempty"`
+	Start       float64                  `json:"start"`
+	End         float64                  `json:"end"`
+	Codecs      string                   `json:"codecs"`
+}
+
+// Server-generated evidence is persisted with the fenced live snapshot, never accepted from uploads.
+type RecordingLiveValidation struct {
+	Version string                 `json:"version"`
+	Init    RecordingPackageObject `json:"init"`
+	Segment RecordingPackageObject `json:"segment"`
 }
 type RecordingLiveSegment struct {
 	Sequence   int                              `json:"sequence"`

@@ -100,6 +100,9 @@ func (p PackageMediaProbe) ValidateLiveSegment(ctx context.Context, captureID, a
 			return nil, assets.ErrInvalidUpload
 		}
 		result[r.Name] = assets.RecordingLiveFragment{VideoFrames: actual.VideoFrames, Start: actual.Start, End: actual.End, Codecs: actual.Codecs, FrameRate: actual.FrameRate}
+		fragment := result[r.Name]
+		fragment.Validation = &assets.RecordingLiveValidation{Version: liveValidationVersion, Init: selected[r.Name+"/init.mp4"], Segment: selected[fmt.Sprintf("%s/seg-%06d.m4s", r.Name, sequence)]}
+		result[r.Name] = fragment
 	}
 	return result, nil
 }
