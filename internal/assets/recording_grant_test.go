@@ -66,7 +66,7 @@ func TestPackageGrantScopesImmutablePrefixAndClampsRetention(t *testing.T) {
 	if exchange["exp"] != float64(now.Add(time.Minute).Unix()) {
 		t.Fatal("exchange must expire after one minute")
 	}
-	if playback["packageId"] != p.ID || playback["prefix"] != p.FinalPrefix || playback["objectKey"] != nil || playback["assetVersionId"] != nil || !grant.ExpiresAt.Equal(expiry) {
+	if playback["packageId"] != p.ID || playback["prefix"] != p.FinalPrefix || playback["objectKey"] != nil || playback["assetVersionId"] != nil || !grant.ExpiresAt.Equal(expiry.Truncate(time.Second)) {
 		t.Fatalf("claims: %v", playback)
 	}
 	p.FinalPrefix = "recordings/packages/other/final/attempt-a/"
@@ -195,4 +195,47 @@ func TestBroadcastGrantsCarryAuthorityAndSeparatePreviewPurpose(t *testing.T) {
 
 func (r *broadcastGrantRepo) WithCaptureGrant(ctx context.Context, id string, fn func(*RecordingCapture, RecordingBroadcastReader) error) (RecordingCapture, error) {
 	return r.UpdateCapture(ctx, id, func(c *RecordingCapture) error { return fn(c, r) })
+}
+
+func TestRecordingGrantDeadlineMatchesSignedPlaybackExpiry(t *testing.T) {
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	signer := &RecordingSigner{key: key, kid: "test", issuer: "fixture"}
+	now := time.Date(2026, 11, 7, 0, 0, 0, 999500000, time.UTC)
+	for _, tc := range []struct {
+		name      string
+		remaining time.Duration
+		valid     bool
+	}{
+		{"hour cap", 2 * time.Hour, true},
+		{"retention cap", 20*time.Minute + 200*time.Microsecond, true},
+		{"next second", time.Millisecond, true},
+		{"same second", 200 * time.Microsecond, false},
+		{"expired", -time.Millisecond, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			deadline := now.Add(tc.remaining)
+			grant, err := signer.issue(map[string]any{}, map[string]any{}, deadline, now)
+			if !tc.valid {
+				if !errors.Is(err, ErrForbidden) {
+					t.Fatalf("expired grant: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			var exchange, playback map[string]any
+			verifyJWT(t, grant.ExchangeCredential, &key.PublicKey, &exchange)
+			verifyJWT(t, exchange["playback"].(string), &key.PublicKey, &playback)
+			if !grant.ExpiresAt.Equal(time.Unix(int64(playback["exp"].(float64)), 0)) {
+				t.Fatal("deadline differs from signed playback expiry")
+			}
+			if !grant.ExpiresAt.After(now) || grant.ExpiresAt.After(deadline) || grant.ExpiresAt.After(now.Add(time.Hour)) {
+				t.Fatal("deadline exceeds authorization bounds")
+			}
+			if exchange["exp"].(float64) > playback["exp"].(float64) {
+				t.Fatal("exchange outlives playback")
+			}
+		})
+	}
 }

@@ -78,6 +78,8 @@ func (s *RecordingSigner) issue(base, resource map[string]any, recordingExpiry, 
 	if recordingExpiry.Before(expiry) {
 		expiry = recordingExpiry.UTC()
 	}
+	// Return the same deadline enforced by the signed JWT, including retention caps.
+	expiry = expiry.Truncate(time.Second)
 	if expiry.Unix() <= now.Unix() {
 		return RecordingGrant{}, ErrForbidden
 	}
