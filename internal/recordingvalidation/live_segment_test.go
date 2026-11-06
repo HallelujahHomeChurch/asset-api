@@ -1,6 +1,7 @@
 package recordingvalidation
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -176,6 +177,31 @@ func testLiveSegmentFrameRate(t *testing.T, rate string) {
 	}
 	if _, err := FreezeRecordingPackage(context.Background(), p, "final-seal", objects, probe); err != nil {
 		t.Fatalf("final sealed three-profile package: %v", err)
+	}
+
+	for _, segment := range history {
+		for _, fragment := range segment.Renditions {
+			fragment.Validation.InitETag, fragment.Validation.SegmentETag = "etag", "etag"
+			for _, object := range []assets.RecordingPackageObject{fragment.Validation.Init, fragment.Validation.Segment} {
+				objects.bytes["recordings/captures/"+p.ID+"/final/"+object.Path] = bytes.Clone(objects.bytes[p.StagingKey(object.Path)])
+			}
+		}
+	}
+	if rate == "30" {
+		assertArchiveFailureAndCancellation(t, p, history, objects)
+	}
+	beforeOpens := objects.opens
+	prefix, used, fastErr := freezeLiveArchive(context.Background(), p, "fast-seal", history, objects, PackageMediaProbe{})
+	if fastErr != nil || !used {
+		t.Fatalf("fast seal: %v %v", used, fastErr)
+	}
+	if objects.opens-beforeOpens != 4 {
+		t.Fatalf("fast archive read media bodies: %d opens", objects.opens-beforeOpens)
+	}
+	for _, object := range p.Inventory.Objects {
+		if !bytes.Equal(objects.bytes[prefix+object.Path], objects.bytes["recordings/packages/"+p.ID+"/final/final-seal/"+object.Path]) {
+			t.Fatalf("fast/full bytes differ: %s", object.Path)
+		}
 	}
 	if err := validateLiveArchiveEvidence(p.Inventory, playlists["master.m3u8"], history); err != nil {
 		t.Fatalf("live and full validation disagree: %v", err)

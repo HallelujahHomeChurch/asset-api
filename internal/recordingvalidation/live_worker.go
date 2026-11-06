@@ -12,7 +12,7 @@ import (
 
 type LiveObjects interface {
 	PackageObjects
-	PublishLiveObject(context.Context, string, string, string) error
+	PublishLiveObject(context.Context, string, string, string) (string, error)
 	PutLivePlaylist(context.Context, string, int64, string, []byte) error
 	AdvanceLivePointer(context.Context, string, int64, int) error
 }
@@ -85,8 +85,15 @@ func runLiveClaim(ctx context.Context, store *postgres.RecordingCaptureStore, ob
 				}
 				logStage(true)
 				stage, started = "stable_publication", time.Now()
-				if err := publishLiveObjects(ctx, objects, claim); err != nil {
+				versions, err := publishLiveObjects(ctx, objects, claim)
+				if err != nil {
 					return err
+				}
+				for _, fragment := range batch {
+					if fragment.Validation != nil {
+						fragment.Validation.InitETag = versions[fragment.Validation.Init.Path]
+						fragment.Validation.SegmentETag = versions[fragment.Validation.Segment.Path]
+					}
 				}
 				snapshot, err = store.CommitLiveBatch(ctx, claim, batch)
 				if err != nil {
@@ -123,7 +130,8 @@ func runLiveClaim(ctx context.Context, store *postgres.RecordingCaptureStore, ob
 }
 
 // Join bounded provider copies before committing the batch or releasing its lease.
-func publishLiveObjects(ctx context.Context, objects LiveObjects, claim postgres.RecordingLiveClaim) error {
+func publishLiveObjects(ctx context.Context, objects LiveObjects, claim postgres.RecordingLiveClaim) (map[string]string, error) {
+	versions := make(map[string]string, len(claim.Objects))
 	workCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	from := "recordings/packages/" + claim.Capture.ID + "/final/" + claim.ClaimID + "/"
@@ -145,7 +153,16 @@ func publishLiveObjects(ctx context.Context, objects LiveObjects, claim postgres
 					err = assets.ErrInvalidUpload
 				}
 				if err == nil {
-					err = objects.PublishLiveObject(workCtx, from+object.Path, to+object.Path, etag)
+					var published string
+					published, err = objects.PublishLiveObject(workCtx, from+object.Path, to+object.Path, etag)
+					if err == nil && published == "" {
+						err = assets.ErrInvalidUpload
+					}
+					if err == nil {
+						mu.Lock()
+						versions[object.Path] = published
+						mu.Unlock()
+					}
 				}
 				if err != nil {
 					mu.Lock()
@@ -161,7 +178,7 @@ func publishLiveObjects(ctx context.Context, objects LiveObjects, claim postgres
 	}
 	workers.Wait()
 	if result != nil {
-		return result
+		return nil, result
 	}
-	return ctx.Err()
+	return versions, ctx.Err()
 }

@@ -234,6 +234,10 @@ func TestLiveNormalSealAfterPublishedFullSegmentAppendsEndOnly(t *testing.T) {
 	if err = store.FinishLivePublication(ctx, end, final.Revision); err != nil {
 		t.Fatal(err)
 	}
+	archive, archiveErr := NewRecordingPackageStore(db).LiveArchiveSnapshot(ctx, id)
+	if archiveErr != nil || !archive.Ended || archive.Revision != archive.PublishedRevision || len(archive.Segments) != 1 {
+		t.Fatalf("archive evidence: %+v %v", archive, archiveErr)
+	}
 	progress, err := store.LiveProgress(ctx, id)
 	if err != nil || !progress.Ended || progress.LastSequence != 0 || progress.EndedAt == nil {
 		t.Fatalf("normal end: %+v %v", progress, err)

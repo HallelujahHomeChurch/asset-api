@@ -274,3 +274,18 @@ func (s *RecordingPackageStore) FinishPackageValidation(ctx context.Context, id,
 		return err
 	})
 }
+
+// LiveArchiveSnapshot reads only the capture owning this sealed package.
+func (s *RecordingPackageStore) LiveArchiveSnapshot(ctx context.Context, id string) (RecordingLiveSnapshot, error) {
+	var snapshot RecordingLiveSnapshot
+	var raw []byte
+	err := s.db.QueryRowContext(ctx, `SELECT l.segments,l.revision,l.published_revision,l.ended FROM recording_live l JOIN recording_captures c ON c.id=l.capture_id WHERE c.id=$1 AND c.package_id=$1 AND c.state IN ('freezing','validating') AND c.terminal_at IS NULL AND c.expires_at>clock_timestamp()`, id).Scan(&raw, &snapshot.Revision, &snapshot.PublishedRevision, &snapshot.Ended)
+	if errors.Is(err, sql.ErrNoRows) {
+		return snapshot, assets.ErrNotFound
+	}
+	if err != nil {
+		return snapshot, err
+	}
+	err = json.Unmarshal(raw, &snapshot.Segments)
+	return snapshot, err
+}

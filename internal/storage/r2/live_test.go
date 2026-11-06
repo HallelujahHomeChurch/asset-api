@@ -49,7 +49,7 @@ func TestLiveStorageCannotCopyAcrossCapturesOrSignFinal(t *testing.T) {
 	defer server.Close()
 	store := packageListStore(server)
 	a, b := strings.Repeat("a", 32), strings.Repeat("b", 32)
-	if err := store.PublishLiveObject(context.Background(), "recordings/packages/"+a+"/final/attempt/720p/init.mp4", "recordings/captures/"+b+"/final/720p/init.mp4", "etag"); err == nil {
+	if _, err := store.PublishLiveObject(context.Background(), "recordings/packages/"+a+"/final/attempt/720p/init.mp4", "recordings/captures/"+b+"/final/720p/init.mp4", "etag"); err == nil {
 		t.Fatal("cross capture copy")
 	}
 	if err := store.PutLivePlaylist(context.Background(), a, 1, "../bad", []byte("#EXTM3U\n")); err == nil {
@@ -162,6 +162,55 @@ func TestLivePreviewPointerNeverRegressesOrTouchesMediaPointer(t *testing.T) {
 	for _, last := range []int{-1, 4320} {
 		if err := store.AdvanceLivePreviewPointer(context.Background(), id, last); err == nil {
 			t.Fatal("bad boundary accepted")
+		}
+	}
+}
+
+func TestLivePublicationReturnsConditionalCopyIdentity(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Amz-Copy-Source-If-Match") != "source-version" {
+			t.Error("missing source fence")
+		}
+		w.Header().Set("Content-Type", "application/xml")
+		io.WriteString(w, `<CopyObjectResult><ETag>"stable-version"</ETag></CopyObjectResult>`)
+	}))
+	defer server.Close()
+	id := strings.Repeat("a", 32)
+	etag, err := packageListStore(server).PublishLiveObject(context.Background(), "recordings/packages/"+id+"/final/attempt/720p/init.mp4", "recordings/captures/"+id+"/final/720p/init.mp4", "source-version")
+	if err != nil || etag != `"stable-version"` {
+		t.Fatalf("published identity %q %v", etag, err)
+	}
+}
+
+func TestArchiveCopyStaysWithinCaptureAndRequiresObjectVersion(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Amz-Copy-Source-If-Match") != "verified-version" {
+			t.Error("missing immutable source fence")
+		}
+		if r.Header.Get("X-Amz-Metadata-Directive") != "REPLACE" {
+			t.Error("private metadata not reset")
+		}
+		w.Header().Set("Content-Type", "application/xml")
+		io.WriteString(w, `<CopyObjectResult><ETag>"archive-version"</ETag></CopyObjectResult>`)
+	}))
+	defer server.Close()
+	store := packageListStore(server)
+	id := strings.Repeat("a", 32)
+	source := "recordings/captures/" + id + "/final/720p/seg-000000.m4s"
+	destination := "recordings/packages/" + id + "/final/attempt/720p/seg-000000.m4s"
+	for _, tc := range []struct {
+		source, destination, etag string
+		ok                        bool
+	}{
+		{source, destination, "verified-version", true},
+		{source, strings.Replace(destination, id, strings.Repeat("b", 32), 1), "verified-version", false},
+		{source, strings.Replace(destination, "seg-000000", "seg-000001", 1), "verified-version", false},
+		{source, destination, "", false},
+		{source, destination, "invalid\r\nversion", false},
+		{strings.Replace(source, "720p/seg-000000.m4s", "playlists/1/master.m3u8", 1), destination, "verified-version", false},
+	} {
+		if err := store.CopyPackageObject(context.Background(), tc.source, tc.destination, tc.etag); (err == nil) != tc.ok {
+			t.Fatalf("copy scope accepted=%v err=%v", tc.ok, err)
 		}
 	}
 }
