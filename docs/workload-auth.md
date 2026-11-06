@@ -19,6 +19,14 @@ The resolved service is kept in the request context (`requestService`). Only
 for ownership is `hhc-web-bulletin-worker` treated as `hhc-web-api`: the worker
 creates and reads CMS-owned assets on CMS's behalf.
 
+Account can use its own Entra identity on the same canonical private routes
+after the exact client/object pair and existing `Asset.Invoke` role are verified.
+Gateway uses a separate Entra identity on `/_gateway/api/assets/...`. Easy Auth
+protects this prefix before the app removes it and dispatches to the existing
+reader handler. Legacy collection paths accept the existing Dapr proof and do
+not trust a workload principal header. Gateway workload identity does not grant
+access to service-owned `/priv/*` paths or replace the end-user scope checks.
+
 ## Trusted bulletin derivative completion
 
 `POST /priv/assets/bulletin-derivatives/{assetID}/complete` marks a watermark

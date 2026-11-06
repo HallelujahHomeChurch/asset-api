@@ -56,8 +56,13 @@ type Config struct {
 	ExtractorWorkloadObjectID string
 	WatermarkWorkloadClientID string
 	WatermarkWorkloadObjectID string
+	AccountWorkloadClientID   string
+	AccountWorkloadObjectID   string
+	GatewayWorkloadClientID   string
+	GatewayWorkloadObjectID   string
 	ShutdownTimeout           time.Duration
 	AuditDispatchEnabled      bool
+	AuditPrivateHTTPS         bool
 	AuditAppID                string
 	AuditToken                string
 	DaprHTTPPort              int
@@ -106,6 +111,10 @@ func Load() (Config, error) {
 		ExtractorWorkloadObjectID: strings.TrimSpace(os.Getenv("ASSET_EXTRACTOR_WORKLOAD_OBJECT_ID")),
 		WatermarkWorkloadClientID: strings.TrimSpace(os.Getenv("ASSET_WATERMARK_WORKLOAD_CLIENT_ID")),
 		WatermarkWorkloadObjectID: strings.TrimSpace(os.Getenv("ASSET_WATERMARK_WORKLOAD_OBJECT_ID")),
+		AccountWorkloadClientID:   strings.TrimSpace(os.Getenv("ASSET_ACCOUNT_WORKLOAD_CLIENT_ID")),
+		AccountWorkloadObjectID:   strings.TrimSpace(os.Getenv("ASSET_ACCOUNT_WORKLOAD_OBJECT_ID")),
+		GatewayWorkloadClientID:   strings.TrimSpace(os.Getenv("ASSET_GATEWAY_WORKLOAD_CLIENT_ID")),
+		GatewayWorkloadObjectID:   strings.TrimSpace(os.Getenv("ASSET_GATEWAY_WORKLOAD_OBJECT_ID")),
 		ShutdownTimeout:           10 * time.Second,
 		AuditAppID:                value("AUDIT_APP_ID", "audit-log"),
 		AuditToken:                strings.TrimSpace(os.Getenv("AUDIT_TOKEN")),
@@ -168,6 +177,12 @@ func Load() (Config, error) {
 		}
 		cfg.AuditDispatchEnabled = enabled
 	}
+	if raw := strings.TrimSpace(os.Getenv("AUDIT_PRIVATE_HTTPS")); raw != "" {
+		cfg.AuditPrivateHTTPS, err = strconv.ParseBool(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("invalid AUDIT_PRIVATE_HTTPS")
+		}
+	}
 	if err := positiveInt("DAPR_HTTP_PORT", &cfg.DaprHTTPPort); err != nil {
 		return Config{}, err
 	}
@@ -194,23 +209,23 @@ func Load() (Config, error) {
 	if configured != 0 && configured != len(workloadValues) {
 		return Config{}, fmt.Errorf("ASSET workload authentication configuration is incomplete")
 	}
-	if cfg.ExtractorWorkloadClientID != "" || cfg.ExtractorWorkloadObjectID != "" {
-		if configured != len(workloadValues) || cfg.ExtractorWorkloadClientID == "" || cfg.ExtractorWorkloadObjectID == "" {
-			return Config{}, fmt.Errorf("ASSET extractor workload authentication configuration is incomplete")
-		}
-		if cfg.ExtractorWorkloadClientID == cfg.LineWorkloadClientID || cfg.ExtractorWorkloadObjectID == cfg.LineWorkloadObjectID {
-			return Config{}, fmt.Errorf("ASSET extractor and LINE workload identities must be distinct")
-		}
+	identities := []struct{ service, client, object string }{
+		{"LINE", cfg.LineWorkloadClientID, cfg.LineWorkloadObjectID},
+		{"extractor", cfg.ExtractorWorkloadClientID, cfg.ExtractorWorkloadObjectID},
+		{"watermark", cfg.WatermarkWorkloadClientID, cfg.WatermarkWorkloadObjectID},
+		{"account", cfg.AccountWorkloadClientID, cfg.AccountWorkloadObjectID},
+		{"gateway", cfg.GatewayWorkloadClientID, cfg.GatewayWorkloadObjectID},
 	}
-	if cfg.WatermarkWorkloadClientID != "" || cfg.WatermarkWorkloadObjectID != "" {
-		if configured != len(workloadValues) || cfg.WatermarkWorkloadClientID == "" || cfg.WatermarkWorkloadObjectID == "" {
-			return Config{}, fmt.Errorf("ASSET watermark workload authentication configuration is incomplete")
+	for i, identity := range identities {
+		if identity.client == "" && identity.object == "" {
+			continue
 		}
-		// The watermark worker gets a distinct service identity that alone may
-		// attest trusted bulletin derivatives; it must never share an identity.
-		for _, other := range [][2]string{{cfg.LineWorkloadClientID, cfg.LineWorkloadObjectID}, {cfg.ExtractorWorkloadClientID, cfg.ExtractorWorkloadObjectID}} {
-			if cfg.WatermarkWorkloadClientID == other[0] || cfg.WatermarkWorkloadObjectID == other[1] {
-				return Config{}, fmt.Errorf("ASSET watermark workload identity must be distinct from LINE and extractor identities")
+		if configured != len(workloadValues) || identity.client == "" || identity.object == "" {
+			return Config{}, fmt.Errorf("ASSET %s workload authentication configuration is incomplete", identity.service)
+		}
+		for _, other := range identities[:i] {
+			if strings.EqualFold(identity.client, other.client) || strings.EqualFold(identity.object, other.object) {
+				return Config{}, fmt.Errorf("ASSET %s and %s workload identities must be distinct", identity.service, other.service)
 			}
 		}
 	}

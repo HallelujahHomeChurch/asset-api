@@ -48,6 +48,10 @@ param extractorClientId string = ''
 param extractorObjectId string = ''
 param watermarkWorkerClientId string = ''
 param watermarkWorkerObjectId string = ''
+param accountWorkloadClientId string = ''
+param accountWorkloadObjectId string = ''
+param gatewayWorkloadClientId string = ''
+param gatewayWorkloadObjectId string = ''
 param readerCallerAppId string = 'api-gateway'
 
 param publicBaseUrl string = 'https://www.alive.org.tw/assets'
@@ -60,6 +64,8 @@ var keyVaultSecretsUserRole = subscriptionResourceId('Microsoft.Authorization/ro
 var workloadAuthEnabled = workloadAuthClientId != '' && workloadAuthAudience != '' && lineAttachmentClientId != '' && lineAttachmentObjectId != ''
 var extractorAuthEnabled = workloadAuthEnabled && extractorClientId != '' && extractorObjectId != ''
 var watermarkWorkerAuthEnabled = workloadAuthEnabled && watermarkWorkerClientId != '' && watermarkWorkerObjectId != ''
+var accountWorkloadAuthEnabled = workloadAuthEnabled && accountWorkloadClientId != '' && accountWorkloadObjectId != ''
+var gatewayWorkloadAuthEnabled = workloadAuthEnabled && gatewayWorkloadClientId != '' && gatewayWorkloadObjectId != ''
 var workloadAuthIssuer = 'https://sts.windows.net/${subscription().tenantId}/'
 var recordingBucket = 'hhc-member-recordings-prod'
 var recordingEventQueueGroups = [for lane in ['live','processing','preview']: [
@@ -448,7 +454,12 @@ resource app 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
             { name: 'ASSET_EXTRACTOR_WORKLOAD_OBJECT_ID', value: workloadAuthEnabled ? extractorObjectId : '' }
             { name: 'ASSET_WATERMARK_WORKLOAD_CLIENT_ID', value: watermarkWorkerAuthEnabled ? watermarkWorkerClientId : '' }
             { name: 'ASSET_WATERMARK_WORKLOAD_OBJECT_ID', value: watermarkWorkerAuthEnabled ? watermarkWorkerObjectId : '' }
+            { name: 'ASSET_ACCOUNT_WORKLOAD_CLIENT_ID', value: accountWorkloadAuthEnabled ? accountWorkloadClientId : '' }
+            { name: 'ASSET_ACCOUNT_WORKLOAD_OBJECT_ID', value: accountWorkloadAuthEnabled ? accountWorkloadObjectId : '' }
+            { name: 'ASSET_GATEWAY_WORKLOAD_CLIENT_ID', value: gatewayWorkloadAuthEnabled ? gatewayWorkloadClientId : '' }
+            { name: 'ASSET_GATEWAY_WORKLOAD_OBJECT_ID', value: gatewayWorkloadAuthEnabled ? gatewayWorkloadObjectId : '' }
             { name: 'AUDIT_DISPATCH_ENABLED', value: 'true' }
+            { name: 'AUDIT_PRIVATE_HTTPS', value: 'true' }
             { name: 'AUDIT_APP_ID', value: 'audit-log' }
             { name: 'AUDIT_TOKEN', secretRef: 'audit-token' }
           ], memberVideoEnabled ? mediaRuntimeEnv : [])
@@ -538,8 +549,22 @@ resource workloadAuth 'Microsoft.App/containerApps/authConfigs@2025-01-01' = if 
         validation: {
           allowedAudiences: [workloadAuthAudience]
           defaultAuthorizationPolicy: {
-            allowedApplications: concat([lineAttachmentClientId], extractorAuthEnabled ? [extractorClientId] : [], watermarkWorkerAuthEnabled ? [watermarkWorkerClientId] : [])
-            allowedPrincipals: { identities: concat([lineAttachmentObjectId], extractorAuthEnabled ? [extractorObjectId] : [], watermarkWorkerAuthEnabled ? [watermarkWorkerObjectId] : []) }
+            allowedApplications: concat(
+              [lineAttachmentClientId],
+              extractorAuthEnabled ? [extractorClientId] : [],
+              watermarkWorkerAuthEnabled ? [watermarkWorkerClientId] : [],
+              accountWorkloadAuthEnabled ? [accountWorkloadClientId] : [],
+              gatewayWorkloadAuthEnabled ? [gatewayWorkloadClientId] : []
+            )
+            allowedPrincipals: {
+              identities: concat(
+                [lineAttachmentObjectId],
+                extractorAuthEnabled ? [extractorObjectId] : [],
+                watermarkWorkerAuthEnabled ? [watermarkWorkerObjectId] : [],
+                accountWorkloadAuthEnabled ? [accountWorkloadObjectId] : [],
+                gatewayWorkloadAuthEnabled ? [gatewayWorkloadObjectId] : []
+              )
+            }
           }
         }
       }

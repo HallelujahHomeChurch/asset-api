@@ -534,8 +534,17 @@ grep -q 'ASSET_EXTRACTOR_WORKLOAD_OBJECT_ID' "$workflow"
 grep -Eq 'EXTRACTOR_ROLE_APPROVED:.*github.event_name.*workflow_dispatch.*inputs.approve_extractor_app_role' "$workflow"
 grep -Fq 'bash scripts/ensure-workload-app-role.sh check' "$workflow"
 grep -Fq 'bash scripts/ensure-workload-app-role.sh apply' "$workflow"
-grep -Fq "allowedApplications: concat([lineAttachmentClientId], extractorAuthEnabled ? [extractorClientId] : [], watermarkWorkerAuthEnabled ? [watermarkWorkerClientId] : [])" infra/main.bicep
-grep -Fq "allowedPrincipals: { identities: concat([lineAttachmentObjectId], extractorAuthEnabled ? [extractorObjectId] : [], watermarkWorkerAuthEnabled ? [watermarkWorkerObjectId] : []) }" infra/main.bicep
+for binding in 'lineAttachmentClientId' 'lineAttachmentObjectId' \
+  'extractorAuthEnabled ? [extractorClientId] : []' 'extractorAuthEnabled ? [extractorObjectId] : []' \
+  'watermarkWorkerAuthEnabled ? [watermarkWorkerClientId] : []' 'watermarkWorkerAuthEnabled ? [watermarkWorkerObjectId] : []' \
+  'accountWorkloadAuthEnabled ? [accountWorkloadClientId] : []' 'accountWorkloadAuthEnabled ? [accountWorkloadObjectId] : []' \
+  'gatewayWorkloadAuthEnabled ? [gatewayWorkloadClientId] : []' 'gatewayWorkloadAuthEnabled ? [gatewayWorkloadObjectId] : []'; do
+  sed -n '/defaultAuthorizationPolicy: {/,/^          }/p' infra/main.bicep | grep -Fq "$binding"
+done
+! sed -n '/excludedPaths: \[/,/^      ]/p' infra/main.bicep | grep -Fq '/_gateway'
+for subject in account gateway; do
+  grep -Fq "ROLE_SUBJECT=$subject bash scripts/ensure-workload-app-role.sh check" "$workflow"
+done
 # W3: the watermark worker identity is wired end to end and approved separately.
 grep -q 'ASSET_WATERMARK_WORKLOAD_CLIENT_ID' "$workflow"
 grep -q 'ASSET_WATERMARK_WORKLOAD_OBJECT_ID' "$workflow"
