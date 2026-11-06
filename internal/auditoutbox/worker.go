@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"math/rand/v2"
+	"net/http"
 	"time"
 
 	"hhc/asset-api/internal/auditclient"
@@ -19,6 +20,7 @@ type repository interface {
 }
 type appender interface {
 	Append(context.Context, []byte) auditclient.AppendResult
+	Verify(context.Context) error
 }
 type Worker struct {
 	store  repository
@@ -34,11 +36,24 @@ func (w *Worker) Run(ctx context.Context) {
 	snapshots := time.NewTicker(time.Minute)
 	defer work.Stop()
 	defer snapshots.Stop()
+	var verified bool
+	var nextVerification time.Time
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-work.C:
+			if !verified {
+				if time.Now().Before(nextVerification) {
+					continue
+				}
+				if err := w.client.Verify(ctx); err != nil {
+					slog.Warn("audit_transport_verification_failed", "sourceService", "asset-api")
+					nextVerification = time.Now().Add(30 * time.Second)
+					continue
+				}
+				verified = true
+			}
 			if err := w.ProcessOnce(ctx); err != nil && !errors.Is(err, context.Canceled) {
 				slog.Error("audit_dispatch_failed", "sourceService", "asset-api")
 			}
@@ -64,7 +79,8 @@ func (w *Worker) ProcessOnce(ctx context.Context) error {
 			if _, hash, err := event.Canonical(); err == nil && hash == row.PayloadHash {
 				result = w.client.Append(ctx, row.Payload)
 				code = result.Result
-				if result.Result == "retry" && row.Attempts >= maxAttempts {
+				if result.Result == "retry" && row.Attempts >= maxAttempts &&
+					result.HTTPStatus != http.StatusUnauthorized && result.HTTPStatus != http.StatusNotFound {
 					result.Result, code = "dead_letter", "dead_letter"
 				}
 			}

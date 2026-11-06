@@ -19,6 +19,16 @@ The resolved service is kept in the request context (`requestService`). Only
 for ownership is `hhc-web-bulletin-worker` treated as `hhc-web-api`: the worker
 creates and reads CMS-owned assets on CMS's behalf.
 
+Account can use its own Entra identity on the same canonical private routes
+after the exact client/object pair and existing `Asset.Invoke` role are verified.
+The LINE API and its attachment worker use separate exact Entra identities
+mapped to the existing `hhc-line-function-bot` service authorization.
+Gateway uses a separate Entra identity on `/_gateway/api/assets/...`. Easy Auth
+protects this prefix before the app removes it and dispatches to the existing
+reader handler. Legacy collection paths accept the existing Dapr proof and do
+not trust a workload principal header. Gateway workload identity does not grant
+access to service-owned `/priv/*` paths or replace the end-user scope checks.
+
 ## Trusted bulletin derivative completion
 
 `POST /priv/assets/bulletin-derivatives/{assetID}/complete` marks a watermark
@@ -52,6 +62,14 @@ audit item; moving to an in-app JWT validation of the bearer token would remove
 the dependency on Easy Auth header replacement.
 
 ## Rollout and rollback
+
+Regular Asset CD preserves the observed sidecar state. After the callers and
+Audit have passed their production HTTPS checks, dispatch the existing Asset
+release with `retire_dapr_revision` set to the exact healthy Asset revision.
+The retirement job copies the serving image into an Asset-only configuration
+revision, then disables the sidecar. It checks the exact private workload
+callers and restores the previous revision and Dapr settings on failure.
+Image builds, migrations, media and other worker deployments are skipped.
 
 - Both paths are accepted until the worker App is retired; the Dapr branch is
   removed in a follow-up after the Event Job has been stable for two weeks.

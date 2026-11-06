@@ -67,7 +67,11 @@ func run() error {
 	db.SetMaxIdleConns(cfg.DBMaxIdleConns)
 	db.SetConnMaxLifetime(cfg.DBConnMaxLifetime)
 	defer db.Close()
-	stopDependencyHealth := dependencyhealth.Start(ctx, db, os.Getenv("DAPR_HTTP_PORT"), os.Getenv("DAPR_API_TOKEN"), slog.Default())
+	var daprPort, daprToken string
+	if cfg.DaprEnabled {
+		daprPort, daprToken = os.Getenv("DAPR_HTTP_PORT"), os.Getenv("DAPR_API_TOKEN")
+	}
+	stopDependencyHealth := dependencyhealth.Start(ctx, db, daprPort, daprToken, slog.Default())
 	defer stopDependencyHealth()
 	diagnosticsCtx, diagnosticsCancel := context.WithCancel(ctx)
 	diagnosticsDone := make(chan struct{})
@@ -136,7 +140,13 @@ func run() error {
 
 	lifecycleWorker := lifecycle.NewWorker(repository, blobStore)
 	if cfg.AuditDispatchEnabled {
-		client, err := auditclient.New(cfg.DaprHTTPPort, cfg.AuditAppID, cfg.AuditToken)
+		var client *auditclient.Client
+		var err error
+		if cfg.AuditPrivateHTTPS {
+			client, err = auditclient.NewPrivateHTTPS(cfg.AuditToken)
+		} else {
+			client, err = auditclient.New(cfg.DaprHTTPPort, cfg.AuditAppID, cfg.AuditToken)
+		}
 		if err != nil {
 			return err
 		}
@@ -228,11 +238,20 @@ func workloadAuth(cfg config.Config) httpapi.WorkloadAuthConfig {
 	if cfg.LineWorkloadClientID != "" {
 		callers[cfg.LineWorkloadClientID] = httpapi.WorkloadCaller{ObjectID: cfg.LineWorkloadObjectID, Service: "hhc-line-function-bot"}
 	}
+	if cfg.LineAPIWorkloadClientID != "" {
+		callers[cfg.LineAPIWorkloadClientID] = httpapi.WorkloadCaller{ObjectID: cfg.LineAPIWorkloadObjectID, Service: "hhc-line-function-bot"}
+	}
 	if cfg.ExtractorWorkloadClientID != "" {
 		callers[cfg.ExtractorWorkloadClientID] = httpapi.WorkloadCaller{ObjectID: cfg.ExtractorWorkloadObjectID, Service: "hhc-web-api"}
 	}
 	if cfg.WatermarkWorkloadClientID != "" {
 		callers[cfg.WatermarkWorkloadClientID] = httpapi.WorkloadCaller{ObjectID: cfg.WatermarkWorkloadObjectID, Service: "hhc-web-bulletin-worker"}
+	}
+	if cfg.AccountWorkloadClientID != "" {
+		callers[cfg.AccountWorkloadClientID] = httpapi.WorkloadCaller{ObjectID: cfg.AccountWorkloadObjectID, Service: "account-api"}
+	}
+	if cfg.GatewayWorkloadClientID != "" {
+		callers[cfg.GatewayWorkloadClientID] = httpapi.WorkloadCaller{ObjectID: cfg.GatewayWorkloadObjectID, Service: cfg.ReaderCallerAppID}
 	}
 	return httpapi.WorkloadAuthConfig{TenantID: cfg.WorkloadTenantID, Issuer: cfg.WorkloadIssuer, Audience: cfg.WorkloadAudience, RequiredRole: cfg.WorkloadRequiredRole, ReaderCallerAppID: cfg.ReaderCallerAppID, Callers: callers}
 }

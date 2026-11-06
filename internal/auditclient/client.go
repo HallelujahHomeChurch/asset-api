@@ -13,6 +13,7 @@ import (
 	"hhc/asset-api/internal/diagnostics"
 	"hhc/asset-api/internal/telemetry"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"regexp"
@@ -334,24 +335,69 @@ type AppendResult struct {
 type Client struct {
 	http            *http.Client
 	endpoint, token string
+	privateHTTPS    bool
 }
 
 func New(port int, appID, token string) (*Client, error) {
-	if port < 1 || port > 65535 || appID != "audit-log" && appID != "audit-log-test" || strings.TrimSpace(token) == "" || strings.ContainsAny(token, "\r\n") {
+	if port < 1 || port > 65535 || appID != "audit-log" && appID != "audit-log-test" {
 		return nil, errors.New("invalid audit client configuration")
 	}
-	return &Client{http: &http.Client{Transport: telemetry.AuditTransport{}, Timeout: 3 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, endpoint: fmt.Sprintf("http://127.0.0.1:%d/v1.0/invoke/%s/method/priv/audit/events", port, appID), token: token}, nil
+	return newClient(fmt.Sprintf("http://127.0.0.1:%d/v1.0/invoke/%s/method/priv/audit/events", port, appID), token, false)
 }
-func (c *Client) Append(ctx context.Context, payload []byte) (result AppendResult) {
-	started := time.Now()
-	defer func() { result.DurationMs = time.Since(started).Milliseconds() }()
+
+func NewPrivateHTTPS(token string) (*Client, error) {
+	return newClient("https://audit-log.internal.gentleriver-81abd7bc.eastasia.azurecontainerapps.io/priv/audit/events", token, true)
+}
+
+func newClient(endpoint, token string, privateHTTPS bool) (*Client, error) {
+	if strings.TrimSpace(token) == "" || strings.ContainsAny(token, "\r\n") {
+		return nil, errors.New("invalid audit client configuration")
+	}
+	return &Client{http: &http.Client{Transport: telemetry.AuditTransport{}, Timeout: 3 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, endpoint: endpoint, token: token, privateHTTPS: privateHTTPS}, nil
+}
+
+func (c *Client) request(ctx context.Context, payload []byte) (*http.Request, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(payload))
 	if err != nil {
-		return AppendResult{Result: "dead_letter"}
+		return nil, err
 	}
 	diagnostics.ForwardHTTP(ctx, request.Header)
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("X-Audit-Token", c.token)
+	if c.privateHTTPS {
+		request.Header.Set("X-HHC-Audit-Caller", "asset-api")
+	}
+	return request, nil
+}
+
+func (c *Client) Verify(ctx context.Context) error {
+	if !c.privateHTTPS {
+		return nil
+	}
+	// Authentication precedes decoding. An empty body cannot append an event.
+	request, err := c.request(ctx, nil)
+	if err != nil {
+		return errors.New("invalid private audit request")
+	}
+	response, err := c.http.Do(request)
+	if err == nil {
+		defer response.Body.Close()
+		var result struct{ Error string }
+		if response.StatusCode == http.StatusBadRequest && json.NewDecoder(io.LimitReader(response.Body, 4096)).Decode(&result) == nil && result.Error == "invalid_event" {
+			slog.Info("audit_private_https_verified", "sourceService", "asset-api")
+			return nil
+		}
+	}
+	return errors.New("private audit authentication could not be verified")
+}
+
+func (c *Client) Append(ctx context.Context, payload []byte) (result AppendResult) {
+	started := time.Now()
+	defer func() { result.DurationMs = time.Since(started).Milliseconds() }()
+	request, err := c.request(ctx, payload)
+	if err != nil {
+		return AppendResult{Result: "dead_letter"}
+	}
 	response, err := c.http.Do(request)
 	if err != nil {
 		return AppendResult{Result: "retry"}
@@ -366,7 +412,8 @@ func (c *Client) Append(ctx context.Context, payload []byte) (result AppendResul
 		result.Result = "duplicate"
 	case response.StatusCode == 409:
 		result.Result = "conflict"
-	case response.StatusCode == 429 || response.StatusCode >= 500 && response.StatusCode <= 599:
+	case response.StatusCode == 429 || response.StatusCode >= 500 && response.StatusCode <= 599,
+		c.privateHTTPS && (response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusNotFound):
 		result.Result = "retry"
 	default:
 		result.Result = "dead_letter"

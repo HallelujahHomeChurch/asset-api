@@ -63,11 +63,15 @@ func (*fakeRepository) Stats(context.Context, time.Time) (auditclient.PipelineSt
 	return auditclient.PipelineStats{}, nil
 }
 
-type fakeAppender struct{ result string }
+type fakeAppender struct {
+	result string
+	status int
+}
 
 func (f fakeAppender) Append(context.Context, []byte) auditclient.AppendResult {
-	return auditclient.AppendResult{Result: f.result, HTTPStatus: 201}
+	return auditclient.AppendResult{Result: f.result, HTTPStatus: f.status}
 }
+func (fakeAppender) Verify(context.Context) error { return nil }
 
 func TestWorkerDeliversOnlyCanonicalRows(t *testing.T) {
 	event, err := auditclient.NewEvent("asset.collection.read", "0123456789abcdef0123456789abcdef", "user", "018f2f5b-8b6d-4a7d-9f2e-7a6b5c4d3e2f", "request-1", time.Now(), nil)
@@ -79,12 +83,18 @@ func TestWorkerDeliversOnlyCanonicalRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	repo := &fakeRepository{row: &Row{ID: "row", EventID: event.EventID, Payload: payload, PayloadHash: hash, Attempts: 1}}
-	if err := NewWorker(repo, fakeAppender{"accepted"}).ProcessOnce(context.Background()); err != nil || repo.completed != "delivered" {
+	if err := NewWorker(repo, fakeAppender{"accepted", 201}).ProcessOnce(context.Background()); err != nil || repo.completed != "delivered" {
 		t.Fatalf("status=%s err=%v", repo.completed, err)
 	}
 	repo = &fakeRepository{row: &Row{ID: "row", EventID: event.EventID, Payload: payload, PayloadHash: "corrupt", Attempts: 1}}
-	if err := NewWorker(repo, fakeAppender{"accepted"}).ProcessOnce(context.Background()); err != nil || repo.completed != "dead_letter" {
+	if err := NewWorker(repo, fakeAppender{"accepted", 201}).ProcessOnce(context.Background()); err != nil || repo.completed != "dead_letter" {
 		t.Fatalf("status=%s err=%v", repo.completed, err)
+	}
+	for status, want := range map[int]string{401: "pending", 404: "pending", 503: "dead_letter"} {
+		repo = &fakeRepository{row: &Row{ID: "row", EventID: event.EventID, Payload: payload, PayloadHash: hash, Attempts: maxAttempts}}
+		if err := NewWorker(repo, fakeAppender{"retry", status}).ProcessOnce(context.Background()); err != nil || repo.completed != want {
+			t.Fatalf("HTTP %d status=%s want=%s err=%v", status, repo.completed, want, err)
+		}
 	}
 }
 

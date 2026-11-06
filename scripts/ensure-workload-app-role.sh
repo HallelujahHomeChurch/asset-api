@@ -9,9 +9,14 @@ case "$mode" in check|apply) ;; *) fail 'Use check or apply.' ;; esac
 # Each subject is one fixed, existing managed identity name with its own
 # reviewed approval input; the identity name is never caller-supplied.
 subject="${ROLE_SUBJECT:-extractor}"
+identity_app=
+approved_var=
 case "$subject" in
   extractor) identity_name=hhc-web-api-identity; client_var=ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID; object_var=ASSET_EXTRACTOR_WORKLOAD_OBJECT_ID; approved_var=EXTRACTOR_ROLE_APPROVED ;;
   watermark) identity_name=hhc-web-bulletin-worker-identity; client_var=ASSET_WATERMARK_WORKLOAD_CLIENT_ID; object_var=ASSET_WATERMARK_WORKLOAD_OBJECT_ID; approved_var=WATERMARK_ROLE_APPROVED ;;
+  account) identity_name=account-api-identity; client_var=ASSET_ACCOUNT_WORKLOAD_CLIENT_ID; object_var=ASSET_ACCOUNT_WORKLOAD_OBJECT_ID ;;
+  gateway) identity_app=api-gateway; client_var=ASSET_GATEWAY_WORKLOAD_CLIENT_ID; object_var=ASSET_GATEWAY_WORKLOAD_OBJECT_ID ;;
+  line-api) identity_app=hhc-line-function-bot; client_var=ASSET_LINE_API_WORKLOAD_CLIENT_ID; object_var=ASSET_LINE_API_WORKLOAD_OBJECT_ID ;;
   *) fail 'Unknown role subject.' ;;
 esac
 for name in RESOURCE_GROUP AZURE_TENANT_ID ASSET_WORKLOAD_CLIENT_ID ASSET_WORKLOAD_AUDIENCE "$client_var" "$object_var"; do
@@ -23,13 +28,20 @@ workload_object="${!object_var}"
 session="$(az account show --output json --only-show-errors)" || fail 'Azure session unavailable.'
 jq -e --arg tenant "$AZURE_TENANT_ID" '.tenantId == $tenant' <<<"$session" >/dev/null || fail 'Deployment tenant mismatch.'
 if [[ "$mode" == apply ]]; then
+  [[ -n "${approved_var:-}" ]] || fail 'This role subject is read-only in Asset release.'
   [[ "${!approved_var:-false}" == true && -n "${AZURE_CLIENT_ID:-}" ]] || fail 'Explicit reviewed role approval required.'
   jq -e --arg client "$AZURE_CLIENT_ID" '.user.type == "servicePrincipal" and .user.name == $client' <<<"$session" >/dev/null || fail 'Apply requires the existing Entra deployment identity.'
 fi
 
-identity="$(az identity show --resource-group "$RESOURCE_GROUP" --name "$identity_name" --output json --only-show-errors)" || fail "Existing $subject managed identity unavailable."
-jq -e --arg client "$workload_client" --arg object "$workload_object" --arg tenant "$AZURE_TENANT_ID" \
-  '.clientId == $client and .principalId == $object and .tenantId == $tenant' <<<"$identity" >/dev/null || fail "Configured $subject pair does not match the existing $identity_name."
+if [[ -n "${identity_app:-}" ]]; then
+  identity="$(az containerapp show --resource-group "$RESOURCE_GROUP" --name "$identity_app" --query identity --output json --only-show-errors)" || fail "Existing $subject system identity unavailable."
+  jq -e --arg object "$workload_object" --arg tenant "$AZURE_TENANT_ID" \
+    '.type == "SystemAssigned" and .principalId == $object and .tenantId == $tenant' <<<"$identity" >/dev/null || fail "Configured $subject object does not match its system identity."
+else
+  identity="$(az identity show --resource-group "$RESOURCE_GROUP" --name "$identity_name" --output json --only-show-errors)" || fail "Existing $subject managed identity unavailable."
+  jq -e --arg client "$workload_client" --arg object "$workload_object" --arg tenant "$AZURE_TENANT_ID" \
+    '.clientId == $client and .principalId == $object and .tenantId == $tenant' <<<"$identity" >/dev/null || fail "Configured $subject pair does not match the existing $identity_name."
+fi
 principal="$(az ad sp show --id "$workload_client" --output json --only-show-errors)" || fail "$subject service principal unavailable."
 jq -e --arg client "$workload_client" --arg object "$workload_object" \
   '.appId == $client and .id == $object and .servicePrincipalType == "ManagedIdentity"' <<<"$principal" >/dev/null || fail 'Managed identity service principal mismatch.'

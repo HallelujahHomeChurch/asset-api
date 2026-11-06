@@ -52,15 +52,23 @@ type Config struct {
 	WorkloadRequiredRole      string
 	LineWorkloadClientID      string
 	LineWorkloadObjectID      string
+	LineAPIWorkloadClientID   string
+	LineAPIWorkloadObjectID   string
 	ExtractorWorkloadClientID string
 	ExtractorWorkloadObjectID string
 	WatermarkWorkloadClientID string
 	WatermarkWorkloadObjectID string
+	AccountWorkloadClientID   string
+	AccountWorkloadObjectID   string
+	GatewayWorkloadClientID   string
+	GatewayWorkloadObjectID   string
 	ShutdownTimeout           time.Duration
 	AuditDispatchEnabled      bool
+	AuditPrivateHTTPS         bool
 	AuditAppID                string
 	AuditToken                string
 	DaprHTTPPort              int
+	DaprEnabled               bool
 }
 
 func Load() (Config, error) {
@@ -102,10 +110,16 @@ func Load() (Config, error) {
 		WorkloadRequiredRole:      value("ASSET_WORKLOAD_REQUIRED_ROLE", "Asset.Invoke"),
 		LineWorkloadClientID:      strings.TrimSpace(os.Getenv("ASSET_LINE_WORKLOAD_CLIENT_ID")),
 		LineWorkloadObjectID:      strings.TrimSpace(os.Getenv("ASSET_LINE_WORKLOAD_OBJECT_ID")),
+		LineAPIWorkloadClientID:   strings.TrimSpace(os.Getenv("ASSET_LINE_API_WORKLOAD_CLIENT_ID")),
+		LineAPIWorkloadObjectID:   strings.TrimSpace(os.Getenv("ASSET_LINE_API_WORKLOAD_OBJECT_ID")),
 		ExtractorWorkloadClientID: strings.TrimSpace(os.Getenv("ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID")),
 		ExtractorWorkloadObjectID: strings.TrimSpace(os.Getenv("ASSET_EXTRACTOR_WORKLOAD_OBJECT_ID")),
 		WatermarkWorkloadClientID: strings.TrimSpace(os.Getenv("ASSET_WATERMARK_WORKLOAD_CLIENT_ID")),
 		WatermarkWorkloadObjectID: strings.TrimSpace(os.Getenv("ASSET_WATERMARK_WORKLOAD_OBJECT_ID")),
+		AccountWorkloadClientID:   strings.TrimSpace(os.Getenv("ASSET_ACCOUNT_WORKLOAD_CLIENT_ID")),
+		AccountWorkloadObjectID:   strings.TrimSpace(os.Getenv("ASSET_ACCOUNT_WORKLOAD_OBJECT_ID")),
+		GatewayWorkloadClientID:   strings.TrimSpace(os.Getenv("ASSET_GATEWAY_WORKLOAD_CLIENT_ID")),
+		GatewayWorkloadObjectID:   strings.TrimSpace(os.Getenv("ASSET_GATEWAY_WORKLOAD_OBJECT_ID")),
 		ShutdownTimeout:           10 * time.Second,
 		AuditAppID:                value("AUDIT_APP_ID", "audit-log"),
 		AuditToken:                strings.TrimSpace(os.Getenv("AUDIT_TOKEN")),
@@ -168,8 +182,22 @@ func Load() (Config, error) {
 		}
 		cfg.AuditDispatchEnabled = enabled
 	}
-	if err := positiveInt("DAPR_HTTP_PORT", &cfg.DaprHTTPPort); err != nil {
-		return Config{}, err
+	if raw := strings.TrimSpace(os.Getenv("AUDIT_PRIVATE_HTTPS")); raw != "" {
+		cfg.AuditPrivateHTTPS, err = strconv.ParseBool(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("invalid AUDIT_PRIVATE_HTTPS")
+		}
+	}
+	switch os.Getenv("ASSET_DAPR_ENABLED") {
+	case "", "true":
+		cfg.DaprEnabled = true
+		if err := positiveInt("DAPR_HTTP_PORT", &cfg.DaprHTTPPort); err != nil {
+			return Config{}, err
+		}
+	case "false":
+		cfg.AppAPIToken = ""
+	default:
+		return Config{}, fmt.Errorf("ASSET_DAPR_ENABLED must be true or false")
 	}
 	if cfg.AuditDispatchEnabled && (cfg.AuditAppID != "audit-log" || cfg.AuditToken == "") {
 		return Config{}, fmt.Errorf("AUDIT_APP_ID and AUDIT_TOKEN are required when audit dispatch is enabled")
@@ -181,7 +209,7 @@ func Load() (Config, error) {
 		}
 		cfg.EmbeddedScanEnabled = enabled
 	}
-	if !cfg.AllowDevCallerHeader && cfg.AppAPIToken == "" {
+	if cfg.DaprEnabled && !cfg.AllowDevCallerHeader && cfg.AppAPIToken == "" {
 		return Config{}, fmt.Errorf("APP_API_TOKEN is required when development caller headers are disabled")
 	}
 	workloadValues := []string{cfg.WorkloadTenantID, cfg.WorkloadIssuer, cfg.WorkloadAudience, cfg.LineWorkloadClientID, cfg.LineWorkloadObjectID}
@@ -194,25 +222,32 @@ func Load() (Config, error) {
 	if configured != 0 && configured != len(workloadValues) {
 		return Config{}, fmt.Errorf("ASSET workload authentication configuration is incomplete")
 	}
-	if cfg.ExtractorWorkloadClientID != "" || cfg.ExtractorWorkloadObjectID != "" {
-		if configured != len(workloadValues) || cfg.ExtractorWorkloadClientID == "" || cfg.ExtractorWorkloadObjectID == "" {
-			return Config{}, fmt.Errorf("ASSET extractor workload authentication configuration is incomplete")
-		}
-		if cfg.ExtractorWorkloadClientID == cfg.LineWorkloadClientID || cfg.ExtractorWorkloadObjectID == cfg.LineWorkloadObjectID {
-			return Config{}, fmt.Errorf("ASSET extractor and LINE workload identities must be distinct")
-		}
+	identities := []struct{ service, client, object string }{
+		{"LINE", cfg.LineWorkloadClientID, cfg.LineWorkloadObjectID},
+		{"LINE API", cfg.LineAPIWorkloadClientID, cfg.LineAPIWorkloadObjectID},
+		{"extractor", cfg.ExtractorWorkloadClientID, cfg.ExtractorWorkloadObjectID},
+		{"watermark", cfg.WatermarkWorkloadClientID, cfg.WatermarkWorkloadObjectID},
+		{"account", cfg.AccountWorkloadClientID, cfg.AccountWorkloadObjectID},
+		{"gateway", cfg.GatewayWorkloadClientID, cfg.GatewayWorkloadObjectID},
 	}
-	if cfg.WatermarkWorkloadClientID != "" || cfg.WatermarkWorkloadObjectID != "" {
-		if configured != len(workloadValues) || cfg.WatermarkWorkloadClientID == "" || cfg.WatermarkWorkloadObjectID == "" {
-			return Config{}, fmt.Errorf("ASSET watermark workload authentication configuration is incomplete")
+	for i, identity := range identities {
+		if identity.client == "" && identity.object == "" {
+			if !cfg.DaprEnabled {
+				return Config{}, fmt.Errorf("ASSET %s workload identity is required without Dapr", identity.service)
+			}
+			continue
 		}
-		// The watermark worker gets a distinct service identity that alone may
-		// attest trusted bulletin derivatives; it must never share an identity.
-		for _, other := range [][2]string{{cfg.LineWorkloadClientID, cfg.LineWorkloadObjectID}, {cfg.ExtractorWorkloadClientID, cfg.ExtractorWorkloadObjectID}} {
-			if cfg.WatermarkWorkloadClientID == other[0] || cfg.WatermarkWorkloadObjectID == other[1] {
-				return Config{}, fmt.Errorf("ASSET watermark workload identity must be distinct from LINE and extractor identities")
+		if configured != len(workloadValues) || identity.client == "" || identity.object == "" {
+			return Config{}, fmt.Errorf("ASSET %s workload authentication configuration is incomplete", identity.service)
+		}
+		for _, other := range identities[:i] {
+			if strings.EqualFold(identity.client, other.client) || strings.EqualFold(identity.object, other.object) {
+				return Config{}, fmt.Errorf("ASSET %s and %s workload identities must be distinct", identity.service, other.service)
 			}
 		}
+	}
+	if !cfg.DaprEnabled && (cfg.AllowDevCallerHeader || !cfg.AuditDispatchEnabled || !cfg.AuditPrivateHTTPS) {
+		return Config{}, fmt.Errorf("Asset without Dapr requires private HTTPS Audit and workload callers")
 	}
 	if err := positiveInt("CLAMAV_PORT", &cfg.ClamAVPort); err != nil {
 		return Config{}, err

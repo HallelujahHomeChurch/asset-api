@@ -23,6 +23,9 @@ if (args[0] === 'identity') {
   emit({clientId: ids.client, principalId: ids.principal, tenantId: scenario === 'wrong-tenant' ? ids.resource : ids.tenant});
 } else if (args[0] === 'account') {
   emit({tenantId: ids.tenant, user: {type: scenario === 'human-apply' ? 'user' : 'servicePrincipal', name: ids.deployment}});
+} else if (args[0] === 'containerapp') {
+  if (args[args.indexOf('--name') + 1] !== process.env.ROLE_EXPECTED_APP || args[args.indexOf('--query') + 1] !== 'identity') process.exit(4);
+  emit({type: scenario === 'wrong-identity-type' ? 'UserAssigned' : 'SystemAssigned', principalId: ids.principal, tenantId: ids.tenant});
 } else if (args[0] === 'ad') {
   const id = args[args.indexOf('--id') + 1];
   if (id === ids.client) emit({id: scenario === 'wrong-object' ? ids.resource : ids.principal, appId: ids.client, servicePrincipalType: 'ManagedIdentity'});
@@ -71,6 +74,14 @@ try {
   }
   // Watermark subject: fixed identity name and its own approval input.
   assert.deepEqual(run('existing', 'check', false, 'watermark'), {status: 0, posts: 0});
+  for (const subject of ['account', 'gateway', 'line-api']) {
+    const prefix = 'ASSET_' + subject.toUpperCase().replace('-', '_') + '_WORKLOAD';
+    const env = {ROLE_SUBJECT: subject, ROLE_EXPECTED_IDENTITY: 'account-api-identity', ROLE_EXPECTED_APP: subject === 'gateway' ? 'api-gateway' : 'hhc-line-function-bot', [prefix + '_CLIENT_ID']: ids.client, [prefix + '_OBJECT_ID']: ids.principal, approved_var: 'EXTRACTOR_ROLE_APPROVED'};
+    assert.deepEqual(run('existing', 'check', false, 'extractor', env), {status: 0, posts: 0});
+    assert.notEqual(run('missing', 'apply', true, 'extractor', env).status, 0);
+    assert.equal(run('missing', 'apply', true, 'extractor', env).posts, 0);
+    assert.notEqual(run(subject === 'account' ? 'wrong-object' : 'wrong-identity-type', 'check', false, 'extractor', env).status, 0);
+  }
   assert.notEqual(run('missing', 'check', false, 'watermark').status, 0);
   const crossApproval = run('missing', 'apply', false, 'watermark');
   assert.ok(crossApproval.status !== 0 && crossApproval.posts === 0, 'extractor approval must not authorize the watermark subject');

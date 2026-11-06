@@ -290,6 +290,14 @@ grep -q 'workloadAuthAudience="$ASSET_WORKLOAD_AUDIENCE"' "$workflow"
 grep -q 'workloadAuthClientId="$ASSET_WORKLOAD_CLIENT_ID"' "$workflow"
 grep -q 'ASSET_READER_CALLER_APP_ID: api-gateway' "$workflow"
 test "$(grep -c 'readerCallerAppId="$ASSET_READER_CALLER_APP_ID"' "$workflow")" = 2
+test "$(grep -c 'daprEnabled="$ASSET_DAPR_ENABLED"' "$workflow")" = 2
+grep -Fq 'retire_dapr_revision:' "$workflow"
+grep -Fq "github.event_name != 'workflow_dispatch' || inputs.retire_dapr_revision == ''" "$workflow"
+retirement_job="$(sed -n '/^  retire_dapr:/,/^  agent_docs:/p' "$workflow")"
+printf '%s\n' "$retirement_job" | grep -Fq 'run: python3 scripts/retire-dapr.py'
+! printf '%s\n' "$retirement_job" | grep -Eq 'docker build|build-release-images|deploy_media|az deployment|az acr'
+python3 scripts/test-retire-dapr.py
+grep -Fq 'param daprEnabled bool = true' infra/main.bicep
 grep -q "param readerCallerAppId string = 'api-gateway'" infra/main.bicep
 grep -q "name: 'ASSET_READER_CALLER_APP_ID', value: readerCallerAppId" infra/main.bicep
 if grep -q "ASSET_ALLOWED_CALLERS.*api-gateway" infra/main.bicep; then
@@ -534,8 +542,18 @@ grep -q 'ASSET_EXTRACTOR_WORKLOAD_OBJECT_ID' "$workflow"
 grep -Eq 'EXTRACTOR_ROLE_APPROVED:.*github.event_name.*workflow_dispatch.*inputs.approve_extractor_app_role' "$workflow"
 grep -Fq 'bash scripts/ensure-workload-app-role.sh check' "$workflow"
 grep -Fq 'bash scripts/ensure-workload-app-role.sh apply' "$workflow"
-grep -Fq "allowedApplications: concat([lineAttachmentClientId], extractorAuthEnabled ? [extractorClientId] : [], watermarkWorkerAuthEnabled ? [watermarkWorkerClientId] : [])" infra/main.bicep
-grep -Fq "allowedPrincipals: { identities: concat([lineAttachmentObjectId], extractorAuthEnabled ? [extractorObjectId] : [], watermarkWorkerAuthEnabled ? [watermarkWorkerObjectId] : []) }" infra/main.bicep
+for binding in 'lineAttachmentClientId' 'lineAttachmentObjectId' \
+  'lineAPIWorkloadAuthEnabled ? [lineAPIWorkloadClientId] : []' 'lineAPIWorkloadAuthEnabled ? [lineAPIWorkloadObjectId] : []' \
+  'extractorAuthEnabled ? [extractorClientId] : []' 'extractorAuthEnabled ? [extractorObjectId] : []' \
+  'watermarkWorkerAuthEnabled ? [watermarkWorkerClientId] : []' 'watermarkWorkerAuthEnabled ? [watermarkWorkerObjectId] : []' \
+  'accountWorkloadAuthEnabled ? [accountWorkloadClientId] : []' 'accountWorkloadAuthEnabled ? [accountWorkloadObjectId] : []' \
+  'gatewayWorkloadAuthEnabled ? [gatewayWorkloadClientId] : []' 'gatewayWorkloadAuthEnabled ? [gatewayWorkloadObjectId] : []'; do
+  sed -n '/defaultAuthorizationPolicy: {/,/^          }/p' infra/main.bicep | grep -Fq "$binding"
+done
+! sed -n '/excludedPaths: \[/,/^      ]/p' infra/main.bicep | grep -Fq '/_gateway'
+for subject in account gateway line-api; do
+  grep -Fq "ROLE_SUBJECT=$subject bash scripts/ensure-workload-app-role.sh check" "$workflow"
+done
 # W3: the watermark worker identity is wired end to end and approved separately.
 grep -q 'ASSET_WATERMARK_WORKLOAD_CLIENT_ID' "$workflow"
 grep -q 'ASSET_WATERMARK_WORKLOAD_OBJECT_ID' "$workflow"

@@ -201,6 +201,8 @@ func (h *Handler) Routes() http.Handler {
 	if h.localUpload != nil {
 		mux.Handle("/dev/uploads/{token}", localUploadCORS(http.HandlerFunc(h.localUpload)))
 	}
+	// Easy Auth always protects this prefix, including during a rolling update.
+	mux.Handle("/_gateway/api/assets/", h.gatewayWorkload(http.StripPrefix("/_gateway", mux)))
 	return requestID(mux)
 }
 
@@ -298,7 +300,7 @@ func (h *Handler) adminUserManager(next http.Handler) http.Handler {
 
 func (h *Handler) collectionReader(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if h.daprCaller(r) != h.workloadAuth.ReaderCallerAppID || h.workloadAuth.ReaderCallerAppID == "" {
+		if !h.gatewayReader(r) {
 			writeError(w, http.StatusForbidden, "AST_FORBIDDEN", "caller is not allowed")
 			return
 		}
@@ -315,7 +317,7 @@ func (h *Handler) collectionTicket(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "private, no-store")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		if h.daprCaller(r) != h.workloadAuth.ReaderCallerAppID || h.workloadAuth.ReaderCallerAppID == "" {
+		if !h.gatewayReader(r) {
 			writeError(w, http.StatusForbidden, "AST_FORBIDDEN", "caller is not allowed")
 			return
 		}
@@ -350,7 +352,34 @@ func (h *Handler) authenticatedService(r *http.Request) string {
 	if caller := h.daprCaller(r); caller != "" {
 		return caller
 	}
-	return workloadCaller(r.Header.Get("X-MS-CLIENT-PRINCIPAL"), h.workloadAuth)
+	return h.workloadPrincipal(r)
+}
+
+func (h *Handler) workloadPrincipal(r *http.Request) string {
+	principal := r.Header.Values("X-MS-CLIENT-PRINCIPAL")
+	if len(principal) != 1 {
+		return ""
+	}
+	return workloadCaller(principal[0], h.workloadAuth)
+}
+
+type gatewayWorkloadKey struct{}
+
+func (h *Handler) gatewayWorkload(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reader := h.workloadAuth.ReaderCallerAppID
+		if reader == "" || h.workloadPrincipal(r) != reader || len(r.Header.Values("Dapr-Caller-App-Id")) != 0 || len(r.Header.Values("dapr-api-token")) != 0 {
+			writeError(w, http.StatusForbidden, "AST_FORBIDDEN", "caller is not allowed")
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), gatewayWorkloadKey{}, true)))
+	})
+}
+
+func (h *Handler) gatewayReader(r *http.Request) bool {
+	workload, _ := r.Context().Value(gatewayWorkloadKey{}).(bool)
+	reader := h.workloadAuth.ReaderCallerAppID
+	return reader != "" && (workload || h.daprCaller(r) == reader)
 }
 
 // requestService is the authenticated service before CMS aliasing.
