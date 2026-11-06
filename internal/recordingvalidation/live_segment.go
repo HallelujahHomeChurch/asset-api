@@ -2,9 +2,12 @@ package recordingvalidation
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"hhc/asset-api/internal/assets"
+	"hhc/asset-api/internal/storage/r2"
 	"io"
 	"log/slog"
 	"os"
@@ -61,6 +64,7 @@ func (p PackageMediaProbe) ValidateLiveSegment(ctx context.Context, captureID, a
 	}
 	close(jobs)
 	actuals := make([]segmentProbe, len(renditions))
+	reusedInits := make([]bool, len(renditions))
 	var workers sync.WaitGroup
 	var errorMu sync.Mutex
 	var root error
@@ -72,7 +76,7 @@ func (p PackageMediaProbe) ValidateLiveSegment(ctx context.Context, captureID, a
 				if jobCtx.Err() != nil {
 					return
 				}
-				actual, err := p.validateLiveRendition(jobCtx, pack, prefix, dir, attempt, sequence, renditions[index], selected)
+				actual, reused, err := p.validateLiveRendition(jobCtx, pack, prefix, dir, attempt, sequence, renditions[index], selected)
 				if err != nil {
 					errorMu.Lock()
 					if root == nil || errors.Is(root, context.Canceled) && !errors.Is(err, context.Canceled) {
@@ -83,6 +87,7 @@ func (p PackageMediaProbe) ValidateLiveSegment(ctx context.Context, captureID, a
 					return
 				}
 				actuals[index] = actual
+				reusedInits[index] = reused
 			}
 		}()
 	}
@@ -102,12 +107,15 @@ func (p PackageMediaProbe) ValidateLiveSegment(ctx context.Context, captureID, a
 		result[r.Name] = assets.RecordingLiveFragment{VideoFrames: actual.VideoFrames, Start: actual.Start, End: actual.End, Codecs: actual.Codecs, FrameRate: actual.FrameRate}
 		fragment := result[r.Name]
 		fragment.Validation = &assets.RecordingLiveValidation{Version: liveValidationVersion, Init: selected[r.Name+"/init.mp4"], Segment: selected[fmt.Sprintf("%s/seg-%06d.m4s", r.Name, sequence)]}
+		if prior, ok := p.reusableLiveInit(r.Name, fragment.Validation.Init); ok && reusedInits[index] {
+			fragment.Validation.InitETag = prior.InitETag
+		}
 		result[r.Name] = fragment
 	}
 	return result, nil
 }
 
-func (p PackageMediaProbe) validateLiveRendition(ctx context.Context, pack assets.RecordingPackage, prefix, dir, attempt string, sequence int, r assets.RecordingRendition, selected map[string]assets.RecordingPackageObject) (actual segmentProbe, err error) {
+func (p PackageMediaProbe) validateLiveRendition(ctx context.Context, pack assets.RecordingPackage, prefix, dir, attempt string, sequence int, r assets.RecordingRendition, selected map[string]assets.RecordingPackageObject) (actual segmentProbe, reused bool, err error) {
 	started := time.Now()
 	var freezeTime, probeTime time.Duration
 	defer func() {
@@ -119,29 +127,61 @@ func (p PackageMediaProbe) validateLiveRendition(ctx context.Context, pack asset
 	init := selected[r.Name+"/init.mp4"]
 	segment := selected[fmt.Sprintf("%s/seg-%06d.m4s", r.Name, sequence)]
 	if err := checkFragmentScratch(dir, init.SizeBytes+segment.SizeBytes); err != nil {
-		return actual, err
+		return actual, reused, err
 	}
 	path := filepath.Join(dir, r.Name+".mp4")
 	freezeStarted := time.Now()
 	err = writePackageScratch(path, func(w io.Writer) error {
-		if err := freezePackageObject(ctx, pack, prefix, init, p.Objects, w, p.OnStage); err != nil {
+		var initErr error
+		if _, ok := p.reusableLiveInit(r.Name, init); ok {
+			reused, initErr = p.copyLiveInit(ctx, pack.ID, init, w)
+		}
+		if initErr == nil && !reused {
+			initErr = freezePackageObject(ctx, pack, prefix, init, p.Objects, w, p.OnStage)
+		}
+		if err := initErr; err != nil {
 			return err
 		}
 		return freezePackageObject(ctx, pack, prefix, segment, p.Objects, w, p.OnStage)
 	})
 	freezeTime = time.Since(freezeStarted)
 	if err != nil {
-		return actual, err
+		return actual, reused, err
 	}
 	r.FrameRate = 0 // Infer the approved rate from this immutable fragment.
 	probeStarted := time.Now()
 	actual, err = p.probeFragment(ctx, path, r)
 	probeTime = time.Since(probeStarted)
 	if err != nil {
-		return actual, err
+		return actual, reused, err
 	}
 	if err := os.Remove(path); err != nil {
-		return actual, err
+		return actual, reused, err
 	}
-	return actual, nil
+	return actual, reused, nil
+}
+
+func (p PackageMediaProbe) reusableLiveInit(name string, init assets.RecordingPackageObject) (assets.RecordingLiveValidation, bool) {
+	prior, ok := p.LiveInitEvidence[name]
+	return prior, ok && prior.Version == liveValidationVersion && prior.Init == init && prior.InitETag != ""
+}
+
+// Stable init reuse still hashes the exact bytes appended to every decoded fragment.
+func (p PackageMediaProbe) copyLiveInit(ctx context.Context, capture string, object assets.RecordingPackageObject, destination io.Writer) (bool, error) {
+	body, err := p.Objects.Open(ctx, "recordings/captures/"+capture+"/final/"+object.Path)
+	if errors.Is(err, r2.ErrNotFound) || errors.Is(err, assets.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	hash := sha256.New()
+	size, readErr := io.Copy(io.MultiWriter(hash, destination), io.LimitReader(body, object.SizeBytes+1))
+	if err := errors.Join(readErr, body.Close()); err != nil {
+		return true, err
+	}
+	if size != object.SizeBytes || hex.EncodeToString(hash.Sum(nil)) != object.SHA256 {
+		return true, assets.ErrInvalidUpload
+	}
+	return true, nil
 }

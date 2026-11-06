@@ -62,6 +62,14 @@ func runLiveClaim(ctx context.Context, store *postgres.RecordingCaptureStore, ob
 				}
 			} else {
 				stage = "validation"
+				probe.LiveInitEvidence = make(map[string]assets.RecordingLiveValidation)
+				if len(snapshot.Segments) > 0 {
+					for name, fragment := range snapshot.Segments[len(snapshot.Segments)-1].Renditions {
+						if fragment.Validation != nil {
+							probe.LiveInitEvidence[name] = *fragment.Validation
+						}
+					}
+				}
 				batch, err := probe.ValidateLiveSegment(ctx, claim.Capture.ID, claim.ClaimID, claim.Sequence, claim.Objects)
 				if err != nil {
 					return err
@@ -85,7 +93,7 @@ func runLiveClaim(ctx context.Context, store *postgres.RecordingCaptureStore, ob
 				}
 				logStage(true)
 				stage, started = "stable_publication", time.Now()
-				versions, err := publishLiveObjects(ctx, objects, claim)
+				versions, err := publishLiveObjects(ctx, objects, claim, batch)
 				if err != nil {
 					return err
 				}
@@ -107,10 +115,8 @@ func runLiveClaim(ctx context.Context, store *postgres.RecordingCaptureStore, ob
 		if err != nil {
 			return err
 		}
-		for name, data := range playlists {
-			if err := objects.PutLivePlaylist(ctx, claim.Capture.ID, snapshot.Revision, name, data); err != nil {
-				return err
-			}
+		if err := publishLivePlaylists(ctx, objects, claim.Capture.ID, snapshot.Revision, playlists); err != nil {
+			return err
 		}
 		logStage(true)
 		stage, started = "pointer", time.Now()
@@ -130,8 +136,24 @@ func runLiveClaim(ctx context.Context, store *postgres.RecordingCaptureStore, ob
 }
 
 // Join bounded provider copies before committing the batch or releasing its lease.
-func publishLiveObjects(ctx context.Context, objects LiveObjects, claim postgres.RecordingLiveClaim) (map[string]string, error) {
+func publishLiveObjects(ctx context.Context, objects LiveObjects, claim postgres.RecordingLiveClaim, batch map[string]assets.RecordingLiveFragment) (map[string]string, error) {
 	versions := make(map[string]string, len(claim.Objects))
+	pending := make([]assets.RecordingPackageObject, 0, len(claim.Objects))
+	for _, object := range claim.Objects {
+		reused := false
+		for _, fragment := range batch {
+			receipt := fragment.Validation
+			if receipt != nil && receipt.Init == object && receipt.InitETag != "" {
+				versions[object.Path] = receipt.InitETag
+				reused = true
+				break
+			}
+		}
+		if !reused {
+			pending = append(pending, object)
+		}
+	}
+
 	workCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	from := "recordings/packages/" + claim.Capture.ID + "/final/" + claim.ClaimID + "/"
@@ -143,11 +165,11 @@ func publishLiveObjects(ctx context.Context, objects LiveObjects, claim postgres
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			for index := worker; index < len(claim.Objects); index += 3 {
+			for index := worker; index < len(pending); index += 3 {
 				if workCtx.Err() != nil {
 					return
 				}
-				object := claim.Objects[index]
+				object := pending[index]
 				size, etag, err := objects.Head(workCtx, from+object.Path)
 				if err == nil && size != object.SizeBytes {
 					err = assets.ErrInvalidUpload
@@ -181,4 +203,31 @@ func publishLiveObjects(ctx context.Context, objects LiveObjects, claim postgres
 		return nil, result
 	}
 	return versions, ctx.Err()
+}
+
+// All four immutable playlists must finish before the common pointer advances.
+func publishLivePlaylists(ctx context.Context, objects LiveObjects, capture string, revision int64, playlists map[string][]byte) error {
+	if len(playlists) == 0 || len(playlists) > 4 {
+		return assets.ErrInvalidInput
+	}
+	workCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	results := make(chan error, len(playlists))
+	for name, data := range playlists {
+		go func() {
+			err := objects.PutLivePlaylist(workCtx, capture, revision, name, data)
+			if err != nil {
+				cancel()
+			}
+			results <- err
+		}()
+	}
+	var result error
+	for range playlists {
+		result = errors.Join(result, <-results)
+	}
+	if result != nil {
+		return result
+	}
+	return ctx.Err()
 }

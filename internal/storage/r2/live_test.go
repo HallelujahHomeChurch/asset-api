@@ -2,6 +2,7 @@ package r2
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -212,5 +213,26 @@ func TestArchiveCopyStaysWithinCaptureAndRequiresObjectVersion(t *testing.T) {
 		if err := store.CopyPackageObject(context.Background(), tc.source, tc.destination, tc.etag); (err == nil) != tc.ok {
 			t.Fatalf("copy scope accepted=%v err=%v", tc.ok, err)
 		}
+	}
+}
+
+func TestOpenNormalizesOnlyMissingObject(t *testing.T) {
+	for _, tc := range []struct {
+		code    string
+		status  int
+		missing bool
+	}{{"NoSuchKey", 404, true}, {"NotFound", 404, true}, {"AccessDenied", 403, false}} {
+		t.Run(tc.code, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/xml")
+				w.WriteHeader(tc.status)
+				io.WriteString(w, "<Error><Code>"+tc.code+"</Code></Error>")
+			}))
+			defer server.Close()
+			_, err := packageListStore(server).Open(context.Background(), "recordings/captures/"+strings.Repeat("a", 32)+"/final/720p/init.mp4")
+			if err == nil || errors.Is(err, ErrNotFound) != tc.missing {
+				t.Fatalf("missing=%v err=%v", tc.missing, err)
+			}
+		})
 	}
 }

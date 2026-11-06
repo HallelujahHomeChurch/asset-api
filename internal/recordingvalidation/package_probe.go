@@ -22,6 +22,7 @@ import (
 )
 
 type PackageMediaProbe struct {
+	LiveInitEvidence             map[string]assets.RecordingLiveValidation
 	Objects                      PackageObjects
 	FFmpeg, FFprobe, ScratchRoot string
 	OnProgress                   func(assets.RecordingProcessingProgress)
