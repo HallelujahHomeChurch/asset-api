@@ -72,7 +72,7 @@ func freezeLiveArchive(ctx context.Context, p assets.RecordingPackage, attempt s
 	var mu sync.Mutex
 	var failure error
 	// Bound provider work independently of media decoders; no media body is downloaded.
-	for worker := 0; worker < 6; worker++ {
+	for worker := 0; worker < 16; worker++ {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()

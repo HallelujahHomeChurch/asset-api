@@ -45,7 +45,7 @@ func assertArchiveFailureAndCancellation(t *testing.T, p assets.RecordingPackage
 	if objects.puts != puts {
 		t.Fatal("failed copy wrote package inventory")
 	}
-	gate := archiveCopyGate{objects, make(chan struct{}, 16), make(chan struct{})}
+	gate := archiveCopyGate{objects, make(chan struct{}, 32), make(chan struct{})}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	done := make(chan error, 1)
@@ -53,7 +53,13 @@ func assertArchiveFailureAndCancellation(t *testing.T, p assets.RecordingPackage
 		_, _, err := freezeLiveArchive(ctx, p, "cancel-copy", history, gate, PackageMediaProbe{})
 		done <- err
 	}()
-	for i := 0; i < 6; i++ {
+	copies := 0
+	for _, object := range p.Inventory.Objects {
+		if !strings.HasSuffix(object.Path, ".m3u8") {
+			copies++
+		}
+	}
+	for i := 0; i < min(16, copies); i++ {
 		select {
 		case <-gate.started:
 		case <-ctx.Done():
@@ -64,7 +70,7 @@ func assertArchiveFailureAndCancellation(t *testing.T, p assets.RecordingPackage
 	select {
 	case <-gate.started:
 		close(gate.release)
-		t.Fatal("more than six active copies")
+		t.Fatal("more than sixteen active copies")
 	default:
 	}
 	cancel()
@@ -81,4 +87,9 @@ func assertArchiveFailureAndCancellation(t *testing.T, p assets.RecordingPackage
 	if objects.puts != puts {
 		t.Fatal("cancelled copy wrote package inventory")
 	}
+}
+
+func TestLongArchiveCopyBoundAndCancellation(t *testing.T) {
+	p, history, objects := longArchiveMetadataFixture(t, 10)
+	assertArchiveFailureAndCancellation(t, p, history, objects)
 }

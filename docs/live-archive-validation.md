@@ -26,7 +26,7 @@ is additive; legacy snapshots have no evidence and remain valid for playback.
 
 The fast path verifies and freezes playlists normally, checks all evidence and
 global media predicates, then copies receipt-bound stable media into the existing
-attempt-owned package prefix with six bounded workers. It downloads no media
+attempt-owned package prefix with sixteen bounded workers. It downloads no media
 bodies and launches no decoders. Conditional copy failure is an error, never a
 successful archive. All provider calls join before cancellation or completion;
 package.json is written last and the existing lease/expiry fence owns ready.
@@ -43,3 +43,21 @@ both full validation and evidence checks. Negative evidence covers missing and
 unknown versions, changed hashes, sizes, paths, rates, non-finite timestamps,
 discontinuity and codec mismatch. Production throughput and long captures are
 separate acceptance steps, not established by these fixtures.
+
+## Long inventory copy calibration (2026-11-07)
+
+`BenchmarkLongLiveArchiveCopies` uses synthetic trusted receipts and a fixed
+250 ms delay for each provider call; it measures only copy fan-out and metadata
+checks. No media is decoded by this benchmark. On macOS ARM64 / Apple M4, one
+iteration per identical inventory produced:
+
+| Ten-second segments | Media objects | Six workers | Sixteen workers |
+| --- | --- | --- | --- |
+| 900 | 2703 | 117.512 s | 46.544 s |
+| 990 | 2973 | 128.857 s | 50.821 s |
+| 1078 | 3237 | 139.877 s | 55.119 s |
+
+The fixed bound is sixteen; provider errors still cancel and join all work before
+returning, and no completion inventory is written on failure. Real provider
+latency, throttling, competing jobs and full Stop-to-published timing remain
+unmeasured here. These synthetic results do not establish a three-hour live SLO.
