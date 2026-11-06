@@ -24,14 +24,20 @@ var ErrLiveConflict = errors.New("live pointer conflict")
 
 // PublishLiveObject accepts only an already hashed/decoded server-owned attempt.
 // Every retry of a declared object has identical bytes before it reaches here.
-func (s *Store) PublishLiveObject(ctx context.Context, source, destination, etag string) error {
+func (s *Store) PublishLiveObject(ctx context.Context, source, destination, etag string) (string, error) {
 	match := liveObjectKey.FindStringSubmatch(destination)
 	parts := strings.SplitN(source, "/", 6)
 	if !packageFinalKey.MatchString(source) || len(match) == 0 || len(parts) != 6 || parts[2] != match[1] || parts[5] != match[2] || etag == "" || strings.ContainsAny(etag, "\r\n") {
-		return errors.New("invalid live copy")
+		return "", errors.New("invalid live copy")
 	}
-	_, err := s.client.CopyObject(ctx, &s3.CopyObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(destination), CopySource: aws.String(url.PathEscape(s.bucket + "/" + source)), CopySourceIfMatch: aws.String(etag), MetadataDirective: types.MetadataDirectiveReplace, ContentType: aws.String("video/mp4"), CacheControl: aws.String("private, no-store")})
-	return err
+	result, err := s.client.CopyObject(ctx, &s3.CopyObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(destination), CopySource: aws.String(url.PathEscape(s.bucket + "/" + source)), CopySourceIfMatch: aws.String(etag), MetadataDirective: types.MetadataDirectiveReplace, ContentType: aws.String("video/mp4"), CacheControl: aws.String("private, no-store")})
+	if err != nil {
+		return "", err
+	}
+	if result.CopyObjectResult == nil || aws.ToString(result.CopyObjectResult.ETag) == "" {
+		return "", errors.New("missing live copy identity")
+	}
+	return aws.ToString(result.CopyObjectResult.ETag), nil
 }
 
 func (s *Store) PutLivePlaylist(ctx context.Context, id string, revision int64, name string, data []byte) error {

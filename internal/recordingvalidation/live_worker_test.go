@@ -164,9 +164,9 @@ func TestLiveWorkerKeepsSiblingCaptureRunningAfterInvalidMedia(t *testing.T) {
 		t.Fatalf("transient sibling terminalized: %s %v", state, err)
 	}
 }
-func (s *liveWorkerObjects) PublishLiveObject(ctx context.Context, from, to, etag string) error {
+func (s *liveWorkerObjects) PublishLiveObject(ctx context.Context, from, to, etag string) (string, error) {
 	s.published.Add(1)
-	return s.packageMemoryObjects.CopyPackageObject(ctx, from, to, etag)
+	return "etag", s.packageMemoryObjects.CopyPackageObject(ctx, from, to, etag)
 }
 func (s *liveWorkerObjects) PutLivePlaylist(context.Context, string, int64, string, []byte) error {
 	s.published.Add(1)

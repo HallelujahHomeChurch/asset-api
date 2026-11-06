@@ -30,7 +30,7 @@ func TestLivePublicationBoundsCopiesAndJoinsFailure(t *testing.T) {
 				claim.Objects = append(claim.Objects, assets.RecordingPackageObject{Path: fmt.Sprint(i), SizeBytes: 10})
 			}
 			done := make(chan error, 1)
-			go func() { done <- publishLiveObjects(ctx, objects, claim) }()
+			go func() { _, err := publishLiveObjects(ctx, objects, claim); done <- err }()
 			for i := 0; i < 3; i++ {
 				select {
 				case <-objects.started:
@@ -72,7 +72,7 @@ func TestLivePublicationBoundsCopiesAndJoinsFailure(t *testing.T) {
 func TestLivePublicationRejectsChangedObjectSize(t *testing.T) {
 	objects := &publicationObjects{}
 	claim := postgres.RecordingLiveClaim{Objects: []assets.RecordingPackageObject{{Path: "fragment", SizeBytes: 11}}}
-	if err := publishLiveObjects(context.Background(), objects, claim); !errors.Is(err, assets.ErrInvalidUpload) || objects.copies.Load() != 0 {
+	if _, err := publishLiveObjects(context.Background(), objects, claim); !errors.Is(err, assets.ErrInvalidUpload) || objects.copies.Load() != 0 {
 		t.Fatalf("changed object copied: %v", err)
 	}
 }
@@ -92,9 +92,9 @@ func (s *publicationObjects) Head(context.Context, string) (int64, string, error
 	return 10, "immutable-etag", nil
 }
 
-func (s *publicationObjects) PublishLiveObject(ctx context.Context, from, to, etag string) error {
+func (s *publicationObjects) PublishLiveObject(ctx context.Context, from, to, etag string) (string, error) {
 	if etag != "immutable-etag" {
-		return errors.New("ETag fence missing")
+		return "", errors.New("ETag fence missing")
 	}
 	n := s.copies.Add(1)
 	s.active.Add(1)
@@ -104,14 +104,14 @@ func (s *publicationObjects) PublishLiveObject(ctx context.Context, from, to, et
 		select {
 		case <-s.fail:
 			close(s.failed)
-			return s.failure
+			return "", s.failure
 		case <-s.release:
-			return nil
+			return "published-etag", nil
 		case <-ctx.Done():
-			return ctx.Err()
+			return "", ctx.Err()
 		}
 	}
 	// A provider can finish late after cancellation; the caller must still join it.
 	<-s.release
-	return nil
+	return "published-etag", nil
 }

@@ -18,9 +18,11 @@ type RecordingLiveFragment struct {
 
 // Server-generated evidence is persisted with the fenced live snapshot, never accepted from uploads.
 type RecordingLiveValidation struct {
-	Version string                 `json:"version"`
-	Init    RecordingPackageObject `json:"init"`
-	Segment RecordingPackageObject `json:"segment"`
+	InitETag    string                 `json:"initETag,omitempty"`
+	SegmentETag string                 `json:"segmentETag,omitempty"`
+	Version     string                 `json:"version"`
+	Init        RecordingPackageObject `json:"init"`
+	Segment     RecordingPackageObject `json:"segment"`
 }
 type RecordingLiveSegment struct {
 	Sequence   int                              `json:"sequence"`

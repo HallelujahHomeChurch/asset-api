@@ -74,7 +74,7 @@ func (s *Store) PresignPackageObject(ctx context.Context, key string, size int64
 }
 
 func (s *Store) CopyPackageObject(ctx context.Context, source, destination, sourceETag string) error {
-	if !packageStagingKey.MatchString(source) || !packageFinalKey.MatchString(destination) || sourceETag == "" || strings.ContainsAny(sourceETag, "\r\n") {
+	if (!packageStagingKey.MatchString(source) && !liveObjectKey.MatchString(source)) || !packageFinalKey.MatchString(destination) || sourceETag == "" || strings.ContainsAny(sourceETag, "\r\n") {
 		return errors.New("invalid package copy")
 	}
 	from, to := strings.SplitN(source, "/", 5), strings.SplitN(destination, "/", 6)
