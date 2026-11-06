@@ -60,6 +60,9 @@ func TestLiveProgressFencesUnpublishedAndStaleClaims(t *testing.T) {
 	for _, r := range assets.LiveRenditions() {
 		batch[r.Name] = assets.RecordingLiveFragment{Start: 0, End: 30, FrameRate: 30000.0 / 1001, Codecs: "avc1.64001f,mp4a.40.2"}
 	}
+	withReceipt := batch["1080p"]
+	withReceipt.Validation = &assets.RecordingLiveValidation{Version: "live-fragment-v1", Init: claim.Objects[0], Segment: claim.Objects[1]}
+	batch["1080p"] = withReceipt
 	snapshot, err := store.CommitLiveBatch(ctx, claim, batch)
 	if err != nil {
 		t.Fatal(err)
@@ -81,6 +84,9 @@ func TestLiveProgressFencesUnpublishedAndStaleClaims(t *testing.T) {
 	}
 	if got := next.Snapshot.Segments[0].Renditions["1080p"].FrameRate; got != 30000.0/1001 {
 		t.Fatalf("persisted measured frame rate: %v", got)
+	}
+	if got := next.Snapshot.Segments[0].Renditions["1080p"].Validation; got == nil || *got != *withReceipt.Validation {
+		t.Fatalf("persisted validation evidence changed: %+v", got)
 	}
 	changed := map[string]assets.RecordingLiveFragment{}
 	for name, v := range batch {

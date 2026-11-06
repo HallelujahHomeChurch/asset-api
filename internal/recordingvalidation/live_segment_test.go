@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hhc/asset-api/internal/assets"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -115,6 +117,14 @@ func testLiveSegmentFrameRate(t *testing.T, rate string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	for index, segment := range history {
+		for name, fragment := range segment.Renditions {
+			receipt := fragment.Validation
+			if receipt == nil || receipt.Version != liveValidationVersion || receipt.Init.Path != name+"/init.mp4" || receipt.Segment.Path != fmt.Sprintf("%s/seg-%06d.m4s", name, index) {
+				t.Fatalf("missing bound validation evidence: %+v", receipt)
+			}
+		}
+	}
 	playlists, err := assets.RecordingLivePlaylists(history, true, profile)
 	expected := "FRAME-RATE=30.000"
 	if rate != "30" {
@@ -166,5 +176,38 @@ func testLiveSegmentFrameRate(t *testing.T, rate string) {
 	}
 	if _, err := FreezeRecordingPackage(context.Background(), p, "final-seal", objects, probe); err != nil {
 		t.Fatalf("final sealed three-profile package: %v", err)
+	}
+	if err := validateLiveArchiveEvidence(p.Inventory, playlists["master.m3u8"], history); err != nil {
+		t.Fatalf("live and full validation disagree: %v", err)
+	}
+	for name, mutate := range map[string]func(*assets.RecordingLiveFragment){
+		"legacy":       func(f *assets.RecordingLiveFragment) { f.Validation = nil },
+		"version":      func(f *assets.RecordingLiveFragment) { f.Validation.Version = "future" },
+		"init-hash":    func(f *assets.RecordingLiveFragment) { f.Validation.Init.SHA256 = strings.Repeat("0", 64) },
+		"segment-hash": func(f *assets.RecordingLiveFragment) { f.Validation.Segment.SHA256 = strings.Repeat("0", 64) },
+		"segment-size": func(f *assets.RecordingLiveFragment) { f.Validation.Segment.SizeBytes++ },
+		"segment-path": func(f *assets.RecordingLiveFragment) { f.Validation.Segment.Path = "480p/seg-000999.m4s" },
+		"frame-rate":   func(f *assets.RecordingLiveFragment) { f.FrameRate = 24 },
+		"nan":          func(f *assets.RecordingLiveFragment) { f.Start = math.NaN() },
+		"infinite":     func(f *assets.RecordingLiveFragment) { f.End = math.Inf(1) },
+		"timeline":     func(f *assets.RecordingLiveFragment) { f.Start += .5 },
+		"codec":        func(f *assets.RecordingLiveFragment) { f.Codecs = "avc1.000000,mp4a.40.2" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			raw, err := json.Marshal(history)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var changed []assets.RecordingLiveSegment
+			if err := json.Unmarshal(raw, &changed); err != nil {
+				t.Fatal(err)
+			}
+			fragment := changed[0].Renditions["480p"]
+			mutate(&fragment)
+			changed[0].Renditions["480p"] = fragment
+			if err := validateLiveArchiveEvidence(p.Inventory, playlists["master.m3u8"], changed); err == nil {
+				t.Fatal("accepted incompatible live evidence")
+			}
+		})
 	}
 }
