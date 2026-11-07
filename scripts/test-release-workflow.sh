@@ -110,7 +110,8 @@ expected_paths="'**'
 '!scripts/test-what-if-policy.sh'
 '!scripts/test-release-workflow.sh'
 '!scripts/check-release-dapr-config-delta.sh'
-'!infra/runtime-env.json'"
+'!infra/runtime-env.json'
+'!**/*.md'"
 actual_paths="$(awk '
   $0 == "    paths:" { in_paths_ignore = 1; next }
   in_paths_ignore && /^      - / { sub(/^      - /, ""); print; next }

@@ -40,9 +40,10 @@ jobs:
           python3 .github/scripts/ci-agent-docs.py "$EVENT_NAME" "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
           python3 .github/scripts/ci-runtime-env.py "$EVENT_NAME" "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
       - name: Test configuration routing
-        if: steps.diff.outputs.config_only != 'true'
+        if: steps.diff.outputs.config_only != 'true' && steps.diff.outputs.docs_only != 'true'
         run: |
           python3 .github/scripts/test-ci-agent-docs.py
+          python3 .github/scripts/test-ci-doc-triggers.py
           python3 scripts/test-runtime-env.py
           python3 scripts/test-restore-runtime-template.py
 

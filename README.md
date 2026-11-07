@@ -892,3 +892,7 @@ use the same environment-only release. For an authorized emergency, use this
 repository's existing healthy-revision rollback, then reconcile the manifest
 before the next release. Application images and database migrations keep their
 existing recovery contracts; configuration rollback never down-migrates data.
+
+Pure Markdown-only changes (`**/*.md`) do not trigger automatic release workflows.
+Non-Markdown configuration and mixed source changes retain their existing gates.
+PRs retain the required `verify` check; Markdown-only PRs use classification only.

@@ -42,14 +42,14 @@ class AgentDocsTests(unittest.TestCase):
         return result.stdout.strip()
 
     def test_inert_entrypoints(self):
-        for path in ['AGENTS.md', 'README.md', '.agents/skills/hhc-delivery/SKILL.md', '.github/pull_request_template.md', 'docs/guide.md']:
+        for path in ['AGENTS.md', 'README.md', '.agents/skills/hhc-delivery/SKILL.md', '.github/pull_request_template.md', 'docs/guide.md', 'infra/README.md', 'internal/handlers/AGENTS.md', 'docs/contracts/api.md', 'docs/fixtures/input.md', 'docs/generated/api.md']:
             self.put(path, 'updated instructions\n')
         self.commit()
         for event in ['pull_request', 'push']:
             self.assertEqual(self.classify(event), 'docs_only=true')
 
     def test_every_non_document_keeps_full_verification(self):
-        for path in ['source.go', 'package.json', 'go.mod', '.github/workflows/ci.yml', '.github/scripts/ci-agent-docs.py', '.agents/skills/hhc-delivery/start.sh', 'docs/openapi.yaml', 'docs/fixtures/input.md', 'docs/contracts/api.md', 'docs/generated/api.md']:
+        for path in ['source.go', 'package.json', 'go.mod', '.github/workflows/ci.yml', '.github/scripts/ci-agent-docs.py', '.agents/skills/hhc-delivery/start.sh', 'docs/openapi.yaml']:
             previous = self.git('rev-parse', 'HEAD')
             self.put('AGENTS.md', path)
             self.put(path, 'changed\n')

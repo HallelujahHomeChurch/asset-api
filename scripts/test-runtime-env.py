@@ -206,7 +206,7 @@ class RuntimeEnvironmentTests(unittest.TestCase):
         fast = {
             'account-api': [True, True, True, False, False],
             'operations-api': [True, True, True, False, False],
-            'asset-api': [True, False, True, True, False],
+            'asset-api': [True, True, True, True, False],
             'notification-api': [True, True, True, True, False],
             'engagement-api': [True, True, False, False, False],
         }[repo]
@@ -229,6 +229,7 @@ class RuntimeEnvironmentTests(unittest.TestCase):
             test_file.chmod(0o755)
             git('add', '.'); git('commit', '-qm', 'baseline'); base = git('rev-parse', 'HEAD')
             cases = [(path, expected, 'modify') for path, expected in zip([None, 'README.md', test_path, workflow_path, 'internal/feature.go'], fast)]
+            cases += [('SECURITY.md', True, 'modify'), ('docs/review.md', True, 'modify')]
             cases += [(test_path, fast[2], 'delete'), (test_path, fast[2], 'add')]
             for path, expected, action in cases:
                 git('reset', '--hard', base); git('clean', '-fd')

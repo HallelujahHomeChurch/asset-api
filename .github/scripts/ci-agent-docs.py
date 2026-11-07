@@ -10,13 +10,7 @@ def git(*args):
 
 
 def document(path):
-    if path in {'AGENTS.md', 'README.md', '.github/pull_request_template.md'}:
-        return True
-    if re.fullmatch(r'\.agents/skills/hhc-delivery/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_.-]+\.md', path):
-        return True
-    return (re.fullmatch(r'docs/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_.-]+\.md', path) is not None
-            and not re.search(r'(?:^|[/_.-])(?:generated|fixtures?|testdata|contracts?|schemas?|snapshots?|tests?)(?:[/_.-]|$)', path, re.I)
-            and not path.startswith('docs/obs-capture/'))
+    return path.endswith('.md') and not any(ord(char) < 32 or ord(char) == 127 for char in path)
 
 
 def docs_only(event, base, head):

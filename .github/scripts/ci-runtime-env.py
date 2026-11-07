@@ -33,7 +33,7 @@ def release_matches(path, patterns):
     for pattern in patterns:
         negative = pattern.startswith('!')
         glob = pattern[1:] if negative else pattern
-        expression = re.escape(glob).replace(r'\*\*', '.*').replace(r'\*', '[^/]*').replace(r'\?', '[^/]')
+        expression = re.escape(glob).replace(r'\*\*/', '(?:.*/)?').replace(r'\*\*', '.*').replace(r'\*', '[^/]*').replace(r'\?', '[^/]')
         if re.fullmatch(expression, path):
             selected = not negative
     return selected
