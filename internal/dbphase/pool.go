@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -30,9 +31,13 @@ func OpenURL(dsn string, report Reporter) (*sql.DB, error) {
 func Open(config pgx.ConnConfig, report Reporter) *sql.DB {
 	config = *config.Copy()
 	if revision := os.Getenv("CONTAINER_APP_REVISION"); revision != "" {
-		if len(revision) > 63 {
+		if strings.IndexFunc(revision, func(r rune) bool { return r < 32 || r > 126 }) >= 0 {
 			sum := sha256.Sum256([]byte(revision))
-			revision = fmt.Sprintf("%.46s-%x", revision, sum[:8])
+			revision = fmt.Sprintf("revision-%x", sum[:8])
+		} else if len(revision) > 63 {
+			sum := sha256.Sum256([]byte(revision))
+			prefix := revision[:46]
+			revision = fmt.Sprintf("%s-%x", prefix, sum[:8])
 		}
 		config.RuntimeParams["application_name"] = revision
 	}

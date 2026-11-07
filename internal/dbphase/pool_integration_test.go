@@ -234,7 +234,7 @@ func TestRealResetCancellation(t *testing.T) {
 }
 
 func TestRevisionTagPreservesLocalAndBoundsLongNames(t *testing.T) {
-	for _, revision := range []string{"", strings.Repeat("revision-", 10)} {
+	for _, revision := range []string{"", strings.Repeat("revision-", 10), strings.Repeat("界", 40)} {
 		t.Setenv("CONTAINER_APP_REVISION", revision)
 		cfg := config(t)
 		cfg.RuntimeParams["application_name"] = "local-name"
@@ -249,7 +249,7 @@ func TestRevisionTagPreservesLocalAndBoundsLongNames(t *testing.T) {
 			t.Fatal("local application name overwritten")
 		}
 		if len(name) > 63 || (revision != "" && name == "local-name") {
-			t.Fatal("unbounded/missing revision tag")
+			t.Fatalf("unbounded/missing revision tag: %q bytes=%d", name, len(name))
 		}
 	}
 }

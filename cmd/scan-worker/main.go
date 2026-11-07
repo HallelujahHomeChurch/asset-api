@@ -104,6 +104,8 @@ func run(ctx context.Context) (result error) {
 		return err
 	}
 	defer db.Close()
+	stopPoolStats := dbphase.StartPoolStats(ctx, db.Stats)
+	defer stopPoolStats()
 	db.SetMaxOpenConns(2)
 	db.SetMaxIdleConns(1)
 	if err := jobidentity.Check(ctx, db, "asset_jobs", 26); err != nil {
