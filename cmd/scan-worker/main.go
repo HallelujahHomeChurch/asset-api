@@ -17,6 +17,7 @@ import (
 	"hhc/asset-api/internal/postgres"
 	"hhc/asset-api/internal/scanqueue"
 	azurestorage "hhc/asset-api/internal/storage/azure"
+	"hhc/asset-api/internal/telemetry"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azqueue"
@@ -36,7 +37,9 @@ func main() {
 	}
 }
 
-func run(ctx context.Context) error {
+func run(ctx context.Context) (result error) {
+	ctx, finishTelemetry := telemetry.StartWorker(ctx, "scan")
+	defer func() { finishTelemetry(result) }()
 	databaseURL, err := required("DATABASE_URL")
 	if err != nil {
 		return err

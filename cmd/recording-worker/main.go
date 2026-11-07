@@ -20,6 +20,7 @@ import (
 	"hhc/asset-api/internal/recordingvalidation"
 	azurestorage "hhc/asset-api/internal/storage/azure"
 	"hhc/asset-api/internal/storage/r2"
+	"hhc/asset-api/internal/telemetry"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -48,6 +49,8 @@ func main() {
 }
 
 func run(ctx context.Context) (result error) {
+	ctx, finishTelemetry := telemetry.StartWorker(ctx, "recording")
+	defer func() { finishTelemetry(result) }()
 	started := time.Now()
 	defer func() {
 		slog.Info("recording_worker_exit", "mode", os.Getenv("ASSET_RECORDING_WORKER_MODE"), "elapsed_ms", time.Since(started).Milliseconds(), "failed", result != nil)

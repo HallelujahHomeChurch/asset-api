@@ -18,6 +18,7 @@ import (
 	"hhc/asset-api/internal/logging"
 	"hhc/asset-api/internal/postgres"
 	"hhc/asset-api/internal/retention"
+	"hhc/asset-api/internal/telemetry"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -34,7 +35,9 @@ func main() {
 	}
 }
 
-func run(ctx context.Context) error {
+func run(ctx context.Context) (runErr error) {
+	ctx, finishTelemetry := telemetry.StartWorker(ctx, "retention")
+	defer func() { finishTelemetry(runErr) }()
 	// Leave a minute for cooperative shutdown inside the existing 900s Job.
 	ctx, cancel := context.WithTimeout(ctx, 14*time.Minute)
 	defer cancel()

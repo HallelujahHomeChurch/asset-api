@@ -13,6 +13,7 @@ import (
 	"hhc/asset-api/internal/logging"
 	"hhc/asset-api/internal/postgres"
 	azurestorage "hhc/asset-api/internal/storage/azure"
+	"hhc/asset-api/internal/telemetry"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -28,7 +29,9 @@ func main() {
 	}
 }
 
-func run(ctx context.Context) error {
+func run(ctx context.Context) (result error) {
+	ctx, finishTelemetry := telemetry.StartWorker(ctx, "derivative")
+	defer func() { finishTelemetry(result) }()
 	databaseURL, err := required("DATABASE_URL")
 	if err != nil {
 		return err
