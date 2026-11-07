@@ -367,9 +367,12 @@ func (h *Handler) gatewayIngress(next http.Handler) http.Handler {
 }
 
 func (h *Handler) gatewayReader(r *http.Request) bool {
-	workload, _ := r.Context().Value(gatewayIngressKey{}).(bool)
+	ingress, _ := r.Context().Value(gatewayIngressKey{}).(bool)
+	if _, present := r.Header[http.CanonicalHeaderKey("X-HHC-Caller-App-Id")]; present && !ingress {
+		return false
+	}
 	reader := h.callerConfig.ReaderCallerAppID
-	return reader != "" && (workload || h.daprCaller(r) == reader)
+	return reader != "" && (ingress || h.daprCaller(r) == reader)
 }
 
 // requestService is the authenticated service before CMS aliasing.

@@ -148,3 +148,19 @@ func TestLegacyPrincipalNeverIdentifiesCaller(t *testing.T) {
 		t.Fatalf("legacy principal identified %q", got)
 	}
 }
+
+func TestLegacyReaderRejectsMixedCallerHeaders(t *testing.T) {
+	h := &Handler{appAPIToken: "token", callerConfig: CallerConfig{ReaderCallerAppID: "api-gateway"}}
+	r := httptest.NewRequest(http.MethodGet, "https://asset.internal/api/assets/collections", nil)
+	r.Header.Set("Dapr-Caller-App-Id", "api-gateway")
+	r.Header.Set("dapr-api-token", "token")
+	if !h.gatewayReader(r) {
+		t.Fatal("legacy reader rejected")
+	}
+	for _, header := range []string{"api-gateway", " api-gateway", ""} {
+		r.Header.Set("X-HHC-Caller-App-Id", header)
+		if h.gatewayReader(r) {
+			t.Fatalf("mixed reader header %q accepted", header)
+		}
+	}
+}
