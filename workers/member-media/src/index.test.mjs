@@ -103,3 +103,30 @@ test('invalid and multiple byte ranges are rejected after authorization', async 
     assert.equal(response.headers.get('Content-Range'), 'bytes */6');
   }
 });
+
+test('trusted origins can read authorization and availability errors without a CORS failure', async () => {
+  const url = `https://media.alive.org.tw${path}720p/seg-000000.m4s`;
+  for (const [settings, status] of [[env, 401], [{...env, DENY_ALL:'true'}, 503]]) {
+    const response = await worker.fetch(new Request(url, {headers:{Origin:origin}}), settings);
+    assert.equal(response.status, status);
+    assert.equal(response.headers.get('Access-Control-Allow-Origin'), origin);
+    assert.equal(response.headers.get('Access-Control-Allow-Credentials'), 'true');
+    assert.equal(response.headers.get('Cache-Control'), 'private, no-store');
+  }
+});
+
+test('unexpected storage errors retain trusted CORS but never permit an untrusted origin', async () => {
+  const token = await playback(Math.floor(Date.now()/1000)+1800);
+  const settings={...env, MEDIA_BUCKET:{...env.MEDIA_BUCKET, async get(){throw new Error('storage unavailable');}}};
+  const url=`https://media.alive.org.tw${path}720p/seg-000000.m4s`;
+  const response=await worker.fetch(new Request(url,{headers:{Origin:origin,Cookie:`hhc_media=${token}`}}),settings);
+  assert.equal(response.status,503);
+  assert.equal(response.headers.get('Access-Control-Allow-Origin'),origin);
+  assert.equal(await response.text(),'');
+  for(const rejectedOrigin of ['https://untrusted.example', 'null']){
+    const rejected=await worker.fetch(new Request(url,{headers:{Origin:rejectedOrigin,Cookie:`hhc_media=${token}`}}),settings);
+    assert.equal(rejected.status,403);
+    assert.equal(rejected.headers.get('Access-Control-Allow-Origin'),null);
+    assert.equal(rejected.headers.get('Access-Control-Allow-Credentials'),null);
+  }
+});

@@ -383,5 +383,9 @@ async function handle(request: Request, env: Env, ctx?: ExecutionContext): Promi
 }
 
 export default { fetch: async (request: Request, env: Env, ctx?: ExecutionContext) => {
-  try { return await handle(request, env, ctx); } catch { return failure(503); }
+  let response: Response;
+  try { response = await handle(request, env, ctx); } catch { response = failure(503); }
+  const origin = request.headers.get('Origin');
+  return origin && env.ALLOWED_ORIGINS?.split(',').some(value => value.trim() === origin)
+    ? withCors(response, origin) : response;
 } };
