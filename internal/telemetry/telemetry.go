@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"log/slog"
 	"math"
 	"net/http"
 	"os"
@@ -26,7 +25,12 @@ import (
 )
 
 func Configure(ctx context.Context) func(context.Context) error {
+	return configureExporter(ctx, func(ctx context.Context) (sdktrace.SpanExporter, error) { return otlptracegrpc.New(ctx) })
+}
+
+func configureExporter(ctx context.Context, create func(context.Context) (sdktrace.SpanExporter, error)) func(context.Context) error {
 	if strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")) == "" {
+		exporterState("disabled_missing_endpoint")
 		return func(context.Context) error { return nil }
 	}
 	// Export failures can contain endpoint credentials; never log the original error.
@@ -34,9 +38,9 @@ func Configure(ctx context.Context) func(context.Context) error {
 	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(error) { failures.record(time.Now()) }))
 	initCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	exporter, err := otlptracegrpc.New(initCtx)
+	exporter, err := create(initCtx)
 	if err != nil {
-		slog.Warn("trace exporter unavailable")
+		exporterState("initialization_failed")
 		return func(context.Context) error { return nil }
 	}
 	serviceResource := resource.NewSchemaless(
@@ -44,13 +48,19 @@ func Configure(ctx context.Context) func(context.Context) error {
 		attribute.String("service.version", envOr("RELEASE", envOr("CONTAINER_APP_REVISION", "unknown"))),
 		attribute.String("deployment.environment.name", envOr("ENVIRONMENT", "production")),
 	)
+	progress := new(exportProgress)
 	provider := sdktrace.NewTracerProvider(
 		sdktrace.WithResource(serviceResource),
-		sdktrace.WithBatcher(resourceExporter{SpanExporter: exporter, resource: serviceResource}, sdktrace.WithMaxQueueSize(512), sdktrace.WithMaxExportBatchSize(128), sdktrace.WithExportTimeout(3*time.Second)),
+		sdktrace.WithBatcher(resourceExporter{SpanExporter: exporter, resource: serviceResource, progress: progress}, sdktrace.WithMaxQueueSize(512), sdktrace.WithMaxExportBatchSize(128), sdktrace.WithExportTimeout(3*time.Second)),
 		sdktrace.WithSampler(traceSampler()),
 	)
 	otel.SetTracerProvider(provider)
-	return provider.Shutdown
+	exporterState("initialized")
+	return func(ctx context.Context) error {
+		err := provider.Shutdown(ctx)
+		progress.summary(ctx, err == nil)
+		return err
+	}
 }
 
 // Private ingress trusts the edge sampling decision; only roots use the local ratio.
@@ -165,6 +175,7 @@ func (t AuditTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 type resourceExporter struct {
 	sdktrace.SpanExporter
 	resource *resource.Resource
+	progress *exportProgress
 }
 
 func (e resourceExporter) ExportSpans(ctx context.Context, spans []sdktrace.ReadOnlySpan) error {
@@ -172,7 +183,9 @@ func (e resourceExporter) ExportSpans(ctx context.Context, spans []sdktrace.Read
 	for i, span := range spans {
 		safe[i] = resourceSpan{ReadOnlySpan: span, resource: e.resource}
 	}
-	return e.SpanExporter.ExportSpans(ctx, safe)
+	err := e.SpanExporter.ExportSpans(ctx, safe)
+	e.progress.record(time.Now(), len(safe), err != nil)
+	return err
 }
 
 type resourceSpan struct {
