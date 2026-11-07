@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"go.opentelemetry.io/otel/trace"
 	"io"
 	"net/http"
 	"regexp"
@@ -34,6 +35,7 @@ type requestObservation struct {
 	values            [len(phaseNames)]phaseValue
 	closed, failed    bool
 	id, route, reason string
+	parentSpanID      string
 }
 type requestKey struct{}
 
@@ -56,7 +58,7 @@ func observeRequest(ctx context.Context, r *http.Request) context.Context {
 	if r.Method == "DELETE" && len(parts) == 6 && parts[1] == "priv" && parts[2] == "assets" && parts[4] == "grants" {
 		route = "asset_grant_revoke"
 	}
-	return context.WithValue(ctx, requestKey{}, &requestObservation{id: id, route: route})
+	return context.WithValue(ctx, requestKey{}, &requestObservation{id: id, route: route, parentSpanID: trace.SpanContextFromContext(ctx).SpanID().String()})
 }
 
 // These are overlapping work durations, never an additive request latency.

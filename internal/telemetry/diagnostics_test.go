@@ -34,6 +34,7 @@ func TestUnsampledFailureEvidenceAndPrivacy(t *testing.T) {
 	t.Cleanup(func() { otel.SetTracerProvider(old); _ = provider.Shutdown(context.Background()) })
 	request := httptest.NewRequest("GET", "/private/user@example.test?token=secret", nil)
 	request.Header.Set("Authorization", "secret")
+	request.Header.Set("traceparent", "00-0123456789abcdef0123456789abcdef-0123456789abcdef-00")
 	Server(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if trace.SpanFromContext(r.Context()).IsRecording() {
 			t.Fatal("unexpected sampled span")
@@ -41,7 +42,7 @@ func TestUnsampledFailureEvidenceAndPrivacy(t *testing.T) {
 		w.WriteHeader(503)
 	})).ServeHTTP(httptest.NewRecorder(), request)
 	got := logs.String()
-	for _, want := range []string{`"phase":"server"`, `"status":503`, `"sampled":false`, `"trace_id":`} {
+	for _, want := range []string{`"phase":"server"`, `"status":503`, `"sampled":false`, `"trace_id":`, `"parent_span_id":"0123456789abcdef"`} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %s: %s", want, got)
 		}
