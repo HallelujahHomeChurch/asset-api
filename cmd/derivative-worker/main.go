@@ -10,6 +10,7 @@ import (
 
 	"hhc/asset-api/internal/derivativequeue"
 	"hhc/asset-api/internal/derivatives"
+	"hhc/asset-api/internal/jobidentity"
 	"hhc/asset-api/internal/logging"
 	"hhc/asset-api/internal/postgres"
 	azurestorage "hhc/asset-api/internal/storage/azure"
@@ -52,6 +53,9 @@ func run(ctx context.Context) error {
 	defer db.Close()
 	db.SetMaxOpenConns(2)
 	db.SetMaxIdleConns(1)
+	if err := jobidentity.Check(ctx, db, "asset_jobs", 26); err != nil {
+		return err
+	}
 	blobs, err := azurestorage.New(accountURL, value("ASSET_AZURE_CONTAINER", "assets"))
 	if err != nil {
 		return err

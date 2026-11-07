@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"hhc/asset-api/internal/clamav"
+	"hhc/asset-api/internal/jobidentity"
 	"hhc/asset-api/internal/logging"
 	"hhc/asset-api/internal/postgres"
 	"hhc/asset-api/internal/scanqueue"
@@ -95,6 +96,17 @@ func run(ctx context.Context) error {
 		return err
 	}
 
+	db, err := sql.Open("pgx", databaseURL)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(2)
+	db.SetMaxIdleConns(1)
+	if err := jobidentity.Check(ctx, db, "asset_jobs", 26); err != nil {
+		return err
+	}
+
 	signatures, err := clamav.NewAzureSignatures(accountURL, signatureContainer)
 	if err != nil {
 		return err
@@ -105,13 +117,6 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	db, err := sql.Open("pgx", databaseURL)
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	db.SetMaxOpenConns(2)
-	db.SetMaxIdleConns(1)
 	blobs, err := azurestorage.New(accountURL, value("ASSET_AZURE_CONTAINER", "assets"))
 	if err != nil {
 		return err
