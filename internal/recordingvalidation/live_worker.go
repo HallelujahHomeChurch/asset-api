@@ -132,6 +132,16 @@ func runLiveClaim(ctx context.Context, store *postgres.RecordingCaptureStore, ob
 			"elapsed_ms", time.Since(claimedAt).Milliseconds(), "published", ready && finishErr == nil, "failure", failure)
 		return finishErr
 	}, 30*time.Second)
+	if errors.Is(err, assets.ErrConflict) && ctx.Err() == nil {
+		terminal, cleanupErr := store.FinishTerminalLiveClaim(ctx, claim)
+		if cleanupErr != nil {
+			return errors.Join(err, cleanupErr)
+		}
+		if terminal {
+			slog.Info("recording_live_claim_cancelled", "capture_id", claim.Capture.ID, "claim_id", claim.ClaimID, "sequence", claim.Sequence, "reason", "capture_terminal")
+			return nil
+		}
+	}
 	return err
 }
 

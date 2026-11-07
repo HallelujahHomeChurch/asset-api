@@ -522,6 +522,12 @@ expire, then resumes durable progress and immutable per-segment receipts.
 Stale live claims cannot publish. Ten-second image sampling does not set event
 frequency. See [the handoff and resource verification](docs/reviews/recording-live-handoff-2026-10-25.md).
 
+If a capture becomes terminal during live validation, the worker joins its
+in-flight work and rechecks durable terminal authority before releasing only
+that claim. It logs `recording_live_claim_cancelled` and continues other work;
+active-capture conflicts and cleanup failures still propagate. This cleanup
+does not reopen the capture or advance its publication watermark.
+
 Normal retry/lease recovery is handled by the running API dispatcher and Queue
 visibility, not hourly maintenance. Keep API min replicas >=1 while this dispatcher
 is active. If no media is ready the API performs bounded readiness probes; it does
