@@ -77,7 +77,8 @@ func envOr(name, fallback string) string {
 func Server(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health" || r.URL.Path == "/ready" {
-			next.ServeHTTP(w, r)
+			metrics := httpsnoop.CaptureMetrics(next, w, r)
+			RecordOutcome(r.Context(), "server", metrics.Code, metrics.Duration, false)
 			return
 		}
 		ctx := r.Context()

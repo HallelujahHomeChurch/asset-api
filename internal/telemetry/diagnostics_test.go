@@ -93,3 +93,11 @@ func TestExporterFailuresCountedAndWarningsBounded(t *testing.T) {
 		t.Fatalf("wrong exporter warning budget: %s", logs.String())
 	}
 }
+
+func TestFailedProbeKeepsEvidence(t *testing.T) {
+	logs := captureDiagnosticLogs(t)
+	Server(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(503) })).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/health", nil))
+	if !strings.Contains(logs.String(), `"status":503`) {
+		t.Fatal("failed probe evidence missing")
+	}
+}
