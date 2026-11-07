@@ -41,14 +41,22 @@ func RecordOutcome(ctx context.Context, phase string, code int, elapsed time.Dur
 
 type diagnosticBody struct {
 	io.ReadCloser
-	ctx     context.Context
-	started time.Time
-	once    sync.Once
+	ctx       context.Context
+	started   time.Time
+	completed sync.Once
+	failed    sync.Once
 }
 
 func (b *diagnosticBody) finish(err error) {
-	b.once.Do(func() {
-		RecordOutcome(b.ctx, "client_body", 0, time.Since(b.started), err != nil && !errors.Is(err, io.EOF))
+	if err != nil && !errors.Is(err, io.EOF) {
+		b.failed.Do(func() {
+			b.completed.Do(func() {})
+			RecordOutcome(b.ctx, "client_body", 0, time.Since(b.started), true)
+		})
+		return
+	}
+	b.completed.Do(func() {
+		RecordOutcome(b.ctx, "client_body", 0, time.Since(b.started), false)
 	})
 }
 func (b *diagnosticBody) Read(p []byte) (int, error) {

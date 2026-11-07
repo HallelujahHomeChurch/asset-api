@@ -141,7 +141,7 @@ func (t AuditTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	}
 	RecordOutcome(ctx, "client_headers", code, time.Since(started), err != nil)
 	if response != nil && response.Body != nil && response.Body != http.NoBody {
-		response.Body = &diagnosticBody{ReadCloser: response.Body, ctx: ctx, started: started}
+		response.Body = &diagnosticBody{ReadCloser: response.Body, ctx: ctx, started: time.Now()}
 	}
 	if err != nil {
 		span.SetStatus(codes.Error, "")

@@ -101,3 +101,39 @@ func TestFailedProbeKeepsEvidence(t *testing.T) {
 		t.Fatal("failed probe evidence missing")
 	}
 }
+
+type eofCloseFailure struct{}
+
+func (eofCloseFailure) Read([]byte) (int, error) { return 0, io.EOF }
+func (eofCloseFailure) Close() error             { return errors.New("secret close failure") }
+func TestBodyCloseFailureAfterEOF(t *testing.T) {
+	logs := captureDiagnosticLogs(t)
+	b := &diagnosticBody{ReadCloser: eofCloseFailure{}, ctx: context.Background(), started: time.Now()}
+	_, _ = b.Read(make([]byte, 1))
+	_ = b.Close()
+	_ = b.Close()
+	if strings.Count(logs.String(), "operation diagnostic") != 1 || !strings.Contains(logs.String(), `"outcome":"failed"`) || strings.Contains(logs.String(), "secret") {
+		t.Fatalf("close failure evidence: %s", logs.String())
+	}
+}
+
+type diagnosticTransportFunc func(*http.Request) (*http.Response, error)
+
+func (f diagnosticTransportFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+func TestSlowHeadersDoNotClassifyFastBodyAsSlow(t *testing.T) {
+	logs := captureDiagnosticLogs(t)
+	base := diagnosticTransportFunc(func(*http.Request) (*http.Response, error) {
+		time.Sleep(slowOperation + 20*time.Millisecond)
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(""))}, nil
+	})
+	request, _ := http.NewRequest(http.MethodGet, "http://internal.invalid", nil)
+	response, err := AuditTransport{Base: base}.RoundTrip(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, response.Body)
+	_ = response.Body.Close()
+	if !strings.Contains(logs.String(), `"phase":"client_headers"`) || strings.Contains(logs.String(), `"phase":"client_body"`) {
+		t.Fatalf("incorrect phase attribution: %s", logs.String())
+	}
+}
