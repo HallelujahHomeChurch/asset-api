@@ -1568,8 +1568,7 @@ func TestPrivateWeeklyDownloadRequiresOwnerAndSubjectGrantBeforeRange(t *testing
 	handler := New(service, nil, map[string]bool{"hhc-web-api": true}, false, "token", CallerConfig{}, nil).Routes()
 
 	request := httptest.NewRequest(http.MethodGet, "/priv/assets/asset-1/download", nil)
-	request.Header.Set("Dapr-Caller-App-Id", "hhc-web-api")
-	request.Header.Set("dapr-api-token", "token")
+	request.Header.Set("X-HHC-Caller-App-Id", "hhc-web-api")
 	request.Header.Set("X-Asset-Subject-Type", "service")
 	request.Header.Set("X-Asset-Subject-Id", "hhc-web-api")
 	request.Header.Set("Range", "bytes=1-3")
@@ -1582,6 +1581,14 @@ func TestPrivateWeeklyDownloadRequiresOwnerAndSubjectGrantBeforeRange(t *testing
 	}
 	if response.Header().Get("Cache-Control") != "private, no-store" {
 		t.Fatalf("cache control=%q", response.Header().Get("Cache-Control"))
+	}
+
+	// Trusted service identification does not create a subject grant.
+	repository.grantActive = false
+	denied := httptest.NewRecorder()
+	handler.ServeHTTP(denied, request)
+	if denied.Code != http.StatusNotFound {
+		t.Fatalf("missing grant status=%d", denied.Code)
 	}
 }
 
