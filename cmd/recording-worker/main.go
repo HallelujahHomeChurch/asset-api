@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"hhc/asset-api/internal/config"
+	"hhc/asset-api/internal/dbphase"
+	"hhc/asset-api/internal/jobidentity"
 	"hhc/asset-api/internal/logging"
 	"hhc/asset-api/internal/postgres"
 	"hhc/asset-api/internal/recordingprocessing"
@@ -20,6 +22,7 @@ import (
 	"hhc/asset-api/internal/recordingvalidation"
 	azurestorage "hhc/asset-api/internal/storage/azure"
 	"hhc/asset-api/internal/storage/r2"
+	"hhc/asset-api/internal/telemetry"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -48,6 +51,8 @@ func main() {
 }
 
 func run(ctx context.Context) (result error) {
+	ctx, finishTelemetry := telemetry.StartWorker(ctx, "recording")
+	defer func() { finishTelemetry(result) }()
 	started := time.Now()
 	defer func() {
 		slog.Info("recording_worker_exit", "mode", os.Getenv("ASSET_RECORDING_WORKER_MODE"), "elapsed_ms", time.Since(started).Milliseconds(), "failed", result != nil)
@@ -77,12 +82,17 @@ func run(ctx context.Context) (result error) {
 	if err != nil {
 		return fmt.Errorf("recording storage configuration: %w", err)
 	}
-	db, err := sql.Open("pgx", dsn)
+	db, err := dbphase.OpenURL(dsn, telemetry.RecordDatabaseOutcome)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
+	stopPoolStats := dbphase.StartPoolStats(ctx, db.Stats)
+	defer stopPoolStats()
 	db.SetMaxOpenConns(3)
+	if err := jobidentity.Check(ctx, db, "asset_jobs", 26); err != nil {
+		return err
+	}
 	// Observability must not prevent cleanup or processing on a transient query
 	// failure. No actor, filename, URL, credential or object key enters this log.
 	if health, err := postgres.RecordingHealth(ctx, db); err != nil {

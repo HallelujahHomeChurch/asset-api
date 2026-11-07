@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -16,6 +15,7 @@ import (
 	"hhc/asset-api/internal/auditoutbox"
 	"hhc/asset-api/internal/clamav"
 	"hhc/asset-api/internal/config"
+	"hhc/asset-api/internal/dbphase"
 	"hhc/asset-api/internal/dependencyhealth"
 	"hhc/asset-api/internal/derivativequeue"
 	"hhc/asset-api/internal/diagnostics"
@@ -59,7 +59,7 @@ func run() error {
 			slog.Warn("trace shutdown incomplete")
 		}
 	}()
-	db, err := sql.Open("pgx", cfg.DatabaseURL)
+	db, err := dbphase.OpenURL(cfg.DatabaseURL, telemetry.RecordDatabaseOutcome)
 	if err != nil {
 		return err
 	}

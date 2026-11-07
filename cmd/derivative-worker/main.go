@@ -2,17 +2,19 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log/slog"
 	"os"
 	"strings"
 
+	"hhc/asset-api/internal/dbphase"
 	"hhc/asset-api/internal/derivativequeue"
 	"hhc/asset-api/internal/derivatives"
+	"hhc/asset-api/internal/jobidentity"
 	"hhc/asset-api/internal/logging"
 	"hhc/asset-api/internal/postgres"
 	azurestorage "hhc/asset-api/internal/storage/azure"
+	"hhc/asset-api/internal/telemetry"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -23,12 +25,14 @@ func main() {
 		os.Exit(1)
 	}
 	if err := run(context.Background()); err != nil {
-		slog.Error("asset derivative worker failed", "error", err)
+		slog.Error("asset derivative worker failed")
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context) error {
+func run(ctx context.Context) (result error) {
+	ctx, finishTelemetry := telemetry.StartWorker(ctx, "derivative")
+	defer func() { finishTelemetry(result) }()
 	databaseURL, err := required("DATABASE_URL")
 	if err != nil {
 		return err
@@ -45,13 +49,18 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	db, err := sql.Open("pgx", databaseURL)
+	db, err := dbphase.OpenURL(databaseURL, telemetry.RecordDatabaseOutcome)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
+	stopPoolStats := dbphase.StartPoolStats(ctx, db.Stats)
+	defer stopPoolStats()
 	db.SetMaxOpenConns(2)
 	db.SetMaxIdleConns(1)
+	if err := jobidentity.Check(ctx, db, "asset_jobs", 26); err != nil {
+		return err
+	}
 	blobs, err := azurestorage.New(accountURL, value("ASSET_AZURE_CONTAINER", "assets"))
 	if err != nil {
 		return err

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -15,9 +14,12 @@ import (
 	"syscall"
 	"time"
 
+	"hhc/asset-api/internal/dbphase"
+	"hhc/asset-api/internal/jobidentity"
 	"hhc/asset-api/internal/logging"
 	"hhc/asset-api/internal/postgres"
 	"hhc/asset-api/internal/retention"
+	"hhc/asset-api/internal/telemetry"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -34,7 +36,9 @@ func main() {
 	}
 }
 
-func run(ctx context.Context) error {
+func run(ctx context.Context) (runErr error) {
+	ctx, finishTelemetry := telemetry.StartWorker(ctx, "retention")
+	defer func() { finishTelemetry(runErr) }()
 	// Leave a minute for cooperative shutdown inside the existing 900s Job.
 	ctx, cancel := context.WithTimeout(ctx, 14*time.Minute)
 	defer cancel()
@@ -50,13 +54,18 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return errorsLog("create run ID", err)
 	}
-	db, err := sql.Open("pgx", databaseURL)
+	db, err := dbphase.OpenURL(databaseURL, telemetry.RecordDatabaseOutcome)
 	if err != nil {
 		return errorsLog("open database", err)
 	}
 	defer db.Close()
+	stopPoolStats := dbphase.StartPoolStats(ctx, db.Stats)
+	defer stopPoolStats()
 	db.SetMaxOpenConns(2)
 	db.SetMaxIdleConns(1)
+	if err := jobidentity.Check(ctx, db, "asset_jobs", 26); err != nil {
+		return err
+	}
 
 	startedAt := time.Now().UTC()
 	result, sweepErr := retention.NewWorker(postgres.New(db), apply).SweepExpiredCollectionItems(ctx, startedAt, retention.BatchSize)

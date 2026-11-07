@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"log/slog"
 	"math"
 	"net/http"
 	"os"
@@ -26,17 +25,22 @@ import (
 )
 
 func Configure(ctx context.Context) func(context.Context) error {
+	return configureExporter(ctx, func(ctx context.Context) (sdktrace.SpanExporter, error) { return otlptracegrpc.New(ctx) })
+}
+
+func configureExporter(ctx context.Context, create func(context.Context) (sdktrace.SpanExporter, error)) func(context.Context) error {
 	if strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")) == "" {
+		exporterState("disabled_missing_endpoint")
 		return func(context.Context) error { return nil }
 	}
 	// Export failures can contain endpoint credentials; never log the original error.
-	var exportWarning sync.Once
-	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(error) { exportWarning.Do(func() { slog.Warn("trace export failed") }) }))
+	var failures exportErrors
+	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(error) { failures.record(time.Now()) }))
 	initCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	exporter, err := otlptracegrpc.New(initCtx)
+	exporter, err := create(initCtx)
 	if err != nil {
-		slog.Warn("trace exporter unavailable")
+		exporterState("initialization_failed")
 		return func(context.Context) error { return nil }
 	}
 	serviceResource := resource.NewSchemaless(
@@ -44,19 +48,25 @@ func Configure(ctx context.Context) func(context.Context) error {
 		attribute.String("service.version", envOr("RELEASE", envOr("CONTAINER_APP_REVISION", "unknown"))),
 		attribute.String("deployment.environment.name", envOr("ENVIRONMENT", "production")),
 	)
+	progress := new(exportProgress)
 	provider := sdktrace.NewTracerProvider(
 		sdktrace.WithResource(serviceResource),
-		sdktrace.WithBatcher(resourceExporter{SpanExporter: exporter, resource: serviceResource}, sdktrace.WithMaxQueueSize(512), sdktrace.WithMaxExportBatchSize(128), sdktrace.WithExportTimeout(3*time.Second)),
+		sdktrace.WithBatcher(resourceExporter{SpanExporter: exporter, resource: serviceResource, progress: progress}, sdktrace.WithMaxQueueSize(512), sdktrace.WithMaxExportBatchSize(128), sdktrace.WithExportTimeout(3*time.Second)),
 		sdktrace.WithSampler(traceSampler()),
 	)
 	otel.SetTracerProvider(provider)
-	return provider.Shutdown
+	exporterState("initialized")
+	return func(ctx context.Context) error {
+		err := provider.Shutdown(ctx)
+		progress.summary(ctx, err == nil)
+		return err
+	}
 }
 
-// shortcut: caller-selected trace IDs can force sampling; platform owner reviews quotas in the next cost phase.
+// Private ingress trusts the edge sampling decision; only roots use the local ratio.
 func traceSampler() sdktrace.Sampler {
 	root := sdktrace.TraceIDRatioBased(sampleRatio())
-	return sdktrace.ParentBased(root, sdktrace.WithRemoteParentSampled(root))
+	return sdktrace.ParentBased(root)
 }
 
 func sampleRatio() float64 {
@@ -77,7 +87,8 @@ func envOr(name, fallback string) string {
 func Server(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health" || r.URL.Path == "/ready" {
-			next.ServeHTTP(w, r)
+			metrics := httpsnoop.CaptureMetrics(next, w, r)
+			RecordOutcome(r.Context(), "server", metrics.Code, metrics.Duration, false)
 			return
 		}
 		ctx := r.Context()
@@ -86,7 +97,16 @@ func Server(next http.Handler) http.Handler {
 		}
 		ctx, span := otel.Tracer("asset-api/http").Start(ctx, "asset.http", trace.WithSpanKind(trace.SpanKindServer), trace.WithAttributes(attribute.String("http.request.method", method(r.Method))))
 		defer span.End()
+		started := time.Now()
+		finished := false
+		defer func() {
+			if !finished {
+				RecordOutcome(ctx, "server", 0, time.Since(started), true)
+			}
+		}()
 		metrics := httpsnoop.CaptureMetrics(next, w, r.WithContext(ctx))
+		finished = true
+		RecordOutcome(ctx, "server", metrics.Code, metrics.Duration, false)
 		span.SetAttributes(attribute.Int("http.response.status_code", metrics.Code))
 		if metrics.Code >= 500 {
 			span.SetStatus(codes.Error, "")
@@ -123,7 +143,16 @@ func (t AuditTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	if base == nil {
 		base = http.DefaultTransport
 	}
+	started := time.Now()
 	response, err := base.RoundTrip(request)
+	code := 0
+	if response != nil {
+		code = response.StatusCode
+	}
+	RecordOutcome(ctx, "client_headers", code, time.Since(started), err != nil)
+	if response != nil && response.Body != nil && response.Body != http.NoBody {
+		response.Body = &diagnosticBody{ReadCloser: response.Body, ctx: ctx, started: time.Now()}
+	}
 	if err != nil {
 		span.SetStatus(codes.Error, "")
 		span.SetAttributes(attribute.String("error.type", "transport_error"))
@@ -146,6 +175,7 @@ func (t AuditTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 type resourceExporter struct {
 	sdktrace.SpanExporter
 	resource *resource.Resource
+	progress *exportProgress
 }
 
 func (e resourceExporter) ExportSpans(ctx context.Context, spans []sdktrace.ReadOnlySpan) error {
@@ -153,7 +183,9 @@ func (e resourceExporter) ExportSpans(ctx context.Context, spans []sdktrace.Read
 	for i, span := range spans {
 		safe[i] = resourceSpan{ReadOnlySpan: span, resource: e.resource}
 	}
-	return e.SpanExporter.ExportSpans(ctx, safe)
+	err := e.SpanExporter.ExportSpans(ctx, safe)
+	e.progress.record(time.Now(), len(safe), err != nil)
+	return err
 }
 
 type resourceSpan struct {
