@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"hhc/asset-api/internal/jobidentity"
 	"hhc/asset-api/internal/logging"
 	"hhc/asset-api/internal/migrations"
 
@@ -48,6 +49,10 @@ func main() {
 	db.SetMaxOpenConns(1)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+	if err := jobidentity.Check(ctx, db, "asset_migrate", 1); err != nil {
+		slog.Error("database job identity rejected")
+		os.Exit(1)
+	}
 	if recovering {
 		store := postgres.NewRecordingPackageStore(db)
 		var output any
