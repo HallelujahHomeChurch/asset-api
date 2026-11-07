@@ -68,7 +68,7 @@ func recordOutcome(ctx context.Context, phase string, code int, elapsed time.Dur
 	sc := trace.SpanContextFromContext(ctx)
 	attrs := []any{"phase", phase, "outcome", outcome, "status", code, "duration_ms", elapsed.Milliseconds()}
 	if observation != nil {
-		attrs = append(attrs, "parent_span_id", observation.parentSpanID, "request_id", observation.id, "route_id", observation.route, "operation", "http_request", "phase_totals", summaries, "failure_reason", reason, "timing_semantics", "overlapping_work_not_wall_time", "db_checkout", "unmeasured_implicit_checkout")
+		attrs = append(attrs, "parent_span_id", observation.parentSpanID, "request_id", observation.id, "route_id", observation.route, "operation", "http_request", "phase_totals", phaseLogValue(summaries), "failure_reason", reason, "timing_semantics", "overlapping_work_not_wall_time", "db_checkout", "unmeasured_implicit_checkout")
 	}
 	if sc.IsValid() {
 		attrs = append(attrs, "trace_id", sc.TraceID().String(), "span_id", sc.SpanID().String(), "sampled", sc.IsSampled())

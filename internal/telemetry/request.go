@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"go.opentelemetry.io/otel/trace"
 	"io"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
@@ -187,4 +188,13 @@ func (b *storageBody) Close() error {
 	err := b.ReadCloser.Close()
 	b.finish(err, !b.eof.Load())
 	return err
+}
+
+// Groups keep the same named numeric fields under JSON and production text handlers.
+func phaseLogValue(values []phaseSummary) slog.Value {
+	attrs := make([]slog.Attr, 0, len(values))
+	for _, v := range values {
+		attrs = append(attrs, slog.Group(v.Phase, "count", v.Count, "total_ms", v.TotalMS, "max_ms", v.MaxMS, "failures", v.Failures, "status", v.Status))
+	}
+	return slog.GroupValue(attrs...)
 }

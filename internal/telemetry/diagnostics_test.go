@@ -163,10 +163,31 @@ func TestFastQueriesAccumulateForSlowRequest(t *testing.T) {
 		}
 		RecordOutcome(r.Context(), "server", 200, 2200*time.Millisecond, false)
 	})).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/api/assets/public/0123456789abcdef0123456789abcdef?secret=private", nil))
-	if strings.Count(logs.String(), `"phase":"server"`) != 1 || !strings.Contains(logs.String(), `"phase":"db_query_lifecycle","count":11,"total_ms":2200,"max_ms":200`) {
+	if strings.Count(logs.String(), `"phase":"server"`) != 1 || !strings.Contains(logs.String(), `"db_query_lifecycle":{"count":11,"total_ms":2200,"max_ms":200`) {
 		t.Fatal(logs.String())
 	}
 	if strings.Contains(logs.String(), "private") {
 		t.Fatal("private query leaked")
 	}
+}
+
+func TestProductionTextSummaryHasNamedPhaseFields(t *testing.T) {
+	var logs bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(old)
+	ctx := observeRequest(context.Background(), httptest.NewRequest("GET", "/", nil))
+	for range 6 {
+		RecordDatabaseOutcome(ctx, "db_query_lifecycle", 200*time.Millisecond, false)
+	}
+	RecordOutcome(ctx, "server", 200, 2200*time.Millisecond, false)
+	for _, want := range []string{"phase_totals.db_query_lifecycle.count=6", "phase_totals.db_query_lifecycle.total_ms=1200", "phase_totals.db_query_lifecycle.max_ms=200"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Fatal(logs.String())
+		}
+	}
+	if logs.Len() > 4096 || strings.Count(logs.String(), "operation diagnostic") != 1 {
+		t.Fatal("unbounded or duplicate summary")
+	}
+	t.Logf("summary_records=1 bytes=%d", logs.Len())
 }

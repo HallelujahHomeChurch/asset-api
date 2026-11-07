@@ -51,7 +51,7 @@ func TestR2DownloadRecordsRealSDKRetriesAndBody(t *testing.T) {
 	if calls != 2 {
 		t.Fatal("SDK retry changed", calls)
 	}
-	for _, want := range []string{`"phase":"storage_attempt","count":2`, `"phase":"storage_retry","count":1`, `"phase":"storage_body","count":1`} {
+	for _, want := range []string{`"storage_attempt":{"count":2`, `"storage_retry":{"count":1`, `"storage_body":{"count":1`} {
 		if !strings.Contains(logs.String(), want) {
 			t.Fatalf("missing %s: %s", want, logs.String())
 		}
