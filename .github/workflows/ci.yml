@@ -47,7 +47,8 @@ jobs:
       api_config_id: ${{ steps.image_fixture.outputs.api_config_id }}
       scan_config_id: ${{ steps.image_fixture.outputs.scan_config_id }}
       recording_config_id: ${{ steps.image_fixture.outputs.recording_config_id }}
-    runs-on: ubuntu-latest
+    # Keep the validated media fixture toolchain during the ubuntu-latest rollout.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     services:
       postgres:
