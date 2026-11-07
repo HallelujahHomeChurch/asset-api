@@ -57,7 +57,7 @@ jq -e '
     | objects
     | select(.propertyChangeType? == "Delete")
       | select(
-        ((.path == "properties.identityProviders" or .path == "properties.globalValidation")
+        ((.path | test("^properties\\.(identityProviders|globalValidation)(\\.|$)"))
           and ($resourceId | endswith("/Microsoft.App/containerApps/asset-api/authConfigs/current"))
           and ($change.after.properties.platform.enabled == false))
         or ((.path == "properties.runningStatus" or .path == "properties.template.revisionSuffix")

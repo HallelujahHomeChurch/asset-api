@@ -133,7 +133,9 @@ resource = '/subscriptions/test/resourceGroups/alive/providers/Microsoft.App/con
 auth = {'resourceId': resource + '/authConfigs/current', 'changeType':'Modify',
         'after': {'properties': {'platform': {'enabled': False}}},
         'delta':[{'path':'properties.identityProviders','propertyChangeType':'Delete'},
-                 {'path':'properties.globalValidation','propertyChangeType':'Delete'}]}
+                 {'path':'properties.globalValidation','propertyChangeType':'Delete'},
+                 {'path':'properties.identityProviders.azureActiveDirectory','propertyChangeType':'Delete'},
+                 {'path':'properties.globalValidation.excludedPaths','propertyChangeType':'Delete'}]}
 (root/'auth-disabled.json').write_text(json.dumps({'changes':[auth]}))
 auth['after']['properties']['platform']['enabled'] = True
 (root/'auth-still-enabled.json').write_text(json.dumps({'changes':[auth]}))
