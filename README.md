@@ -896,3 +896,19 @@ existing recovery contracts; configuration rollback never down-migrates data.
 Pure Markdown-only changes (`**/*.md`) do not trigger automatic release workflows.
 Non-Markdown configuration and mixed source changes retain their existing gates.
 PRs retain the required `verify` check; Markdown-only PRs use classification only.
+Public grant revocation retains the grant update and audit outbox in one
+transaction. User delegation keeps its supplied user provenance. The receiver
+may derive the fixed Account maintenance principal only from the authenticated
+Account caller and only for Account-owned `account.avatar` grants; incoming
+actor-type headers are ignored. Missing/invalid source and enqueue failures stay
+fail-closed with the existing HTTP/error contract. Deploy Audit first, then this
+receiver, then the Account caller. No background work is replayed or repaired.
+
+Failure and >=2s request summaries retain fixed route/phase counts and total/max
+work independently of trace sampling. Per-query 250ms logging remains; shorter
+queries also accumulate. Actual Azure and R2 download SDK attempts/retries,
+metadata/response and body completion/interruption are measured without reading
+ahead or taking ownership away from the caller. Work may overlap: connect/reset
+are connection children, and storage body overlaps stream copying. Never add
+these totals as request wall time or infer exact remote processing. Implicit
+SQL checkout remains explicitly unmeasured. No pool, retry or timeout changes.

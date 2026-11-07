@@ -21,6 +21,7 @@ import (
 	"hhc/asset-api/internal/auditoutbox"
 	"hhc/asset-api/internal/diagnostics"
 	"hhc/asset-api/internal/storage/r2"
+	"hhc/asset-api/internal/telemetry"
 )
 
 type Handler struct {
@@ -254,9 +255,9 @@ func (h *Handler) internal(next http.Handler) http.Handler {
 		ctx := context.WithValue(r.Context(), callerContextKey{}, caller)
 		ctx = context.WithValue(ctx, serviceContextKey{}, service)
 		actor, request := strings.TrimSpace(r.Header.Get("X-HHC-Actor-ID")), strings.TrimSpace(r.Header.Get("X-HHC-Request-ID"))
-		if auditclient.ValidUserRequest(actor, request) {
+		if len(r.Header.Values("X-HHC-Actor-ID")) == 1 && len(r.Header.Values("X-HHC-Request-ID")) == 1 && auditclient.ValidUserRequest(actor, request) {
 			ctx = auditclient.WithProvenance(ctx, "user", actor, request)
-		} else if caller == "hhc-line-function-bot" && auditclient.ValidServiceRequest(request) {
+		} else if (caller == "hhc-line-function-bot" || caller == "account-api") && actor == "" && len(r.Header.Values("X-HHC-Actor-ID")) <= 1 && len(r.Header.Values("X-HHC-Request-ID")) == 1 && auditclient.ValidServiceRequest(request) {
 			ctx = auditclient.WithProvenance(ctx, "service", caller, request)
 		}
 		next.ServeHTTP(w, r.WithContext(ctx))
@@ -1084,7 +1085,9 @@ func (h *Handler) publicDerivativeDownload(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *Handler) servePublicDownload(w http.ResponseWriter, r *http.Request, variant string) {
+	started := time.Now()
 	metadata, err := h.service.PublicMetadata(r.Context(), r.PathValue("assetID"), variant)
+	telemetry.RecordPhase(r.Context(), "metadata", time.Since(started), err != nil)
 	if err != nil {
 		handleError(w, err)
 		return
@@ -1137,9 +1140,9 @@ func (h *Handler) serveDownload(w http.ResponseWriter, r *http.Request, metadata
 		w.Header().Set("Content-Range", contentRange)
 		w.WriteHeader(http.StatusPartialContent)
 	}
-	if _, err := io.Copy(w, download.Body); err != nil {
-		slog.Warn("stream asset download", "asset_id", r.PathValue("assetID"), "error", err)
-	}
+	copyStarted := time.Now()
+	_, copyErr := io.Copy(w, download.Body)
+	telemetry.RecordPhase(r.Context(), "stream_copy", time.Since(copyStarted), copyErr != nil)
 }
 
 func (h *Handler) serveCollectionDownload(w http.ResponseWriter, r *http.Request, metadata assets.PublicDownloadMetadata) {

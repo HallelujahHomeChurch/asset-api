@@ -25,6 +25,31 @@ func RecordDatabaseOutcome(ctx context.Context, phase string, elapsed time.Durat
 }
 
 func recordOutcome(ctx context.Context, phase string, code int, elapsed time.Duration, failed bool, threshold time.Duration) {
+	var summaries []phaseSummary
+	var observation *requestObservation
+	reason := ""
+	if phase == "server" {
+		observation, _ = ctx.Value(requestKey{}).(*requestObservation)
+		if observation != nil {
+			var emit, childFailed bool
+			summaries, childFailed, emit, reason = observation.finish()
+			if !emit {
+				return
+			}
+			failed = failed || childFailed
+		}
+	} else {
+		recordPhase(ctx, phase, elapsed, failed || code >= 400, code)
+	}
+	if ctx.Err() != nil {
+		failed = true
+		if reason == "" {
+			reason = "caller_canceled"
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				reason = "local_deadline"
+			}
+		}
+	}
 	if !failed && code < 400 && elapsed < threshold {
 		return
 	}
@@ -42,6 +67,9 @@ func recordOutcome(ctx context.Context, phase string, code int, elapsed time.Dur
 	}
 	sc := trace.SpanContextFromContext(ctx)
 	attrs := []any{"phase", phase, "outcome", outcome, "status", code, "duration_ms", elapsed.Milliseconds()}
+	if observation != nil {
+		attrs = append(attrs, "parent_span_id", observation.parentSpanID, "request_id", observation.id, "route_id", observation.route, "operation", "http_request", "phase_totals", phaseLogValue(summaries), "failure_reason", reason, "timing_semantics", "overlapping_work_not_wall_time", "db_checkout", "unmeasured_implicit_checkout")
+	}
 	if sc.IsValid() {
 		attrs = append(attrs, "trace_id", sc.TraceID().String(), "span_id", sc.SpanID().String(), "sampled", sc.IsSampled())
 	}
@@ -97,4 +125,18 @@ func (e *exportErrors) record(now time.Time) {
 	if emit {
 		slog.Error("trace export failed", "sdk_errors_total", total)
 	}
+}
+
+// RecordFailureReason accepts only closed audit categories, never error text.
+func RecordFailureReason(ctx context.Context, reason string) {
+	switch reason {
+	case "audit_provenance_missing", "audit_event_invalid", "audit_enqueue_failed":
+	default:
+		return
+	}
+	if setFailureReason(ctx, reason) {
+		return
+	}
+	sc := trace.SpanContextFromContext(ctx)
+	slog.ErrorContext(ctx, "audit mutation unavailable", "failure_reason", reason, "trace_id", sc.TraceID().String(), "span_id", sc.SpanID().String())
 }

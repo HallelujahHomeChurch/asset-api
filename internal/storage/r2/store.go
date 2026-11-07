@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hhc/asset-api/internal/telemetry"
 	"io"
 	"net/url"
 	"regexp"
@@ -141,11 +142,13 @@ func (s *Store) PutRecordingObject(ctx context.Context, key string, body io.Read
 	return nil
 }
 
-func (s *Store) Head(ctx context.Context, key string) (int64, string, error) {
+func (s *Store) Head(ctx context.Context, key string) (size int64, etag string, err error) {
+	ctx, finish := telemetry.StorageCall(ctx, "metadata")
+	defer func() { finish(err) }()
 	if !validKey(key) {
 		return 0, "", errors.New("invalid recording key")
 	}
-	result, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key)})
+	result, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key)}, func(o *s3.Options) { o.HTTPClient = storageHTTPObserver{s.client.Options().HTTPClient} })
 	if err != nil {
 		var missing *types.NotFound
 		if errors.As(err, &missing) {
@@ -156,11 +159,13 @@ func (s *Store) Head(ctx context.Context, key string) (int64, string, error) {
 	return aws.ToInt64(result.ContentLength), aws.ToString(result.ETag), nil
 }
 
-func (s *Store) Open(ctx context.Context, key string) (io.ReadCloser, error) {
+func (s *Store) Open(ctx context.Context, key string) (body io.ReadCloser, err error) {
+	ctx, finish := telemetry.StorageCall(ctx, "storage_response")
+	defer func() { finish(err) }()
 	if !validKey(key) {
 		return nil, errors.New("invalid recording key")
 	}
-	result, err := s.client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key)})
+	result, err := s.client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key)}, func(o *s3.Options) { o.HTTPClient = storageHTTPObserver{s.client.Options().HTTPClient} })
 	if err != nil {
 		var failure smithy.APIError
 		if errors.As(err, &failure) && (failure.ErrorCode() == "NoSuchKey" || failure.ErrorCode() == "NotFound") {
@@ -168,7 +173,7 @@ func (s *Store) Open(ctx context.Context, key string) (io.ReadCloser, error) {
 		}
 		return nil, fmt.Errorf("open R2 object: %w", err)
 	}
-	return result.Body, nil
+	return telemetry.StorageBody(ctx, result.Body), nil
 }
 
 // DeletePackageObjects is bounded to one server-owned staging/attempt scope.

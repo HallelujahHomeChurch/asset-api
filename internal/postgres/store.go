@@ -22,6 +22,7 @@ import (
 	"hhc/asset-api/internal/derivativequeue"
 	"hhc/asset-api/internal/lifecycle"
 	"hhc/asset-api/internal/retention"
+	"hhc/asset-api/internal/telemetry"
 
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -40,13 +41,16 @@ func (s *Store) enqueueAuditTx(ctx context.Context, tx *sql.Tx, action, resource
 	}
 	provenance, ok := auditclient.ProvenanceFromContext(ctx)
 	if !ok {
+		telemetry.RecordFailureReason(ctx, "audit_provenance_missing")
 		return assets.ErrAuditUnavailable
 	}
 	event, err := auditclient.NewEvent(action, resource, provenance.ActorType, provenance.ActorID, provenance.RequestID, now, metadata)
 	if err != nil {
+		telemetry.RecordFailureReason(ctx, "audit_event_invalid")
 		return assets.ErrAuditUnavailable
 	}
 	if err := s.audit.EnqueueTx(ctx, tx, event, now); err != nil {
+		telemetry.RecordFailureReason(ctx, "audit_enqueue_failed")
 		return assets.ErrAuditUnavailable
 	}
 	return nil
@@ -404,7 +408,8 @@ func (s *Store) RevokeGrant(ctx context.Context, assetID, grantID string, now ti
 	}
 	defer tx.Rollback()
 	var subjectType assets.SubjectType
-	if err := tx.QueryRowContext(ctx, `SELECT subject_type FROM asset_grants WHERE id=$1 AND asset_id=$2 AND revoked_at IS NULL FOR UPDATE`, grantID, assetID).Scan(&subjectType); err != nil {
+	var owner, namespace string
+	if err := tx.QueryRowContext(ctx, `SELECT g.subject_type,a.owner_service,a.namespace FROM asset_grants g JOIN assets a ON a.id=g.asset_id WHERE g.id=$1 AND g.asset_id=$2 AND g.revoked_at IS NULL FOR UPDATE OF g`, grantID, assetID).Scan(&subjectType, &owner, &namespace); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return assets.ErrNotFound
 		}
@@ -418,6 +423,10 @@ func (s *Store) RevokeGrant(ctx context.Context, assetID, grantID string, now ti
 		return assets.ErrNotFound
 	}
 	if subjectType == assets.SubjectPublic {
+		if p, ok := auditclient.ProvenanceFromContext(ctx); ok && p.ActorType == "service" && (p.ActorID != "account-api" || owner != "account-api" || namespace != "account.avatar") {
+			telemetry.RecordFailureReason(ctx, "audit_event_invalid")
+			return assets.ErrAuditUnavailable
+		}
 		if err := s.enqueueAuditTx(ctx, tx, "asset.public_grant.revoke", assetID, nil, now); err != nil {
 			return err
 		}
