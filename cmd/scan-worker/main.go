@@ -32,7 +32,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := run(ctx); err != nil {
-		slog.Error("asset scan worker failed", "error", err)
+		slog.Error("asset scan worker failed")
 		os.Exit(1)
 	}
 }

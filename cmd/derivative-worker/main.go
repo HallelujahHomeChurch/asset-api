@@ -24,7 +24,7 @@ func main() {
 		os.Exit(1)
 	}
 	if err := run(context.Background()); err != nil {
-		slog.Error("asset derivative worker failed", "error", err)
+		slog.Error("asset derivative worker failed")
 		os.Exit(1)
 	}
 }
