@@ -98,3 +98,14 @@ func (e *exportErrors) record(now time.Time) {
 		slog.Error("trace export failed", "sdk_errors_total", total)
 	}
 }
+
+// RecordFailureReason accepts only closed audit categories, never error text.
+func RecordFailureReason(ctx context.Context, reason string) {
+	switch reason {
+	case "audit_provenance_missing", "audit_event_invalid", "audit_enqueue_failed":
+	default:
+		return
+	}
+	sc := trace.SpanContextFromContext(ctx)
+	slog.ErrorContext(ctx, "audit mutation unavailable", "failure_reason", reason, "trace_id", sc.TraceID().String(), "span_id", sc.SpanID().String())
+}

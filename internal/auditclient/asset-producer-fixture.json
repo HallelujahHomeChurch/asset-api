@@ -316,10 +316,13 @@
       "resourceType": "asset",
       "resourceIdGrammar": "asset_hex",
       "actorTypes": [
+        "service",
         "user"
       ],
       "actorIdGrammar": "user=account_uuid; anonymous=empty; service=servicePrincipals",
-      "servicePrincipals": [],
+      "servicePrincipals": [
+        "account-api"
+      ],
       "eventIdGrammar": "uuid",
       "identityStrategy": "mutation_uuid_v4",
       "outcome": "success",
@@ -976,5 +979,5 @@
       "eventId": "47df88725140013edd36ef6b51f433322b7070b244a68b98bd3fb70296fa0429"
     }
   ],
-  "checksum": "sha256:3cba479e3a340884fd8c426c96d0b40bd09f1fb6a882ad7a490c0a17b5ec7230"
+  "checksum": "sha256:24e664f416d85b5401a202d5fa8a7deaa231fe46c7526e0cadb746f062b4ff69"
 }

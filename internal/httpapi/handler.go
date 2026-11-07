@@ -254,9 +254,9 @@ func (h *Handler) internal(next http.Handler) http.Handler {
 		ctx := context.WithValue(r.Context(), callerContextKey{}, caller)
 		ctx = context.WithValue(ctx, serviceContextKey{}, service)
 		actor, request := strings.TrimSpace(r.Header.Get("X-HHC-Actor-ID")), strings.TrimSpace(r.Header.Get("X-HHC-Request-ID"))
-		if auditclient.ValidUserRequest(actor, request) {
+		if len(r.Header.Values("X-HHC-Actor-ID")) == 1 && len(r.Header.Values("X-HHC-Request-ID")) == 1 && auditclient.ValidUserRequest(actor, request) {
 			ctx = auditclient.WithProvenance(ctx, "user", actor, request)
-		} else if caller == "hhc-line-function-bot" && auditclient.ValidServiceRequest(request) {
+		} else if (caller == "hhc-line-function-bot" || caller == "account-api") && actor == "" && len(r.Header.Values("X-HHC-Actor-ID")) <= 1 && len(r.Header.Values("X-HHC-Request-ID")) == 1 && auditclient.ValidServiceRequest(request) {
 			ctx = auditclient.WithProvenance(ctx, "service", caller, request)
 		}
 		next.ServeHTTP(w, r.WithContext(ctx))
