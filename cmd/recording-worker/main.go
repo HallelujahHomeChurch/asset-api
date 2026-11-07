@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"hhc/asset-api/internal/config"
+	"hhc/asset-api/internal/dbphase"
 	"hhc/asset-api/internal/jobidentity"
 	"hhc/asset-api/internal/logging"
 	"hhc/asset-api/internal/postgres"
@@ -81,7 +82,7 @@ func run(ctx context.Context) (result error) {
 	if err != nil {
 		return fmt.Errorf("recording storage configuration: %w", err)
 	}
-	db, err := sql.Open("pgx", dsn)
+	db, err := dbphase.OpenURL(dsn, telemetry.RecordDatabaseOutcome)
 	if err != nil {
 		return err
 	}

@@ -2,12 +2,12 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log/slog"
 	"os"
 	"strings"
 
+	"hhc/asset-api/internal/dbphase"
 	"hhc/asset-api/internal/derivativequeue"
 	"hhc/asset-api/internal/derivatives"
 	"hhc/asset-api/internal/jobidentity"
@@ -49,7 +49,7 @@ func run(ctx context.Context) (result error) {
 	if err != nil {
 		return err
 	}
-	db, err := sql.Open("pgx", databaseURL)
+	db, err := dbphase.OpenURL(databaseURL, telemetry.RecordDatabaseOutcome)
 	if err != nil {
 		return err
 	}

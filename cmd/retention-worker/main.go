@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -15,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"hhc/asset-api/internal/dbphase"
 	"hhc/asset-api/internal/jobidentity"
 	"hhc/asset-api/internal/logging"
 	"hhc/asset-api/internal/postgres"
@@ -54,7 +54,7 @@ func run(ctx context.Context) (runErr error) {
 	if err != nil {
 		return errorsLog("create run ID", err)
 	}
-	db, err := sql.Open("pgx", databaseURL)
+	db, err := dbphase.OpenURL(databaseURL, telemetry.RecordDatabaseOutcome)
 	if err != nil {
 		return errorsLog("open database", err)
 	}

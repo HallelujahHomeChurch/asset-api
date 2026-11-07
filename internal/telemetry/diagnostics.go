@@ -16,11 +16,20 @@ const slowOperation = 2 * time.Second
 // RecordOutcome keeps fixed-size failure evidence even when a span is not sampled.
 // It never accepts error text, URLs, headers, payloads, or business identifiers.
 func RecordOutcome(ctx context.Context, phase string, code int, elapsed time.Duration, failed bool) {
-	if !failed && code < 400 && elapsed < slowOperation {
+	recordOutcome(ctx, phase, code, elapsed, failed, slowOperation)
+}
+
+// RecordDatabaseOutcome uses the tighter database latency budget; query lifecycle includes rows consumption.
+func RecordDatabaseOutcome(ctx context.Context, phase string, elapsed time.Duration, failed bool) {
+	recordOutcome(ctx, phase, 0, elapsed, failed, 250*time.Millisecond)
+}
+
+func recordOutcome(ctx context.Context, phase string, code int, elapsed time.Duration, failed bool, threshold time.Duration) {
+	if !failed && code < 400 && elapsed < threshold {
 		return
 	}
 	switch phase {
-	case "server", "client_headers", "client_body", "worker", "queue":
+	case "server", "client_headers", "client_body", "worker", "queue", "db_connect", "db_reset", "db_query_lifecycle":
 	default:
 		phase = "operation"
 	}

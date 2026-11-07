@@ -137,3 +137,16 @@ func TestSlowHeadersDoNotClassifyFastBodyAsSlow(t *testing.T) {
 		t.Fatalf("incorrect phase attribution: %s", logs.String())
 	}
 }
+
+func TestDatabaseThresholdAndPrivacy(t *testing.T) {
+	logs := captureDiagnosticLogs(t)
+	RecordDatabaseOutcome(context.Background(), "db_query_lifecycle", 249*time.Millisecond, false)
+	if logs.Len() != 0 {
+		t.Fatal("normal database operation logged")
+	}
+	RecordDatabaseOutcome(context.Background(), "db_query_lifecycle", 250*time.Millisecond, false)
+	RecordDatabaseOutcome(context.Background(), "db_reset", time.Millisecond, true)
+	if strings.Count(logs.String(), "operation diagnostic") != 2 || !strings.Contains(logs.String(), `"phase":"db_query_lifecycle"`) || !strings.Contains(logs.String(), `"phase":"db_reset"`) {
+		t.Fatal(logs.String())
+	}
+}
