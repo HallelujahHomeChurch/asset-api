@@ -1,5 +1,12 @@
 targetScope = 'resourceGroup'
 
+// One env source for both image releases and config-only updates.
+var runtimeOverrides = loadJsonContent('runtime-env.json').resources
+var configuredEnv = toObject(items(runtimeOverrides), resource => resource.key, resource => map(
+  filter(items(resource.value), entry => entry.value != null), entry => union({name: entry.key}, entry.value)
+))
+
+
 param location string = resourceGroup().location
 param containerAppEnvironmentName string = 'alive-env'
 param containerRegistryName string = 'alive'
@@ -410,7 +417,7 @@ resource app 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
         {
           name: 'asset-api'
           image: runtimeImage
-          env: concat([
+          env: concat(filter(concat([
             { name: 'PORT', value: '8080' }
             { name: 'ASSET_DAPR_ENABLED', value: daprEnabled ? 'true' : 'false' }
             { name: 'DATABASE_URL', secretRef: 'database-url' }
@@ -432,7 +439,7 @@ resource app 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
             { name: 'AUDIT_PRIVATE_HTTPS', value: 'true' }
             { name: 'AUDIT_APP_ID', value: 'audit-log' }
             { name: 'AUDIT_TOKEN', secretRef: 'audit-token' }
-          ], memberVideoEnabled ? mediaRuntimeEnv : [])
+          ], memberVideoEnabled ? mediaRuntimeEnv : []), entry => !contains(runtimeOverrides['asset-api'], entry.name)), configuredEnv['asset-api'])
           resources: {
             cpu: json('0.25')
             memory: '0.5Gi'
@@ -709,7 +716,7 @@ resource scanJob 'Microsoft.App/jobs@2025-07-01' = if (deployScanJob) {
           name: 'asset-scan'
           image: scanWorkerImage
           command: ['/asset-scan-worker']
-          env: [
+          env: concat(filter([
             { name: 'DATABASE_URL', secretRef: 'database-url' }
             { name: 'ASSET_AZURE_ACCOUNT_URL', value: 'https://${storageAccount.name}.blob.${az.environment().suffixes.storage}' }
             { name: 'ASSET_AZURE_CONTAINER', value: 'assets' }
@@ -726,7 +733,7 @@ resource scanJob 'Microsoft.App/jobs@2025-07-01' = if (deployScanJob) {
             { name: 'CLAMAV_MAX_FILES', value: '10000' }
             { name: 'CLAMAV_MAX_RECURSION', value: '32' }
             { name: 'CLAMAV_MAX_RETRIES', value: '5' }
-          ]
+          ], entry => !contains(runtimeOverrides['asset-scan'], entry.name)), configuredEnv['asset-scan'])
           resources: { cpu: json('2.0'), memory: '4Gi' }
         }
       ]
@@ -763,7 +770,7 @@ resource scanWorker 'Microsoft.App/containerApps@2025-01-01' = if (deployScanWor
           name: 'asset-scan-worker'
           image: scanWorkerImage
           command: ['/asset-scan-worker']
-          env: [
+          env: concat(filter([
             { name: 'DATABASE_URL', secretRef: 'database-url' }
             { name: 'ASSET_AZURE_ACCOUNT_URL', value: 'https://${storageAccount.name}.blob.${az.environment().suffixes.storage}' }
             { name: 'ASSET_AZURE_CONTAINER', value: 'assets' }
@@ -781,7 +788,7 @@ resource scanWorker 'Microsoft.App/containerApps@2025-01-01' = if (deployScanWor
             { name: 'CLAMAV_MAX_FILES', value: '10000' }
             { name: 'CLAMAV_MAX_RECURSION', value: '32' }
             { name: 'CLAMAV_MAX_RETRIES', value: '5' }
-          ]
+          ], entry => !contains(runtimeOverrides['asset-scan-worker'], entry.name)), configuredEnv['asset-scan-worker'])
           resources: { cpu: json('1.5'), memory: '3Gi' }
         }
       ]
@@ -906,11 +913,11 @@ resource signatureRefreshJob 'Microsoft.App/jobs@2025-07-01' = if (deploySignatu
           name: 'clamav-signature-refresh'
           image: scanWorkerImage
           command: ['/asset-signature-refresh']
-          env: [
+          env: concat(filter([
             { name: 'AZURE_CLIENT_ID', value: signatureRefreshIdentity.properties.clientId }
             { name: 'ASSET_AZURE_ACCOUNT_URL', value: 'https://${storageAccount.name}.blob.${az.environment().suffixes.storage}' }
             { name: 'CLAMAV_SIGNATURE_CONTAINER', value: 'asset-signatures' }
-          ]
+          ], entry => !contains(runtimeOverrides['asset-clamav-signature-refresh'], entry.name)), configuredEnv['asset-clamav-signature-refresh'])
           resources: { cpu: json('0.5'), memory: '1Gi' }
         }
       ]
@@ -970,14 +977,14 @@ resource derivativeJob 'Microsoft.App/jobs@2025-07-01' = if (deployDerivativeJob
           name: 'asset-derivative'
           image: runtimeImage
           command: ['/asset-derivative-worker']
-          env: [
+          env: concat(filter([
             { name: 'DATABASE_URL', secretRef: 'database-url' }
             { name: 'ASSET_AZURE_ACCOUNT_URL', value: 'https://${storageAccount.name}.blob.${az.environment().suffixes.storage}' }
             { name: 'ASSET_AZURE_CONTAINER', value: 'assets' }
             { name: 'AZURE_CLIENT_ID', value: derivativeIdentity.properties.clientId }
             { name: 'ASSET_DERIVATIVE_QUEUE_URL', value: 'https://${storageAccount.name}.queue.${az.environment().suffixes.storage}/asset-derivative' }
             { name: 'ASSET_DERIVATIVE_POISON_QUEUE_URL', value: 'https://${storageAccount.name}.queue.${az.environment().suffixes.storage}/asset-derivative-poison' }
-          ]
+          ], entry => !contains(runtimeOverrides['asset-derivative'], entry.name)), configuredEnv['asset-derivative'])
           resources: { cpu: json('0.5'), memory: '1Gi' }
         }
       ]
@@ -1015,10 +1022,10 @@ resource retentionJob 'Microsoft.App/jobs@2025-07-01' = if (deployRetentionJob) 
           name: 'asset-retention'
           image: runtimeImage
           command: ['/asset-retention-worker']
-          env: [
+          env: concat(filter([
             { name: 'DATABASE_URL', secretRef: 'database-url' }
             { name: 'ASSET_RETENTION_APPLY_ENABLED', value: string(retentionApplyEnabled) }
-          ]
+          ], entry => !contains(runtimeOverrides['asset-retention'], entry.name)), configuredEnv['asset-retention'])
           resources: { cpu: json('0.25'), memory: '0.5Gi' }
         }
       ]
@@ -1065,11 +1072,11 @@ resource recordingJob 'Microsoft.App/jobs@2025-07-01' = if (memberVideoEnabled) 
         {
           name: 'asset-recording-validation'
           image: recordingImage
-          env: concat([
+          env: concat(filter(concat([
             { name: 'DATABASE_URL', secretRef: 'database-url' }
           ], recordingR2Env, recordingProcessingEnv, recordingSourceEnabled ? [
             { name: 'AZURE_CLIENT_ID', value: runtimeIdentity.properties.clientId }
-          ] : [])
+          ] : []), entry => !contains(runtimeOverrides['asset-recording-validation'], entry.name)), configuredEnv['asset-recording-validation'])
           resources: { cpu: recordingHLSEnabled ? json('4.0') : json('0.5'), memory: recordingHLSEnabled ? '8Gi' : '1Gi' }
         }
       ]
@@ -1119,9 +1126,9 @@ resource migrate 'Microsoft.App/jobs@2024-03-01' = if (deployMigrationJob) {
           name: 'asset-migrate'
           image: migrationImage
           command: ['/asset-migrate']
-          env: [
+          env: concat(filter([
             { name: 'DATABASE_URL', secretRef: 'database-url' }
-          ]
+          ], entry => !contains(runtimeOverrides['asset-migrate'], entry.name)), configuredEnv['asset-migrate'])
           resources: {
             cpu: json('0.25')
             memory: '0.5Gi'

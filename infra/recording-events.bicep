@@ -1,4 +1,10 @@
 targetScope = 'resourceGroup'
+
+var runtimeOverrides = loadJsonContent('runtime-env.json').resources
+var configuredEnv = toObject(items(runtimeOverrides), resource => resource.key, resource => map(
+  filter(items(resource.value), entry => entry.value != null), entry => union({name: entry.key}, entry.value)
+))
+
 param location string
 param environmentId string
 param storageAccountName string
@@ -68,7 +74,7 @@ resource jobs 'Microsoft.App/jobs@2025-07-01' = [for lane in lanes: {
    containers: [{
     name: 'recording-${lane}'
     image: image
-    env: concat(jobEnv,[{name:'ASSET_RECORDING_WORKER_MODE',value:lane}])
+    env: concat(filter(concat(jobEnv,[{name:'ASSET_RECORDING_WORKER_MODE',value:lane}]), entry => !contains(runtimeOverrides['asset-recording-${lane}'], entry.name)), configuredEnv['asset-recording-${lane}'])
     resources: {
      cpu: lane=='live' ? json(liveCPU) : lane=='processing' ? json(string(processingCPU)) : json(string(previewCPU))
      memory: lane=='live' && liveCPU=='1.5' ? '3Gi' : lane=='preview' && previewCPU==1 ? '2Gi' : (lane=='live' && liveCPU=='2') || (lane=='processing' && processingCPU==2) ? '4Gi' : '8Gi'
@@ -97,7 +103,7 @@ resource maintenance 'Microsoft.App/jobs@2025-07-01' = {
   template:{containers:[{
    name:'recording-maintenance'
    image:image
-   env:concat(jobEnv,[{name:'ASSET_RECORDING_WORKER_MODE',value:'maintenance'}])
+   env:concat(filter(concat(jobEnv,[{name:'ASSET_RECORDING_WORKER_MODE',value:'maintenance'}]), entry => !contains(runtimeOverrides['asset-recording-maintenance'], entry.name)), configuredEnv['asset-recording-maintenance'])
    resources:{cpu:json('0.25'),memory:'0.5Gi'}
   }]}
  }
