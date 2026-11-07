@@ -12,7 +12,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"hhc/asset-api/internal/assets"
+	"hhc/asset-api/internal/telemetry"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
@@ -35,7 +37,7 @@ func New(accountURL, container string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	client, err := azblob.NewClient(strings.TrimRight(accountURL, "/"), credential, nil)
+	client, err := azblob.NewClient(strings.TrimRight(accountURL, "/"), credential, diagnosticClientOptions())
 	if err != nil {
 		return nil, err
 	}
@@ -55,7 +57,9 @@ func (s *Store) CreateUploadTarget(ctx context.Context, objectKey string, _ int6
 	return assets.UploadTarget{URL: blobURL + "?" + query.Encode(), Method: http.MethodPut, Headers: map[string]string{"x-ms-blob-type": "BlockBlob", "Content-Type": "application/octet-stream"}, ExpiresAt: expiresAt}, nil
 }
 
-func (s *Store) InspectProperties(ctx context.Context, objectKey string) (assets.BlobMetadata, error) {
+func (s *Store) InspectProperties(ctx context.Context, objectKey string) (result assets.BlobMetadata, err error) {
+	ctx, finish := telemetry.StorageCall(ctx, "metadata")
+	defer func() { finish(err) }()
 	response, err := s.client.ServiceClient().NewContainerClient(s.container).NewBlobClient(objectKey).GetProperties(ctx, nil)
 	if err != nil {
 		return assets.BlobMetadata{}, mapError(err)
@@ -149,7 +153,9 @@ func (s *Store) Commit(ctx context.Context, stagingObjectKey, finalObjectKey str
 	return s.Inspect(ctx, finalObjectKey, "", 0)
 }
 
-func (s *Store) Open(ctx context.Context, objectKey string, requested assets.ByteRange, expectedETag string) (assets.BlobDownload, error) {
+func (s *Store) Open(ctx context.Context, objectKey string, requested assets.ByteRange, expectedETag string) (download assets.BlobDownload, err error) {
+	ctx, finish := telemetry.StorageCall(ctx, "storage_response")
+	defer func() { finish(err) }()
 	options := &azblob.DownloadStreamOptions{}
 	if requested.Offset > 0 || requested.Count > 0 {
 		options.Range = blob.HTTPRange{Offset: requested.Offset, Count: requested.Count}
@@ -182,7 +188,7 @@ func (s *Store) Open(ctx context.Context, objectKey string, requested assets.Byt
 	if response.ContentRange != nil {
 		totalSize = contentRangeTotal(*response.ContentRange, size)
 	}
-	return assets.BlobDownload{Body: response.Body, Size: size, TotalSize: totalSize, ContentType: contentType, ETag: etag, LastModified: modified}, nil
+	return assets.BlobDownload{Body: telemetry.StorageBody(ctx, response.Body), Size: size, TotalSize: totalSize, ContentType: contentType, ETag: etag, LastModified: modified}, nil
 }
 
 func (s *Store) Delete(ctx context.Context, objectKey string) error {
@@ -271,4 +277,22 @@ func contentRangeTotal(value string, fallback int64) int64 {
 		return fallback
 	}
 	return total
+}
+
+// Per-retry policy observes the SDK's actual attempts without replacing its transport or retryer.
+func diagnosticClientOptions() *azblob.ClientOptions {
+	return &azblob.ClientOptions{ClientOptions: azcore.ClientOptions{PerRetryPolicies: []policy.Policy{storageAttemptPolicy{}}}}
+}
+
+type storageAttemptPolicy struct{}
+
+func (storageAttemptPolicy) Do(req *policy.Request) (*http.Response, error) {
+	started := time.Now()
+	response, err := req.Next()
+	status := 0
+	if response != nil {
+		status = response.StatusCode
+	}
+	telemetry.RecordStorageAttempt(req.Raw().Context(), time.Since(started), status, err != nil)
+	return response, err
 }

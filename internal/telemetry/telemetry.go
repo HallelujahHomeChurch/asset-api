@@ -95,6 +95,7 @@ func Server(next http.Handler) http.Handler {
 		if headers := r.Header.Values("traceparent"); len(headers) == 1 && validParent(headers[0]) {
 			ctx = propagation.TraceContext{}.Extract(ctx, propagation.MapCarrier{"traceparent": headers[0]})
 		}
+		ctx = observeRequest(ctx, r)
 		ctx, span := otel.Tracer("asset-api/http").Start(ctx, "asset.http", trace.WithSpanKind(trace.SpanKindServer), trace.WithAttributes(attribute.String("http.request.method", method(r.Method))))
 		defer span.End()
 		started := time.Now()

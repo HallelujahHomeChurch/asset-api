@@ -150,3 +150,22 @@ func TestDatabaseThresholdAndPrivacy(t *testing.T) {
 		t.Fatal(logs.String())
 	}
 }
+
+func TestFastQueriesAccumulateForSlowRequest(t *testing.T) {
+	var logs bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	defer slog.SetDefault(old)
+	Server(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for range 11 {
+			RecordDatabaseOutcome(r.Context(), "db_query_lifecycle", 200*time.Millisecond, false)
+		}
+		RecordOutcome(r.Context(), "server", 200, 2200*time.Millisecond, false)
+	})).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/api/assets/public/0123456789abcdef0123456789abcdef?secret=private", nil))
+	if strings.Count(logs.String(), `"phase":"server"`) != 1 || !strings.Contains(logs.String(), `"phase":"db_query_lifecycle","count":11,"total_ms":2200,"max_ms":200`) {
+		t.Fatal(logs.String())
+	}
+	if strings.Contains(logs.String(), "private") {
+		t.Fatal("private query leaked")
+	}
+}

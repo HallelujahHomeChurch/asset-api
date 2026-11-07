@@ -21,6 +21,7 @@ import (
 	"hhc/asset-api/internal/auditoutbox"
 	"hhc/asset-api/internal/diagnostics"
 	"hhc/asset-api/internal/storage/r2"
+	"hhc/asset-api/internal/telemetry"
 )
 
 type Handler struct {
@@ -1084,7 +1085,9 @@ func (h *Handler) publicDerivativeDownload(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *Handler) servePublicDownload(w http.ResponseWriter, r *http.Request, variant string) {
+	started := time.Now()
 	metadata, err := h.service.PublicMetadata(r.Context(), r.PathValue("assetID"), variant)
+	telemetry.RecordPhase(r.Context(), "metadata", time.Since(started), err != nil)
 	if err != nil {
 		handleError(w, err)
 		return
@@ -1137,9 +1140,9 @@ func (h *Handler) serveDownload(w http.ResponseWriter, r *http.Request, metadata
 		w.Header().Set("Content-Range", contentRange)
 		w.WriteHeader(http.StatusPartialContent)
 	}
-	if _, err := io.Copy(w, download.Body); err != nil {
-		slog.Warn("stream asset download", "asset_id", r.PathValue("assetID"), "error", err)
-	}
+	copyStarted := time.Now()
+	_, copyErr := io.Copy(w, download.Body)
+	telemetry.RecordPhase(r.Context(), "stream_copy", time.Since(copyStarted), copyErr != nil)
 }
 
 func (h *Handler) serveCollectionDownload(w http.ResponseWriter, r *http.Request, metadata assets.PublicDownloadMetadata) {
