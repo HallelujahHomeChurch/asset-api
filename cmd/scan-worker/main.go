@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log/slog"
 	"os"
@@ -13,10 +12,12 @@ import (
 	"time"
 
 	"hhc/asset-api/internal/clamav"
+	"hhc/asset-api/internal/dbphase"
 	"hhc/asset-api/internal/logging"
 	"hhc/asset-api/internal/postgres"
 	"hhc/asset-api/internal/scanqueue"
 	azurestorage "hhc/asset-api/internal/storage/azure"
+	"hhc/asset-api/internal/telemetry"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azqueue"
@@ -31,12 +32,14 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := run(ctx); err != nil {
-		slog.Error("asset scan worker failed", "error", err)
+		slog.Error("asset scan worker failed")
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context) error {
+func run(ctx context.Context) (result error) {
+	ctx, finishTelemetry := telemetry.StartWorker(ctx, "scan")
+	defer func() { finishTelemetry(result) }()
 	databaseURL, err := required("DATABASE_URL")
 	if err != nil {
 		return err
@@ -105,13 +108,16 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	db, err := sql.Open("pgx", databaseURL)
+	db, err := dbphase.OpenURL(databaseURL, telemetry.RecordDatabaseOutcome)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
+	stopPoolStats := dbphase.StartPoolStats(ctx, db.Stats)
+	defer stopPoolStats()
 	db.SetMaxOpenConns(2)
 	db.SetMaxIdleConns(1)
+
 	blobs, err := azurestorage.New(accountURL, value("ASSET_AZURE_CONTAINER", "assets"))
 	if err != nil {
 		return err

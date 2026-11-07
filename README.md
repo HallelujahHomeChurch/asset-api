@@ -837,3 +837,31 @@ one additional attempt through the existing worker and retains every attempt
 record. Repeating the same apply is rejected, including after that attempt fails.
 Changed, expired, deleted, revoked or non-failed sources are ineligible. These
 operations do not run migrations or change the original video.
+
+### Failure diagnostics and sampling
+
+Private ingress honors the edge's sampled/unsampled trace decision; new roots retain
+the existing bounded sampling rate. The public edge must own sampling admission.
+Server and internal-client failures (HTTP 400+, transport/body errors, handler
+panics) and operations taking at least two seconds emit fixed-field diagnostics
+independently of span sampling. Trace/span IDs join the records when a valid span
+context exists; URLs, headers, error text and business payloads are omitted.
+SDK exporter errors are counted cumulatively with at most one safe log per minute.
+These logs are best-effort operational evidence, not durable audit or tail sampling;
+process crashes, sink failure and SDK queue loss can still lose evidence.
+
+
+Runtime PostgreSQL diagnostics retain failed or >=250ms connection establishment,
+session reset, and `db_query_lifecycle` outcomes without SQL, arguments or raw
+errors. Query lifecycle includes result consumption/closure, not only PostgreSQL
+execution time. Runtime-owned 15s global pool-pressure records report wait deltas
+or >=90% in-use occupancy and flush at shutdown; Asset API retains its existing
+pool summaries. Global counters cannot assign a wait to an individual request.
+Migrations retain unwrapped driver connections.
+
+Runtime sessions use `CONTAINER_APP_REVISION` as PostgreSQL `application_name`:
+ASCII names <=63 bytes are exact; longer names use first46 bytes plus a hyphen and
+the first16 hex digits of SHA-256. Nonprintable/non-ASCII names use `revision-`
+plus that hash. Without the Azure variable, configured application names remain
+unchanged. This identifies new revision sessions; it does not identify legacy
+untagged sessions or prove a rollout has drained them.

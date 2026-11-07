@@ -216,7 +216,7 @@ func TestRemoteParentCannotOverrideLocalSampling(t *testing.T) {
 		want            sdktrace.SamplingDecision
 	}{
 		{"remote sampled selected", low, true, true, sdktrace.RecordAndSample},
-		{"remote sampled rejected", high, true, true, sdktrace.Drop},
+		{"remote sampled rejected", high, true, true, sdktrace.RecordAndSample},
 		{"remote unsampled", low, true, false, sdktrace.Drop},
 		{"local sampled", high, false, true, sdktrace.RecordAndSample},
 	} {

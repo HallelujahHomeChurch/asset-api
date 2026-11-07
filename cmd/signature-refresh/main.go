@@ -11,6 +11,7 @@ import (
 
 	"hhc/asset-api/internal/clamav"
 	"hhc/asset-api/internal/logging"
+	"hhc/asset-api/internal/telemetry"
 )
 
 func main() {
@@ -18,10 +19,18 @@ func main() {
 		slog.Error("invalid logging configuration", "error", err)
 		os.Exit(1)
 	}
+	if err := run(context.Background()); err != nil {
+		slog.Error("signature job failed")
+		os.Exit(1)
+	}
+}
+
+func run(ctx context.Context) (result error) {
+	ctx, finishTelemetry := telemetry.StartWorker(ctx, "signature")
+	defer func() { finishTelemetry(result) }()
 	accountURL := strings.TrimSpace(os.Getenv("ASSET_AZURE_ACCOUNT_URL"))
 	if accountURL == "" {
-		slog.Error("ASSET_AZURE_ACCOUNT_URL is required")
-		os.Exit(1)
+		return fmt.Errorf("ASSET_AZURE_ACCOUNT_URL is required")
 	}
 	container := strings.TrimSpace(os.Getenv("CLAMAV_SIGNATURE_CONTAINER"))
 	if container == "" {
@@ -29,12 +38,11 @@ func main() {
 	}
 	root, err := os.MkdirTemp("", "clamav-refresh-")
 	if err != nil {
-		slog.Error("create refresh directory", "error", err)
-		os.Exit(1)
+		return err
 	}
 	defer os.RemoveAll(root)
 	timeout := 15 * time.Minute
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	manifest, err := clamav.RefreshSignatures(ctx, root, time.Now().UTC(), func(ctx context.Context, command string, args ...string) error {
 		output, err := exec.CommandContext(ctx, command, args...).CombinedOutput()
@@ -44,16 +52,15 @@ func main() {
 		return nil
 	})
 	if err != nil {
-		slog.Error("ClamAV signature refresh failed", "error", err)
-		os.Exit(1)
+		return err
 	}
 	store, err := clamav.NewAzureSignatures(accountURL, container)
 	if err == nil {
 		manifest, err = store.Publish(ctx, root, manifest)
 	}
 	if err != nil {
-		slog.Error("publish ClamAV signatures failed", "error", err)
-		os.Exit(1)
+		return err
 	}
 	slog.Info("ClamAV signatures refreshed", "signatureVersion", manifest.SignatureVersion)
+	return nil
 }
