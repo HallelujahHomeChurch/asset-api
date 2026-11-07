@@ -22,7 +22,7 @@ func TestCaptureAdmissionLogsAcceptedSequenceAndTimingWithoutPrivateInputs(t *te
 	id := strings.Repeat("a", 32)
 	actor := "22222222-2222-4222-8222-222222222222"
 	repo := &httpCaptureRepo{c: assets.RecordingCapture{ID: id, ActorID: actor, State: "uploading", CreatedAt: now, ExpiresAt: now.Add(time.Hour), Receipts: map[string]assets.RecordingCaptureStoredReceipt{}}}
-	h := New(nil, nil, map[string]bool{"hhc-web-api": true}, true, "", WorkloadAuthConfig{}, nil).WithRecordingCaptures(assets.NewRecordingCaptureService(repo, admissionObjects{}, time.Now)).Routes()
+	h := New(nil, nil, map[string]bool{"hhc-web-api": true}, true, "", CallerConfig{}, nil).WithRecordingCaptures(assets.NewRecordingCaptureService(repo, admissionObjects{}, time.Now)).Routes()
 	for _, request := range []struct {
 		route, body string
 		status      int
@@ -69,7 +69,7 @@ func (admissionObjects) ListPackageObjects(context.Context, string, int) (map[st
 }
 
 func TestCaptureRoutesFailClosed(t *testing.T) {
-	h := New(nil, nil, map[string]bool{"hhc-web-api": true, "account-api": true}, true, "", WorkloadAuthConfig{}, nil).Routes()
+	h := New(nil, nil, map[string]bool{"hhc-web-api": true, "account-api": true}, true, "", CallerConfig{}, nil).Routes()
 	for _, route := range []string{"", "/capture-a", "/capture-a/objects", "/capture-a/sign", "/capture-a/confirm", "/capture-a/broadcast-signal", "/capture-a/seal", "/capture-a/abort", "/capture-a/progress", "/capture-a/grant"} {
 		for _, caller := range []string{"hhc-web-api", "account-api"} {
 			method := "POST"
@@ -113,7 +113,7 @@ func (r *httpCaptureRepo) UpdateCapture(_ context.Context, id string, fn func(*a
 func TestCaptureHTTPReceiptsAndInvalidBodyContract(t *testing.T) {
 	repo := &httpCaptureRepo{}
 	svc := assets.NewRecordingCaptureService(repo, httpPackageObjects{}, time.Now)
-	h := New(nil, nil, map[string]bool{"hhc-web-api": true}, true, "", WorkloadAuthConfig{}, nil).WithRecordingCaptures(svc).Routes()
+	h := New(nil, nil, map[string]bool{"hhc-web-api": true}, true, "", CallerConfig{}, nil).WithRecordingCaptures(svc).Routes()
 	request := func(method, path, body string) *httptest.ResponseRecorder {
 		t.Helper()
 		r := httptest.NewRequest(method, path, strings.NewReader(body))
@@ -169,7 +169,7 @@ func TestCaptureDependencyFailuresReturnUnavailable503(t *testing.T) {
 		{"database", "GET", "/priv/recording-captures/capture-a", "", assets.NewRecordingCaptureService(failingCaptureRepository{}, httpPackageObjects{}, time.Now)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			h := New(nil, nil, map[string]bool{"hhc-web-api": true}, true, "", WorkloadAuthConfig{}, nil).WithRecordingCaptures(tc.service).Routes()
+			h := New(nil, nil, map[string]bool{"hhc-web-api": true}, true, "", CallerConfig{}, nil).WithRecordingCaptures(tc.service).Routes()
 			r := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
 			r.Header.Set("X-Internal-Caller-App-Id", "hhc-web-api")
 			r.Header.Set("X-HHC-Actor-ID", actor)
@@ -186,7 +186,7 @@ func TestCaptureLiveProgressRequiresUploaderAndReportsPublishedWaterline(t *test
 	actor := "22222222-2222-4222-8222-222222222222"
 	repo := &httpCaptureRepo{c: assets.RecordingCapture{ID: strings.Repeat("a", 32), ActorID: actor, Progress: assets.RecordingLiveProgress{Revision: 3, LastSequence: 2, MediaEndSeconds: 90}}}
 	svc := assets.NewRecordingCaptureService(repo, httpPackageObjects{}, time.Now)
-	h := New(nil, nil, map[string]bool{"hhc-web-api": true}, true, "", WorkloadAuthConfig{}, nil).WithRecordingCaptures(svc).Routes()
+	h := New(nil, nil, map[string]bool{"hhc-web-api": true}, true, "", CallerConfig{}, nil).WithRecordingCaptures(svc).Routes()
 	for _, owner := range []string{"", "other", actor} {
 		r := httptest.NewRequest("GET", "/priv/recording-captures/"+repo.c.ID+"/progress", nil)
 		r.Header.Set("X-Internal-Caller-App-Id", "hhc-web-api")
@@ -211,7 +211,7 @@ func TestBroadcastSignalRequiresExplicitClosePolicyAndOwner(t *testing.T) {
 	id := strings.Repeat("a", 32)
 	actor := "22222222-2222-4222-8222-222222222222"
 	repo := &httpCaptureRepo{c: assets.RecordingCapture{ID: id, ActorID: actor, BroadcastEpoch: 1, State: "uploading", ExpiresAt: now.Add(time.Hour)}}
-	h := New(nil, nil, map[string]bool{"hhc-web-api": true}, true, "", WorkloadAuthConfig{}, nil).WithRecordingCaptures(assets.NewRecordingCaptureService(repo, nil, time.Now)).Routes()
+	h := New(nil, nil, map[string]bool{"hhc-web-api": true}, true, "", CallerConfig{}, nil).WithRecordingCaptures(assets.NewRecordingCaptureService(repo, nil, time.Now)).Routes()
 	for _, tc := range []struct {
 		body, owner string
 		status      int
@@ -243,7 +243,7 @@ func TestCaptureRecoveryWireOptIn(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := &httpCaptureRepo{}
-			h := New(nil, nil, map[string]bool{"hhc-web-api": true}, true, "", WorkloadAuthConfig{}, nil).WithRecordingCaptures(assets.NewRecordingCaptureService(repo, nil, time.Now)).Routes()
+			h := New(nil, nil, map[string]bool{"hhc-web-api": true}, true, "", CallerConfig{}, nil).WithRecordingCaptures(assets.NewRecordingCaptureService(repo, nil, time.Now)).Routes()
 			body := `{"recordingId":"11111111-1111-4111-8111-111111111111","operationKey":"create","broadcastEpoch":1,"segmentFrames":300` + tc.extra + `}`
 			r := httptest.NewRequest("POST", "/priv/recording-captures", strings.NewReader(body))
 			r.Header.Set("X-Internal-Caller-App-Id", "hhc-web-api")

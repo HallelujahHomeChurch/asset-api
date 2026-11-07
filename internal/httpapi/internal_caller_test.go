@@ -7,7 +7,7 @@ import (
 )
 
 func TestTrustedInternalCallerHeader(t *testing.T) {
-	h := &Handler{allowedCallers: map[string]bool{"account-api": true, "hhc-web-api": true, "hhc-line-function-bot": true}, appAPIToken: "token", workloadAuth: WorkloadAuthConfig{ReaderCallerAppID: "api-gateway"}}
+	h := &Handler{allowedCallers: map[string]bool{"account-api": true, "hhc-web-api": true, "hhc-line-function-bot": true}, appAPIToken: "token", callerConfig: CallerConfig{ReaderCallerAppID: "api-gateway"}}
 	for _, tc := range []struct {
 		name   string
 		values []string
@@ -46,7 +46,7 @@ func TestTrustedInternalCallerHeader(t *testing.T) {
 }
 
 func TestTrustedGatewayKeepsReaderAndPrivateBoundaries(t *testing.T) {
-	h := &Handler{allowedCallers: map[string]bool{"account-api": true}, workloadAuth: WorkloadAuthConfig{ReaderCallerAppID: "api-gateway"}}
+	h := &Handler{allowedCallers: map[string]bool{"account-api": true}, callerConfig: CallerConfig{ReaderCallerAppID: "api-gateway"}}
 	ok := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	for _, caller := range []string{"api-gateway", "account-api"} {
 		r := httptest.NewRequest("GET", "https://asset.internal/_gateway/api/assets/collections", nil)
@@ -55,7 +55,7 @@ func TestTrustedGatewayKeepsReaderAndPrivateBoundaries(t *testing.T) {
 			handler http.Handler
 			want    int
 		}{
-			{h.gatewayWorkload(h.collectionReader(ok)), map[string]int{"api-gateway": 401, "account-api": 403}[caller]},
+			{h.gatewayIngress(h.collectionReader(ok)), map[string]int{"api-gateway": 401, "account-api": 403}[caller]},
 			{h.internal(ok), map[string]int{"api-gateway": 403, "account-api": 204}[caller]},
 		} {
 			w := httptest.NewRecorder()
@@ -68,8 +68,8 @@ func TestTrustedGatewayKeepsReaderAndPrivateBoundaries(t *testing.T) {
 }
 
 func TestTrustedGatewayUnicodeContextDoesNotRequirePrincipal(t *testing.T) {
-	h := &Handler{workloadAuth: WorkloadAuthConfig{ReaderCallerAppID: "api-gateway"}}
-	server := httptest.NewTLSServer(h.gatewayWorkload(h.collectionReader(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := &Handler{callerConfig: CallerConfig{ReaderCallerAppID: "api-gateway"}}
+	server := httptest.NewTLSServer(h.gatewayIngress(h.collectionReader(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := collectionReaderSubject(r).UserID; got != "使用者" {
 			t.Errorf("user=%q", got)
 		}
@@ -91,22 +91,6 @@ func TestTrustedGatewayUnicodeContextDoesNotRequirePrincipal(t *testing.T) {
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusNoContent {
 		t.Fatalf("status=%d", response.StatusCode)
-	}
-}
-
-func TestInvalidInternalCallerCannotFallBackToEntra(t *testing.T) {
-	auth := WorkloadAuthConfig{TenantID: "tenant", Issuer: "issuer", Audience: "audience", RequiredRole: "role", Callers: map[string]WorkloadCaller{"client": {ObjectID: "object", Service: "account-api"}}}
-	h := &Handler{allowedCallers: map[string]bool{"account-api": true}, workloadAuth: auth}
-	r := httptest.NewRequest(http.MethodGet, "https://asset.internal/priv/assets/item", nil)
-	r.Header.Set("X-MS-CLIENT-PRINCIPAL", encodedPrincipal(t, map[string]string{"tid": "tenant", "iss": "issuer", "aud": "audience", "roles": "role", "appid": "client", "oid": "object"}))
-	if got := h.authenticatedService(r); got != "account-api" {
-		t.Fatalf("legacy caller=%q", got)
-	}
-	for _, value := range []string{"", "unknown", " account-api", "account-api,account-api"} {
-		r.Header.Set("X-HHC-Caller-App-Id", value)
-		if got := h.authenticatedService(r); got != "" {
-			t.Fatalf("invalid %q fell back to %q", value, got)
-		}
 	}
 }
 
@@ -136,8 +120,8 @@ func TestTrustedHeaderPreservesWorkerOwnerAndDerivativeRestriction(t *testing.T)
 }
 
 func TestTrustedGatewayStillRequiresMemberScope(t *testing.T) {
-	h := &Handler{workloadAuth: WorkloadAuthConfig{ReaderCallerAppID: "api-gateway"}}
-	handler := h.gatewayWorkload(h.personalReader(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })))
+	h := &Handler{callerConfig: CallerConfig{ReaderCallerAppID: "api-gateway"}}
+	handler := h.gatewayIngress(h.personalReader(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })))
 	for _, scope := range []string{"", "unrelated:scope", "presenter:cloud:use"} {
 		r := httptest.NewRequest(http.MethodGet, "https://asset.internal/_gateway/api/assets/personal", nil)
 		r.Header.Set("X-HHC-Caller-App-Id", "api-gateway")
@@ -152,6 +136,31 @@ func TestTrustedGatewayStillRequiresMemberScope(t *testing.T) {
 		}
 		if w.Code != want {
 			t.Fatalf("scope=%q status=%d want=%d", scope, w.Code, want)
+		}
+	}
+}
+
+func TestLegacyPrincipalNeverIdentifiesCaller(t *testing.T) {
+	h := &Handler{allowedCallers: map[string]bool{"account-api": true}, callerConfig: CallerConfig{ReaderCallerAppID: "api-gateway"}}
+	r := httptest.NewRequest(http.MethodGet, "https://asset.internal/priv/assets/item", nil)
+	r.Header.Set("X-MS-CLIENT-PRINCIPAL", encodedPrincipal(t, map[string]string{"tid": "tenant", "iss": "issuer", "aud": "audience", "roles": "role", "appid": "client", "oid": "object"}))
+	if got := h.authenticatedService(r); got != "" {
+		t.Fatalf("legacy principal identified %q", got)
+	}
+}
+
+func TestLegacyReaderRejectsMixedCallerHeaders(t *testing.T) {
+	h := &Handler{appAPIToken: "token", callerConfig: CallerConfig{ReaderCallerAppID: "api-gateway"}}
+	r := httptest.NewRequest(http.MethodGet, "https://asset.internal/api/assets/collections", nil)
+	r.Header.Set("Dapr-Caller-App-Id", "api-gateway")
+	r.Header.Set("dapr-api-token", "token")
+	if !h.gatewayReader(r) {
+		t.Fatal("legacy reader rejected")
+	}
+	for _, header := range []string{"api-gateway", " api-gateway", ""} {
+		r.Header.Set("X-HHC-Caller-App-Id", header)
+		if h.gatewayReader(r) {
+			t.Fatalf("mixed reader header %q accepted", header)
 		}
 	}
 }

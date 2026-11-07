@@ -6,7 +6,7 @@ import (
 )
 
 func TestRecordingCoverRoutesFailClosed(t *testing.T) {
-	h := New(nil, nil, map[string]bool{"hhc-web-api": true, "account-api": true}, true, "", WorkloadAuthConfig{}, nil).Routes()
+	h := New(nil, nil, map[string]bool{"hhc-web-api": true, "account-api": true}, true, "", CallerConfig{}, nil).Routes()
 	for _, tc := range []struct {
 		method, path, caller string
 		want                 int

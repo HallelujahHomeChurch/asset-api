@@ -10,21 +10,13 @@
 
 Local uploads use a short-lived signed `PUT /dev/uploads/{token}` target and store bytes under `.data/assets`. Production uses Azure Blob Storage with `DefaultAzureCredential` and a single-blob user-delegation SAS. Account keys are not supported.
 
-Set `ASSET_ALLOW_DEV_CALLER_HEADER=true` only for local development without
-Dapr. Production leaves it disabled. Container Apps invoke through Dapr with
-the matching `APP_API_TOKEN`; the LINE attachment Job uses a dedicated managed
-identity against internal ingress. ACA authentication validates the token before
-Asset also checks tenant, issuer, audience, client, object id, and `Asset.Invoke`.
-The isolated bulletin extractor can reuse `hhc-web-api-identity` through the
-optional exact `ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID` / `OBJECT_ID` pair. It maps
-to the existing `hhc-web-api` owner, not a new asset owner. Both identifiers
-must be configured together; leaving both empty preserves existing behavior.
-
-Internal HTTPS callers can now send one exact `X-HHC-Caller-App-Id` service
-value. Existing Entra authentication remains enabled for the staged migration;
-callers must keep their bearer token until the separate producer cutover. The
-[ordered rollout](docs/workload-auth.md#ordered-internal-caller-rollout) prevents
-app-level authentication changes from disrupting older replicas.
+Set `ASSET_ALLOW_DEV_CALLER_HEADER=true` only for local development. Production
+accepts one exact `X-HHC-Caller-App-Id` service value on internal HTTPS; ACA
+terminates TLS and only trusted same-environment workloads reach this ingress.
+Legacy Dapr callers still require the matching `APP_API_TOKEN`. Platform
+principal headers are never used for caller identity, and Easy Auth is explicitly
+disabled. Member scopes, ownership, grants and tickets remain enforced. See the
+[caller and rollout contract](docs/workload-auth.md).
 
 ## CI test scheduling
 
@@ -91,12 +83,11 @@ the service contract and legacy browser compatibility path.
 - `GET /priv/assets/{assetId}/public-url`
 - `DELETE /priv/assets/{assetId}`
 
-Private routes first authenticate Dapr's app-channel token, then derive caller
-identity from `Dapr-Caller-App-Id`. Restricted downloads additionally require
+Private routes resolve the exact internal service header (or authenticated Dapr
+caller during retirement). Restricted downloads additionally require
 `X-Asset-Subject-Type` and `X-Asset-Subject-Id` to match an active grant. The
-custom caller fallback is accepted only when the development setting is enabled.
-The dedicated `hhc-web-bulletin-worker` is delegated to its owning `hhc-web-api`
-service for these private asset operations.
+`hhc-web-bulletin-worker` service is delegated to its existing `hhc-web-api`
+owner while worker-only operations retain its original service identity.
 
 ## HLS package producer contract
 
@@ -256,10 +247,9 @@ and production resource activation are still separate delivery gates.
 
 The exact authenticated `hhc-web-bulletin-worker` service may complete its controlled
 personalized PDF through `/priv/assets/bulletin-derivatives/{assetID}/complete`.
-The worker proves its identity either through Dapr or, without Dapr, through the
-dedicated `hhc-web-bulletin-worker-identity` Entra workload principal configured by
-`ASSET_WATERMARK_WORKLOAD_CLIENT_ID`/`_OBJECT_ID`; a valid Dapr token always takes
-precedence over any principal header. See [`docs/workload-auth.md`](docs/workload-auth.md).
+The worker sends `X-HHC-Caller-App-Id: hhc-web-bulletin-worker` on internal
+HTTPS; authenticated Dapr remains a temporary alternative. See
+[`docs/workload-auth.md`](docs/workload-auth.md).
 The original must be an immutable clean private bulletin with matching SHA-256
 and locale; output ownership, MIME, size, checksum and immutable Blob commit
 remain validated. This records `trusted-bulletin-watermark-v1` plus source

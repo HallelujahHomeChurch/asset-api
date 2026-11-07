@@ -19,16 +19,9 @@ class RetireDaprTest(unittest.TestCase):
     def fixture(self):
         env = dict(GITHUB_REPOSITORY="HallelujahHomeChurch/asset-api", GITHUB_REF="refs/heads/main",
                    RELEASE_CONFIRMATION="deploy-asset-api-production", RETIRE_DAPR_REVISION=PREVIOUS,
-                   GITHUB_RUN_ID="123", GITHUB_RUN_ATTEMPT="1", ASSET_WORKLOAD_AUDIENCE="api://asset",
-                   AZURE_TENANT_ID="test-tenant")
+                   GITHUB_RUN_ID="123", GITHUB_RUN_ATTEMPT="1")
         values = dict(ASSET_DAPR_ENABLED="true", AUDIT_DISPATCH_ENABLED="true", AUDIT_PRIVATE_HTTPS="true",
-                      ASSET_ALLOW_DEV_CALLER_HEADER="false", ASSET_WORKLOAD_REQUIRED_ROLE="Asset.Invoke",
-                      ASSET_READER_CALLER_APP_ID="api-gateway", ASSET_WORKLOAD_AUDIENCE="api://asset",
-                      ASSET_WORKLOAD_TENANT_ID="test-tenant", ASSET_WORKLOAD_ISSUER="https://sts.windows.net/test-tenant/")
-        for subject in module.PAIR_NAMES:
-            for kind in ("CLIENT_ID", "OBJECT_ID"):
-                key = f"ASSET_{subject}_WORKLOAD_{kind}"
-                values[key] = env[f"LINE_ATTACHMENT_{kind}" if subject == "LINE" else key] = f"{subject}-{kind}"
+                      ASSET_ALLOW_DEV_CALLER_HEADER="false", ASSET_READER_CALLER_APP_ID="api-gateway")
         bindings = [{"name": name, "value": value} for name, value in values.items()]
         bindings.append({"name": "AUDIT_TOKEN", "secretRef": "audit-token"})
         app = dict(latest=PREVIOUS, ready=PREVIOUS, mode="Single", dapr=copy.deepcopy(module.DAPR),
@@ -43,8 +36,8 @@ class RetireDaprTest(unittest.TestCase):
         mutations = []
         if failure == "stale":
             app["latest"] = "asset-api--wrong"
-        if failure == "role":
-            env["ASSET_GATEWAY_WORKLOAD_CLIENT_ID"] = "wrong"
+        if failure == "caller":
+            current["template"]["containers"][0]["env"] = [entry for entry in current["template"]["containers"][0]["env"] if entry["name"] != "ASSET_READER_CALLER_APP_ID"]
 
         def az(*args):
             nonlocal current
@@ -89,7 +82,7 @@ class RetireDaprTest(unittest.TestCase):
         self.assertIs(app["dapr"]["enabled"], False)
 
     def test_retirement_rejects_changed_inputs_before_mutation(self):
-        for failure in ("stale", "role"):
+        for failure in ("stale", "caller"):
             with self.subTest(failure=failure):
                 _, mutations = self.run_fixture(failure)
                 self.assertEqual(mutations, [])

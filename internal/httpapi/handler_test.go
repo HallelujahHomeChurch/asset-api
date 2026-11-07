@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"maps"
 	"mime"
 	"net/http"
 	"net/http/httptest"
@@ -347,7 +346,7 @@ func TestCollectionTicketRouteRequiresExactAuthenticatedGatewayCaller(t *testing
 }
 
 func TestCollectionTicketMiddlewareClearsExternalIdentityAndNonTicketQuery(t *testing.T) {
-	handler := &Handler{appAPIToken: "token", workloadAuth: WorkloadAuthConfig{ReaderCallerAppID: "api-gateway"}}
+	handler := &Handler{appAPIToken: "token", callerConfig: CallerConfig{ReaderCallerAppID: "api-gateway"}}
 	called := false
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called = true
@@ -418,7 +417,7 @@ func newCollectionContentHandler() (http.Handler, *collectionContentRepository, 
 	}}
 	blobs := &downloadBlobStore{objects: map[string][]byte{"content": []byte("abcdef")}}
 	service := assets.NewService(repository, blobs, "", func() time.Time { return collectionContentNow })
-	handler := New(service, nil, nil, false, "token", WorkloadAuthConfig{ReaderCallerAppID: "api-gateway"}, nil).Routes()
+	handler := New(service, nil, nil, false, "token", CallerConfig{ReaderCallerAppID: "api-gateway"}, nil).Routes()
 	return handler, repository, blobs
 }
 
@@ -608,7 +607,7 @@ func collectionReaderRequest(method, path string) *http.Request {
 func newCollectionReaderHandler() (http.Handler, *collectionReaderRepository) {
 	repository := &collectionReaderRepository{}
 	service := assets.NewService(repository, &collectionManagementBlobStore{}, "", func() time.Time { return time.Date(2026, 8, 16, 0, 0, 0, 0, time.UTC) })
-	return New(service, nil, map[string]bool{"hhc-line-function-bot": true}, false, "token", WorkloadAuthConfig{ReaderCallerAppID: "api-gateway"}, nil).Routes(), repository
+	return New(service, nil, map[string]bool{"hhc-line-function-bot": true}, false, "token", CallerConfig{ReaderCallerAppID: "api-gateway"}, nil).Routes(), repository
 }
 
 type collectionReaderRepository struct {
@@ -1044,7 +1043,7 @@ func collectionManagementRequests() []collectionManagementRequest {
 func newCollectionManagementHandler() (http.Handler, *collectionManagementRepository) {
 	repository := &collectionManagementRepository{}
 	service := assets.NewService(repository, &collectionManagementBlobStore{}, "", func() time.Time { return time.Date(2026, 8, 16, 0, 0, 0, 0, time.UTC) })
-	handler := New(service, nil, map[string]bool{"hhc-line-function-bot": true, "api-gateway": true, "account-api": true}, true, "", WorkloadAuthConfig{}, nil).Routes()
+	handler := New(service, nil, map[string]bool{"hhc-line-function-bot": true, "api-gateway": true, "account-api": true}, true, "", CallerConfig{}, nil).Routes()
 	return handler, repository
 }
 
@@ -1282,127 +1281,6 @@ func TestInternalAllowsExplicitDevelopmentCaller(t *testing.T) {
 
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusNoContent)
-	}
-}
-
-func TestInternalAllowsValidatedEntraWorkload(t *testing.T) {
-	auth := WorkloadAuthConfig{
-		TenantID: "tenant-1", Audience: "api://asset-api", Issuer: "https://login.microsoftonline.com/tenant-1/v2.0",
-		RequiredRole: "Asset.Invoke", Callers: map[string]WorkloadCaller{
-			"line-client": {ObjectID: "line-object", Service: "hhc-line-function-bot"},
-		},
-	}
-	handler := (&Handler{allowedCallers: map[string]bool{"hhc-line-function-bot": true}, workloadAuth: auth}).internal(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if callerFromRequest(r, false) != "hhc-line-function-bot" {
-			t.Fatalf("caller = %q", callerFromRequest(r, false))
-		}
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	request := httptest.NewRequest(http.MethodPost, "/priv/assets/upload-sessions", nil)
-	request.Header.Set("X-MS-CLIENT-PRINCIPAL", encodedPrincipal(t, map[string]string{
-		"tid": "tenant-1", "iss": auth.Issuer, "aud": auth.Audience, "appid": "line-client", "oid": "line-object", "roles": auth.RequiredRole,
-	}))
-	response := httptest.NewRecorder()
-
-	handler.ServeHTTP(response, request)
-
-	if response.Code != http.StatusNoContent {
-		t.Fatalf("status = %d", response.Code)
-	}
-}
-
-func TestExtractorIdentityHasOnlyItsExistingCMSOwnerAndValidClaims(t *testing.T) {
-	auth := WorkloadAuthConfig{TenantID: "tenant-1", Audience: "api://asset-api", Issuer: "https://sts.windows.net/tenant-1/", RequiredRole: "Asset.Invoke", Callers: map[string]WorkloadCaller{
-		"extractor-client": {ObjectID: "extractor-object", Service: "hhc-web-api"},
-		"line-client":      {ObjectID: "line-object", Service: "hhc-line-function-bot"},
-	}}
-	base := map[string]string{"tid": auth.TenantID, "iss": auth.Issuer, "aud": auth.Audience, "appid": "extractor-client", "oid": "extractor-object", "roles": auth.RequiredRole}
-	check := func(claims map[string]string, want int) {
-		t.Helper()
-		handler := (&Handler{allowedCallers: map[string]bool{"hhc-web-api": true, "hhc-line-function-bot": true}, workloadAuth: auth}).internal(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if callerFromRequest(r, false) != "hhc-web-api" {
-				t.Fatal("extractor changed asset ownership")
-			}
-			w.WriteHeader(http.StatusNoContent)
-		}))
-		request := httptest.NewRequest(http.MethodGet, "/priv/assets/owned-asset", nil)
-		request.Header.Set("X-MS-CLIENT-PRINCIPAL", encodedPrincipal(t, claims))
-		request.Header.Set("Dapr-Caller-App-Id", "account-api")
-		response := httptest.NewRecorder()
-		handler.ServeHTTP(response, request)
-		if response.Code != want {
-			t.Fatalf("status=%d, want=%d", response.Code, want)
-		}
-	}
-	check(base, http.StatusNoContent)
-	for _, key := range []string{"tid", "iss", "aud", "roles", "appid", "oid"} {
-		claims := maps.Clone(base)
-		claims[key] = "wrong"
-		check(claims, http.StatusForbidden)
-	}
-	for key, value := range map[string]string{"appid": "line-client", "oid": "line-object"} {
-		claims := maps.Clone(base)
-		claims[key] = value
-		check(claims, http.StatusForbidden)
-	}
-}
-
-func TestManagedIdentityV1IssuerMustMatchConfiguredIssuer(t *testing.T) {
-	config := WorkloadAuthConfig{
-		TenantID: "tenant-1", Audience: "api://asset-api", Issuer: "https://sts.windows.net/tenant-1/",
-		RequiredRole: "Asset.Invoke", Callers: map[string]WorkloadCaller{"line-client": {ObjectID: "line-object", Service: "hhc-line-function-bot"}},
-	}
-	claims := map[string]string{
-		"tid": "tenant-1", "iss": "https://sts.windows.net/tenant-1/", "aud": config.Audience,
-		"appid": "line-client", "oid": "line-object", "roles": config.RequiredRole,
-	}
-	if caller := workloadCaller(encodedPrincipal(t, claims), config); caller != "hhc-line-function-bot" {
-		t.Fatalf("caller = %q", caller)
-	}
-	claims["iss"] = "https://login.microsoftonline.com/tenant-1/v2.0"
-	if caller := workloadCaller(encodedPrincipal(t, claims), config); caller != "" {
-		t.Fatalf("v2 caller = %q", caller)
-	}
-	claims["iss"] = "https://sts.windows.net/other-tenant/"
-	if caller := workloadCaller(encodedPrincipal(t, claims), config); caller != "" {
-		t.Fatalf("cross-tenant caller = %q", caller)
-	}
-}
-
-func TestManagedIdentityV1IssuerIsRejectedWhenV2IsConfigured(t *testing.T) {
-	config := WorkloadAuthConfig{
-		TenantID: "tenant-1", Audience: "api://asset-api", Issuer: "https://login.microsoftonline.com/tenant-1/v2.0",
-		RequiredRole: "Asset.Invoke", Callers: map[string]WorkloadCaller{"line-client": {ObjectID: "line-object", Service: "hhc-line-function-bot"}},
-	}
-	claims := map[string]string{
-		"tid": "tenant-1", "iss": "https://sts.windows.net/tenant-1/", "aud": config.Audience,
-		"appid": "line-client", "oid": "line-object", "roles": config.RequiredRole,
-	}
-
-	if caller := workloadCaller(encodedPrincipal(t, claims), config); caller != "" {
-		t.Fatalf("caller = %q", caller)
-	}
-}
-
-func TestInternalRejectsInvalidEntraWorkloadClaims(t *testing.T) {
-	auth := WorkloadAuthConfig{
-		TenantID: "tenant-1", Audience: "api://asset-api", Issuer: "https://login.microsoftonline.com/tenant-1/v2.0", RequiredRole: "Asset.Invoke",
-		Callers: map[string]WorkloadCaller{"line-client": {ObjectID: "line-object", Service: "hhc-line-function-bot"}},
-	}
-	base := map[string]string{"tid": auth.TenantID, "iss": auth.Issuer, "aud": auth.Audience, "appid": "line-client", "oid": "line-object", "roles": auth.RequiredRole}
-	for _, claim := range []string{"tid", "iss", "aud", "appid", "oid", "roles"} {
-		t.Run(claim, func(t *testing.T) {
-			claims := maps.Clone(base)
-			claims[claim] = "wrong"
-			handler := (&Handler{allowedCallers: map[string]bool{"hhc-line-function-bot": true}, workloadAuth: auth}).internal(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
-			request := httptest.NewRequest(http.MethodPost, "/priv/assets/upload-sessions", nil)
-			request.Header.Set("X-MS-CLIENT-PRINCIPAL", encodedPrincipal(t, claims))
-			response := httptest.NewRecorder()
-			handler.ServeHTTP(response, request)
-			if response.Code != http.StatusForbidden {
-				t.Fatalf("status = %d", response.Code)
-			}
-		})
 	}
 }
 
@@ -1687,11 +1565,10 @@ func TestPrivateWeeklyDownloadRequiresOwnerAndSubjectGrantBeforeRange(t *testing
 	}
 	blobs := &downloadBlobStore{objects: map[string][]byte{"original": []byte("secret")}}
 	service := assets.NewService(repository, blobs, "https://www.alive.org.tw/api/assets", func() time.Time { return modified })
-	handler := New(service, nil, map[string]bool{"hhc-web-api": true}, false, "token", WorkloadAuthConfig{}, nil).Routes()
+	handler := New(service, nil, map[string]bool{"hhc-web-api": true}, false, "token", CallerConfig{}, nil).Routes()
 
 	request := httptest.NewRequest(http.MethodGet, "/priv/assets/asset-1/download", nil)
-	request.Header.Set("Dapr-Caller-App-Id", "hhc-web-api")
-	request.Header.Set("dapr-api-token", "token")
+	request.Header.Set("X-HHC-Caller-App-Id", "hhc-web-api")
 	request.Header.Set("X-Asset-Subject-Type", "service")
 	request.Header.Set("X-Asset-Subject-Id", "hhc-web-api")
 	request.Header.Set("Range", "bytes=1-3")
@@ -1704,6 +1581,14 @@ func TestPrivateWeeklyDownloadRequiresOwnerAndSubjectGrantBeforeRange(t *testing
 	}
 	if response.Header().Get("Cache-Control") != "private, no-store" {
 		t.Fatalf("cache control=%q", response.Header().Get("Cache-Control"))
+	}
+
+	// Trusted service identification does not create a subject grant.
+	repository.grantActive = false
+	denied := httptest.NewRecorder()
+	handler.ServeHTTP(denied, request)
+	if denied.Code != http.StatusNotFound {
+		t.Fatalf("missing grant status=%d", denied.Code)
 	}
 }
 
@@ -1740,7 +1625,7 @@ func publicDownloadHandlerWithOriginalAndGrant(t *testing.T, original []byte, gr
 	}
 	blobs := &downloadBlobStore{objects: map[string][]byte{"original": original, "small": []byte("xyz")}}
 	service := assets.NewService(repository, blobs, "https://www.alive.org.tw/api/assets", func() time.Time { return modified })
-	return New(service, nil, nil, false, "", WorkloadAuthConfig{}, nil).Routes(), blobs
+	return New(service, nil, nil, false, "", CallerConfig{}, nil).Routes(), blobs
 }
 
 type downloadRepository struct {

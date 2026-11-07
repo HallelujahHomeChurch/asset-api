@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/subtle"
 	"database/sql"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,7 +29,7 @@ type Handler struct {
 	allowedCallers       map[string]bool
 	allowDevCallerHeader bool
 	appAPIToken          string
-	workloadAuth         WorkloadAuthConfig
+	callerConfig         CallerConfig
 	localUpload          http.HandlerFunc
 	audit                *auditoutbox.Store
 	recordingPackages    *assets.RecordingPackageService
@@ -45,22 +44,12 @@ type Handler struct {
 	coverObjects         *r2.Store
 }
 
-type WorkloadCaller struct {
-	ObjectID string
-	Service  string
-}
-
-type WorkloadAuthConfig struct {
-	TenantID          string
-	Issuer            string
-	Audience          string
-	RequiredRole      string
+type CallerConfig struct {
 	ReaderCallerAppID string
-	Callers           map[string]WorkloadCaller
 }
 
-func New(service *assets.Service, db *sql.DB, allowedCallers map[string]bool, allowDevCallerHeader bool, appAPIToken string, workloadAuth WorkloadAuthConfig, localUpload http.HandlerFunc) *Handler {
-	return &Handler{service: service, db: db, allowedCallers: allowedCallers, allowDevCallerHeader: allowDevCallerHeader, appAPIToken: appAPIToken, workloadAuth: workloadAuth, localUpload: localUpload}
+func New(service *assets.Service, db *sql.DB, allowedCallers map[string]bool, allowDevCallerHeader bool, appAPIToken string, callerConfig CallerConfig, localUpload http.HandlerFunc) *Handler {
+	return &Handler{service: service, db: db, allowedCallers: allowedCallers, allowDevCallerHeader: allowDevCallerHeader, appAPIToken: appAPIToken, callerConfig: callerConfig, localUpload: localUpload}
 }
 
 func (h *Handler) WithAudit(store *auditoutbox.Store) *Handler { h.audit = store; return h }
@@ -201,8 +190,8 @@ func (h *Handler) Routes() http.Handler {
 	if h.localUpload != nil {
 		mux.Handle("/dev/uploads/{token}", localUploadCORS(http.HandlerFunc(h.localUpload)))
 	}
-	// Easy Auth always protects this prefix, including during a rolling update.
-	mux.Handle("/_gateway/api/assets/", h.gatewayWorkload(http.StripPrefix("/_gateway", mux)))
+	// Only the trusted Gateway caller may enter the protected reader prefix.
+	mux.Handle("/_gateway/api/assets/", h.gatewayIngress(http.StripPrefix("/_gateway", mux)))
 	return requestID(mux)
 }
 
@@ -333,20 +322,7 @@ func (h *Handler) collectionTicket(next http.Handler) http.Handler {
 	})
 }
 
-// authenticatedService resolves the private caller's own service identity.
-//
-// Trust order (see docs/workload-auth.md):
-//  0. Internal ACA ingress trusts the exact service header. Invalid or ambiguous
-//     headers fail closed; they never fall back to a legacy identity.
-//  1. Dapr: a valid app-channel token proves the request came through the
-//     local sidecar, which sets Dapr-Caller-App-Id. Dapr reaches the app over
-//     localhost and bypasses Easy Auth, so any X-MS-CLIENT-PRINCIPAL on such a
-//     request is caller-controlled and is ignored.
-//  2. Otherwise the request came through internal ingress, where Easy Auth has
-//     validated the Entra token and replaced X-MS-CLIENT-PRINCIPAL; the
-//     principal must still match a configured client/object ID and role. A
-//     Dapr-Caller-App-Id header without a valid token is caller-controlled
-//     and ignored (existing contract, kept by owner decision 2026-10-31).
+// authenticatedService accepts the internal caller header or temporary Dapr proof.
 func (h *Handler) authenticatedService(r *http.Request) string {
 	if _, present := r.Header[http.CanonicalHeaderKey("X-HHC-Caller-App-Id")]; present {
 		return h.internalCaller(r)
@@ -357,7 +333,7 @@ func (h *Handler) authenticatedService(r *http.Request) string {
 	if caller := h.daprCaller(r); caller != "" {
 		return caller
 	}
-	return h.workloadPrincipal(r)
+	return ""
 }
 
 // ACA terminates HTTPS before forwarding to the app. This identity relies on
@@ -369,42 +345,34 @@ func (h *Handler) internalCaller(r *http.Request) string {
 		return ""
 	}
 	caller := values[0]
-	if h.allowedCallers[caller] || caller == h.workloadAuth.ReaderCallerAppID ||
+	if h.allowedCallers[caller] || caller == h.callerConfig.ReaderCallerAppID ||
 		(caller == "hhc-web-bulletin-worker" && h.allowedCallers["hhc-web-api"]) {
 		return caller
 	}
 	return ""
 }
 
-func (h *Handler) workloadPrincipal(r *http.Request) string {
-	principal := r.Header.Values("X-MS-CLIENT-PRINCIPAL")
-	if len(principal) != 1 {
-		return ""
-	}
-	return workloadCaller(principal[0], h.workloadAuth)
-}
+type gatewayIngressKey struct{}
 
-type gatewayWorkloadKey struct{}
-
-func (h *Handler) gatewayWorkload(next http.Handler) http.Handler {
+func (h *Handler) gatewayIngress(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		reader := h.workloadAuth.ReaderCallerAppID
-		caller := h.workloadPrincipal(r)
-		if _, present := r.Header[http.CanonicalHeaderKey("X-HHC-Caller-App-Id")]; present {
-			caller = h.internalCaller(r)
-		}
+		reader := h.callerConfig.ReaderCallerAppID
+		caller := h.internalCaller(r)
 		if reader == "" || caller != reader || len(r.Header.Values("Dapr-Caller-App-Id")) != 0 || len(r.Header.Values("dapr-api-token")) != 0 {
 			writeError(w, http.StatusForbidden, "AST_FORBIDDEN", "caller is not allowed")
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), gatewayWorkloadKey{}, true)))
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), gatewayIngressKey{}, true)))
 	})
 }
 
 func (h *Handler) gatewayReader(r *http.Request) bool {
-	workload, _ := r.Context().Value(gatewayWorkloadKey{}).(bool)
-	reader := h.workloadAuth.ReaderCallerAppID
-	return reader != "" && (workload || h.daprCaller(r) == reader)
+	ingress, _ := r.Context().Value(gatewayIngressKey{}).(bool)
+	if _, present := r.Header[http.CanonicalHeaderKey("X-HHC-Caller-App-Id")]; present && !ingress {
+		return false
+	}
+	reader := h.callerConfig.ReaderCallerAppID
+	return reader != "" && (ingress || h.daprCaller(r) == reader)
 }
 
 // requestService is the authenticated service before CMS aliasing.
@@ -1436,53 +1404,3 @@ func collectionReaderSubject(r *http.Request) assets.CollectionSubject {
 type callerContextKey struct{}
 
 type serviceContextKey struct{}
-
-func workloadCaller(encoded string, config WorkloadAuthConfig) string {
-	if encoded == "" || config.TenantID == "" || config.Issuer == "" || config.Audience == "" || config.RequiredRole == "" {
-		return ""
-	}
-	raw, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil {
-		return ""
-	}
-	var principal struct {
-		AuthType string `json:"auth_typ"`
-		Claims   []struct {
-			Type  string `json:"typ"`
-			Value string `json:"val"`
-		} `json:"claims"`
-	}
-	if json.Unmarshal(raw, &principal) != nil || principal.AuthType != "aad" {
-		return ""
-	}
-	claims := map[string][]string{}
-	for _, claim := range principal.Claims {
-		claims[claim.Type] = append(claims[claim.Type], claim.Value)
-	}
-	claim := func(names ...string) string {
-		for _, name := range names {
-			if len(claims[name]) > 0 {
-				return claims[name][0]
-			}
-		}
-		return ""
-	}
-	if claim("tid", "http://schemas.microsoft.com/identity/claims/tenantid") != config.TenantID || !validWorkloadIssuer(claim("iss"), config) || claim("aud") != config.Audience {
-		return ""
-	}
-	clientID := claim("appid", "azp")
-	configured, ok := config.Callers[clientID]
-	if !ok || claim("oid", "http://schemas.microsoft.com/identity/claims/objectidentifier") != configured.ObjectID {
-		return ""
-	}
-	for _, role := range append(claims["roles"], claims["http://schemas.microsoft.com/ws/2008/06/identity/claims/role"]...) {
-		if role == config.RequiredRole {
-			return configured.Service
-		}
-	}
-	return ""
-}
-
-func validWorkloadIssuer(issuer string, config WorkloadAuthConfig) bool {
-	return issuer == config.Issuer
-}

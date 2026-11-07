@@ -31,7 +31,7 @@ func (s *retentionStoreStub) UpdateRetentionPolicy(context.Context, assets.Updat
 
 func TestRecordingRetentionOwnerAndHumanMutationBoundary(t *testing.T) {
 	s := &retentionStoreStub{}
-	h := New(nil, nil, map[string]bool{"hhc-web-api": true, "account-api": true}, true, "", WorkloadAuthConfig{}, nil).
+	h := New(nil, nil, map[string]bool{"hhc-web-api": true, "account-api": true}, true, "", CallerConfig{}, nil).
 		WithRecordingPackages(assets.NewRecordingPackageService(&httpPackageRepo{}, httpPackageObjects{}, nil)).WithRecordingRetention(s).Routes()
 	for _, tc := range []struct {
 		method, path, caller, actor, body string

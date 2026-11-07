@@ -135,7 +135,6 @@ jobs:
           ./scripts/test-migration-policy.sh internal/migrations/sql/*.sql
           ./scripts/test-what-if-policy.sh
           ./scripts/test-install-media-test-tools.sh
-          bash scripts/ensure-workload-app-role.test.sh
           mkdir -p .artifacts/data-governance
           set -o pipefail
           python3 scripts/test-go-lanes_test.py

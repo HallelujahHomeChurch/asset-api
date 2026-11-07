@@ -12,7 +12,7 @@ import (
 )
 
 func TestRecordingSourceRoutesFailClosed(t *testing.T) {
-	h := New(nil, nil, map[string]bool{"hhc-web-api": true, "account-api": true}, true, "", WorkloadAuthConfig{}, nil).Routes()
+	h := New(nil, nil, map[string]bool{"hhc-web-api": true, "account-api": true}, true, "", CallerConfig{}, nil).Routes()
 	for _, route := range []struct{ method, path string }{{"POST", "/priv/recording-sources"}, {"GET", "/priv/recording-sources/source-a"}, {"POST", "/priv/recording-sources/source-a/sign"}, {"POST", "/priv/recording-sources/source-a/complete"}, {"POST", "/priv/recording-sources/source-a/retry-processing"}} {
 		for _, tc := range []struct {
 			caller string
@@ -31,7 +31,7 @@ func TestRecordingSourceRoutesFailClosed(t *testing.T) {
 
 func TestSourceReadyLookupIsOwnerScopedAndDoesNotRequireHumanSession(t *testing.T) {
 	repo := &httpSourceRepo{p: assets.RecordingSource{ID: strings.Repeat("a", 32), OwnerService: "hhc-web-api", RecordingID: "recording-a", State: "processing"}}
-	h := New(nil, nil, map[string]bool{"hhc-web-api": true, "account-api": true}, true, "", WorkloadAuthConfig{}, nil).WithRecordingSources(assets.NewRecordingSourceService(repo, httpSourceObjects{}, time.Now)).Routes()
+	h := New(nil, nil, map[string]bool{"hhc-web-api": true, "account-api": true}, true, "", CallerConfig{}, nil).WithRecordingSources(assets.NewRecordingSourceService(repo, httpSourceObjects{}, time.Now)).Routes()
 	request := func(caller, recording string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest("GET", "/priv/recording-sources/"+repo.p.ID+"/ready?recordingId="+recording, nil)
 		r.Header.Set("X-Internal-Caller-App-Id", caller)
@@ -89,7 +89,7 @@ func (httpSourceObjects) RecordingSourceBlocks(context.Context, string) (assets.
 func TestRecordingSourceCompleteAndWriteCapabilityHTTP(t *testing.T) {
 	now := time.Now().UTC()
 	repo := &httpSourceRepo{p: assets.RecordingSource{ID: strings.Repeat("a", 32), OwnerService: "hhc-web-api", ActorID: "actor-a", RecordingID: "recording-a", FileName: "source.mp4", SizeBytes: 5, BlockCount: 1, State: "uploading", CreatedAt: now, ExpiresAt: now.Add(time.Hour)}}
-	h := New(nil, nil, map[string]bool{"hhc-web-api": true}, true, "", WorkloadAuthConfig{}, nil).WithRecordingSources(assets.NewRecordingSourceService(repo, httpSourceObjects{}, time.Now)).Routes()
+	h := New(nil, nil, map[string]bool{"hhc-web-api": true}, true, "", CallerConfig{}, nil).WithRecordingSources(assets.NewRecordingSourceService(repo, httpSourceObjects{}, time.Now)).Routes()
 	request := func(suffix, actor, body string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest("POST", "/priv/recording-sources/"+repo.p.ID+suffix, strings.NewReader(body))
 		r.Header.Set("X-Internal-Caller-App-Id", "hhc-web-api")

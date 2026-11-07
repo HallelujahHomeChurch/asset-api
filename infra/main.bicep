@@ -41,20 +41,6 @@ param recordingPreviewCPU int = 1
 param recordingImage string = runtimeImage
 param recordingR2AccountId string = ''
 param mediaKeyId string = ''
-param workloadAuthClientId string = ''
-param workloadAuthAudience string = ''
-param lineAttachmentClientId string = ''
-param lineAttachmentObjectId string = ''
-param lineAPIWorkloadClientId string = ''
-param lineAPIWorkloadObjectId string = ''
-param extractorClientId string = ''
-param extractorObjectId string = ''
-param watermarkWorkerClientId string = ''
-param watermarkWorkerObjectId string = ''
-param accountWorkloadClientId string = ''
-param accountWorkloadObjectId string = ''
-param gatewayWorkloadClientId string = ''
-param gatewayWorkloadObjectId string = ''
 param readerCallerAppId string = 'api-gateway'
 
 param publicBaseUrl string = 'https://www.alive.org.tw/assets'
@@ -64,13 +50,6 @@ param uploadAllowedOrigins array = [
 ]
 
 var keyVaultSecretsUserRole = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
-var workloadAuthEnabled = workloadAuthClientId != '' && workloadAuthAudience != '' && lineAttachmentClientId != '' && lineAttachmentObjectId != ''
-var lineAPIWorkloadAuthEnabled = workloadAuthEnabled && lineAPIWorkloadClientId != '' && lineAPIWorkloadObjectId != ''
-var extractorAuthEnabled = workloadAuthEnabled && extractorClientId != '' && extractorObjectId != ''
-var watermarkWorkerAuthEnabled = workloadAuthEnabled && watermarkWorkerClientId != '' && watermarkWorkerObjectId != ''
-var accountWorkloadAuthEnabled = workloadAuthEnabled && accountWorkloadClientId != '' && accountWorkloadObjectId != ''
-var gatewayWorkloadAuthEnabled = workloadAuthEnabled && gatewayWorkloadClientId != '' && gatewayWorkloadObjectId != ''
-var workloadAuthIssuer = 'https://sts.windows.net/${subscription().tenantId}/'
 var recordingBucket = 'hhc-member-recordings-prod'
 var recordingEventQueueGroups = [for lane in ['live','processing','preview']: [
  {name:'ASSET_RECORDING_${toUpper(lane)}_QUEUE_URL',value:'https://${storageAccountName}.queue.${az.environment().suffixes.storage}/asset-recording-${lane}'}
@@ -449,22 +428,6 @@ resource app 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
             { name: 'ASSET_ALLOWED_CALLERS', value: 'account-api,hhc-web-api,hhc-line-function-bot' }
             { name: 'ASSET_READER_CALLER_APP_ID', value: readerCallerAppId }
             { name: 'ASSET_ALLOW_DEV_CALLER_HEADER', value: 'false' }
-            { name: 'ASSET_WORKLOAD_TENANT_ID', value: workloadAuthEnabled ? subscription().tenantId : '' }
-            { name: 'ASSET_WORKLOAD_ISSUER', value: workloadAuthEnabled ? workloadAuthIssuer : '' }
-            { name: 'ASSET_WORKLOAD_AUDIENCE', value: workloadAuthEnabled ? workloadAuthAudience : '' }
-            { name: 'ASSET_WORKLOAD_REQUIRED_ROLE', value: 'Asset.Invoke' }
-            { name: 'ASSET_LINE_WORKLOAD_CLIENT_ID', value: workloadAuthEnabled ? lineAttachmentClientId : '' }
-            { name: 'ASSET_LINE_WORKLOAD_OBJECT_ID', value: workloadAuthEnabled ? lineAttachmentObjectId : '' }
-            { name: 'ASSET_LINE_API_WORKLOAD_CLIENT_ID', value: lineAPIWorkloadAuthEnabled ? lineAPIWorkloadClientId : '' }
-            { name: 'ASSET_LINE_API_WORKLOAD_OBJECT_ID', value: lineAPIWorkloadAuthEnabled ? lineAPIWorkloadObjectId : '' }
-            { name: 'ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID', value: workloadAuthEnabled ? extractorClientId : '' }
-            { name: 'ASSET_EXTRACTOR_WORKLOAD_OBJECT_ID', value: workloadAuthEnabled ? extractorObjectId : '' }
-            { name: 'ASSET_WATERMARK_WORKLOAD_CLIENT_ID', value: watermarkWorkerAuthEnabled ? watermarkWorkerClientId : '' }
-            { name: 'ASSET_WATERMARK_WORKLOAD_OBJECT_ID', value: watermarkWorkerAuthEnabled ? watermarkWorkerObjectId : '' }
-            { name: 'ASSET_ACCOUNT_WORKLOAD_CLIENT_ID', value: accountWorkloadAuthEnabled ? accountWorkloadClientId : '' }
-            { name: 'ASSET_ACCOUNT_WORKLOAD_OBJECT_ID', value: accountWorkloadAuthEnabled ? accountWorkloadObjectId : '' }
-            { name: 'ASSET_GATEWAY_WORKLOAD_CLIENT_ID', value: gatewayWorkloadAuthEnabled ? gatewayWorkloadClientId : '' }
-            { name: 'ASSET_GATEWAY_WORKLOAD_OBJECT_ID', value: gatewayWorkloadAuthEnabled ? gatewayWorkloadObjectId : '' }
             { name: 'AUDIT_DISPATCH_ENABLED', value: 'true' }
             { name: 'AUDIT_PRIVATE_HTTPS', value: 'true' }
             { name: 'AUDIT_APP_ID', value: 'audit-log' }
@@ -525,59 +488,13 @@ resource app 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
   ]
 }
 
-resource workloadAuth 'Microsoft.App/containerApps/authConfigs@2025-01-01' = if (deployRuntime && workloadAuthEnabled) {
+// Explicitly disable the existing app-level proxy; omitting it leaves it active.
+resource internalIngressAuth 'Microsoft.App/containerApps/authConfigs@2025-01-01' = if (deployRuntime) {
   parent: app
   name: 'current'
   properties: {
-    platform: { enabled: true }
+    platform: { enabled: false }
     httpSettings: { requireHttps: true }
-    globalValidation: {
-      unauthenticatedClientAction: 'Return401'
-      excludedPaths: [
-        '/health'
-        '/ready'
-        '/api/assets/public/*'
-        '/api/assets/collections'
-        '/api/assets/collections/*/changes'
-        '/api/assets/collections/*/items/*'
-        '/api/assets/collections/*/items/*/content-ticket'
-        '/api/assets/collections/*/items/*/content'
-        '/api/assets/content'
-      ]
-    }
-    identityProviders: {
-      azureActiveDirectory: {
-        enabled: true
-        isAutoProvisioned: false
-        registration: {
-          clientId: workloadAuthClientId
-          openIdIssuer: workloadAuthIssuer
-        }
-        validation: {
-          allowedAudiences: [workloadAuthAudience]
-          defaultAuthorizationPolicy: {
-            allowedApplications: concat(
-              [lineAttachmentClientId],
-              lineAPIWorkloadAuthEnabled ? [lineAPIWorkloadClientId] : [],
-              extractorAuthEnabled ? [extractorClientId] : [],
-              watermarkWorkerAuthEnabled ? [watermarkWorkerClientId] : [],
-              accountWorkloadAuthEnabled ? [accountWorkloadClientId] : [],
-              gatewayWorkloadAuthEnabled ? [gatewayWorkloadClientId] : []
-            )
-            allowedPrincipals: {
-              identities: concat(
-                [lineAttachmentObjectId],
-                lineAPIWorkloadAuthEnabled ? [lineAPIWorkloadObjectId] : [],
-                extractorAuthEnabled ? [extractorObjectId] : [],
-                watermarkWorkerAuthEnabled ? [watermarkWorkerObjectId] : [],
-                accountWorkloadAuthEnabled ? [accountWorkloadObjectId] : [],
-                gatewayWorkloadAuthEnabled ? [gatewayWorkloadObjectId] : []
-              )
-            }
-          }
-        }
-      }
-    }
   }
 }
 

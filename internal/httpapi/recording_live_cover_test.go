@@ -12,7 +12,7 @@ import (
 )
 
 func TestLiveCoverRoutesFailClosed(t *testing.T) {
-	h := New(nil, nil, map[string]bool{"hhc-web-api": true, "account-api": true}, true, "", WorkloadAuthConfig{}, nil).Routes()
+	h := New(nil, nil, map[string]bool{"hhc-web-api": true, "account-api": true}, true, "", CallerConfig{}, nil).Routes()
 	for _, tc := range []struct {
 		method, path, caller string
 		want                 int
@@ -51,7 +51,7 @@ func TestLiveCoverPromotionEmptyChunkedBody(t *testing.T) {
 	for _, length := range []int64{0, -1} {
 		t.Run(fmt.Sprint(length), func(t *testing.T) {
 			probe := &promotionProbe{}
-			h := New(nil, nil, map[string]bool{"hhc-web-api": true}, true, "", WorkloadAuthConfig{}, nil).WithRecordingCovers(&coverProbe{}, &r2.Store{}).WithRecordingLiveCovers(probe)
+			h := New(nil, nil, map[string]bool{"hhc-web-api": true}, true, "", CallerConfig{}, nil).WithRecordingCovers(&coverProbe{}, &r2.Store{}).WithRecordingLiveCovers(probe)
 			r := httptest.NewRequest("POST", "/promote?recordingId=recording", nil)
 			r.Body = io.NopCloser(strings.NewReader(""))
 			r.ContentLength = length
@@ -70,7 +70,7 @@ func TestLiveCoverPromotionEmptyChunkedBody(t *testing.T) {
 func TestLiveCoverPromotionRejectsInvalidChunkedPayload(t *testing.T) {
 	for _, body := range []string{"{", `{"unknown":true}`, `{"targetCaptureId":"a"} {}`, strings.Repeat(" ", 2049)} {
 		probe := &promotionProbe{}
-		h := New(nil, nil, map[string]bool{"hhc-web-api": true}, true, "", WorkloadAuthConfig{}, nil).WithRecordingCovers(&coverProbe{}, &r2.Store{}).WithRecordingLiveCovers(probe)
+		h := New(nil, nil, map[string]bool{"hhc-web-api": true}, true, "", CallerConfig{}, nil).WithRecordingCovers(&coverProbe{}, &r2.Store{}).WithRecordingLiveCovers(probe)
 		r := httptest.NewRequest("POST", "/promote?recordingId=recording", strings.NewReader(body))
 		r.ContentLength = -1
 		r.Header.Set("X-Internal-Caller-App-Id", "hhc-web-api")

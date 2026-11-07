@@ -82,7 +82,7 @@ func TestPersonalRoutesRequireTrustedIdentity(t *testing.T) {
 		} {
 			t.Run(route.path+"/"+test.name, func(t *testing.T) {
 				repo := &personalRepository{}
-				handler := New(assets.NewService(repo, nil, "", time.Now), nil, nil, false, "token", WorkloadAuthConfig{ReaderCallerAppID: "api-gateway"}, nil).Routes()
+				handler := New(assets.NewService(repo, nil, "", time.Now), nil, nil, false, "token", CallerConfig{ReaderCallerAppID: "api-gateway"}, nil).Routes()
 				request := personalReaderRequest(route.method, route.path)
 				request.Body = io.NopCloser(strings.NewReader(route.body))
 				test.alter(request)
@@ -118,7 +118,7 @@ func TestPersonalMutationRejectsOwnerAndDistinguishesPendingScan(t *testing.T) {
 		{`{"operationId":"op","type":"create-folder","itemId":"node","name":"Folder"}`, assets.ErrConflict, 409, "AST_CONFLICT"},
 	} {
 		repo := &personalRepository{err: test.err}
-		handler := New(assets.NewService(repo, nil, "", time.Now), nil, nil, false, "token", WorkloadAuthConfig{ReaderCallerAppID: "api-gateway"}, nil).Routes()
+		handler := New(assets.NewService(repo, nil, "", time.Now), nil, nil, false, "token", CallerConfig{ReaderCallerAppID: "api-gateway"}, nil).Routes()
 		request := personalReaderRequest("POST", "/api/assets/personal-space/mutations")
 		request.Body = io.NopCloser(strings.NewReader(test.body))
 		response := httptest.NewRecorder()
@@ -134,7 +134,7 @@ func TestPersonalMutationRejectsOwnerAndDistinguishesPendingScan(t *testing.T) {
 
 func TestPersonalQuotaExceededResponse(t *testing.T) {
 	repo := &personalRepository{err: &assets.PersonalQuotaExceeded{UsedBytes: 90, QuotaBytes: 100, RequiredBytes: 20}}
-	handler := New(assets.NewService(repo, nil, "", time.Now), nil, nil, false, "token", WorkloadAuthConfig{ReaderCallerAppID: "api-gateway"}, nil).Routes()
+	handler := New(assets.NewService(repo, nil, "", time.Now), nil, nil, false, "token", CallerConfig{ReaderCallerAppID: "api-gateway"}, nil).Routes()
 	request := personalReaderRequest(http.MethodPost, "/api/assets/personal-space/mutations")
 	request.Body = io.NopCloser(strings.NewReader(`{"operationId":"op","type":"create-file","itemId":"node","name":"file","uploadId":"upload"}`))
 	response := httptest.NewRecorder()
@@ -146,7 +146,7 @@ func TestPersonalQuotaExceededResponse(t *testing.T) {
 
 func TestPersonalUsageAndPurgeRoutes(t *testing.T) {
 	repo := &personalRepository{usage: assets.PersonalUsage{UsedBytes: 25, QuotaBytes: 100}}
-	handler := New(assets.NewService(repo, nil, "", time.Now), nil, nil, false, "token", WorkloadAuthConfig{ReaderCallerAppID: "api-gateway"}, nil).Routes()
+	handler := New(assets.NewService(repo, nil, "", time.Now), nil, nil, false, "token", CallerConfig{ReaderCallerAppID: "api-gateway"}, nil).Routes()
 
 	usage := httptest.NewRecorder()
 	handler.ServeHTTP(usage, personalReaderRequest(http.MethodGet, "/api/assets/personal-space/usage"))
@@ -165,7 +165,7 @@ func TestPersonalUsageAndPurgeRoutes(t *testing.T) {
 
 func TestAdminPersonalQuotaRequiresUsersManage(t *testing.T) {
 	repo := &personalRepository{usage: assets.PersonalUsage{UsedBytes: 25, QuotaBytes: 100}}
-	handler := New(assets.NewService(repo, nil, "", time.Now), nil, nil, false, "token", WorkloadAuthConfig{ReaderCallerAppID: "api-gateway"}, nil).Routes()
+	handler := New(assets.NewService(repo, nil, "", time.Now), nil, nil, false, "token", CallerConfig{ReaderCallerAppID: "api-gateway"}, nil).Routes()
 	request := func(method, body, scopes string) *http.Request {
 		r := collectionReaderRequest(method, "/api/assets/admin/presenter-cloud/users/target/quota")
 		r.Header.Set("X-HHC-Scopes", scopes)
@@ -208,7 +208,7 @@ func TestAllPersonalRoutesDenyMissingPermission(t *testing.T) {
 		{"POST", "/api/assets/personal-space/uploads/upload/complete"}, {"GET", "/api/assets/personal-space/items/item/content"},
 	} {
 		t.Run(route.path, func(t *testing.T) {
-			handler := New(assets.NewService(&personalRepository{}, nil, "", time.Now), nil, nil, false, "token", WorkloadAuthConfig{ReaderCallerAppID: "api-gateway"}, nil).Routes()
+			handler := New(assets.NewService(&personalRepository{}, nil, "", time.Now), nil, nil, false, "token", CallerConfig{ReaderCallerAppID: "api-gateway"}, nil).Routes()
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, collectionReaderRequest(route.method, route.path))
 			if response.Code != http.StatusForbidden {

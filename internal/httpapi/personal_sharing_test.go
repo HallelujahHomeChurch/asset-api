@@ -54,7 +54,7 @@ func TestPersonalSharingRoutes(t *testing.T) {
 	}
 	for _, test := range tests {
 		repo := &personalRepository{}
-		handler := New(assets.NewService(repo, nil, "", time.Now), nil, nil, false, "token", WorkloadAuthConfig{ReaderCallerAppID: "api-gateway"}, nil).Routes()
+		handler := New(assets.NewService(repo, nil, "", time.Now), nil, nil, false, "token", CallerConfig{ReaderCallerAppID: "api-gateway"}, nil).Routes()
 		request := personalReaderRequest(test.method, test.path)
 		request.Body = io.NopCloser(strings.NewReader(test.body))
 		response := httptest.NewRecorder()
@@ -67,7 +67,7 @@ func TestPersonalSharingRoutes(t *testing.T) {
 
 func TestSharedFoldersExposeNoMutationRoutes(t *testing.T) {
 	repo := &personalRepository{}
-	handler := New(assets.NewService(repo, nil, "", time.Now), nil, nil, false, "token", WorkloadAuthConfig{ReaderCallerAppID: "api-gateway"}, nil).Routes()
+	handler := New(assets.NewService(repo, nil, "", time.Now), nil, nil, false, "token", CallerConfig{ReaderCallerAppID: "api-gateway"}, nil).Routes()
 	for _, path := range []string{"/api/assets/shared-folders/grant/items/item", "/api/assets/shared-folders/grant/items/item/content/upload"} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, personalReaderRequest(http.MethodPost, path))

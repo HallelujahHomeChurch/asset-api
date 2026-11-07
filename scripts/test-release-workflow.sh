@@ -79,7 +79,7 @@ GH
   export PATH="$fixture:$PATH" SOURCE_FIXTURE_BASE="$base"
   export GITHUB_SHA="$fixed" GITHUB_RUN_ID=456 GITHUB_REPOSITORY=HallelujahHomeChurch/asset-api GITHUB_EVENT_NAME=workflow_dispatch
   export GITHUB_OUTPUT="$fixture/output" GITHUB_ENV="$fixture/env"
-  export MEMBER_VIDEO_ENABLED=true EXTRACTOR_ROLE_APPROVED=false WATERMARK_ROLE_APPROVED=false
+  export MEMBER_VIDEO_ENABLED=true
   digest="sha256:$(printf '%064d' 1)"
   export RECOVERY_IMAGE_DIGESTS="$digest $digest $digest"
   RECOVERY_RUN=123:1 bash -eo pipefail -c "$source_step"
@@ -316,7 +316,7 @@ test "$(grep -c 'deployRetentionJob="$DEPLOY_RETENTION_JOB"' "$workflow")" = 2
 test "$(grep -c 'deployDerivativeJob=true' "$workflow")" = 2
 test "$(grep -c 'deployScanWorker=true' "$workflow")" = 2
 test "$(grep -c 'provisionScanWarmInfrastructure=false' "$workflow")" = 2
-grep -Fq 'ASSET_WORKLOAD_AUDIENCE LINE_ATTACHMENT_CLIENT_ID LINE_ATTACHMENT_OBJECT_ID; do' "$workflow"
+grep -Fq 'for name in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID; do' "$workflow"
 test "$(grep -c 'retentionScheduleEnabled="$RETENTION_SCHEDULE_ENABLED"' "$workflow")" = 2
 test "$(grep -c 'retentionApplyEnabled="$RETENTION_APPLY_ENABLED"' "$workflow")" = 2
 grep -Fq 'for name in RETENTION_SCHEDULE_ENABLED RETENTION_APPLY_ENABLED RECORDING_HLS_ENABLED RECORDING_SOURCE_ENABLED; do' "$workflow"
@@ -364,15 +364,11 @@ grep -q 'asset-derivative-identity' "$workflow"
 grep -q 'asset-derivative-poison' "$workflow"
 grep -q "roleDefinitionName=='Storage Queue Data Message Processor'" "$workflow"
 grep -q "roleDefinitionName=='Storage Blob Data Contributor'" "$workflow"
-grep -q 'ASSET_WORKLOAD_AUDIENCE' "$workflow"
-grep -q 'ASSET_WORKLOAD_CLIENT_ID' "$workflow"
-grep -Fqx "var workloadAuthIssuer = 'https://sts.windows.net/\${subscription().tenantId}/'" infra/main.bicep
-grep -Fqx "            { name: 'ASSET_WORKLOAD_ISSUER', value: workloadAuthEnabled ? workloadAuthIssuer : '' }" infra/main.bicep
-grep -Fqx '          openIdIssuer: workloadAuthIssuer' infra/main.bicep
-grep -q 'LINE_ATTACHMENT_CLIENT_ID' "$workflow"
-grep -q 'LINE_ATTACHMENT_OBJECT_ID' "$workflow"
-grep -q 'workloadAuthAudience="$ASSET_WORKLOAD_AUDIENCE"' "$workflow"
-grep -q 'workloadAuthClientId="$ASSET_WORKLOAD_CLIENT_ID"' "$workflow"
+# Retired service-auth configuration must not remain a deployment prerequisite.
+! grep -Eq 'ASSET_.*WORKLOAD_|ensure-workload-app-role|approve_.*app_role' "$workflow"
+grep -Fq "resource internalIngressAuth 'Microsoft.App/containerApps/authConfigs@2025-01-01' = if (deployRuntime)" infra/main.bicep
+grep -Fq 'platform: { enabled: false }' infra/main.bicep
+! grep -Eq 'workloadAuth|ASSET_.*WORKLOAD_' infra/main.bicep
 grep -q 'ASSET_READER_CALLER_APP_ID: api-gateway' "$workflow"
 test "$(grep -c 'readerCallerAppId="$ASSET_READER_CALLER_APP_ID"' "$workflow")" = 2
 test "$(grep -c 'daprEnabled="$ASSET_DAPR_ENABLED"' "$workflow")" = 2
@@ -389,25 +385,12 @@ if grep -q "ASSET_ALLOWED_CALLERS.*api-gateway" infra/main.bicep; then
   echo 'api-gateway must not be admitted to private asset routes' >&2
   exit 1
 fi
-for path in \
-  "'/api/assets/collections'" \
-  "'/api/assets/collections/*/changes'" \
-  "'/api/assets/collections/*/items/*'" \
-  "'/api/assets/collections/*/items/*/content-ticket'" \
-  "'/api/assets/collections/*/items/*/content'" \
-  "'/api/assets/content'"; do
-  grep -Fq "$path" infra/main.bicep
-done
-if grep -Fq "'/api/assets/collections/*'" infra/main.bicep; then
-  echo 'collection reader exclusion must not cover the whole prefix' >&2
-  exit 1
-fi
+! grep -Fq 'excludedPaths:' infra/main.bicep
 grep -q 'az deployment group what-if' "$workflow"
 grep -q './scripts/check-what-if.sh what-if.json' "$workflow"
 grep -q 'manageSharedInfrastructure=false' "$workflow"
 grep -q 'exposedPort: 0' infra/main.bicep
 grep -q 'latestRevision: true' infra/main.bicep
-grep -q 'isAutoProvisioned: false' infra/main.bicep
 grep -q 'az containerapp job start' "$workflow"
 grep -q 'DERIVATIVE_JOB_NAME: asset-derivative' "$workflow"
 grep -q 'SCAN_WORKER_APP_NAME: asset-scan-worker' "$workflow"
@@ -622,30 +605,6 @@ migration_line="$(grep -n -- '- name: Run migrations' "$workflow" | cut -d: -f1)
 deploy_line="$(grep -n -- '- name: Deploy API' "$workflow" | cut -d: -f1)"
 test "$migration_line" -lt "$deploy_line"
 test -f internal/migrations/sql/014_asset_derivative_outbox.sql
-grep -q 'ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID' "$workflow"
-grep -q 'ASSET_EXTRACTOR_WORKLOAD_OBJECT_ID' "$workflow"
-grep -Eq 'EXTRACTOR_ROLE_APPROVED:.*github.event_name.*workflow_dispatch.*inputs.approve_extractor_app_role' "$workflow"
-grep -Fq 'bash scripts/ensure-workload-app-role.sh check' "$workflow"
-grep -Fq 'bash scripts/ensure-workload-app-role.sh apply' "$workflow"
-for binding in 'lineAttachmentClientId' 'lineAttachmentObjectId' \
-  'lineAPIWorkloadAuthEnabled ? [lineAPIWorkloadClientId] : []' 'lineAPIWorkloadAuthEnabled ? [lineAPIWorkloadObjectId] : []' \
-  'extractorAuthEnabled ? [extractorClientId] : []' 'extractorAuthEnabled ? [extractorObjectId] : []' \
-  'watermarkWorkerAuthEnabled ? [watermarkWorkerClientId] : []' 'watermarkWorkerAuthEnabled ? [watermarkWorkerObjectId] : []' \
-  'accountWorkloadAuthEnabled ? [accountWorkloadClientId] : []' 'accountWorkloadAuthEnabled ? [accountWorkloadObjectId] : []' \
-  'gatewayWorkloadAuthEnabled ? [gatewayWorkloadClientId] : []' 'gatewayWorkloadAuthEnabled ? [gatewayWorkloadObjectId] : []'; do
-  sed -n '/defaultAuthorizationPolicy: {/,/^          }/p' infra/main.bicep | grep -Fq "$binding"
-done
-! sed -n '/excludedPaths: \[/,/^      ]/p' infra/main.bicep | grep -Fq '/_gateway'
-for subject in account gateway line-api; do
-  grep -Fq "ROLE_SUBJECT=$subject bash scripts/ensure-workload-app-role.sh check" "$workflow"
-done
-# W3: the watermark worker identity is wired end to end and approved separately.
-grep -q 'ASSET_WATERMARK_WORKLOAD_CLIENT_ID' "$workflow"
-grep -q 'ASSET_WATERMARK_WORKLOAD_OBJECT_ID' "$workflow"
-[ "$(grep -c 'watermarkWorkerClientId="$ASSET_WATERMARK_WORKLOAD_CLIENT_ID" watermarkWorkerObjectId="$ASSET_WATERMARK_WORKLOAD_OBJECT_ID"' "$workflow")" = 2 ]
-grep -Fq "WATERMARK_ROLE_APPROVED: \${{ github.event_name == 'workflow_dispatch' && inputs.approve_watermark_app_role && 'true' || 'false' }}" "$workflow"
-grep -Fq "{ name: 'ASSET_WATERMARK_WORKLOAD_CLIENT_ID', value: watermarkWorkerAuthEnabled ? watermarkWorkerClientId : '' }" infra/main.bicep
-
 if grep -Eiq 'migrate[[:space:]_-]*down|migration[[:space:]_-]*rollback' "$workflow"; then
   echo 'release workflow must not roll back database migrations automatically' >&2
   exit 1

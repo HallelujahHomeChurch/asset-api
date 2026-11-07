@@ -24,7 +24,7 @@ func TestPersonalHTTPTransferAndRange(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	handler := httpapi.New(assets.NewService(store, blobs, "", func() time.Time { return now }), db, nil, false, "token", httpapi.WorkloadAuthConfig{ReaderCallerAppID: "api-gateway"}, nil).Routes()
+	handler := httpapi.New(assets.NewService(store, blobs, "", func() time.Time { return now }), db, nil, false, "token", httpapi.CallerConfig{ReaderCallerAppID: "api-gateway"}, nil).Routes()
 	request := func(method, path, owner string, body []byte, headers map[string]string) *httptest.ResponseRecorder {
 		t.Helper()
 		r := httptest.NewRequest(method, path, bytes.NewReader(body))

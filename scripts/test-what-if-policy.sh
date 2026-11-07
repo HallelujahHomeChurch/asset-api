@@ -124,3 +124,38 @@ if ./scripts/check-what-if.sh "$tmp/migration-create.json" 2>/dev/null; then
   echo "migration job creation was not rejected" >&2
   exit 1
 fi
+
+# Removing only retired service-auth settings is safe; keep every other deletion guard.
+python3 - "$tmp" <<'PY'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+resource = '/subscriptions/test/resourceGroups/alive/providers/Microsoft.App/containerApps/asset-api'
+auth = {'resourceId': resource + '/authConfigs/current', 'changeType':'Modify',
+        'after': {'properties': {'platform': {'enabled': False}}},
+        'delta':[{'path':'properties.identityProviders','propertyChangeType':'Delete'},
+                 {'path':'properties.globalValidation','propertyChangeType':'Delete'},
+                 {'path':'properties.identityProviders.azureActiveDirectory','propertyChangeType':'Delete'},
+                 {'path':'properties.globalValidation.excludedPaths','propertyChangeType':'Delete'}]}
+(root/'auth-disabled.json').write_text(json.dumps({'changes':[auth]}))
+auth['after']['properties']['platform']['enabled'] = True
+(root/'auth-still-enabled.json').write_text(json.dumps({'changes':[auth]}))
+for name in ['ASSET_WORKLOAD_AUDIENCE','ASSET_LINE_WORKLOAD_OBJECT_ID','DATABASE_URL','AUDIT_TOKEN','ASSET_UNKNOWN_WORKLOAD_CLIENT_ID']:
+    entry = {'name':name,'value':'fixture'}
+    change = {'resourceId':resource,'changeType':'Modify',
+              'before':{'properties':{'template':{'containers':[{'name':'asset-api','env':[entry]}]}}},
+              'after':{'properties':{'template':{'containers':[{'name':'asset-api','env':[]}]}}},
+              'delta':[{'path':'properties.template.containers','propertyChangeType':'Array','children':[
+                  {'path':'0','children':[{'path':'env','propertyChangeType':'Array','children':[
+                      {'path':'0','propertyChangeType':'Delete','before':entry}]}]}]}]}
+    (root/(name+'.json')).write_text(json.dumps({'changes':[change]}))
+PY
+./scripts/check-what-if.sh "$tmp/auth-disabled.json"
+for setting in ASSET_WORKLOAD_AUDIENCE ASSET_LINE_WORKLOAD_OBJECT_ID; do
+  ./scripts/check-what-if.sh "$tmp/$setting.json"
+done
+for setting in auth-still-enabled DATABASE_URL AUDIT_TOKEN ASSET_UNKNOWN_WORKLOAD_CLIENT_ID; do
+  if ./scripts/check-what-if.sh "$tmp/$setting.json"; then
+    echo "unexpected auth retirement deletion accepted: $setting" >&2
+    exit 1
+  fi
+done

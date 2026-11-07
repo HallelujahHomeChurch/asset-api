@@ -55,7 +55,7 @@ func TestDeletedBroadcastRevocationConvergesThroughCMSRoute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := httpapi.New(nil, nil, map[string]bool{"hhc-web-api": true, "account-api": true}, true, "", httpapi.WorkloadAuthConfig{}, nil).
+	h := httpapi.New(nil, nil, map[string]bool{"hhc-web-api": true, "account-api": true}, true, "", httpapi.CallerConfig{}, nil).
 		WithRecordingCaptures(assets.NewRecordingCaptureService(store, nil, time.Now)).WithRecordingBroadcasts(store).Routes()
 	for _, tc := range []struct {
 		caller string

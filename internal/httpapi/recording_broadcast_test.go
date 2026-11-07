@@ -28,7 +28,7 @@ func (s *httpBroadcastRepo) GetBroadcastProjection(context.Context, string) (ass
 }
 func TestBroadcastRoutesAreCMSOnlyAndSchemaStrict(t *testing.T) {
 	repo := &httpBroadcastRepo{}
-	h := New(nil, nil, map[string]bool{"hhc-web-api": true, "account-api": true}, true, "", WorkloadAuthConfig{}, nil).WithRecordingCaptures(assets.NewRecordingCaptureService(&httpCaptureRepo{}, httpPackageObjects{}, time.Now)).WithRecordingBroadcasts(repo).Routes()
+	h := New(nil, nil, map[string]bool{"hhc-web-api": true, "account-api": true}, true, "", CallerConfig{}, nil).WithRecordingCaptures(assets.NewRecordingCaptureService(&httpCaptureRepo{}, httpPackageObjects{}, time.Now)).WithRecordingBroadcasts(repo).Routes()
 	good := `{"recordingId":"11111111-1111-4111-8111-111111111111","epoch":1,"rangeRevision":1,"startSequence":null,"endSequenceExclusive":null,"revoked":false}`
 	for _, tc := range []struct {
 		method, path, caller, body string

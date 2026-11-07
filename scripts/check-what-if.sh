@@ -5,8 +5,8 @@ file="${1:?what-if JSON is required}"
 
 jq -e '
   # ARM compares the env array by position. Preserve the deletion guard unless
-  # the exact original DB entry is present once under the same name elsewhere.
-  def ignore_reordered_asset_db_env:
+  # the exact original entry is present once under the same name elsewhere.
+  def ignore_reordered_asset_env:
     if .changeType == "Modify" and (.resourceId | endswith("/Microsoft.App/containerApps/asset-api"))
       and ([.before.properties.template.containers[]?.name] == ["asset-api"])
       and ([.after.properties.template.containers[]?.name] == ["asset-api"]) then
@@ -18,17 +18,36 @@ jq -e '
         | .children[]? | select(.path | test("^(0|[1-9][0-9]*)$"))) |= (
           (.path | tonumber) as $index
           | $before[$index] as $entry
-          | if (($entry.name == "DATABASE_URL" and ($entry.secretRef | type) == "string")
-                or ($entry.name == "DB_MAX_OPEN_CONNS" and ($entry.value | type) == "string"))
+          | if (($entry.name | type) == "string")
+              and ((($entry.secretRef | type) == "string") or (($entry.value | type) == "string"))
               and $after[$index].name != $entry.name
               and [$before[] | select(.name == $entry.name)] == [$entry]
               and [$after[] | select(.name == $entry.name)] == [$entry] then
-              ($entry | if .name == "DATABASE_URL" then "secretRef" else "value" end) as $field
+              ($entry | if has("secretRef") then "secretRef" else "value" end) as $field
               | .children |= map(select(.propertyChangeType != "Delete" or .path != $field))
             else . end)
     else . end;
 
-  .changes |= map(ignore_reordered_asset_db_env) |
+  # Only remove the retired service-auth environment values from this app.
+  def ignore_retired_asset_auth_env:
+    if .changeType == "Modify" and (.resourceId | endswith("/Microsoft.App/containerApps/asset-api"))
+      and ([.before.properties.template.containers[]?.name] == ["asset-api"])
+      and ([.after.properties.template.containers[]?.name] == ["asset-api"]) then
+      .before.properties.template.containers[0].env as $before
+      | .after.properties.template.containers[0].env as $after
+      | (.delta[] | select(.path == "properties.template.containers" and .propertyChangeType == "Array")
+        | .children[]? | select(.path == "0")
+        | .children[]? | select(.path == "env" and .propertyChangeType == "Array")
+        | .children[]? | select(.path | test("^(0|[1-9][0-9]*)$"))) |= (
+          $before[(.path | tonumber)] as $entry
+          | if (($entry.name | type) == "string") and ($entry.name | test("^ASSET_(WORKLOAD_(TENANT_ID|ISSUER|AUDIENCE|REQUIRED_ROLE)|(LINE|LINE_API|EXTRACTOR|WATERMARK|ACCOUNT|GATEWAY)_WORKLOAD_(CLIENT_ID|OBJECT_ID))$"))
+              and [$after[] | select(.name == $entry.name)] == [] then
+              # Keep non-deletion changes visible to the rest of the policy.
+              walk(if type == "object" and .propertyChangeType? == "Delete" then .propertyChangeType = "NoChange" else . end)
+            else . end)
+    else . end;
+
+  .changes |= map(ignore_reordered_asset_env | ignore_retired_asset_auth_env) |
   ([.changes[] | select(.changeType == "Delete" or .changeType == "Unsupported")] | length == 0)
   and
   ([.changes[]
@@ -38,7 +57,10 @@ jq -e '
     | objects
     | select(.propertyChangeType? == "Delete")
       | select(
-        ((.path == "properties.runningStatus" or .path == "properties.template.revisionSuffix")
+        ((.path | test("^properties\\.(identityProviders|globalValidation)(\\.|$)"))
+          and ($resourceId | endswith("/Microsoft.App/containerApps/asset-api/authConfigs/current"))
+          and ($change.after.properties.platform.enabled == false))
+        or ((.path == "properties.runningStatus" or .path == "properties.template.revisionSuffix")
           and ($resourceId | contains("/Microsoft.App/containerApps/")))
         or ((.path == "properties.configuration.eventTriggerConfig.parallelism"
             or .path == "properties.configuration.eventTriggerConfig.replicaCompletionCount"

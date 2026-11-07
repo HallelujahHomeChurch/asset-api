@@ -48,10 +48,9 @@ func TestDerivedBulletinWorkerHTTPCompletionUsesRealByteAndDatabasePath(t *testi
 	sum := sha256.Sum256(payload)
 	body, _ := json.Marshal(assets.CompleteDerivedBulletinInput{CompleteUploadInput: assets.CompleteUploadInput{SizeBytes: int64(len(payload)), ChecksumSHA256: hex.EncodeToString(sum[:]), MIMEType: "application/pdf"}, SourceAssetID: sourceID, SourceSHA256: sourceHash})
 	r := httptest.NewRequest(http.MethodPost, "/priv/assets/bulletin-derivatives/"+created.Asset.ID+"/complete", bytes.NewReader(body))
-	r.Header.Set("Dapr-Caller-App-Id", "hhc-web-bulletin-worker")
-	r.Header.Set("dapr-api-token", "synthetic-app-token")
+	r.Header.Set("X-HHC-Caller-App-Id", "hhc-web-bulletin-worker")
 	w := httptest.NewRecorder()
-	httpapi.New(service, db, map[string]bool{"hhc-web-api": true}, false, "synthetic-app-token", httpapi.WorkloadAuthConfig{}, nil).Routes().ServeHTTP(w, r)
+	httpapi.New(service, db, map[string]bool{"hhc-web-api": true}, false, "synthetic-app-token", httpapi.CallerConfig{}, nil).Routes().ServeHTTP(w, r)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
