@@ -20,6 +20,12 @@ optional exact `ASSET_EXTRACTOR_WORKLOAD_CLIENT_ID` / `OBJECT_ID` pair. It maps
 to the existing `hhc-web-api` owner, not a new asset owner. Both identifiers
 must be configured together; leaving both empty preserves existing behavior.
 
+Internal HTTPS callers can now send one exact `X-HHC-Caller-App-Id` service
+value. Existing Entra authentication remains enabled for the staged migration;
+callers must keep their bearer token until the separate producer cutover. The
+[ordered rollout](docs/workload-auth.md#ordered-internal-caller-rollout) prevents
+app-level authentication changes from disrupting older replicas.
+
 ## CI test scheduling
 
 `python3 scripts/test-go-lanes.py` runs all packages discovered by `go list ./...`

@@ -336,6 +336,8 @@ func (h *Handler) collectionTicket(next http.Handler) http.Handler {
 // authenticatedService resolves the private caller's own service identity.
 //
 // Trust order (see docs/workload-auth.md):
+//  0. Internal ACA ingress trusts the exact service header. Invalid or ambiguous
+//     headers fail closed; they never fall back to a legacy identity.
 //  1. Dapr: a valid app-channel token proves the request came through the
 //     local sidecar, which sets Dapr-Caller-App-Id. Dapr reaches the app over
 //     localhost and bypasses Easy Auth, so any X-MS-CLIENT-PRINCIPAL on such a
@@ -346,6 +348,9 @@ func (h *Handler) collectionTicket(next http.Handler) http.Handler {
 //     Dapr-Caller-App-Id header without a valid token is caller-controlled
 //     and ignored (existing contract, kept by owner decision 2026-10-31).
 func (h *Handler) authenticatedService(r *http.Request) string {
+	if _, present := r.Header[http.CanonicalHeaderKey("X-HHC-Caller-App-Id")]; present {
+		return h.internalCaller(r)
+	}
 	if h.allowDevCallerHeader {
 		return strings.TrimSpace(r.Header.Get("X-Internal-Caller-App-Id"))
 	}
@@ -353,6 +358,22 @@ func (h *Handler) authenticatedService(r *http.Request) string {
 		return caller
 	}
 	return h.workloadPrincipal(r)
+}
+
+// ACA terminates HTTPS before forwarding to the app. This identity relies on
+// internal-only ingress and trusted workloads in the same environment.
+func (h *Handler) internalCaller(r *http.Request) string {
+	values := r.Header.Values("X-HHC-Caller-App-Id")
+	if len(values) != 1 || values[0] == "" || strings.TrimSpace(values[0]) != values[0] ||
+		len(r.Header.Values("Dapr-Caller-App-Id")) != 0 || len(r.Header.Values("dapr-api-token")) != 0 {
+		return ""
+	}
+	caller := values[0]
+	if h.allowedCallers[caller] || caller == h.workloadAuth.ReaderCallerAppID ||
+		(caller == "hhc-web-bulletin-worker" && h.allowedCallers["hhc-web-api"]) {
+		return caller
+	}
+	return ""
 }
 
 func (h *Handler) workloadPrincipal(r *http.Request) string {
@@ -368,7 +389,11 @@ type gatewayWorkloadKey struct{}
 func (h *Handler) gatewayWorkload(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reader := h.workloadAuth.ReaderCallerAppID
-		if reader == "" || h.workloadPrincipal(r) != reader || len(r.Header.Values("Dapr-Caller-App-Id")) != 0 || len(r.Header.Values("dapr-api-token")) != 0 {
+		caller := h.workloadPrincipal(r)
+		if _, present := r.Header[http.CanonicalHeaderKey("X-HHC-Caller-App-Id")]; present {
+			caller = h.internalCaller(r)
+		}
+		if reader == "" || caller != reader || len(r.Header.Values("Dapr-Caller-App-Id")) != 0 || len(r.Header.Values("dapr-api-token")) != 0 {
 			writeError(w, http.StatusForbidden, "AST_FORBIDDEN", "caller is not allowed")
 			return
 		}
