@@ -2,7 +2,7 @@
 set -euo pipefail
 # Fixed three-image handoff; Python parses provenance and archives without executing their contents.
 python3 - "$@" <<'PY'
-import gzip, hashlib, json, os, pathlib, re, shutil, subprocess, sys, tarfile
+import gzip, hashlib, json, os, pathlib, re, shutil, subprocess, sys, tarfile, tempfile
 
 ROLES = ('api', 'scan', 'recording')
 FILES = {'IMAGE_PROVENANCE.json', 'images.tar.gz', 'SHA256SUMS'}
@@ -33,7 +33,7 @@ def inspect(ref):
     return read_json(subprocess.check_output(['docker', 'image', 'inspect', ref]))[0]
 
 def archive_configs(path, images):
-    with tarfile.open(path, 'r:gz') as archive:
+    with tarfile.open(path, 'r:*') as archive:
         members = {}
         for member in archive.getmembers():
             parts = pathlib.PurePosixPath(member.name).parts
@@ -124,12 +124,22 @@ try:
         require(len({image['ref'] for image in images}) == 3, 'duplicate image refs')
         require(archive_configs(directory / 'images.tar.gz', images) == [image['config_id'] for image in images], 'archive config identity mismatch')
         subprocess.run(['docker', 'load', '--input', str(directory / 'images.tar.gz')], check=True)
+        loaded_images = []
         for image in images:
             loaded = inspect(image['ref'])
-            require(loaded['Id'] == image['image_id'] and loaded['Os'] == 'linux' and loaded['Architecture'] == 'amd64', 'loaded image identity or platform mismatch')
+            require(loaded['Os'] == 'linux' and loaded['Architecture'] == 'amd64', 'loaded image platform mismatch')
+            loaded_images.append({**image, 'image_id': loaded['Id']})
+        # Docker stores can expose OCI index/manifest or config IDs for identical content.
+        # Re-export all three loaded tags and prove their graphs reach the verified configs.
+        with tempfile.TemporaryDirectory() as temporary:
+            exported = pathlib.Path(temporary) / 'loaded.tar'
+            subprocess.run(['docker', 'save', '--output', str(exported), *[image['ref'] for image in images]], check=True)
+            require(archive_configs(exported, loaded_images) == [image['config_id'] for image in images], 'loaded image config mismatch')
+        images = loaded_images
         with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
             for image in images:
                 output.write(image['role'] + '_image_id=' + image['image_id'] + '\n')
+                output.write(image['role'] + '_config_id=' + image['config_id'] + '\n')
 except (ValueError, KeyError, TypeError, OSError, tarfile.TarError, subprocess.SubprocessError) as error:
     sys.exit('Image artifact rejected: ' + str(error))
 PY

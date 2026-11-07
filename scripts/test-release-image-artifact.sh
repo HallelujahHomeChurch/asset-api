@@ -26,7 +26,7 @@ with tempfile.TemporaryDirectory() as temp:
         watched = root / 'bin'
         watched.mkdir()
         calls = root / 'docker-calls'
-        (watched / 'docker').write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$DOCKER_CALLS"\nexec "$REAL_DOCKER" "$@"\n')
+        (watched / 'docker').write_text("#!/usr/bin/env python3\nimport json, os, subprocess, sys\nargs = sys.argv[1:]\nwith open(os.environ['DOCKER_CALLS'], 'a') as stream: stream.write(' '.join(args) + '\\n')\nif args[:2] == ['image', 'inspect'] and os.environ.get('LOADED_IDS'):\n    details = json.loads(subprocess.check_output([os.environ['REAL_DOCKER'], *args]))\n    details[0]['Id'] = json.loads(os.environ['LOADED_IDS'])[args[2]]\n    details[0]['Architecture'] = os.environ.get('LOADED_ARCH', details[0]['Architecture'])\n    print(json.dumps(details))\nelse:\n    sys.exit(subprocess.call([os.environ['REAL_DOCKER'], *args]))\n")
         (watched / 'docker').chmod(0o755)
         env = dict(os.environ, PATH=str(watched) + os.pathsep + os.environ['PATH'], DOCKER_CALLS=str(calls), REAL_DOCKER=real_docker)
         output = root / 'outputs'
@@ -103,10 +103,26 @@ with tempfile.TemporaryDirectory() as temp:
         output.write_text('')
         subprocess.run(['bash', str(helper), 'load', str(good), commit], env=env, check=True)
         actual = dict(line.split('=', 1) for line in output.read_text().splitlines())
-        assert actual == dict(zip((role + '_image_id' for role in roles), ids)), (actual, ids)
+        records = json.loads((good / 'IMAGE_PROVENANCE.json').read_text())['images']
+        expected = dict(zip((role + '_image_id' for role in roles), ids))
+        expected.update({record['role'] + '_config_id': record['config_id'] for record in records})
+        assert actual == expected, (actual, expected)
         for image_id in ids:
             assert subprocess.check_output([real_docker, 'image', 'inspect', '--format', '{{.Os}}/{{.Architecture}}', image_id], text=True).strip() == 'linux/amd64'
         print('PASS cold Docker round-trip and exact producer identities')
+        records = json.loads((good / 'IMAGE_PROVENANCE.json').read_text())['images']
+        config_ids = {record['ref']: record['config_id'] for record in records}
+        classic = dict(env, LOADED_IDS=json.dumps(config_ids))
+        output.write_text('')
+        subprocess.run(['bash', str(helper), 'load', str(good), commit], env=classic, check=True)
+        assert dict(line.split('=', 1) for line in output.read_text().splitlines()) == {record['role'] + suffix: record['config_id'] for record in records for suffix in ('_image_id', '_config_id')}
+        wrong_ids = {**config_ids, refs[0]: 'sha256:' + '0' * 64}
+        for override in [dict(LOADED_IDS=json.dumps(wrong_ids)), dict(LOADED_IDS=json.dumps(config_ids), LOADED_ARCH='arm64')]:
+            output.write_text('')
+            result = subprocess.run(['bash', str(helper), 'load', str(good), commit], env=dict(env, **override), capture_output=True)
+            assert result.returncode != 0 and not output.read_text(), 'loaded identity/platform mismatch accepted'
+        print('PASS OCI-to-classic identities and reject unrelated loaded identity/platform')
+        output.write_text(''.join(key + '=' + value + '\n' for key, value in expected.items()))
         if len(sys.argv) == 2:
             destination = pathlib.Path(sys.argv[1])
             shutil.copytree(good, destination)
