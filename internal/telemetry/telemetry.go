@@ -30,8 +30,8 @@ func Configure(ctx context.Context) func(context.Context) error {
 		return func(context.Context) error { return nil }
 	}
 	// Export failures can contain endpoint credentials; never log the original error.
-	var exportWarning sync.Once
-	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(error) { exportWarning.Do(func() { slog.Warn("trace export failed") }) }))
+	var failures exportErrors
+	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(error) { failures.record(time.Now()) }))
 	initCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	exporter, err := otlptracegrpc.New(initCtx)
@@ -53,10 +53,10 @@ func Configure(ctx context.Context) func(context.Context) error {
 	return provider.Shutdown
 }
 
-// shortcut: caller-selected trace IDs can force sampling; platform owner reviews quotas in the next cost phase.
+// Private ingress trusts the edge sampling decision; only roots use the local ratio.
 func traceSampler() sdktrace.Sampler {
 	root := sdktrace.TraceIDRatioBased(sampleRatio())
-	return sdktrace.ParentBased(root, sdktrace.WithRemoteParentSampled(root))
+	return sdktrace.ParentBased(root)
 }
 
 func sampleRatio() float64 {
@@ -86,7 +86,16 @@ func Server(next http.Handler) http.Handler {
 		}
 		ctx, span := otel.Tracer("asset-api/http").Start(ctx, "asset.http", trace.WithSpanKind(trace.SpanKindServer), trace.WithAttributes(attribute.String("http.request.method", method(r.Method))))
 		defer span.End()
+		started := time.Now()
+		finished := false
+		defer func() {
+			if !finished {
+				RecordOutcome(ctx, "server", 0, time.Since(started), true)
+			}
+		}()
 		metrics := httpsnoop.CaptureMetrics(next, w, r.WithContext(ctx))
+		finished = true
+		RecordOutcome(ctx, "server", metrics.Code, metrics.Duration, false)
 		span.SetAttributes(attribute.Int("http.response.status_code", metrics.Code))
 		if metrics.Code >= 500 {
 			span.SetStatus(codes.Error, "")
@@ -123,7 +132,16 @@ func (t AuditTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	if base == nil {
 		base = http.DefaultTransport
 	}
+	started := time.Now()
 	response, err := base.RoundTrip(request)
+	code := 0
+	if response != nil {
+		code = response.StatusCode
+	}
+	RecordOutcome(ctx, "client_headers", code, time.Since(started), err != nil)
+	if response != nil && response.Body != nil && response.Body != http.NoBody {
+		response.Body = &diagnosticBody{ReadCloser: response.Body, ctx: ctx, started: started}
+	}
 	if err != nil {
 		span.SetStatus(codes.Error, "")
 		span.SetAttributes(attribute.String("error.type", "transport_error"))
