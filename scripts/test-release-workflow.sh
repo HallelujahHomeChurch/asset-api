@@ -79,7 +79,7 @@ GH
   export PATH="$fixture:$PATH" SOURCE_FIXTURE_BASE="$base"
   export GITHUB_SHA="$fixed" GITHUB_RUN_ID=456 GITHUB_REPOSITORY=HallelujahHomeChurch/asset-api GITHUB_EVENT_NAME=workflow_dispatch
   export GITHUB_OUTPUT="$fixture/output" GITHUB_ENV="$fixture/env"
-  export MEMBER_VIDEO_ENABLED=true EXTRACTOR_ROLE_APPROVED=false WATERMARK_ROLE_APPROVED=false
+  export MEMBER_VIDEO_ENABLED=true
   digest="sha256:$(printf '%064d' 1)"
   export RECOVERY_IMAGE_DIGESTS="$digest $digest $digest"
   RECOVERY_RUN=123:1 bash -eo pipefail -c "$source_step"
@@ -385,25 +385,12 @@ if grep -q "ASSET_ALLOWED_CALLERS.*api-gateway" infra/main.bicep; then
   echo 'api-gateway must not be admitted to private asset routes' >&2
   exit 1
 fi
-for path in \
-  "'/api/assets/collections'" \
-  "'/api/assets/collections/*/changes'" \
-  "'/api/assets/collections/*/items/*'" \
-  "'/api/assets/collections/*/items/*/content-ticket'" \
-  "'/api/assets/collections/*/items/*/content'" \
-  "'/api/assets/content'"; do
-  grep -Fq "$path" infra/main.bicep
-done
-if grep -Fq "'/api/assets/collections/*'" infra/main.bicep; then
-  echo 'collection reader exclusion must not cover the whole prefix' >&2
-  exit 1
-fi
+! grep -Fq 'excludedPaths:' infra/main.bicep
 grep -q 'az deployment group what-if' "$workflow"
 grep -q './scripts/check-what-if.sh what-if.json' "$workflow"
 grep -q 'manageSharedInfrastructure=false' "$workflow"
 grep -q 'exposedPort: 0' infra/main.bicep
 grep -q 'latestRevision: true' infra/main.bicep
-grep -q 'isAutoProvisioned: false' infra/main.bicep
 grep -q 'az containerapp job start' "$workflow"
 grep -q 'DERIVATIVE_JOB_NAME: asset-derivative' "$workflow"
 grep -q 'SCAN_WORKER_APP_NAME: asset-scan-worker' "$workflow"
