@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"hhc/asset-api/internal/config"
+	"hhc/asset-api/internal/jobidentity"
 	"hhc/asset-api/internal/logging"
 	"hhc/asset-api/internal/postgres"
 	"hhc/asset-api/internal/recordingprocessing"
@@ -86,6 +87,9 @@ func run(ctx context.Context) (result error) {
 	}
 	defer db.Close()
 	db.SetMaxOpenConns(3)
+	if err := jobidentity.Check(ctx, db, "asset_jobs", 26); err != nil {
+		return err
+	}
 	// Observability must not prevent cleanup or processing on a transient query
 	// failure. No actor, filename, URL, credential or object key enters this log.
 	if health, err := postgres.RecordingHealth(ctx, db); err != nil {

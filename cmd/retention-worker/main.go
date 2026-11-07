@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"hhc/asset-api/internal/jobidentity"
 	"hhc/asset-api/internal/logging"
 	"hhc/asset-api/internal/postgres"
 	"hhc/asset-api/internal/retention"
@@ -60,6 +61,9 @@ func run(ctx context.Context) (runErr error) {
 	defer db.Close()
 	db.SetMaxOpenConns(2)
 	db.SetMaxIdleConns(1)
+	if err := jobidentity.Check(ctx, db, "asset_jobs", 26); err != nil {
+		return err
+	}
 
 	startedAt := time.Now().UTC()
 	result, sweepErr := retention.NewWorker(postgres.New(db), apply).SweepExpiredCollectionItems(ctx, startedAt, retention.BatchSize)
