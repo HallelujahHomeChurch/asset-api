@@ -700,10 +700,7 @@ jobs:
           if [[ "$MEMBER_VIDEO_ENABLED" == true && "$RECORDING_EVENTS_PROVISIONED" == true ]]; then
             python3 scripts/recording-event-topology.py pause "$RUNNER_TEMP/recording-topology.json"
           fi
-          az containerapp revision copy -g "$RESOURCE_GROUP" -n "$API_APP_NAME" \
-            --from-revision "$PREVIOUS_READY_REVISION" --image "$PREVIOUS_IMAGE_REF" \
-            --revision-suffix "rollback-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
-            --only-show-errors --output none
+          python3 scripts/restore-runtime-template.py "$API_APP_NAME" "$PREVIOUS_READY_REVISION" "$PREVIOUS_IMAGE_REF"
           for attempt in {1..60}; do
             latest="$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_APP_NAME" --query properties.latestRevisionName -o tsv --only-show-errors)"
             ready="$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_APP_NAME" --query properties.latestReadyRevisionName -o tsv --only-show-errors)"

@@ -44,6 +44,7 @@ jobs:
         run: |
           python3 .github/scripts/test-ci-agent-docs.py
           python3 scripts/test-runtime-env.py
+          python3 scripts/test-restore-runtime-template.py
 
   verify:
     needs: agent_docs

@@ -1,3 +1,4 @@
+import test_no_cloud  # Block real Azure in every child process.
 """Offline coverage for config routing, env ownership and same-image deployment."""
 import copy
 import importlib.util
@@ -211,7 +212,7 @@ class RuntimeEnvironmentTests(unittest.TestCase):
         }[repo]
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            files = ['.github/scripts/ci-agent-docs.py', '.github/scripts/ci-runtime-env.py', workflow_path]
+            files = ['.github/scripts/ci-agent-docs.py', '.github/scripts/ci-runtime-env.py', 'scripts/runtime_env.py', workflow_path]
             for name in files:
                 destination = root / name
                 destination.parent.mkdir(parents=True, exist_ok=True)
@@ -222,16 +223,29 @@ class RuntimeEnvironmentTests(unittest.TestCase):
             def git(*args):
                 return subprocess.check_output(['git', *args], cwd=root, stderr=subprocess.DEVNULL, text=True).strip()
             git('init'); git('config', 'user.name', 'Fixture'); git('config', 'user.email', 'fixture@example.invalid')
+            test_file = root / test_path
+            test_file.parent.mkdir(parents=True, exist_ok=True)
+            test_file.write_text('#!/bin/sh\n')
+            test_file.chmod(0o755)
             git('add', '.'); git('commit', '-qm', 'baseline'); base = git('rev-parse', 'HEAD')
-            for path, expected in zip([None, 'README.md', test_path, workflow_path, 'internal/feature.go'], fast):
+            cases = [(path, expected, 'modify') for path, expected in zip([None, 'README.md', test_path, workflow_path, 'internal/feature.go'], fast)]
+            cases += [(test_path, fast[2], 'delete'), (test_path, fast[2], 'add')]
+            for path, expected, action in cases:
                 git('reset', '--hard', base); git('clean', '-fd')
+                case_base = base
+                if action == 'add':
+                    git('rm', test_path); git('commit', '-qm', 'without companion'); case_base = git('rev-parse', 'HEAD')
                 manifest.write_text(json.dumps(self.manifest(target, {'POOL': {'value': '20'}})))
                 if path:
                     file = root / path; file.parent.mkdir(parents=True, exist_ok=True)
-                    file.write_text((file.read_text() if file.exists() else '') + '\n# fixture\n')
+                    if action == 'delete':
+                        file.unlink()
+                    else:
+                        file.write_text((file.read_text() if file.exists() else '') + '\n# fixture\n')
+                        if path.endswith('.sh'): file.chmod(0o755)
                 git('add', '.'); git('commit', '-qm', 'change')
                 command = ['python3', '.github/scripts/ci-runtime-env.py']
-                args = ['push', base, git('rev-parse', 'HEAD')]
+                args = ['push', case_base, git('rev-parse', 'HEAD')]
                 self.assertEqual(subprocess.check_output(command + ['deploy'] + args, cwd=root, text=True).strip(), 'config_only=' + str(expected).lower(), path)
                 # All mixed cases retain application CI regardless of deploy owner.
                 self.assertEqual(subprocess.check_output(command + args, cwd=root, text=True).strip(), 'config_only=' + str(path is None).lower(), path)
@@ -262,8 +276,42 @@ class RuntimeEnvironmentTests(unittest.TestCase):
             git('reset', '--hard', base)
             manifest.write_text(json.dumps(self.manifest(target, {})))
             git('add', '.'); git('commit', '-qm', 'drop ownership')
-            self.assertEqual(classify(), 'config_only=true')
+            result = subprocess.run(['python3', '.github/scripts/ci-runtime-env.py', 'push', base, git('rev-parse', 'HEAD')], cwd=root, capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
 
+
+    def test_cli_rejects_deleted_ownership_even_with_code_change(self):
+        import shutil
+        root=Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as directory:
+            fixture=Path(directory)
+            for name in ['.github/scripts','scripts','infra']:
+                (fixture/name).mkdir(parents=True,exist_ok=True)
+            for name in ['.github/scripts/ci-agent-docs.py','.github/scripts/ci-runtime-env.py','scripts/runtime_env.py','scripts/runtime-env.py']:
+                if (root/name).exists():shutil.copyfile(root/name,fixture/name)
+            document=json.loads((root/'infra/runtime-env.json').read_text())
+            target=next(iter(document['resources']))
+            document['resources'][target]['POOL']={'value':'20'}
+            source=fixture/'infra/runtime-env.json';source.write_text(json.dumps(document))
+            def git(*args):
+                return subprocess.check_output(['git',*args],cwd=fixture,text=True,stderr=subprocess.DEVNULL).strip()
+            git('init');git('config','user.name','Fixture');git('config','user.email','fixture@example.invalid')
+            git('add','.');git('commit','-qm','base');base=git('rev-parse','HEAD')
+            document['resources'][target]={};source.write_text(json.dumps(document));(fixture/'code.go').write_text('package fixture')
+            git('add','.');git('commit','-qm','deleted ownership')
+            command=(['python3','scripts/runtime-env.py','classify'] if (fixture/'scripts/runtime-env.py').exists() else ['python3','.github/scripts/ci-runtime-env.py'])
+            result=subprocess.run(command+['push',base,git('rev-parse','HEAD')],cwd=fixture,capture_output=True,text=True)
+            self.assertNotEqual(result.returncode,0,'Mixed changes must reject deletion instead of restoring release defaults')
+
+    def test_platform_failures_propagate_without_exposing_values(self):
+        with patch.object(runtime.subprocess, 'run', return_value=subprocess.CompletedProcess([], 1, '', 'sensitive-value')):
+            with self.assertRaisesRegex(ValueError, 'values withheld') as caught:
+                runtime.patch_template('/resource', {})
+            self.assertNotIn('sensitive-value', str(caught.exception))
+        for kind in ([], ['job']):
+            with patch.object(runtime, 'az', return_value={'properties': {'provisioningState': 'Failed'}}), patch.object(runtime.time, 'sleep'):
+                with self.assertRaisesRegex(ValueError, 'provisioning failed'):
+                    runtime.wait_for_template('fixture', kind, {}, 'fixture--revision')
 
 if __name__ == '__main__':
     unittest.main()

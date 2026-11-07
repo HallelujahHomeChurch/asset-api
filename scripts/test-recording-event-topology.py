@@ -255,8 +255,8 @@ print(values[query])
     def test_workflow_coordinates_failure_recovery(self):
         workflow = Path('.github/workflows/release.yml').read_text()
         rollback = workflow[workflow.index('      - name: Roll back failed runtime'):workflow.index('  deploy_media:')]
-        self.assertLess(rollback.index('recording-event-topology.py pause'), rollback.index('az containerapp revision copy'))
-        self.assertLess(rollback.index('az containerapp revision copy'), rollback.index('recording-event-topology.py restore'))
+        self.assertLess(rollback.index('recording-event-topology.py pause'), rollback.index('python3 scripts/restore-runtime-template.py'))
+        self.assertLess(rollback.index('python3 scripts/restore-runtime-template.py'), rollback.index('recording-event-topology.py restore'))
         self.assertLess(workflow.index('recording-event-topology.py capture'), workflow.index('      - name: Deploy API'))
         self.assertLess(workflow.index('      - name: Run migrations'), workflow.index('recording-event-topology.py quiesce'))
         self.assertLess(workflow.index('recording-event-topology.py quiesce'), workflow.index('      - name: Deploy API'))

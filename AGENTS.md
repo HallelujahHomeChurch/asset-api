@@ -37,3 +37,13 @@ If no sibling planning checkout exists, use the [single-repository fallback](htt
 to read the same entry documents through authorized GitHub access at the task’s
 immutable planning revision. Record that revision; report the exact inaccessible
 target/error without expanding permissions or copying private text here.
+
+## Runtime configuration delivery
+
+`infra/runtime-env.json` owns runtime environment overrides for the listed Apps
+and Jobs. Manifest-only changes use the serving image and skip application tests,
+build, scan, migration and application smoke. Mixed and deployment-tool changes
+retain the normal verification/release policy. Keep managed keys; use explicit
+`null` for removal and existing `secretRef` bindings for secrets. `RELEASE` remains
+immutable image identity. Local deployment fixtures require an executable Azure
+mock/blocker and an empty `AZURE_CONFIG_DIR`; never use real cloud credentials.

@@ -886,3 +886,9 @@ before preview and deployment. The workflow records its Git blob separately from
 the immutable application image source, so an older queued release cannot restore
 old settings. Mixed changes follow the existing owner release path filters;
 when the other paths do not trigger an owner release, the env job owns deployment.
+
+Runtime configuration recovery: revert the manifest values in a reviewed PR and
+use the same environment-only release. For an authorized emergency, use this
+repository's existing healthy-revision rollback, then reconcile the manifest
+before the next release. Application images and database migrations keep their
+existing recovery contracts; configuration rollback never down-migrates data.
