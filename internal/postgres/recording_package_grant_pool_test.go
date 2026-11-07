@@ -89,7 +89,7 @@ func testPackageGrantPool(t *testing.T, mode string) {
 		t.Fatal(err)
 	}
 	service := assets.NewRecordingPackageService(packages, nil, time.Now)
-	handler := httpapi.New(nil, nil, map[string]bool{"hhc-web-api": true}, true, "", httpapi.WorkloadAuthConfig{}, nil).
+	handler := httpapi.New(nil, nil, map[string]bool{"hhc-web-api": true}, true, "", httpapi.CallerConfig{}, nil).
 		WithRecordingPackages(service).
 		WithRecordingSigner(signer)
 	if mode != "broadcast-disabled" {

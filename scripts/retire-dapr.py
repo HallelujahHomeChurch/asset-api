@@ -14,7 +14,6 @@ GROUP = "alive"
 HOST = "asset-api.internal.gentleriver-81abd7bc.eastasia.azurecontainerapps.io"
 DAPR = {"enabled": True, "appId": APP, "appPort": 8080, "appProtocol": "http", "httpMaxRequestSize": 210,
         "logLevel": "info", "enableApiLogging": False}
-PAIR_NAMES = ("LINE", "LINE_API", "EXTRACTOR", "WATERMARK", "ACCOUNT", "GATEWAY")
 ERRORS = (ValueError, KeyError, TypeError, OSError, subprocess.SubprocessError)
 
 
@@ -60,18 +59,11 @@ def require_prerequisites(app, source, env):
         raise ValueError("Asset does not match the reviewed sidecar and ingress settings")
     required = {"AUDIT_DISPATCH_ENABLED": "true", "AUDIT_PRIVATE_HTTPS": "true",
                 "ASSET_ALLOW_DEV_CALLER_HEADER": "false", "ASSET_DAPR_ENABLED": "true",
-                "ASSET_WORKLOAD_REQUIRED_ROLE": "Asset.Invoke", "ASSET_READER_CALLER_APP_ID": "api-gateway",
-                "ASSET_WORKLOAD_AUDIENCE": env["ASSET_WORKLOAD_AUDIENCE"],
-                "ASSET_WORKLOAD_TENANT_ID": env["AZURE_TENANT_ID"],
-                "ASSET_WORKLOAD_ISSUER": f"https://sts.windows.net/{env['AZURE_TENANT_ID']}/"}
-    for subject in PAIR_NAMES:
-        for kind in ("CLIENT_ID", "OBJECT_ID"):
-            key = f"ASSET_{subject}_WORKLOAD_{kind}"
-            required[key] = env[f"LINE_ATTACHMENT_{kind}" if subject == "LINE" else key]
+                "ASSET_READER_CALLER_APP_ID": "api-gateway"}
     actual = {entry["name"]: entry for entry in source["containers"][0]["env"]}
     if (any(not value or actual.get(key, {}).get("value") != value for key, value in required.items())
             or actual.get("AUDIT_TOKEN", {}).get("secretRef") != "audit-token"):
-        raise ValueError("Asset is missing an exact private workload or Audit binding")
+        raise ValueError("Asset is missing an exact internal caller or Audit binding")
 
 
 def wait_ready(name, previous, expected):

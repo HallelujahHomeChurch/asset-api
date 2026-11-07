@@ -51,7 +51,7 @@ func TestDerivedBulletinWorkerHTTPCompletionUsesRealByteAndDatabasePath(t *testi
 	r.Header.Set("Dapr-Caller-App-Id", "hhc-web-bulletin-worker")
 	r.Header.Set("dapr-api-token", "synthetic-app-token")
 	w := httptest.NewRecorder()
-	httpapi.New(service, db, map[string]bool{"hhc-web-api": true}, false, "synthetic-app-token", httpapi.WorkloadAuthConfig{}, nil).Routes().ServeHTTP(w, r)
+	httpapi.New(service, db, map[string]bool{"hhc-web-api": true}, false, "synthetic-app-token", httpapi.CallerConfig{}, nil).Routes().ServeHTTP(w, r)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}

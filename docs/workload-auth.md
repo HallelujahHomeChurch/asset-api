@@ -1,102 +1,56 @@
-# Private caller authentication and trusted bulletin derivatives
+# Internal caller identification and trusted bulletin derivatives
 
-Asset API private routes (`/priv/*`) accept trusted internal caller identification
-and two legacy production caller proofs during migration. `internal()` resolves the caller's own service identity in this order
-(`authenticatedService`):
+Asset uses internal-only, HTTPS-only ACA ingress. All workloads in the same
+environment are trusted; only Gateway is externally reachable. ACA terminates
+TLS before the app. `X-HHC-Caller-App-Id` identifies the trusted service and must
+contain exactly one allowlisted service string. Duplicate, empty, whitespace,
+comma-separated, unknown, and mixed Dapr/header identities fail closed.
+`X-MS-CLIENT-PRINCIPAL` never identifies a caller. Easy Auth is explicitly
+disabled through `authConfigs/current`; omitting that resource would leave the
+existing proxy enabled.
 
-1. **Trusted internal HTTPS.** `X-HHC-Caller-App-Id` must contain exactly one
-   allowlisted service string, without whitespace or comma-separated values.
-   A present invalid header or any accompanying Dapr identity/token fails closed.
-   Internal-only ACA ingress and trusted same-environment workloads provide the
-   transport boundary; ACA terminates TLS before the application. This does not
-   grant member scopes, resource ownership, grants, or content tickets.
-2. **Dapr.** A request whose `dapr-api-token` matches the revision-scoped
-   `APP_API_TOKEN` came from the local Dapr sidecar, which sets
-   `Dapr-Caller-App-Id`. `sameToken` rejects empty values, and configuration
-   refuses to start without `APP_API_TOKEN` outside development.
-3. **Entra workload identity (temporary compatibility).** Otherwise the request entered through internal
-   ingress, where Container Apps Easy Auth (AAD, `Return401`, allowed
-   applications/principals pinned in `infra/main.bicep`) validated the bearer
-   token and replaced `X-MS-CLIENT-PRINCIPAL`. The principal must still carry
-   the configured tenant, issuer, audience, `Asset.Invoke` role, and an exact
-   configured client ID **and** object ID pair.
+Private `/priv/*` routes retain their configured service allowlist. Gateway
+uses `api-gateway` on `/_gateway/api/assets/...`, which dispatches to the existing
+reader handlers without granting access to service-owned private routes.
+Member identity, scopes, resource ACL, grants and ticket checks remain intact.
+The public Gateway must strip caller identity supplied by clients and construct
+its own service header.
 
-The resolved service is kept in the request context (`requestService`). Only
-for ownership is `hhc-web-bulletin-worker` treated as `hhc-web-api`: the worker
-creates and reads CMS-owned assets on CMS's behalf.
+The bulletin extractor identifies as `hhc-web-api`. LINE API and attachment
+jobs identify as `hhc-line-function-bot`. The watermark worker identifies as
+`hhc-web-bulletin-worker`; only its ownership is aliased to `hhc-web-api`, while
+its original service identity gates derivative completion.
 
-Account can use its own Entra identity on the same canonical private routes
-after the exact client/object pair and existing `Asset.Invoke` role are verified.
-The LINE API and its attachment worker use separate exact Entra identities
-mapped to the existing `hhc-line-function-bot` service authorization.
-Gateway sends `X-HHC-Caller-App-Id: api-gateway` on
-`/_gateway/api/assets/...`; its separate Entra identity remains a compatibility
-fallback only when the new header is absent. Easy Auth
-protects this prefix before the app removes it and dispatches to the existing
-reader handler. Legacy collection paths accept the existing Dapr proof and do
-not trust a workload principal header. Gateway workload identity does not grant
-access to service-owned `/priv/*` paths or replace the end-user scope checks.
+## Temporary Dapr compatibility
+
+A request without the internal header can still use an exact app-channel token
+and Dapr caller identity. Local-only `ASSET_ALLOW_DEV_CALLER_HEADER` remains a
+development convenience. Without Dapr, production still requires direct HTTPS
+Audit dispatch. No Entra client, tenant, audience, object or app-role settings
+are required for Asset caller admission. Managed identities for Blob, queues,
+Key Vault and image pulling retain their separate responsibilities.
 
 ## Trusted bulletin derivative completion
 
-`POST /priv/assets/bulletin-derivatives/{assetID}/complete` marks a watermark
-worker output clean without a second ClamAV scan, because the bytes are
-derived inside the worker from an already-scanned source whose checksum is
-re-verified here. It requires `requestService == "hhc-web-bulletin-worker"`,
-reached by either proof:
+Only `hhc-web-bulletin-worker` may call
+`POST /priv/assets/bulletin-derivatives/{assetID}/complete`. The original must be
+an immutable clean private bulletin with matching SHA-256 and locale. Output
+ownership, MIME, size, checksum and immutable Blob commit remain validated.
+This records `trusted-bulletin-watermark-v1` provenance without claiming a new
+ClamAV scan. Browser uploads and ordinary completion retain the scan lifecycle.
 
-| Path | Proof | Configuration |
-|---|---|---|
-| Dapr (current App) | app-channel token + `Dapr-Caller-App-Id: hhc-web-bulletin-worker` | worker App Dapr app ID |
-| Workload (Event Job, no Dapr) | Easy Auth principal of `hhc-web-bulletin-worker-identity` | `ASSET_WATERMARK_WORKLOAD_CLIENT_ID` / `_OBJECT_ID`, authConfig allow-lists, `Asset.Invoke` app-role assignment |
+## Ordered rollout and rollback
 
-The extractor identity (`hhc-web-api-identity`, service `hhc-web-api`) and the
-LINE identity cannot use this route, and configuration rejects a watermark
-identity that shares a client or object ID with either.
+1. Release the producer compatibility image accepting both the new service
+   header and old authenticated principal.
+2. Release every HTTPS caller with the new header alongside its existing token.
+3. Verify that compatible Asset revision is serving and older replicas drained.
+4. Release this removal of principal inference and explicit proxy disablement.
+5. Remove obsolete caller token acquisition after the cutover is verified.
 
-## Threat analysis: can the principal header be forged?
-
-| Path to the app | Easy Auth in front? | Who controls `X-MS-CLIENT-PRINCIPAL` | Outcome |
-|---|---|---|---|
-| Internal ingress (other apps in `alive-env`) | Yes | Easy Auth replaces it after validating the token; unauthenticated requests get 401 before the app | Trusted only for configured client+object+role |
-| Dapr sidecar → app over localhost | **No** | The calling app | Dapr proof wins first; the header is never read when the token is valid (locked by `TestDerivedBulletinDaprIdentityTakesPrecedenceOverPrincipalHeader`) |
-| Public internet | n/a | — | Asset API has internal ingress only; public routes go through api-gateway, which strips identity headers |
-
-Residual risk: a request that reaches the app port with neither a valid Dapr
-token nor Easy Auth in front would be judged by its principal header. In
-Container Apps the only such entry is the Dapr sidecar, whose requests always
-carry the valid token. This is the open "single-point-of-trust header model"
-audit item; moving to an in-app JWT validation of the bearer token would remove
-the dependency on Easy Auth header replacement.
-
-## Rollout and rollback
-
-Regular Asset CD preserves the observed sidecar state. After the callers and
-Audit have passed their production HTTPS checks, dispatch the existing Asset
-release with `retire_dapr_revision` set to the exact healthy Asset revision.
-The retirement job copies the serving image into an Asset-only configuration
-revision, then disables the sidecar. It checks the exact private workload
-callers and restores the previous revision and Dapr settings on failure.
-Image builds, migrations, media and other worker deployments are skipped.
-
-- Both paths are accepted until the worker App is retired; the Dapr branch is
-  removed in a follow-up after the Event Job has been stable for two weeks.
-- Rollback of the workload path: clear the `ASSET_WATERMARK_WORKLOAD_*`
-  repository variables and release. The authConfig allow-lists and the
-  environment variables are then empty for the worker, and the Dapr path keeps
-  working.
-
-## Ordered internal caller rollout
-
-1. Deploy this producer compatibility release with Easy Auth unchanged.
-2. Deploy every HTTPS caller (including extractor, watermark and attachment
-   jobs) sending the exact service header alongside its existing bearer token.
-3. Verify the compatibility revision is serving and prior replicas have drained.
-4. A subsequent producer release removes principal inference and workload-only
-   configuration and explicitly disables the app-level `authConfigs/current`.
-5. Remove obsolete token acquisition from callers.
-
-Do not disable Easy Auth while a pre-header Asset image still serves: the
-app-level setting affects old revisions before new replicas become ready.
-The compatibility image is the rollback floor after that cutover. The public
-Gateway must strip client-supplied caller identity and construct its own.
+The app-level authentication switch affects all revisions immediately. Never
+perform step 4 while a pre-header Asset image can serve. After cutover, roll
+back only to the header-compatible image; restoring an older image requires a
+separate coordinated restoration of its prior authentication configuration.
+The release retains storage/queue identities and the existing app/worker
+rollback path. No database, media, retention, or permission migration is needed.

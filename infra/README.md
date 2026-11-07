@@ -83,8 +83,9 @@ The template creates `asset-api` in the existing `alive-env`, enables Dapr
 with app id `asset-api`, creates a private Blob container, and assigns its
 dedicated pull identity ACR pull, plus its system identity container-scoped
 Blob contributor and account-scoped Blob delegator roles. Owner services use
-Dapr; the dedicated LINE attachment Job uses authenticated internal ingress
-with an Entra application audience and the `Asset.Invoke` app role.
+internal HTTPS with an exact caller header; authenticated Dapr remains during
+retirement. The existing app-level auth configuration is explicitly disabled;
+ingress remains internal and HTTPS-only. Storage and queue identities remain.
 Dapr uses `info` logging so managed-sidecar startup can be correlated with probe
 failures during scaling. This does not enable Dapr API request logging or change
 application health probes, permissions, resource allocations or scale limits.
@@ -176,26 +177,15 @@ replaces `current.json`. The previous generation remains available for rollback.
 
 ## One-time production cutover
 
-### Bulletin extractor authorization gate
+### Internal caller cutover gate
 
-Reuse the existing `hhc-web-api-identity`; do not create another identity or
-broaden application consent. The optional `extractorClientId` and
-`extractorObjectId` parameters must match that identity and are added to the
-existing EasyAuth application/principal allowlists alongside LINE.
-
-With the corresponding release variables configured, release first runs
-`bash scripts/ensure-workload-app-role.sh check`. This verifies the exact
-existing `Asset.Invoke` assignment without changing it. A missing assignment
-stops release before ARM writes. Only a separately reviewed manual dispatch
-with `approve_extractor_app_role=true` allows `apply`, under the existing
-Entra deployment service principal. Missing authority, unexpected assignments
-or ambiguous roles require platform-owner review, not additional consent.
-
-Review the fresh what-if and exact role delta before that dispatch. After the
-approved asset release, verify a real CMS managed-identity token's audience,
-client/object IDs and `Asset.Invoke` role, then read a clean private asset owned
-by `hhc-web-api` through EasyAuth. Do not enable the extractor Job until this
-smoke passes. Local mock tests and Bicep compilation do not satisfy this gate.
+Deploy the header-compatible Asset image and all callers (including attachment,
+extractor and watermark jobs) before disabling the app-level authentication
+proxy. Verify the compatible image is serving and older replicas have drained.
+The extractor sends `hhc-web-api`; watermark sends `hhc-web-bulletin-worker`.
+The header-compatible image is the rollback floor after this cutover; reverting
+to a pre-header image requires separately restoring its old authentication
+configuration first. No Entra app-role provisioning belongs to this release.
 
 The existing `asset` login becomes the DML-only runtime role. Migrations use
 `asset_migrate` through a manual Container Apps job. Runtime and migration

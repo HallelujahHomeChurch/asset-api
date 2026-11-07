@@ -7,7 +7,7 @@ import (
 )
 
 func TestLegacyRecordingEndpointsCannotAcceptWork(t *testing.T) {
-	handler := New(nil, nil, map[string]bool{"hhc-web-api": true}, true, "", WorkloadAuthConfig{}, nil).Routes()
+	handler := New(nil, nil, map[string]bool{"hhc-web-api": true}, true, "", CallerConfig{}, nil).Routes()
 	for _, endpoint := range []struct{ method, path string }{
 		{"POST", "/priv/recording-uploads"},
 		{"GET", "/priv/recording-uploads/session"},

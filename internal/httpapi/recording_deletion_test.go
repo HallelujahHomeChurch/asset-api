@@ -16,7 +16,7 @@ func (d *deletionFixture) DeleteRecording(_ context.Context, id string) error { 
 func TestRecordingDeleteIsRestrictedToOwningCMS(t *testing.T) {
 	d := &deletionFixture{}
 	svc := assets.NewRecordingPackageService(&httpPackageRepo{}, httpPackageObjects{}, time.Now)
-	h := New(nil, nil, map[string]bool{"hhc-web-api": true, "account-api": true}, true, "", WorkloadAuthConfig{}, nil).WithRecordingPackages(svc).WithRecordingDeletion(d).Routes()
+	h := New(nil, nil, map[string]bool{"hhc-web-api": true, "account-api": true}, true, "", CallerConfig{}, nil).WithRecordingPackages(svc).WithRecordingDeletion(d).Routes()
 	for _, tc := range []struct {
 		caller string
 		want   int

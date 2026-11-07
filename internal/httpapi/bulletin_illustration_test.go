@@ -63,7 +63,7 @@ func TestBulletinIllustrationReadsCheckFreshAuthorityWithoutGrantWrites(t *testi
 			}
 			repo := &illustrationReadRepository{downloadRepository: &downloadRepository{asset: asset}}
 			blobs := &downloadBlobStore{objects: map[string][]byte{"image": []byte("image")}}
-			handler := New(assets.NewService(repo, blobs, "", time.Now), nil, map[string]bool{"hhc-web-api": true, "account-api": true}, false, "token", WorkloadAuthConfig{}, nil).Routes()
+			handler := New(assets.NewService(repo, blobs, "", time.Now), nil, map[string]bool{"hhc-web-api": true, "account-api": true}, false, "token", CallerConfig{}, nil).Routes()
 			read := func() *httptest.ResponseRecorder {
 				request := httptest.NewRequest(http.MethodGet, "/priv/assets/asset-1/bulletin-illustration?issueId=issue-1&checksumSha256="+strings.Repeat("a", 64), nil)
 				request.Header.Set("Dapr-Caller-App-Id", "hhc-web-api")

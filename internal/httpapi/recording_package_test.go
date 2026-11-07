@@ -22,7 +22,7 @@ func TestReadyPackageProjectionIsOwnerAndRecordingBoundNotUploaderBound(t *testi
 	ready, expiry := now.Add(-time.Hour), now.Add(719*time.Hour)
 	repo := &httpPackageRepo{p: assets.RecordingPackage{ID: "package-a", OwnerService: "hhc-web-api", ActorID: "uploader-only", RecordingID: "recording-a", State: "ready", ReadyAt: &ready, MediaExpiresAt: &expiry, FinalPrefix: "recordings/packages/package-a/final/attempt-a/"}}
 	svc := assets.NewRecordingPackageService(repo, httpPackageObjects{}, time.Now)
-	handler := New(nil, nil, map[string]bool{"hhc-web-api": true, "account-api": true}, true, "", WorkloadAuthConfig{}, nil).WithRecordingPackages(svc).Routes()
+	handler := New(nil, nil, map[string]bool{"hhc-web-api": true, "account-api": true}, true, "", CallerConfig{}, nil).WithRecordingPackages(svc).Routes()
 	for _, tc := range []struct {
 		caller, recording, state string
 		want                     int
@@ -61,7 +61,7 @@ func TestRecordingPackageGrantChecksReadyOwnershipAndExpiry(t *testing.T) {
 	ready, expiry := now.Add(-time.Hour), now.Add(time.Hour)
 	repo := &httpPackageRepo{p: assets.RecordingPackage{ID: "package-a", OwnerService: "hhc-web-api", RecordingID: "recording-a", State: "ready", ReadyAt: &ready, MediaExpiresAt: &expiry, FinalPrefix: "recordings/packages/package-a/final/attempt-a/"}}
 	svc := assets.NewRecordingPackageService(repo, httpPackageObjects{}, time.Now)
-	handler := New(nil, nil, map[string]bool{"hhc-web-api": true, "account-api": true}, true, "", WorkloadAuthConfig{}, nil).WithRecordingPackages(svc).WithRecordingSigner(signer).Routes()
+	handler := New(nil, nil, map[string]bool{"hhc-web-api": true, "account-api": true}, true, "", CallerConfig{}, nil).WithRecordingPackages(svc).WithRecordingSigner(signer).Routes()
 	for _, tc := range []struct {
 		caller, recording, state string
 		expires                  time.Time
@@ -122,7 +122,7 @@ func (httpPackageObjects) PresignPackageObject(context.Context, string, int64, s
 }
 
 func TestRecordingPackageRoutesFailClosed(t *testing.T) {
-	handler := New(nil, nil, map[string]bool{"hhc-web-api": true, "account-api": true}, true, "", WorkloadAuthConfig{}, nil).Routes()
+	handler := New(nil, nil, map[string]bool{"hhc-web-api": true, "account-api": true}, true, "", CallerConfig{}, nil).Routes()
 	for _, route := range []struct{ method, path string }{{"POST", "/priv/recording-packages"}, {"GET", "/priv/recording-packages/package-a"}, {"GET", "/priv/recording-packages/package-a/ready"}, {"POST", "/priv/recording-packages/package-a/sign"}, {"POST", "/priv/recording-packages/package-a/complete"}, {"POST", "/priv/recording-packages/package-a/grant"}} {
 		for _, tc := range []struct {
 			caller string
@@ -142,7 +142,7 @@ func TestRecordingPackageRoutesFailClosed(t *testing.T) {
 func TestRecordingPackageCreateAndCompleteHTTP(t *testing.T) {
 	repo := &httpPackageRepo{}
 	svc := assets.NewRecordingPackageService(repo, httpPackageObjects{}, time.Now)
-	handler := New(nil, nil, map[string]bool{"hhc-web-api": true}, true, "", WorkloadAuthConfig{}, nil).WithRecordingPackages(svc).Routes()
+	handler := New(nil, nil, map[string]bool{"hhc-web-api": true}, true, "", CallerConfig{}, nil).WithRecordingPackages(svc).Routes()
 	inv := assets.RecordingPackageInventory{SchemaVersion: 1, PresetVersion: "hls-v1", Objects: []assets.RecordingPackageObject{
 		{Path: "master.m3u8", SizeBytes: 100, SHA256: strings.Repeat("a", 64)}, {Path: "720p/index.m3u8", SizeBytes: 100, SHA256: strings.Repeat("b", 64)},
 		{Path: "720p/init.mp4", SizeBytes: 100, SHA256: strings.Repeat("c", 64)}, {Path: "720p/seg-000000.m4s", SizeBytes: 100, SHA256: strings.Repeat("d", 64)},
