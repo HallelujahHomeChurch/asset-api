@@ -865,3 +865,34 @@ the first16 hex digits of SHA-256. Nonprintable/non-ASCII names use `revision-`
 plus that hash. Without the Azure variable, configured application names remain
 unchanged. This identifies new revision sessions; it does not identify legacy
 untagged sessions or prove a rollout has drained them.
+
+## Runtime environment updates
+
+Edit `infra/runtime-env.json` for runtime-only configuration. Values use
+`{"value":"20"}`, existing secret bindings use `{"secretRef":"name"}`, and
+`null` removes a variable. Never put secret values in this file. `RELEASE` is reserved for
+immutable artifact identity and cannot be overridden or removed in this manifest. Keep owned keys
+and use null for removal; a key deletion is rejected before deployment.
+
+A manifest-only PR skips application verification. After merge, a lightweight routing job selects a serialized
+configuration job that reconciles owned env using the complete serving template; it
+runs no build, scan, migration, or smoke suite. Existing deployment enablement
+and identity boundaries remain in force. Mixed source/config changes use the
+ordinary release, which reads this same manifest. Configuration does not create
+missing resources or start Jobs. Build-time variables still require a build.
+
+Normal releases load the latest merged runtime manifest under the release lock
+before preview and deployment. The workflow records its Git blob separately from
+the immutable application image source, so an older queued release cannot restore
+old settings. Mixed changes follow the existing owner release path filters;
+when the other paths do not trigger an owner release, the env job owns deployment.
+
+Runtime configuration recovery: revert the manifest values in a reviewed PR and
+use the same environment-only release. For an authorized emergency, use this
+repository's existing healthy-revision rollback, then reconcile the manifest
+before the next release. Application images and database migrations keep their
+existing recovery contracts; configuration rollback never down-migrates data.
+
+Pure Markdown-only changes (`**/*.md`) do not trigger automatic release workflows.
+Non-Markdown configuration and mixed source changes retain their existing gates.
+PRs retain the required `verify` check; Markdown-only PRs use classification only.

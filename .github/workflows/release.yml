@@ -13,6 +13,8 @@ on:
       - '!scripts/test-what-if-policy.sh'
       - '!scripts/test-release-workflow.sh'
       - '!scripts/check-release-dapr-config-delta.sh'
+      - '!infra/runtime-env.json'
+      - '!**/*.md'
   workflow_dispatch:
     inputs:
       confirmation:
@@ -41,6 +43,7 @@ permissions:
 concurrency:
   group: asset-api-production
   cancel-in-progress: false
+  queue: max
 
 jobs:
   retire_dapr:
@@ -302,6 +305,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: ${{ inputs.recovery_run != '' && '0' || '1' }}
+      - name: Load latest merged runtime configuration
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/runtime_env.py refresh
       - name: Validate release configuration
         run: |
           [[ "$GITHUB_REF" == "refs/heads/main" ]]
@@ -694,10 +701,7 @@ jobs:
           if [[ "$MEMBER_VIDEO_ENABLED" == true && "$RECORDING_EVENTS_PROVISIONED" == true ]]; then
             python3 scripts/recording-event-topology.py pause "$RUNNER_TEMP/recording-topology.json"
           fi
-          az containerapp revision copy -g "$RESOURCE_GROUP" -n "$API_APP_NAME" \
-            --from-revision "$PREVIOUS_READY_REVISION" --image "$PREVIOUS_IMAGE_REF" \
-            --revision-suffix "rollback-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
-            --only-show-errors --output none
+          python3 scripts/restore-runtime-template.py "$API_APP_NAME" "$PREVIOUS_READY_REVISION" "$PREVIOUS_IMAGE_REF"
           for attempt in {1..60}; do
             latest="$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_APP_NAME" --query properties.latestRevisionName -o tsv --only-show-errors)"
             ready="$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_APP_NAME" --query properties.latestReadyRevisionName -o tsv --only-show-errors)"

@@ -1,0 +1,16 @@
+{
+  "resources": {
+    "asset-api": {},
+    "asset-clamav-signature-refresh": {},
+    "asset-derivative": {},
+    "asset-migrate": {},
+    "asset-recording-validation": {},
+    "asset-retention": {},
+    "asset-scan": {},
+    "asset-scan-worker": {},
+    "asset-recording-live": {},
+    "asset-recording-processing": {},
+    "asset-recording-preview": {},
+    "asset-recording-maintenance": {}
+  }
+}

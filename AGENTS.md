@@ -29,11 +29,22 @@ Read the checked-out `hhc-planning/AGENTS.md` and
 `hhc-planning/docs/cloud-environments.md` first and record its revision.
 Sibling repositories do not inherit it automatically. This repository owns its
 setup/tests; use the task’s smallest runtime set and preserve active writers in
-isolated worktrees. Follow explicit review/merge/deployment authority. Pure human
-documentation uses lightweight checks; source, workflow/configuration, executable
+isolated worktrees. Follow explicit review/merge/deployment authority. Pure Markdown documentation skips automatic workflows; source, workflow/configuration, executable
 skills and mixed changes retain full verification.
 
 If no sibling planning checkout exists, use the [single-repository fallback](https://github.com/HallelujahHomeChurch/hhc-planning/blob/73ee1af2a1ff828d72421a73626f45ff4ce04a6f/docs/cloud-environments.md#single-repository-checkout)
 to read the same entry documents through authorized GitHub access at the task’s
 immutable planning revision. Record that revision; report the exact inaccessible
 target/error without expanding permissions or copying private text here.
+
+## Runtime configuration delivery
+
+`infra/runtime-env.json` owns runtime environment overrides for the listed Apps
+and Jobs. Manifest-only changes use the serving image and skip application tests,
+build, scan, migration and application smoke. Mixed and deployment-tool changes
+retain the normal verification/release policy. Keep managed keys; use explicit
+`null` for removal and existing `secretRef` bindings for secrets. `RELEASE` remains
+immutable image identity. Local deployment fixtures require an executable Azure
+mock/blocker and an empty `AZURE_CONFIG_DIR`; never use real cloud credentials.
+
+Markdown-only PRs retain the branch-required verify classification check. Do not remove branch protection.

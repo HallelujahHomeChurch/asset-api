@@ -109,7 +109,9 @@ expected_paths="'**'
 '!scripts/check-what-if.sh'
 '!scripts/test-what-if-policy.sh'
 '!scripts/test-release-workflow.sh'
-'!scripts/check-release-dapr-config-delta.sh'"
+'!scripts/check-release-dapr-config-delta.sh'
+'!infra/runtime-env.json'
+'!**/*.md'"
 actual_paths="$(awk '
   $0 == "    paths:" { in_paths_ignore = 1; next }
   in_paths_ignore && /^      - / { sub(/^      - /, ""); print; next }
@@ -398,8 +400,8 @@ grep -q 'az containerapp show.*"$SCAN_WORKER_APP_NAME"' "$workflow"
 grep -q 'az containerapp job show.*"$DERIVATIVE_JOB_NAME"' "$workflow"
 grep -q '"$derivative_image" == "$IMAGE_REF"' "$workflow"
 grep -q 'PREVIOUS_IMAGE_REF=' "$workflow"
-grep -q 'az containerapp revision copy' "$workflow"
-grep -q -- '--image "$PREVIOUS_IMAGE_REF"' "$workflow"
+grep -q 'python3 scripts/restore-runtime-template.py' "$workflow"
+grep -Fq '"$PREVIOUS_IMAGE_REF"' "$workflow"
 grep -q '^  publish_openapi:' "$workflow"
 publish_job="$(sed -n '/^  publish_openapi:/,$p' "$workflow")"
 printf '%s\n' "$publish_job" | grep -q 'needs: deploy'
