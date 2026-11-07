@@ -1,14 +1,20 @@
 # Private caller authentication and trusted bulletin derivatives
 
-Asset API private routes (`/priv/*`) accept exactly two production caller
-proofs. `internal()` resolves the caller's own service identity in this order
+Asset API private routes (`/priv/*`) accept trusted internal caller identification
+and two legacy production caller proofs during migration. `internal()` resolves the caller's own service identity in this order
 (`authenticatedService`):
 
-1. **Dapr.** A request whose `dapr-api-token` matches the revision-scoped
+1. **Trusted internal HTTPS.** `X-HHC-Caller-App-Id` must contain exactly one
+   allowlisted service string, without whitespace or comma-separated values.
+   A present invalid header or any accompanying Dapr identity/token fails closed.
+   Internal-only ACA ingress and trusted same-environment workloads provide the
+   transport boundary; ACA terminates TLS before the application. This does not
+   grant member scopes, resource ownership, grants, or content tickets.
+2. **Dapr.** A request whose `dapr-api-token` matches the revision-scoped
    `APP_API_TOKEN` came from the local Dapr sidecar, which sets
    `Dapr-Caller-App-Id`. `sameToken` rejects empty values, and configuration
    refuses to start without `APP_API_TOKEN` outside development.
-2. **Entra workload identity.** Otherwise the request entered through internal
+3. **Entra workload identity (temporary compatibility).** Otherwise the request entered through internal
    ingress, where Container Apps Easy Auth (AAD, `Return401`, allowed
    applications/principals pinned in `infra/main.bicep`) validated the bearer
    token and replaced `X-MS-CLIENT-PRINCIPAL`. The principal must still carry
@@ -23,7 +29,9 @@ Account can use its own Entra identity on the same canonical private routes
 after the exact client/object pair and existing `Asset.Invoke` role are verified.
 The LINE API and its attachment worker use separate exact Entra identities
 mapped to the existing `hhc-line-function-bot` service authorization.
-Gateway uses a separate Entra identity on `/_gateway/api/assets/...`. Easy Auth
+Gateway sends `X-HHC-Caller-App-Id: api-gateway` on
+`/_gateway/api/assets/...`; its separate Entra identity remains a compatibility
+fallback only when the new header is absent. Easy Auth
 protects this prefix before the app removes it and dispatches to the existing
 reader handler. Legacy collection paths accept the existing Dapr proof and do
 not trust a workload principal header. Gateway workload identity does not grant
@@ -77,3 +85,18 @@ Image builds, migrations, media and other worker deployments are skipped.
   repository variables and release. The authConfig allow-lists and the
   environment variables are then empty for the worker, and the Dapr path keeps
   working.
+
+## Ordered internal caller rollout
+
+1. Deploy this producer compatibility release with Easy Auth unchanged.
+2. Deploy every HTTPS caller (including extractor, watermark and attachment
+   jobs) sending the exact service header alongside its existing bearer token.
+3. Verify the compatibility revision is serving and prior replicas have drained.
+4. A subsequent producer release removes principal inference and workload-only
+   configuration and explicitly disables the app-level `authConfigs/current`.
+5. Remove obsolete token acquisition from callers.
+
+Do not disable Easy Auth while a pre-header Asset image still serves: the
+app-level setting affects old revisions before new replicas become ready.
+The compatibility image is the rollback floor after that cutover. The public
+Gateway must strip client-supplied caller identity and construct its own.

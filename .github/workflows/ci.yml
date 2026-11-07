@@ -44,10 +44,11 @@ jobs:
     if: ${{ !cancelled() && !inputs.cancellation_fixture && (needs.agent_docs.result != 'success' || needs.agent_docs.outputs.docs_only != 'true') }}
     outputs:
       image_artifact_id: ${{ steps.images_artifact.outputs.artifact-id }}
-      api_image_id: ${{ steps.image_fixture.outputs.api_image_id }}
-      scan_image_id: ${{ steps.image_fixture.outputs.scan_image_id }}
-      recording_image_id: ${{ steps.image_fixture.outputs.recording_image_id }}
-    runs-on: ubuntu-latest
+      api_config_id: ${{ steps.image_fixture.outputs.api_config_id }}
+      scan_config_id: ${{ steps.image_fixture.outputs.scan_config_id }}
+      recording_config_id: ${{ steps.image_fixture.outputs.recording_config_id }}
+    # Keep the validated media fixture toolchain during the ubuntu-latest rollout.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     services:
       postgres:
@@ -217,14 +218,14 @@ jobs:
       - name: Verify and load release images
         id: images
         run: bash scripts/release-image-artifact.sh load "$RUNNER_TEMP/release-images" "$GITHUB_SHA"
-      - name: Verify transported producer identities
+      - name: Verify transported producer config identities
         env:
-          EXPECTED_API: ${{ needs.verify.outputs.api_image_id }}
-          EXPECTED_SCAN: ${{ needs.verify.outputs.scan_image_id }}
-          EXPECTED_RECORDING: ${{ needs.verify.outputs.recording_image_id }}
-          ACTUAL_API: ${{ steps.images.outputs.api_image_id }}
-          ACTUAL_SCAN: ${{ steps.images.outputs.scan_image_id }}
-          ACTUAL_RECORDING: ${{ steps.images.outputs.recording_image_id }}
+          EXPECTED_API: ${{ needs.verify.outputs.api_config_id }}
+          EXPECTED_SCAN: ${{ needs.verify.outputs.scan_config_id }}
+          EXPECTED_RECORDING: ${{ needs.verify.outputs.recording_config_id }}
+          ACTUAL_API: ${{ steps.images.outputs.api_config_id }}
+          ACTUAL_SCAN: ${{ steps.images.outputs.scan_config_id }}
+          ACTUAL_RECORDING: ${{ steps.images.outputs.recording_config_id }}
         run: |
           [[ "$EXPECTED_API" =~ ^sha256:[0-9a-f]{64}$ && "$ACTUAL_API" == "$EXPECTED_API" ]]
           [[ "$EXPECTED_SCAN" =~ ^sha256:[0-9a-f]{64}$ && "$ACTUAL_SCAN" == "$EXPECTED_SCAN" ]]
