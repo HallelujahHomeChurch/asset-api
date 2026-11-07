@@ -137,3 +137,20 @@ func TestPublicGrantAuditEnqueueFailureRollsBack(t *testing.T) {
 		t.Fatal("grant escaped rollback", err)
 	}
 }
+
+func TestUnsupportedServiceRevocationPreservesAuditUnavailable(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	store.WithAudit(auditoutbox.New(db))
+	now := time.Now().UTC()
+	const id = "0123456789abcdef0123456789abcdef"
+	insertAsset(t, db, id, assets.UploadCompleted, assets.ScanClean, assets.ProcessingReady, now, time.Time{})
+	_, err := store.CreateGrant(context.Background(), assets.Grant{ID: "grant-1", AssetID: id, SubjectType: assets.SubjectPublic, SubjectID: "*", Permission: assets.PermissionRead, IdempotencyKey: "grant-1", CallerService: "test", Operation: "create_grant", CreatedAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := auditclient.WithProvenance(context.Background(), "service", "hhc-line-function-bot", "service-revoke-test")
+	if err := store.RevokeGrant(ctx, id, "grant-1", now); !errors.Is(err, assets.ErrAuditUnavailable) {
+		t.Fatalf("existing audit failure contract changed: %v", err)
+	}
+}

@@ -424,7 +424,8 @@ func (s *Store) RevokeGrant(ctx context.Context, assetID, grantID string, now ti
 	}
 	if subjectType == assets.SubjectPublic {
 		if p, ok := auditclient.ProvenanceFromContext(ctx); ok && p.ActorType == "service" && (p.ActorID != "account-api" || owner != "account-api" || namespace != "account.avatar") {
-			return assets.ErrForbidden
+			telemetry.RecordFailureReason(ctx, "audit_event_invalid")
+			return assets.ErrAuditUnavailable
 		}
 		if err := s.enqueueAuditTx(ctx, tx, "asset.public_grant.revoke", assetID, nil, now); err != nil {
 			return err
