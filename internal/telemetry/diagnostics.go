@@ -13,6 +13,13 @@ import (
 
 const slowOperation = 2 * time.Second
 
+type auditOperationKey struct{}
+
+// WithAuditVerification labels the existing empty-body authentication probe.
+func WithAuditVerification(ctx context.Context) context.Context {
+	return context.WithValue(ctx, auditOperationKey{}, "audit_auth_probe")
+}
+
 // RecordOutcome keeps fixed-size failure evidence even when a span is not sampled.
 // It never accepts error text, URLs, headers, payloads, or business identifiers.
 func RecordOutcome(ctx context.Context, phase string, code int, elapsed time.Duration, failed bool) {
@@ -67,6 +74,9 @@ func recordOutcome(ctx context.Context, phase string, code int, elapsed time.Dur
 	}
 	sc := trace.SpanContextFromContext(ctx)
 	attrs := []any{"phase", phase, "outcome", outcome, "status", code, "duration_ms", elapsed.Milliseconds()}
+	if operation, _ := ctx.Value(auditOperationKey{}).(string); operation == "audit_auth_probe" || operation == "audit_append" {
+		attrs = append(attrs, "operation", operation)
+	}
 	if observation != nil {
 		attrs = append(attrs, "parent_span_id", observation.parentSpanID, "request_id", observation.id, "route_id", observation.route, "operation", "http_request", "phase_totals", phaseLogValue(summaries), "failure_reason", reason, "timing_semantics", "overlapping_work_not_wall_time", "db_checkout", "unmeasured_implicit_checkout")
 	}

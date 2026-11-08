@@ -135,6 +135,9 @@ type AuditTransport struct{ Base http.RoundTripper }
 
 func (t AuditTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	ctx, span := otel.Tracer("asset-api/http").Start(r.Context(), "audit.http", trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(attribute.String("http.request.method", method(r.Method))))
+	if ctx.Value(auditOperationKey{}) == nil {
+		ctx = context.WithValue(ctx, auditOperationKey{}, "audit_append")
+	}
 	request := r.Clone(ctx)
 	request.Header = r.Header.Clone()
 	if trace.SpanContextFromContext(ctx).IsValid() {

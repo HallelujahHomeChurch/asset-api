@@ -375,7 +375,7 @@ func (c *Client) Verify(ctx context.Context) error {
 		return nil
 	}
 	// Authentication precedes decoding. An empty body cannot append an event.
-	request, err := c.request(ctx, nil)
+	request, err := c.request(telemetry.WithAuditVerification(ctx), nil)
 	if err != nil {
 		return errors.New("invalid private audit request")
 	}
