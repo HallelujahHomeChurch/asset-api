@@ -1,12 +1,59 @@
 package auditclient
 
 import (
+	"bytes"
 	"context"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"go.opentelemetry.io/otel/trace"
+	"hhc/asset-api/internal/telemetry"
 )
+
+func TestAuditProbeDiagnosticIsDistinctFromAppend(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"error":"invalid_event"}`)
+	}))
+	defer srv.Close()
+	client, err := NewPrivateHTTPS("test-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.endpoint = srv.URL + "/private-sensitive-path?token=secret-query"
+	client.http.Transport = telemetry.AuditTransport{Base: srv.Client().Transport}
+	tid, _ := trace.TraceIDFromHex("0123456789abcdef0123456789abcdef")
+	sid, _ := trace.SpanIDFromHex("0123456789abcdef")
+	ctx := trace.ContextWithSpanContext(context.Background(), trace.NewSpanContext(trace.SpanContextConfig{TraceID: tid, SpanID: sid}))
+	if err := client.Verify(ctx); err != nil {
+		t.Fatal(err)
+	}
+	probe := logs.String()
+	if !strings.Contains(probe, `"operation":"audit_auth_probe"`) || !strings.Contains(probe, `"status":400`) || !strings.Contains(probe, `"sampled":false`) || !strings.Contains(probe, tid.String()) {
+		t.Fatal("probe diagnostic missing bounded unsampled correlation")
+	}
+	logs.Reset()
+	if result := client.Append(ctx, []byte("sensitive-payload")); result.Result != "dead_letter" {
+		t.Fatal("append rejection changed")
+	}
+	appendLog := logs.String()
+	if !strings.Contains(appendLog, `"operation":"audit_append"`) || strings.Contains(appendLog, "audit_auth_probe") {
+		t.Fatal("append misclassified as probe")
+	}
+	for _, forbidden := range []string{"test-secret", "private-sensitive-path", "secret-query", "sensitive-payload"} {
+		if strings.Contains(probe+appendLog, forbidden) {
+			t.Fatal("sensitive request data logged")
+		}
+	}
+}
 
 func TestPrivateHTTPSAppendAndProbe(t *testing.T) {
 	client, err := NewPrivateHTTPS("test-token")
@@ -38,6 +85,11 @@ func TestPrivateHTTPSAppendAndProbe(t *testing.T) {
 	ctx := context.Background()
 	if err := client.Verify(ctx); err != nil {
 		t.Fatal(err)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := client.Verify(canceled); err == nil {
+		t.Fatal("canceled probe passed")
 	}
 	status = http.StatusUnauthorized
 	if err := client.Verify(ctx); err == nil {
