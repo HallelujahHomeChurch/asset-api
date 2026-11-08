@@ -159,6 +159,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.Handle("POST /priv/recording-sources/{sourceID}/retry-processing", h.internal(http.HandlerFunc(h.retryRecordingSource)))
 	mux.Handle("GET /priv/recording-packages/{packageID}", h.internal(http.HandlerFunc(h.getRecordingPackage)))
 	mux.Handle("GET /priv/recording-packages/{packageID}/ready", h.internal(http.HandlerFunc(h.getReadyRecordingPackage)))
+	mux.Handle("POST /priv/recording-packages/ready-batch", h.internal(http.HandlerFunc(h.readyRecordingPackages)))
 	mux.Handle("GET /priv/recording-sources/{sourceID}/ready", h.internal(http.HandlerFunc(h.getReadyRecordingSource)))
 	mux.Handle("POST /priv/recording-packages/{packageID}/sign", h.internal(http.HandlerFunc(h.signRecordingPackage)))
 	mux.Handle("POST /priv/recording-packages/{packageID}/complete", h.internal(http.HandlerFunc(h.completeRecordingPackage)))

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -133,7 +134,66 @@ func (h *Handler) getReadyRecordingPackage(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	w.Header().Set("Cache-Control", "private, no-store")
-	writeJSON(w, http.StatusOK, assets.RecordingPackageStatus{Audio: p.Audio, PackageID: p.ID, SessionID: p.SessionID, RecordingID: p.RecordingID, State: p.State, SizeBytes: p.SizeBytes, ExpiresAt: p.ExpiresAt, ReadyAt: p.ReadyAt, MediaExpiresAt: p.MediaExpiresAt, UploadedAt: p.UploadedAt, RetentionRevision: p.RetentionRevision, Renditions: p.Inventory.Renditions, ConfirmedObjects: []string{}})
+	writeJSON(w, http.StatusOK, readyPackageProjection(p))
+}
+
+func readyPackageProjection(p assets.RecordingPackage) assets.RecordingPackageStatus {
+	return assets.RecordingPackageStatus{Audio: p.Audio, PackageID: p.ID, SessionID: p.SessionID, RecordingID: p.RecordingID, State: p.State, SizeBytes: p.SizeBytes, ExpiresAt: p.ExpiresAt, ReadyAt: p.ReadyAt, MediaExpiresAt: p.MediaExpiresAt, UploadedAt: p.UploadedAt, RetentionRevision: p.RetentionRevision, Renditions: p.Inventory.Renditions, ConfirmedObjects: []string{}}
+}
+
+func (h *Handler) readyRecordingPackages(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "private, no-store")
+	if !h.recordingPackageAllowed(w, r) {
+		return
+	}
+	var input struct {
+		Items []assets.RecordingLifecycleBinding `json:"items"`
+	}
+	if !decodeJSONLimit(w, r, &input, 32<<10) {
+		return
+	}
+	if len(input.Items) < 1 || len(input.Items) > 100 {
+		handleError(w, assets.ErrInvalidInput)
+		return
+	}
+	seen := make(map[assets.RecordingLifecycleBinding]bool, len(input.Items))
+	for _, binding := range input.Items {
+		if binding.RecordingID == "" || len(binding.RecordingID) > 128 || strings.TrimSpace(binding.RecordingID) != binding.RecordingID || binding.PackageID == "" || len(binding.PackageID) > 128 || strings.TrimSpace(binding.PackageID) != binding.PackageID || seen[binding] {
+			handleError(w, assets.ErrInvalidInput)
+			return
+		}
+		seen[binding] = true
+	}
+	type result struct {
+		assets.RecordingLifecycleBinding
+		Status  string                         `json:"status"`
+		Package *assets.RecordingPackageStatus `json:"package,omitempty"`
+	}
+	items := make([]result, 0, len(input.Items))
+	for _, binding := range input.Items {
+		if err := r.Context().Err(); err != nil {
+			handleError(w, err)
+			return
+		}
+		p, err := h.recordingPackages.GetReady(r.Context(), binding.PackageID, binding.RecordingID)
+		item := result{RecordingLifecycleBinding: binding}
+		switch {
+		case err == nil:
+			projection := readyPackageProjection(p)
+			item.Status, item.Package = "ready", &projection
+		case errors.Is(err, assets.ErrNotFound):
+			item.Status = "not_found"
+		case errors.Is(err, assets.ErrForbidden):
+			item.Status = "forbidden"
+		default:
+			handleError(w, err)
+			return
+		}
+		items = append(items, item)
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Items []result `json:"items"`
+	}{items})
 }
 
 func (h *Handler) signRecordingPackage(w http.ResponseWriter, r *http.Request) {
