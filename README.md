@@ -315,6 +315,12 @@ first.
 startup. This controls application slog and default standard-log output.
 Persisted audit records remain independent of this setting.
 
+Failed/slow child diagnostics carry the validated request ID and fixed route
+class, including private recording-package reads. Failed events also record
+`context_state=active|canceled|deadline` at logging time; this is not the database
+error's cause. Query lifecycle timings include rows consumption and exclude
+implicit pool checkout. Raw paths, SQL and error text remain excluded.
+
 Recording cleanup emits `recording_cleanup_start` / `recording_cleanup_phase`
 with the fixed phase name, elapsed time and cancellation state. R2 bulk deletion
 emits `recording_delete_attempt` for each HTTP attempt (time to response headers,

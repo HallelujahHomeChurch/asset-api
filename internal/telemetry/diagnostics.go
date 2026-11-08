@@ -33,10 +33,9 @@ func RecordDatabaseOutcome(ctx context.Context, phase string, elapsed time.Durat
 
 func recordOutcome(ctx context.Context, phase string, code int, elapsed time.Duration, failed bool, threshold time.Duration) {
 	var summaries []phaseSummary
-	var observation *requestObservation
+	observation, _ := ctx.Value(requestKey{}).(*requestObservation)
 	reason := ""
 	if phase == "server" {
-		observation, _ = ctx.Value(requestKey{}).(*requestObservation)
 		if observation != nil {
 			var emit, childFailed bool
 			summaries, childFailed, emit, reason = observation.finish()
@@ -74,11 +73,24 @@ func recordOutcome(ctx context.Context, phase string, code int, elapsed time.Dur
 	}
 	sc := trace.SpanContextFromContext(ctx)
 	attrs := []any{"phase", phase, "outcome", outcome, "status", code, "duration_ms", elapsed.Milliseconds()}
+	if outcome == "failed" {
+		state := "active"
+		if errors.Is(ctx.Err(), context.Canceled) {
+			state = "canceled"
+		} else if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			state = "deadline"
+		}
+		// Context state is evidence at logging time, not the database error's cause.
+		attrs = append(attrs, "context_state", state)
+	}
 	if operation, _ := ctx.Value(auditOperationKey{}).(string); operation == "audit_auth_probe" || operation == "audit_append" {
 		attrs = append(attrs, "operation", operation)
 	}
 	if observation != nil {
-		attrs = append(attrs, "parent_span_id", observation.parentSpanID, "request_id", observation.id, "route_id", observation.route, "operation", "http_request", "phase_totals", phaseLogValue(summaries), "failure_reason", reason, "timing_semantics", "overlapping_work_not_wall_time", "db_checkout", "unmeasured_implicit_checkout")
+		attrs = append(attrs, "request_id", observation.id, "route_id", observation.route)
+		if phase == "server" {
+			attrs = append(attrs, "parent_span_id", observation.parentSpanID, "operation", "http_request", "phase_totals", phaseLogValue(summaries), "failure_reason", reason, "timing_semantics", "overlapping_work_not_wall_time", "db_checkout", "unmeasured_implicit_checkout")
+		}
 	}
 	if sc.IsValid() {
 		attrs = append(attrs, "trace_id", sc.TraceID().String(), "span_id", sc.SpanID().String(), "sampled", sc.IsSampled())
