@@ -1279,6 +1279,63 @@ paths:
         '403': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
+  /priv/recording-packages/ready-batch:
+    post:
+      operationId: readyRecordingPackages
+      summary: Read one bounded page of canonical recording-bound ready projections.
+      description: Owner-only and gated with HLS. Accepts 1-100 distinct recording/package pairs in at most 32 KiB. Reuses the single ready check per item; does not batch SQL or impersonate uploaders. Returns exactly one result per input in input order. Missing and denied packages are explicit per-item results; store failures fail the entire request. All responses are private/no-store. CMS independently authorizes publication and viewers.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [ { daprCaller: [] }, { internalServiceCaller: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  uniqueItems: true
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [recordingId, packageId]
+                    properties:
+                      recordingId: {type: string, minLength: 1, maxLength: 128}
+                      packageId: {type: string, minLength: 1, maxLength: 128}
+      responses:
+        '200':
+          description: Complete ordered results; no upload, inventory or storage locations.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    minItems: 1
+                    maxItems: 100
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [recordingId, packageId, status]
+                      properties:
+                        recordingId: {type: string}
+                        packageId: {type: string}
+                        status: {type: string, enum: [ready, not_found, forbidden]}
+                        package: {$ref: '#/components/schemas/RecordingPackageStatus'}
+        '400': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '500': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
   /priv/recording-packages/{packageID}/covers:
     parameters:
       - { $ref: '#/components/parameters/RecordingPackageID' }
@@ -2856,6 +2913,11 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
 components:
   securitySchemes:
+    internalServiceCaller:
+      type: apiKey
+      in: header
+      name: X-HHC-Caller-App-Id
+      description: Trusted service identity on internal-only ingress in the same environment. This route requires exactly hhc-web-api; do not expose this header-based admission through a public ingress. Cannot be combined with Dapr caller/token headers.
     daprCaller:
       type: apiKey
       in: header

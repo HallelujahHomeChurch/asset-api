@@ -91,6 +91,11 @@ owner while worker-only operations retain its original service identity.
 
 ## HLS package producer contract
 
+`POST /priv/recording-packages/ready-batch` reads 1–100 distinct recording/package
+pairs with the same canonical readiness and owner checks as the single ready
+route. It reduces HTTP round trips, retains per-item SQL reads, and returns
+explicit missing/denied results; a store failure fails the entire request.
+
 Capture confirmation performs storage LIST outside its database transaction.
 A short preflight preserves accepted receipt replay without accessing storage;
 the final transaction rechecks ownership, expiry, state, epoch, deletion and
