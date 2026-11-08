@@ -53,6 +53,14 @@ func observeRequest(ctx context.Context, r *http.Request) context.Context {
 	}
 	route := "other"
 	parts := strings.Split(r.URL.Path, "/")
+	if (r.Method == "GET" || r.Method == "HEAD") && len(parts) >= 4 && parts[1] == "priv" && parts[2] == "recording-packages" && parts[3] != "" {
+		switch {
+		case len(parts) == 4:
+			route = "recording_package_read"
+		case len(parts) == 5 && parts[4] == "ready":
+			route = "recording_package_ready"
+		}
+	}
 	if (r.Method == "GET" || r.Method == "HEAD") && len(parts) >= 5 && len(parts) <= 6 && parts[1] == "api" && parts[2] == "assets" && parts[3] == "public" {
 		route = "asset_public_download"
 	}
