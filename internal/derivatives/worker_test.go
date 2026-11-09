@@ -234,6 +234,30 @@ func TestWorkerDoesNotCleanupUnknownCommitOutcome(t *testing.T) {
 	}
 }
 
+func TestWorkerStopsBeforeRenderingAfterSourceCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	repo := &processingRepository{asset: processingAsset(1)}
+	blobs := &processingBlobs{objects: map[string][]byte{repo.asset.ObjectKey: testImage(t)}}
+	worker := NewWorker(repo, &cancelingProcessingBlob{BlobStore: blobs, cancel: cancel})
+
+	written, err := worker.process(ctx, repo.asset)
+	if !errors.Is(err, context.Canceled) || len(written) != 0 || len(repo.derivatives) != 0 || len(blobs.objects) != 1 {
+		t.Fatalf("written=%v derivatives=%v err=%v", written, repo.derivatives, err)
+	}
+}
+
+type cancelingProcessingBlob struct {
+	BlobStore
+	cancel context.CancelFunc
+}
+
+func (b *cancelingProcessingBlob) Open(ctx context.Context, key string, requested assets.ByteRange, etag string) (assets.BlobDownload, error) {
+	result, err := b.BlobStore.Open(ctx, key, requested, etag)
+	b.cancel()
+	return result, err
+}
+
 type processingRepository struct {
 	asset         assets.Asset
 	derivatives   []assets.Derivative

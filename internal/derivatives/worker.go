@@ -19,6 +19,9 @@ import (
 	_ "golang.org/x/image/webp"
 )
 
+// ProcessingLease bounds database ownership of an image processing attempt.
+const ProcessingLease = 3 * time.Minute
+
 var variants = []struct {
 	name  string
 	width int
@@ -79,7 +82,7 @@ func (w *Worker) Run(ctx context.Context) error {
 }
 
 func (w *Worker) ProcessOne(ctx context.Context) error {
-	asset, ok, err := w.repository.ClaimPendingProcessing(ctx, w.now().UTC(), 3*time.Minute)
+	asset, ok, err := w.repository.ClaimPendingProcessing(ctx, w.now().UTC(), ProcessingLease)
 	if err != nil || !ok {
 		return err
 	}
@@ -92,7 +95,7 @@ func (w *Worker) ProcessAsset(ctx context.Context, assetID, etag string) (Proces
 		return ProcessResult{}, assets.ErrInvalidInput
 	}
 	now := w.now().UTC()
-	asset, state, err := w.repository.ClaimProcessing(ctx, assetID, etag, now, 3*time.Minute)
+	asset, state, err := w.repository.ClaimProcessing(ctx, assetID, etag, now, ProcessingLease)
 	if err != nil {
 		return ProcessResult{}, err
 	}
@@ -153,14 +156,23 @@ func maxTime(left, right time.Time) time.Time {
 }
 
 func (w *Worker) process(ctx context.Context, asset assets.Asset) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	download, err := w.blobs.Open(ctx, asset.ObjectKey, assets.ByteRange{}, asset.ETag)
 	if err != nil {
 		return nil, fmt.Errorf("open original: %w", err)
 	}
 	defer download.Body.Close()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	encoded, err := io.ReadAll(io.LimitReader(download.Body, (25<<20)+1))
 	if err != nil {
 		return nil, fmt.Errorf("read image: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	if len(encoded) > 25<<20 {
 		return nil, terminalError{fmt.Errorf("read image: %w", assets.ErrInvalidUpload)}
@@ -184,13 +196,22 @@ func (w *Worker) process(ctx context.Context, asset assets.Asset) ([]string, err
 	values := make([]assets.Derivative, 0, len(variants))
 	written := make([]string, 0, len(variants))
 	for _, variant := range variants {
+		if err := ctx.Err(); err != nil {
+			return written, err
+		}
 		width := min(variant.width, source.Dx())
 		height := max(1, source.Dy()*width/source.Dx())
 		target := image.NewRGBA(image.Rect(0, 0, width, height))
 		draw.CatmullRom.Scale(target, target.Bounds(), decoded, source, draw.Over, nil)
+		if err := ctx.Err(); err != nil {
+			return written, err
+		}
 		var encoded bytes.Buffer
 		if err := jpeg.Encode(&encoded, target, &jpeg.Options{Quality: 88}); err != nil {
 			return written, terminalError{fmt.Errorf("encode %s: %w", variant.name, err)}
+		}
+		if err := ctx.Err(); err != nil {
+			return written, err
 		}
 		objectKey := path.Join(path.Dir(asset.ObjectKey), "derivatives", fmt.Sprintf("attempt-%d", asset.ProcessingAttempts), variant.name+".jpg")
 		written = append(written, objectKey)
@@ -199,6 +220,9 @@ func (w *Worker) process(ctx context.Context, asset assets.Asset) ([]string, err
 			return written, fmt.Errorf("store %s: %w", variant.name, err)
 		}
 		values = append(values, assets.Derivative{AssetID: asset.ID, Variant: variant.name, ObjectKey: objectKey, MIMEType: "image/jpeg", Width: width, Height: height, SizeBytes: properties.Size, ETag: properties.ETag, CreatedAt: now})
+	}
+	if err := ctx.Err(); err != nil {
+		return written, err
 	}
 	if err := w.repository.CompleteProcessing(ctx, asset.ID, asset.ETag, asset.ProcessingAttempts, values, now); err != nil {
 		return written, fmt.Errorf("complete processing: %w", err)
