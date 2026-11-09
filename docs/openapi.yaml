@@ -979,6 +979,49 @@ paths:
         '403': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
         '416': { $ref: '#/components/responses/Error' }
+  /priv/assets/{assetID}/owner-content:
+    parameters:
+      - { $ref: '#/components/parameters/AssetID' }
+      - { name: sha256, in: query, required: true, schema: { type: string, pattern: '^[0-9a-f]{64}$' } }
+      - { name: ownerType, in: query, required: true, schema: { type: string, minLength: 1, maxLength: 255 } }
+      - { name: ownerId, in: query, required: true, schema: { type: string, minLength: 1, maxLength: 255 } }
+    get:
+      operationId: readOwnerAssetContent
+      summary: Read approved owner content at an exact immutable digest
+      tags: [Private]
+      description: Approved verified CMS principals may read clean private bulletin issue source files by exact owner binding and digest. Supports Range and private no-store responses. Performs no grant writes.
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [ { verifiedAssetWorkload: [] } ]
+      responses:
+        '200': { $ref: '#/components/responses/Download' }
+        '206': { $ref: '#/components/responses/Download' }
+        '304': { description: Immutable content matches the supplied conditional ETag. }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '416': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+    head:
+      operationId: readOwnerAssetContentMetadata
+      summary: Read approved owner content headers under the same scope
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-web-api]
+      security: [ { verifiedAssetWorkload: [] } ]
+      responses:
+        '200': { description: Immutable content headers only. }
+        '206': { description: Immutable partial content headers only. }
+        '304': { description: Immutable content matches the supplied conditional ETag. }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '416': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
   /priv/assets/{assetID}/public-url:
     parameters: [ { $ref: '#/components/parameters/AssetID' } ]
     get:
@@ -2928,6 +2971,11 @@ components:
       in: header
       name: X-MS-CLIENT-PRINCIPAL
       description: Validated Azure workload principal. The configured LINE workload principal maps to `hhc-line-function-bot`.
+    verifiedAssetWorkload:
+      type: apiKey
+      in: header
+      name: X-HHC-Workload-Authorization
+      description: Bearer JWT with the configured issuer, exact audience and explicitly approved workload principal.
     gatewayDaprCaller:
       type: apiKey
       in: header

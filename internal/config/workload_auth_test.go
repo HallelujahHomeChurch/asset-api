@@ -20,6 +20,9 @@ func TestWorkloadAuthRuntimeConfig(t *testing.T) {
 		valid     bool
 	}{
 		{"synthetic", valid, true},
+		{"owner content CMS principal", strings.TrimSuffix(valid, "}") + `,"ownerContentPrincipals":["cms-id"]}`, true},
+		{"owner content extractor denied", strings.TrimSuffix(valid, "}") + `,"ownerContentPrincipals":["extractor-id"]}`, false},
+		{"owner content unknown principal", strings.TrimSuffix(valid, "}") + `,"ownerContentPrincipals":["unknown-id"]}`, false},
 		{"invalid claim", strings.Replace(valid, `"oid"`, `"appid"`, 1), false},
 		{"missing audience", strings.Replace(valid, `"asset-fixture"`, `""`, 1), false},
 		{"unsafe JWKS URL", strings.Replace(valid, "https://issuer.example/keys", "http://issuer.example/keys", 1), false},

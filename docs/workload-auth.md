@@ -192,3 +192,26 @@ owned the dimension check. To roll back CMS to a build without its check, first
 restore the flag-off Asset guard in an AS3-aware artifact and verify it serves.
 A pre-AS3 Asset artifact cannot apply this grant guard. Roll back further only
 after delegated assets have been handled through a separately reviewed recovery.
+
+### Verified owner content
+
+`ownerContentPrincipals` defaults to an empty list. Each configured ID must
+resolve to the existing CMS service alias. Only those exact verified principals
+can call `GET` or `HEAD /priv/assets/{assetID}/owner-content`. Set scopes only
+after the workload identity readiness gate and the CMS caller checks pass.
+
+The caller supplies the exact SHA-256, owner type and owner ID. Asset serves
+private, completed, clean and processing-ready original bytes in the approved
+`cms.weekly.image` and `cms.weekly.pdf` namespaces for `bulletin_issue` owners.
+That scope excludes collection and retention-managed media, download-job
+outputs and other owners. CMS checks the issue, locale and purpose association
+before requesting bytes.
+
+Asset binds the Blob read to the recorded ETag and rechecks the same immutable
+object and current access state before sending the body. HEAD and a matching
+conditional request use current metadata. Range uses the same authorization.
+Responses use `private, no-store`. Missing, deleted, purged, quarantined and
+mismatched objects return 404. Dependency failures return a sanitized error.
+The path creates no grants and exposes no Blob credentials. To disable it,
+remove the principal scope. The existing narrow illustration adapter remains
+available under its original authorization rules.
