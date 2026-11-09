@@ -164,16 +164,20 @@ func TestOpenAPISecurityAndWireContracts(t *testing.T) {
 		{"PATCH", "/priv/assets/collections/{collectionID}/retention", ""},
 		{"POST", "/priv/assets/collections/{collectionID}/acl", ""},
 		{"DELETE", "/priv/assets/collections/{collectionID}/acl/{aclID}", ""},
-		{"GET", "/priv/assets/{assetID}", ""},
 		{"GET", "/priv/assets/{assetID}/download", ""},
 		{"GET", "/priv/assets/{assetID}/public-url", ""},
-		{"POST", "/priv/assets/{assetID}/complete", ""},
 		{"POST", "/priv/assets/{assetID}/grants", ""},
 		{"DELETE", "/priv/assets/{assetID}/grants/{grantID}", ""},
 		{"POST", "/priv/assets/{assetID}/scan/requeue", ""},
 		{"DELETE", "/priv/assets/{assetID}", ""},
 	} {
 		assertContains(t, operationBlockFor(t, document, operation), "security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]")
+	}
+	for _, operation := range []documentedOperation{
+		{"GET", "/priv/assets/{assetID}", ""},
+		{"POST", "/priv/assets/{assetID}/complete", ""},
+	} {
+		assertContains(t, operationBlockFor(t, document, operation), "security: [ { daprCaller: [] }, { workloadPrincipal: [] }, { verifiedAssetWorkload: [] } ]")
 	}
 	assertContains(t, document, "name: X-MS-CLIENT-PRINCIPAL")
 

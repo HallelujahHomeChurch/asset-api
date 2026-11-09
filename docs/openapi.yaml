@@ -929,12 +929,12 @@ paths:
     get:
       summary: Asset API operation
       tags: [Private]
-      description: Returns lifecycle metadata only to the service that owns the asset namespace.
+      description: Returns lifecycle metadata only to the owning service. Verified workloads also receive versioned readiness and optional safety evidence.
       x-hhc-visibility: private
       x-hhc-callers: [account-api, hhc-web-api, hhc-line-function-bot]
-      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] }, { verifiedAssetWorkload: [] } ]
       responses:
-        '200': { $ref: '#/components/responses/Asset' }
+        '200': { $ref: '#/components/responses/PrivateAsset' }
         '403': { $ref: '#/components/responses/Error' }
     delete:
       summary: Asset API operation
@@ -1038,18 +1038,24 @@ paths:
     post:
       summary: Asset API operation
       tags: [Private]
-      description: Validates completed upload bytes, including namespace-specific detected MIME and decoded image dimensions, then queues the scan lifecycle.
+      description: Validates completed upload bytes, including namespace-specific detected MIME and decoded image dimensions when required, and normally queues a scan. The exact approved verified watermark workload can supply derivation proof for the supported bulletin transform. Verified workloads receive versioned readiness and optional safety evidence.
       x-hhc-visibility: private
       x-hhc-callers: [account-api, hhc-web-api, hhc-line-function-bot]
-      security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
+      security: [ { daprCaller: [] }, { workloadPrincipal: [] }, { verifiedAssetWorkload: [] } ]
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/CompleteUploadRequest' }
+            schema: { $ref: '#/components/schemas/CompletePrivateUploadRequest' }
       responses:
-        '200': { $ref: '#/components/responses/Asset' }
+        '200': { $ref: '#/components/responses/PrivateAsset' }
         '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
   /priv/assets/bulletin-derivatives/{assetID}/complete:
     parameters: [ { $ref: '#/components/parameters/AssetID' } ]
     post:
@@ -3013,6 +3019,9 @@ components:
     Asset:
       description: Asset lifecycle metadata.
       content: { application/json: { schema: { $ref: '#/components/schemas/Asset' } } }
+    PrivateAsset:
+      description: Owner lifecycle metadata with optional readiness and safety evidence for verified workloads.
+      content: { application/json: { schema: { $ref: '#/components/schemas/PrivateAsset' } } }
     CreatedUpload:
       description: Idempotent upload session with a short-lived upload target.
       content: { application/json: { schema: { $ref: '#/components/schemas/CreatedUpload' } } }
@@ -4012,6 +4021,23 @@ components:
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
         deletedAt: { type: string, format: date-time }
+    PrivateAsset:
+      allOf:
+        - $ref: '#/components/schemas/Asset'
+        - type: object
+          properties:
+            processingReadiness:
+              description: Technical availability only. Verified workload readers must reject unknown versions and states.
+              type: object
+              required: [version, state]
+              properties:
+                version: { type: integer, const: 1 }
+                state: { type: string, enum: [pending, ready, rejected] }
+            safetyEvidence:
+              type: object
+              required: [kind]
+              properties:
+                kind: { type: string, enum: [scanned, trusted-derived] }
     UploadSession:
       type: object
       required: [id, assetId, maxSizeBytes, status, expiresAt, createdAt]
@@ -4062,6 +4088,22 @@ components:
         sizeBytes: { type: integer, format: int64, minimum: 1 }
         checksumSha256: { type: string }
         mimeType: { type: string }
+    CompletePrivateUploadRequest:
+      allOf:
+        - $ref: '#/components/schemas/CompleteUploadRequest'
+        - type: object
+          properties:
+            derivation:
+              description: Omit for normal scanning. Requires exact verified watermark scope and an immutable source match.
+              type: object
+              additionalProperties: false
+              required: [sourceAssetId, sourceSha256, sourceETag, transform, transformVersion]
+              properties:
+                sourceAssetId: { $ref: '#/components/schemas/OpaqueID' }
+                sourceSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+                sourceETag: { type: string, minLength: 1, maxLength: 255 }
+                transform: { type: string, const: bulletin-watermark }
+                transformVersion: { type: string, const: '1' }
     Grant:
       type: object
       required: [id, assetId, subjectType, subjectId, permission, createdAt]

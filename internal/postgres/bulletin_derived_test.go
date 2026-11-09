@@ -16,8 +16,14 @@ func TestTrustedBulletinCompletionCommitsWithoutScanOutbox(t *testing.T) {
 	if err := store.CreateUpload(ctx, asset, session); err != nil {
 		t.Fatal(err)
 	}
+	sourceID, sourceHash := strings.Repeat("b", 32), strings.Repeat("c", 64)
+	insertAsset(t, db, sourceID, assets.UploadCompleted, assets.ScanClean, assets.ProcessingNotRequired, now, time.Time{})
+	if _, err := db.Exec(`UPDATE assets SET namespace='cms.weekly.pdf',owner_service='hhc-web-api',owner_type='bulletin_issue',purpose='weekly_bulletin',locale='zh-Hant',visibility='private',detected_mime_type='application/pdf',checksum_sha256=$2,etag='source-etag' WHERE id=$1`, sourceID, sourceHash); err != nil {
+		t.Fatal(err)
+	}
+	asset.Derivation = assets.Derivation{SourceAssetID: sourceID, SourceSHA256: sourceHash, SourceETag: "source-etag", Transform: assets.BulletinWatermarkTransform, TransformVersion: assets.BulletinWatermarkVersion}
 	asset.UploadStatus, asset.ScanStatus, asset.ScanSignature = assets.UploadCompleted, assets.ScanClean, assets.TrustedBulletinWatermark
-	asset.ScanDetails, asset.DetectedMIMEType, asset.ChecksumSHA256, asset.ETag, asset.SizeBytes = strings.Repeat("b", 32)+":"+strings.Repeat("c", 64), "application/pdf", strings.Repeat("e", 64), "immutable", 20
+	asset.ScanDetails, asset.DetectedMIMEType, asset.ChecksumSHA256, asset.ETag, asset.SizeBytes = sourceID+":"+sourceHash, "application/pdf", strings.Repeat("e", 64), "immutable", 20
 	session.Status, session.CompletedAt = assets.UploadCompleted, now
 	for range 2 {
 		if err := store.CompleteUpload(ctx, asset, session, assets.ScanRequest{}); err != nil {

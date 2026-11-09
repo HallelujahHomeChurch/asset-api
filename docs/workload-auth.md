@@ -215,3 +215,47 @@ mismatched objects return 404. Dependency failures return a sanitized error.
 The path creates no grants and exposes no Blob credentials. To disable it,
 remove the principal scope. The existing narrow illustration adapter remains
 available under its original authorization rules.
+
+### Verified completion and readiness
+
+`trustedDerivationPrincipals` defaults to an empty list. It accepts only exact
+verified principals mapped to `hhc-web-bulletin-worker`. For those principals
+the existing private completion route can accept the optional `derivation`
+object. The only approved pair is transform `bulletin-watermark` and version
+`"1"`. Supply the exact source asset ID, lowercase SHA-256 and recorded ETag.
+Asset fences the clean, completed private bulletin issue PDF and the member
+download-job output in one transaction. The output is still validated against
+its byte length, checksum and MIME. The worker retains responsibility for
+binding the source to the authorized bulletin job and locale.
+
+A matching committed proof replays the original output. A different proof or a
+completed ordinary upload returns 409. A source deletion or quarantine that
+wins before the transaction prevents trusted completion. Source retirement
+after commit does not change the existing output lifecycle. Migration 051
+stores structured proof with the output and session. The old narrow completion
+adapter uses the same fence for new writes and retains its original response
+and historical replay format. An ordinary first completion queues scanning.
+An ordinary request with identical bytes can replay an already completed
+trusted output under the historical idempotency rule. It cannot create or
+upgrade trusted evidence, and the replay retains the original safety kind.
+
+Verified workloads receive `processingReadiness` on private asset GET and
+completion. Version 1 states are `pending`, `ready` and `rejected`. Readers
+must reject unknown versions and states. They may infer readiness from
+recognized legacy fields only when the field is absent. `ready` concerns
+technical availability. Access, publication and retention still have their
+existing checks. Optional `safetyEvidence.kind` is `scanned` or
+`trusted-derived`. The legacy `scanStatus: clean` enum continues to represent
+accepted safety, including the established trusted watermark path. It is not
+proof of an actual malware scan. Consumers that require a scan must also
+require scanned evidence. Legacy and end-user projections keep their existing
+shapes.
+
+Deploy the migration and compatible producer before sending proof. A workload
+transport switch can receive the optional fields even while the proof scope
+is empty. Close the CMS, Account and LINE readers before enabling their
+workload transport. Enable derivation only after the verified identity and CMS
+release gates. Remove the derivation scope and return the caller to the narrow
+adapter to disable the new route. Keep an AS4-compatible writer while
+structured proof exists. The previous writer cannot validate source and
+session atomicity or replay the structured evidence.

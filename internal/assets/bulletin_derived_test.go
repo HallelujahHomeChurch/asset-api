@@ -16,7 +16,7 @@ func TestCompleteDerivedBulletinPreservesByteValidationWithoutScanQueue(t *testi
 			ctx := context.Background()
 			repo, blobs := newMemoryRepository(), newMemoryBlobStore()
 			service := NewService(repo, blobs, "https://example.invalid/assets", time.Now)
-			source := Asset{ID: strings.Repeat("b", 32), Namespace: "cms.weekly.pdf", OwnerService: "hhc-web-api", OwnerType: "bulletin_issue", Purpose: "weekly_bulletin", Locale: "zh-Hant", ExpectedMIMEType: "application/pdf", DetectedMIMEType: "application/pdf", UploadStatus: UploadCompleted, ScanStatus: ScanClean, Visibility: VisibilityPrivate, ChecksumSHA256: strings.Repeat("c", 64), ETag: "immutable"}
+			source := Asset{ID: strings.Repeat("b", 32), Namespace: "cms.weekly.pdf", OwnerService: "hhc-web-api", OwnerType: "bulletin_issue", Purpose: "weekly_bulletin", Locale: "zh-Hant", ExpectedMIMEType: "application/pdf", DetectedMIMEType: "application/pdf", UploadStatus: UploadCompleted, ScanStatus: ScanClean, ProcessingStatus: ProcessingNotRequired, Visibility: VisibilityPrivate, ChecksumSHA256: strings.Repeat("c", 64), ETag: "immutable"}
 			created, err := service.CreateUploadSession(ctx, CreateUploadInput{Namespace: "cms.weekly.pdf", OwnerService: "hhc-web-api", OwnerType: "bulletin_download_job", OwnerID: "job", Purpose: "weekly_bulletin_member", Locale: "zh-Hant", OriginalFileName: "weekly.pdf", ExpectedMIMEType: "application/pdf", MaxSizeBytes: 1024}, "derived")
 			if err != nil {
 				t.Fatal(err)

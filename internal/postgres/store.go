@@ -101,11 +101,25 @@ func (s *Store) GetAsset(ctx context.Context, id string) (assets.Asset, error) {
 
 // Receipt replay needs retained tombstones; ordinary reads still hide purged assets.
 func (s *Store) getAsset(ctx context.Context, id string, includePurged bool) (assets.Asset, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id,namespace,owner_service,owner_type,owner_id,purpose,locale,original_file_name,object_key,expected_mime_type,detected_mime_type,size_bytes,checksum_sha256,etag,upload_status,scan_status,scan_details,scan_signature_version,scan_failure_category,processing_status,visibility,created_at,updated_at,COALESCE(deleted_at,'0001-01-01'::timestamptz),scan_attempts,scan_event_id,processing_attempts,processing_error,COALESCE(processing_next_attempt_at,'0001-01-01'::timestamptz),COALESCE(processing_claimed_until,'0001-01-01'::timestamptz),COALESCE(purged_at,'0001-01-01'::timestamptz),security_profile,processing_profile FROM assets WHERE id=$1 AND ($2 OR purged_at IS NULL)`, id, includePurged)
+	return readAsset(ctx, s.db, id, includePurged)
+}
+
+type assetRowReader interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func readAsset(ctx context.Context, db assetRowReader, id string, includePurged bool) (assets.Asset, error) {
+	row := db.QueryRowContext(ctx, `SELECT id,namespace,owner_service,owner_type,owner_id,purpose,locale,original_file_name,object_key,expected_mime_type,detected_mime_type,size_bytes,checksum_sha256,etag,upload_status,scan_status,scan_details,scan_signature_version,scan_failure_category,processing_status,visibility,created_at,updated_at,COALESCE(deleted_at,'0001-01-01'::timestamptz),scan_attempts,scan_event_id,processing_attempts,processing_error,COALESCE(processing_next_attempt_at,'0001-01-01'::timestamptz),COALESCE(processing_claimed_until,'0001-01-01'::timestamptz),COALESCE(purged_at,'0001-01-01'::timestamptz),security_profile,processing_profile,derivation_proof FROM assets WHERE id=$1 AND ($2 OR purged_at IS NULL)`, id, includePurged)
 	var value assets.Asset
-	err := row.Scan(&value.ID, &value.Namespace, &value.OwnerService, &value.OwnerType, &value.OwnerID, &value.Purpose, &value.Locale, &value.OriginalFileName, &value.ObjectKey, &value.ExpectedMIMEType, &value.DetectedMIMEType, &value.SizeBytes, &value.ChecksumSHA256, &value.ETag, &value.UploadStatus, &value.ScanStatus, &value.ScanDetails, &value.ScanSignature, &value.ScanFailure, &value.ProcessingStatus, &value.Visibility, &value.CreatedAt, &value.UpdatedAt, &value.DeletedAt, &value.ScanAttempts, &value.ScanEventID, &value.ProcessingAttempts, &value.ProcessingError, &value.ProcessingNextAt, &value.ProcessingClaimedUntil, &value.PurgedAt, &value.UploadProfiles.SecurityProfile, &value.UploadProfiles.ProcessingProfile)
+	var proof []byte
+	err := row.Scan(&value.ID, &value.Namespace, &value.OwnerService, &value.OwnerType, &value.OwnerID, &value.Purpose, &value.Locale, &value.OriginalFileName, &value.ObjectKey, &value.ExpectedMIMEType, &value.DetectedMIMEType, &value.SizeBytes, &value.ChecksumSHA256, &value.ETag, &value.UploadStatus, &value.ScanStatus, &value.ScanDetails, &value.ScanSignature, &value.ScanFailure, &value.ProcessingStatus, &value.Visibility, &value.CreatedAt, &value.UpdatedAt, &value.DeletedAt, &value.ScanAttempts, &value.ScanEventID, &value.ProcessingAttempts, &value.ProcessingError, &value.ProcessingNextAt, &value.ProcessingClaimedUntil, &value.PurgedAt, &value.UploadProfiles.SecurityProfile, &value.UploadProfiles.ProcessingProfile, &proof)
 	if errors.Is(err, sql.ErrNoRows) {
 		return assets.Asset{}, assets.ErrNotFound
+	}
+	if err == nil && proof != nil {
+		if err = json.Unmarshal(proof, &value.Derivation); err == nil && !value.Derivation.Valid() {
+			err = errors.New("invalid stored asset derivation")
+		}
 	}
 	return value, err
 }
@@ -135,8 +149,20 @@ func (s *Store) FindUploadByIdempotency(ctx context.Context, caller, operation, 
 }
 
 func (s *Store) CompleteUpload(ctx context.Context, asset assets.Asset, session assets.UploadSession, request assets.ScanRequest) error {
-	trusted := asset.ScanStatus == assets.ScanClean && asset.ScanSignature == assets.TrustedBulletinWatermark
-	if trusted && request != (assets.ScanRequest{}) || !trusted && (request.EventID == "" || request.AssetID != asset.ID || request.ETag == "" || request.ETag != asset.ETag || request.CreatedAt.IsZero()) {
+	trusted := asset.Derivation != (assets.Derivation{})
+	var proof []byte
+	if trusted {
+		if !asset.Derivation.Valid() || asset.Derivation.SourceAssetID == asset.ID || session.AssetID != asset.ID ||
+			asset.ScanStatus != assets.ScanClean || asset.ScanSignature != assets.TrustedBulletinWatermark || request != (assets.ScanRequest{}) {
+			return assets.ErrInvalidInput
+		}
+		var err error
+		proof, err = json.Marshal(asset.Derivation)
+		if err != nil {
+			return err
+		}
+	} else if request.EventID == "" || request.AssetID != asset.ID || request.ETag == "" || request.ETag != asset.ETag || request.CreatedAt.IsZero() ||
+		asset.ScanSignature == assets.TrustedBulletinWatermark {
 		return assets.ErrInvalidInput
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -144,8 +170,15 @@ func (s *Store) CompleteUpload(ctx context.Context, asset assets.Asset, session 
 		return err
 	}
 	defer tx.Rollback()
+	if trusted {
+		// Lock source and output in ID order before acquiring the upload session.
+		// Source deletion and quarantine update the same source row.
+		if _, err := tx.ExecContext(ctx, `SELECT id FROM assets WHERE id IN ($1,$2) ORDER BY id FOR UPDATE`, asset.ID, asset.Derivation.SourceAssetID); err != nil {
+			return err
+		}
+	}
 	var assetStatus, sessionStatus string
-	err = tx.QueryRowContext(ctx, `SELECT a.upload_status,u.status FROM assets a JOIN upload_sessions u ON u.asset_id=a.id WHERE a.id=$1 AND a.purged_at IS NULL FOR UPDATE OF a,u`, asset.ID).Scan(&assetStatus, &sessionStatus)
+	err = tx.QueryRowContext(ctx, `SELECT a.upload_status,u.status FROM assets a JOIN upload_sessions u ON u.asset_id=a.id WHERE a.id=$1 AND a.purged_at IS NULL AND (NOT $2 OR a.deleted_at IS NULL) FOR UPDATE OF a,u`, asset.ID, trusted).Scan(&assetStatus, &sessionStatus)
 	if errors.Is(err, sql.ErrNoRows) {
 		return assets.ErrNotFound
 	}
@@ -153,12 +186,36 @@ func (s *Store) CompleteUpload(ctx context.Context, asset assets.Asset, session 
 		return err
 	}
 	if assetStatus == string(assets.UploadCompleted) && sessionStatus == string(assets.UploadCompleted) {
+		if trusted {
+			stored, err := readAsset(ctx, tx, asset.ID, false)
+			if err != nil {
+				return err
+			}
+			if stored.Derivation != asset.Derivation || stored.ScanStatus != assets.ScanClean ||
+				stored.ETag != asset.ETag || stored.ChecksumSHA256 != asset.ChecksumSHA256 ||
+				stored.SizeBytes != asset.SizeBytes || stored.DetectedMIMEType != asset.DetectedMIMEType {
+				return assets.ErrConflict
+			}
+		}
 		return tx.Commit()
 	}
 	if assetStatus != string(assets.UploadCreated) || sessionStatus != string(assets.UploadCreated) {
 		return assets.ErrConflict
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE assets SET detected_mime_type=$2,size_bytes=$3,checksum_sha256=$4,etag=$5,upload_status=$6,scan_status=$7,scan_event_id=$8,updated_at=$9,scan_signature_version=$10,scan_details=$11 WHERE id=$1`, asset.ID, asset.DetectedMIMEType, asset.SizeBytes, asset.ChecksumSHA256, asset.ETag, asset.UploadStatus, asset.ScanStatus, request.EventID, asset.UpdatedAt, asset.ScanSignature, asset.ScanDetails)
+	if trusted {
+		output, err := readAsset(ctx, tx, asset.ID, false)
+		if err != nil {
+			return err
+		}
+		source, err := readAsset(ctx, tx, asset.Derivation.SourceAssetID, true)
+		if err != nil {
+			return err
+		}
+		if !asset.Derivation.MatchesBulletin(source, output) {
+			return assets.ErrInvalidInput
+		}
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE assets SET detected_mime_type=$2,size_bytes=$3,checksum_sha256=$4,etag=$5,upload_status=$6,scan_status=$7,scan_event_id=$8,updated_at=$9,scan_signature_version=$10,scan_details=$11,derivation_proof=$12 WHERE id=$1`, asset.ID, asset.DetectedMIMEType, asset.SizeBytes, asset.ChecksumSHA256, asset.ETag, asset.UploadStatus, asset.ScanStatus, request.EventID, asset.UpdatedAt, asset.ScanSignature, asset.ScanDetails, proof)
 	if err != nil {
 		return err
 	}

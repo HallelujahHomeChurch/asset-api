@@ -118,10 +118,10 @@ func (s *Service) replayUpload(ctx context.Context, input CreateUploadInput, key
 }
 
 func (s *Service) CompleteUpload(ctx context.Context, assetID string, input CompleteUploadInput) (Asset, error) {
-	return s.completeUpload(ctx, assetID, input, "")
+	return s.completeUpload(ctx, assetID, input, Derivation{}, false)
 }
 
-func (s *Service) completeUpload(ctx context.Context, assetID string, input CompleteUploadInput, derivation string) (Asset, error) {
+func (s *Service) completeUpload(ctx context.Context, assetID string, input CompleteUploadInput, derivation Derivation, legacy bool) (Asset, error) {
 	asset, err := s.repository.GetAsset(ctx, assetID)
 	if err != nil {
 		return Asset{}, err
@@ -130,10 +130,26 @@ func (s *Service) completeUpload(ctx context.Context, assetID string, input Comp
 	if err != nil {
 		return Asset{}, err
 	}
+	trusted := derivation != (Derivation{})
+	if trusted && (legacy || session.Status != UploadCompleted) {
+		source, err := s.repository.GetAsset(ctx, derivation.SourceAssetID)
+		if err != nil {
+			return Asset{}, err
+		}
+		if legacy {
+			derivation.SourceETag = source.ETag
+		}
+		if !derivation.MatchesBulletin(source, asset) {
+			return Asset{}, ErrInvalidInput
+		}
+	}
 	if session.Status == UploadCompleted {
 		asset, err = s.repository.GetAsset(ctx, assetID)
 		if err != nil {
 			return Asset{}, err
+		}
+		if trusted && (!asset.DeletedAt.IsZero() || !derivation.matchesCompleted(asset, legacy)) {
+			return Asset{}, ErrConflict
 		}
 		if asset.SizeBytes == input.SizeBytes && asset.ChecksumSHA256 == strings.ToLower(input.ChecksumSHA256) && asset.DetectedMIMEType == input.MIMEType {
 			if err := s.blobs.Delete(ctx, session.StagingObjectKey); err != nil {
@@ -272,12 +288,24 @@ func (s *Service) completeUpload(ctx context.Context, assetID string, input Comp
 	session.Status = UploadCompleted
 	session.CompletedAt = now
 	request := ScanRequest{EventID: newID(), AssetID: asset.ID, ETag: asset.ETag, CreatedAt: now}
-	if derivation != "" {
-		asset.ScanStatus, asset.ScanSignature, asset.ScanDetails = ScanClean, TrustedBulletinWatermark, derivation
+	if trusted {
+		asset.ScanStatus, asset.ScanSignature, asset.Derivation = ScanClean, TrustedBulletinWatermark, derivation
+		if legacy {
+			asset.ScanDetails = derivation.legacyDetails()
+		}
 		request = ScanRequest{}
 	}
 	if err := s.repository.CompleteUpload(ctx, asset, session, request); err != nil {
 		return Asset{}, fmt.Errorf("complete upload: %w", err)
+	}
+	if trusted {
+		asset, err = s.repository.GetAsset(ctx, assetID)
+		if err != nil {
+			return Asset{}, err
+		}
+		if !derivation.matchesCompleted(asset, legacy) {
+			return Asset{}, ErrConflict
+		}
 	}
 	if err := s.blobs.Delete(ctx, session.StagingObjectKey); err != nil {
 		return Asset{}, fmt.Errorf("delete committed staging blob: %w", err)

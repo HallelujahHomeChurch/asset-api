@@ -14,7 +14,7 @@ func TestWorkloadAuthRuntimeConfig(t *testing.T) {
 		t.Fatalf("default workload verifier config is not disabled: %v", err)
 	}
 
-	valid := `{"issuer":"https://issuer.example/tenant","audience":"asset-fixture","jwksUrl":"https://issuer.example/keys","principalClaim":"oid","principals":{"cms-id":"hhc-web-api","reader-id":"api-gateway","extractor-id":"hhc-web-extractor"},"disableLegacyCallers":["hhc-web-api"]}`
+	valid := `{"issuer":"https://issuer.example/tenant","audience":"asset-fixture","jwksUrl":"https://issuer.example/keys","principalClaim":"oid","principals":{"cms-id":"hhc-web-api","reader-id":"api-gateway","extractor-id":"hhc-web-extractor","watermark-id":"hhc-web-bulletin-worker"},"disableLegacyCallers":["hhc-web-api"]}`
 	for _, test := range []struct {
 		name, raw string
 		valid     bool
@@ -23,7 +23,9 @@ func TestWorkloadAuthRuntimeConfig(t *testing.T) {
 		{"owner content CMS principal", strings.TrimSuffix(valid, "}") + `,"ownerContentPrincipals":["cms-id"]}`, true},
 		{"owner content extractor denied", strings.TrimSuffix(valid, "}") + `,"ownerContentPrincipals":["extractor-id"]}`, false},
 		{"owner content unknown principal", strings.TrimSuffix(valid, "}") + `,"ownerContentPrincipals":["unknown-id"]}`, false},
-		{"invalid claim", strings.Replace(valid, `"oid"`, `"appid"`, 1), false},
+
+		{"trusted derivation watermark principal", strings.TrimSuffix(valid, "}") + `,"trustedDerivationPrincipals":["watermark-id"]}`, true},
+		{"trusted derivation CMS denied", strings.TrimSuffix(valid, "}") + `,"trustedDerivationPrincipals":["cms-id"]}`, false}, {"invalid claim", strings.Replace(valid, `"oid"`, `"appid"`, 1), false},
 		{"missing audience", strings.Replace(valid, `"asset-fixture"`, `""`, 1), false},
 		{"unsafe JWKS URL", strings.Replace(valid, "https://issuer.example/keys", "http://issuer.example/keys", 1), false},
 		{"principal cannot add a caller", strings.Replace(valid, `"reader-id":"api-gateway"`, `"reader-id":"unknown-caller"`, 1), false},
