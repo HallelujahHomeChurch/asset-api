@@ -134,6 +134,9 @@ func Load() (Config, error) {
 	if cfg.AllowedCallers[cfg.ReaderCallerAppID] {
 		return Config{}, fmt.Errorf("ASSET_READER_CALLER_APP_ID must not be in ASSET_ALLOWED_CALLERS")
 	}
+	if cfg.ReaderCallerAppID == BulletinExtractorCaller {
+		return Config{}, fmt.Errorf("ASSET_READER_CALLER_APP_ID cannot identify the bulletin extractor")
+	}
 	cfg.WorkloadAuth, err = loadWorkloadAuth(os.Getenv("ASSET_WORKLOAD_AUTH"), cfg)
 	if err != nil {
 		return Config{}, err

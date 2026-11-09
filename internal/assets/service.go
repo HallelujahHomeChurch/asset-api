@@ -350,6 +350,16 @@ func (s *Service) RevokeGrant(ctx context.Context, assetID, grantID string) erro
 	return s.repository.RevokeGrant(ctx, assetID, grantID, s.now().UTC())
 }
 
+func (s *Service) RevokeServiceReadGrant(ctx context.Context, assetID, grantID, subject string) error {
+	repository, ok := s.repository.(interface {
+		RevokeServiceReadGrant(context.Context, string, string, string, time.Time) error
+	})
+	if !ok {
+		return ErrForbidden
+	}
+	return repository.RevokeServiceReadGrant(ctx, assetID, grantID, subject, s.now().UTC())
+}
+
 func (s *Service) SoftDelete(ctx context.Context, assetID, ownerService string) error {
 	repository, ok := s.repository.(interface {
 		SoftDeleteAsset(context.Context, string, string, time.Time) error

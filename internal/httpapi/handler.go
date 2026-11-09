@@ -250,6 +250,13 @@ func (h *Handler) internal(next http.Handler) http.Handler {
 			return
 		}
 		caller := service
+		if service == extractorCaller {
+			if principal == "" || !extractorRouteAllowed(r) {
+				writeWorkloadAuthError(w, assets.ErrForbidden)
+				return
+			}
+			caller = "hhc-web-api"
+		}
 		// The bulletin worker owns no assets of its own; it acts for CMS.
 		if caller == "hhc-web-bulletin-worker" {
 			caller = "hhc-web-api"
@@ -371,7 +378,7 @@ func (h *Handler) gatewayIngress(next http.Handler) http.Handler {
 			writeWorkloadAuthError(w, err)
 			return
 		}
-		if caller != h.callerConfig.ReaderCallerAppID {
+		if caller == extractorCaller || caller != h.callerConfig.ReaderCallerAppID {
 			writeWorkloadAuthError(w, assets.ErrForbidden)
 			return
 		}
@@ -450,6 +457,11 @@ func (h *Handler) createUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	caller := callerFromRequest(r, h.allowDevCallerHeader)
+	if requestService(r) == extractorCaller && !extractorIllustration(input.Namespace, input.OwnerType, input.OwnerID,
+		input.Purpose, input.Locale, input.ExpectedMIMEType, input.Visibility) {
+		handleError(w, assets.ErrForbidden)
+		return
+	}
 	policy, ok := assets.PolicyFor(input.Namespace)
 	if !ok || input.OwnerService != caller || policy.OwnerService != caller {
 		writeError(w, http.StatusForbidden, "AST_FORBIDDEN", "caller cannot use this asset namespace")
@@ -476,16 +488,9 @@ func (h *Handler) cleanupAccount(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 func (h *Handler) getAsset(w http.ResponseWriter, r *http.Request) {
-	asset, err := h.service.GetAsset(r.Context(), r.PathValue("assetID"))
-	if err != nil {
-		handleError(w, err)
-		return
+	if asset, ok := h.ownedAsset(w, r); ok {
+		writeJSON(w, http.StatusOK, asset)
 	}
-	if asset.OwnerService != callerFromRequest(r, h.allowDevCallerHeader) {
-		writeError(w, http.StatusForbidden, "AST_FORBIDDEN", "caller does not own this asset")
-		return
-	}
-	writeJSON(w, http.StatusOK, asset)
 }
 func (h *Handler) completeUpload(w http.ResponseWriter, r *http.Request) {
 	if !h.requireOwnedAsset(w, r) {
@@ -510,6 +515,10 @@ func (h *Handler) createGrant(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &input) {
 		return
 	}
+	if requestService(r) == extractorCaller && !extractorGrantAllowed(input, time.Now()) {
+		handleError(w, assets.ErrForbidden)
+		return
+	}
 	if input.IdempotencyKey == "" {
 		input.IdempotencyKey = r.Header.Get("Idempotency-Key")
 	}
@@ -524,7 +533,14 @@ func (h *Handler) revokeGrant(w http.ResponseWriter, r *http.Request) {
 	if !h.requireOwnedAsset(w, r) {
 		return
 	}
-	if err := h.service.RevokeGrant(r.Context(), r.PathValue("assetID"), r.PathValue("grantID")); err != nil {
+	assetID, grantID := r.PathValue("assetID"), r.PathValue("grantID")
+	var err error
+	if requestService(r) == extractorCaller {
+		err = h.service.RevokeServiceReadGrant(r.Context(), assetID, grantID, extractorCaller)
+	} else {
+		err = h.service.RevokeGrant(r.Context(), assetID, grantID)
+	}
+	if err != nil {
 		handleError(w, err)
 		return
 	}
@@ -539,6 +555,10 @@ func (h *Handler) publicURL(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) authorizedDownload(w http.ResponseWriter, r *http.Request) {
 	if !h.requireOwnedAsset(w, r) {
+		return
+	}
+	if requestService(r) == extractorCaller && !extractorDownloadAllowed(r) {
+		handleError(w, assets.ErrForbidden)
 		return
 	}
 	metadata, err := h.service.AuthorizedMetadata(
@@ -1088,16 +1108,25 @@ func validBytes(value string, limit int) bool {
 }
 
 func (h *Handler) requireOwnedAsset(w http.ResponseWriter, r *http.Request) bool {
+	_, ok := h.ownedAsset(w, r)
+	return ok
+}
+
+func (h *Handler) ownedAsset(w http.ResponseWriter, r *http.Request) (assets.Asset, bool) {
 	asset, err := h.service.GetAsset(r.Context(), r.PathValue("assetID"))
 	if err != nil {
 		handleError(w, err)
-		return false
+		return assets.Asset{}, false
+	}
+	if requestService(r) == extractorCaller && !extractorAssetAllowed(r, asset) {
+		handleError(w, assets.ErrNotFound)
+		return assets.Asset{}, false
 	}
 	if asset.OwnerService != callerFromRequest(r, h.allowDevCallerHeader) {
 		writeError(w, http.StatusForbidden, "AST_FORBIDDEN", "caller does not own this asset")
-		return false
+		return assets.Asset{}, false
 	}
-	return true
+	return asset, true
 }
 
 func (h *Handler) publicDownload(w http.ResponseWriter, r *http.Request) {

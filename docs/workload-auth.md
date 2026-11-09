@@ -43,7 +43,7 @@ when explicitly configured. The following values are synthetic examples.
   "principalClaim": "oid",
   "principals": {
     "cms-fixture-object": "hhc-web-api",
-    "extractor-fixture-object": "hhc-web-api",
+    "extractor-fixture-object": "hhc-web-extractor",
     "watermark-fixture-object": "hhc-web-bulletin-worker",
     "gateway-fixture-object": "api-gateway"
   },
@@ -91,6 +91,22 @@ claims, owner mapping and dual-mode rollback have been verified. Local fixtures
 use an isolated issuer and keys. They do not certify production identity
 readiness. Existing Dapr fallback stays available for the permitted aliases.
 
+
+## Verified bulletin extractor
+
+A verified `hhc-web-extractor` retains its own service identity and uses CMS
+storage ownership for the existing zh-Hant bulletin flows. It can read source
+PDF metadata, create its own service read grant for clean source bytes with an
+expiry of at most one hour, download through that grant and revoke that exact
+grant. Other grant subjects and permissions are rejected. Revocation is scoped
+by asset, grant, service subject and read permission in the database.
+
+The extractor can create, complete and inspect its private `cms.weekly.image`
+PNG uploads for `bulletin_issue` and `online_bulletin_illustration`. Existing
+2 MiB and ordinary scan limits apply. Other CMS asset namespaces and actions
+remain outside this delegation. Header-only and Dapr callers cannot assume the
+new alias. Keep the current legacy extractor identity until its real token and
+both bulletin flows are verified.
 
 ## Trusted bulletin derivative completion
 

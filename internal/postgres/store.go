@@ -433,6 +433,23 @@ func (s *Store) RevokeGrant(ctx context.Context, assetID, grantID string, now ti
 	}
 	return tx.Commit()
 }
+func (s *Store) RevokeServiceReadGrant(ctx context.Context, assetID, grantID, subject string, now time.Time) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE asset_grants SET revoked_at=$3
+		WHERE id=$1 AND asset_id=$2 AND revoked_at IS NULL
+		AND subject_type='service' AND subject_id=$4 AND permission='read'`, grantID, assetID, now, subject)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return assets.ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) HasActiveGrant(ctx context.Context, assetID string, subject assets.SubjectType, subjectID string, permission assets.Permission, now time.Time) (bool, error) {
 	var exists bool
 	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM asset_grants WHERE asset_id=$1 AND subject_type=$2 AND subject_id=$3 AND permission=$4 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>$5))`, assetID, subject, subjectID, permission, now).Scan(&exists)
