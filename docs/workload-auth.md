@@ -132,3 +132,63 @@ back only to the header-compatible image; restoring an older image requires a
 separate coordinated restoration of its prior authentication configuration.
 The release retains storage/queue identities and the existing app/worker
 rollback path. No database, media, retention, or permission migration is needed.
+
+## Upload profile pairs
+
+Omitting both `securityProfile` and `processingProfile` selects the existing
+namespace policy. Legacy upload fingerprints and response fields stay compatible.
+An explicit pair must match the existing mapping for a known namespace and a
+scope configured for the verified principal. Unknown or partial pairs, malformed
+namespace names, and known namespace mismatches return 400. A valid pair
+without the verified principal's approved scope returns 403.
+
+The initial registry preserves the existing MIME, byte, visibility and processing
+limits. Only these complete pairs are admitted.
+
+| Existing namespace | Security profile | Processing profile |
+| --- | --- | --- |
+| `account.avatar` | `avatar-jpeg-v1` | `no-processing-v1` |
+| `cms.weekly.pdf` | `bulletin-pdf-v1` | `no-processing-v1` |
+| `cms.weekly.image` | `bulletin-png-v1` | `no-processing-v1` |
+| `cms.news.cover`, `cms.page.image` | `web-image-v1` | `image-variants-v1` |
+| `cms.home.banner` | `home-banner-jpeg-v1` | `no-processing-v1` |
+| `line.group.file` | `line-attachment-v1` | `no-processing-v1` |
+| `line.group.media-sync` | `line-media-v1` | `no-processing-v1` |
+| `presenter.personal` | `personal-media-v1` | `no-processing-v1` |
+
+The optional `uploadProfileScopes` object in `ASSET_WORKLOAD_AUTH` maps an exact
+verified principal ID to approved family/pair entries. For example, a synthetic
+CMS fixture could allow `cms.page` with `web-image-v1` and `image-variants-v1`.
+That matches `cms.page.image` and an approved new purpose such as `cms.page.hero`.
+A similarly named `cms.pages.hero` falls outside that scope. Asset checks the
+stored service owner separately.
+
+Unmapped namespaces initially belong only to CMS within approved dotted
+families. Account cleanup and LINE retention bind their existing exact
+namespaces, so their explicit profiles can be scoped to those known namespaces.
+Personal-space uploads keep the existing policy path. This change does not
+expand the audited upload tuple catalog. A new audited purpose needs its own
+reviewed audit contract before rollout.
+
+Migration 050 stores explicit paired IDs without backfill. Completion, public
+grant and public metadata resolve the same persisted pair. Roll out the producer
+migration and compatible readers before sending explicit fields. Once a new
+namespace has live assets, retain a rollback artifact that understands its
+stored pair and namespace. Keep all affected Asset writers and scanner or
+derivative jobs on the compatible minimum while those scopes are enabled.
+Disabling new admission cannot migrate existing assets into the legacy
+namespace catalog.
+
+`ASSET_HOME_BANNER_DIMENSIONS_DELEGATED` defaults to false. Legacy unprofiled
+Home Banner uploads always keep the existing Asset 1900×700 check. A profiled
+Home Banner can defer the check to CMS only when the flag is enabled. Enable
+that path only after the CMS release independently validates the immutable
+scanned JPEG before public grant, its profiled upload path is approved, and
+older CMS writers drain. Asset retains JPEG, size, scan and processing limits.
+
+When the flag is false, a public read grant for a profiled Home Banner rechecks
+the immutable bytes. This covers already-completed banners admitted while CMS
+owned the dimension check. To roll back CMS to a build without its check, first
+restore the flag-off Asset guard in an AS3-aware artifact and verify it serves.
+A pre-AS3 Asset artifact cannot apply this grant guard. Roll back further only
+after delegated assets have been handled through a separately reviewed recovery.

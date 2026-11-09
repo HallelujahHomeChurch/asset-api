@@ -179,6 +179,8 @@ func TestCompleteHomeBannerValidatesJPEGDimensionsFromByteZero(t *testing.T) {
 		name      string
 		payload   func(*testing.T) []byte
 		wantError bool
+		delegate  bool
+		profiled  bool
 	}{
 		{name: "invalid JPEG", payload: func(*testing.T) []byte { return []byte{0xff, 0xd8, 0xff, 0xe0} }, wantError: true},
 		{name: "MIME spoofed PNG", payload: func(t *testing.T) []byte { return encodePNG(t, 1900, 700) }, wantError: true},
@@ -186,17 +188,24 @@ func TestCompleteHomeBannerValidatesJPEGDimensionsFromByteZero(t *testing.T) {
 		{name: "1899x700", payload: func(t *testing.T) []byte { return encodeJPEG(t, 1899, 700, false) }, wantError: true},
 		{name: "1900x699", payload: func(t *testing.T) []byte { return encodeJPEG(t, 1900, 699, false) }, wantError: true},
 		{name: "1900x700", payload: func(t *testing.T) []byte { return encodeJPEG(t, 1900, 700, false) }},
+		{name: "unprofiled legacy still validates when delegation is on", payload: func(t *testing.T) []byte { return encodeJPEG(t, 1899, 700, false) }, delegate: true, wantError: true},
+		{name: "CMS delegation accepts wrong dimensions for the CMS gate", payload: func(t *testing.T) []byte { return encodeJPEG(t, 1899, 700, false) }, delegate: true, profiled: true},
+		{name: "CMS delegation does not accept different MIME", payload: func(t *testing.T) []byte { return encodePNG(t, 1900, 700) }, delegate: true, profiled: true, wantError: true},
 		{name: "1900x700 with SOF after byte 512", payload: func(t *testing.T) []byte { return encodeJPEG(t, 1900, 700, true) }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ctx := context.Background()
 			repo := newMemoryRepository()
 			blobs := newMemoryBlobStore()
-			service := NewService(repo, blobs, "https://www.alive.org.tw/api/assets", time.Now)
-			created, err := service.CreateUploadSession(ctx, CreateUploadInput{
+			service := NewService(repo, blobs, "https://www.alive.org.tw/api/assets", time.Now).WithHomeBannerDimensionsDelegated(test.delegate)
+			input := CreateUploadInput{
 				Namespace: "cms.home.banner", OwnerService: "hhc-web-api", OwnerType: "page", OwnerID: "home-1", Purpose: "home_banner",
 				OriginalFileName: "banner.jpg", ExpectedMIMEType: "image/jpeg", MaxSizeBytes: 10 << 20, Visibility: VisibilityPublic,
-			}, "home-banner-complete-"+test.name)
+			}
+			if test.profiled {
+				input.UploadProfiles = legacyUploadProfiles[input.Namespace]
+			}
+			created, err := service.CreateUploadSession(ctx, input, "home-banner-complete-"+test.name)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -221,7 +230,10 @@ func TestCompleteHomeBannerValidatesJPEGDimensionsFromByteZero(t *testing.T) {
 			if asset.UploadStatus != UploadCompleted || asset.DetectedMIMEType != "image/jpeg" || asset.ProcessingStatus != ProcessingNotRequired {
 				t.Fatalf("asset = %+v", asset)
 			}
-			if blobs.lastOpenRange != (ByteRange{Offset: 0, Count: 10 << 20}) || blobs.lastOpenETag == "" {
+			if test.delegate && test.profiled && blobs.lastOpenRange.Count == 10<<20 {
+				t.Fatal("Asset still probed image dimensions after explicit delegation")
+			}
+			if !(test.delegate && test.profiled) && (blobs.lastOpenRange != (ByteRange{Offset: 0, Count: 10 << 20}) || blobs.lastOpenETag == "") {
 				t.Fatalf("dimension read range=%+v etag=%q", blobs.lastOpenRange, blobs.lastOpenETag)
 			}
 		})

@@ -80,6 +80,7 @@ const (
 )
 
 type Asset struct {
+	UploadProfiles         UploadProfiles   `json:"-"`
 	ID                     string           `json:"id"`
 	Namespace              string           `json:"namespace"`
 	OwnerService           string           `json:"ownerService"`
@@ -174,6 +175,11 @@ type Grant struct {
 	RevokedAt      time.Time   `json:"revokedAt,omitempty"`
 }
 
+type UploadProfiles struct {
+	SecurityProfile   string `json:"securityProfile,omitempty"`
+	ProcessingProfile string `json:"processingProfile,omitempty"`
+}
+
 type CreateUploadInput struct {
 	Namespace        string     `json:"namespace"`
 	OwnerService     string     `json:"ownerService"`
@@ -185,6 +191,7 @@ type CreateUploadInput struct {
 	ExpectedMIMEType string     `json:"expectedMimeType"`
 	MaxSizeBytes     int64      `json:"maxSizeBytes"`
 	Visibility       Visibility `json:"visibility"`
+	UploadProfiles
 }
 
 type CompleteUploadInput struct {

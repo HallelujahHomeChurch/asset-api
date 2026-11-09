@@ -45,6 +45,7 @@ type Config struct {
 	AllowedCallers            map[string]bool
 	ReaderCallerAppID         string
 	WorkloadAuth              *WorkloadAuth
+	DelegateHomeBannerSize    bool
 	AllowDevCallerHeader      bool
 	AppAPIToken               string
 	ShutdownTimeout           time.Duration
@@ -140,6 +141,13 @@ func Load() (Config, error) {
 	cfg.WorkloadAuth, err = loadWorkloadAuth(os.Getenv("ASSET_WORKLOAD_AUTH"), cfg)
 	if err != nil {
 		return Config{}, err
+	}
+	switch os.Getenv("ASSET_HOME_BANNER_DIMENSIONS_DELEGATED") {
+	case "", "false":
+	case "true":
+		cfg.DelegateHomeBannerSize = true
+	default:
+		return Config{}, fmt.Errorf("ASSET_HOME_BANNER_DIMENSIONS_DELEGATED must be true or false")
 	}
 	if value := strings.TrimSpace(os.Getenv("ASSET_SCAN_DISPATCH_ENABLED")); value != "" {
 		enabled, err := strconv.ParseBool(value)

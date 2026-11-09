@@ -42,3 +42,37 @@ func TestWorkloadAuthRuntimeConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestUploadProfileScopeConfiguration(t *testing.T) {
+	cfg := Config{AllowedCallers: map[string]bool{"hhc-web-api": true, "account-api": true}}
+	const base = `{"issuer":"https://issuer.example/tenant","audience":"asset-fixture","jwksUrl":"https://issuer.example/keys","principalClaim":"oid","principals":{"cms-id":"hhc-web-api","account-id":"account-api"},"uploadProfileScopes":`
+	for _, test := range []struct {
+		name, scope string
+		valid       bool
+	}{
+		{"CMS approved family", `{"cms-id":[{"namespaceFamily":"cms.page","securityProfile":"web-image-v1","processingProfile":"image-variants-v1"}]}`, true},
+		{"Account exact scope", `{"account-id":[{"namespaceFamily":"account.avatar","securityProfile":"avatar-jpeg-v1","processingProfile":"no-processing-v1"}]}`, true},
+		{"unmapped Account scope", `{"account-id":[{"namespaceFamily":"account.new","securityProfile":"avatar-jpeg-v1","processingProfile":"no-processing-v1"}]}`, false},
+		{"wrong owner", `{"account-id":[{"namespaceFamily":"cms.page","securityProfile":"web-image-v1","processingProfile":"image-variants-v1"}]}`, false},
+		{"unknown principal", `{"missing-id":[{"namespaceFamily":"cms.page","securityProfile":"web-image-v1","processingProfile":"image-variants-v1"}]}`, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := loadWorkloadAuth(base+test.scope+"}", cfg)
+			if (err == nil) != test.valid {
+				t.Fatalf("valid=%v error=%v", test.valid, err)
+			}
+		})
+	}
+}
+
+func TestHomeBannerDimensionDelegationDefaultsOff(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://test")
+	t.Setenv("ASSET_ALLOW_DEV_CALLER_HEADER", "true")
+	for _, value := range []string{"", "false", "true", "1"} {
+		t.Setenv("ASSET_HOME_BANNER_DIMENSIONS_DELEGATED", value)
+		cfg, err := Load()
+		if (err != nil) != (value == "1") || cfg.DelegateHomeBannerSize != (value == "true") {
+			t.Fatalf("value=%q delegated=%v err=%v", value, cfg.DelegateHomeBannerSize, err)
+		}
+	}
+}

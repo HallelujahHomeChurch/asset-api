@@ -30,18 +30,24 @@ const uploadTTL = 10 * time.Minute
 const contentTicketTTL = 5 * time.Minute
 
 type Service struct {
-	repository    Repository
-	blobs         BlobStore
-	publicBaseURL string
-	now           func() time.Time
+	repository         Repository
+	blobs              BlobStore
+	publicBaseURL      string
+	delegateBannerSize bool
+	now                func() time.Time
 }
 
 func NewService(repository Repository, blobs BlobStore, publicBaseURL string, now func() time.Time) *Service {
 	return &Service{repository: repository, blobs: blobs, publicBaseURL: strings.TrimRight(publicBaseURL, "/"), now: now}
 }
 
+func (s *Service) WithHomeBannerDimensionsDelegated(delegated bool) *Service {
+	s.delegateBannerSize = delegated
+	return s
+}
+
 func (s *Service) CreateUploadSession(ctx context.Context, input CreateUploadInput, idempotencyKey string) (created CreatedUpload, err error) {
-	policy, ok := PolicyFor(input.Namespace)
+	policy, ok := UploadPolicy(input.Namespace, input.UploadProfiles)
 	if !ok || policy.OwnerService != input.OwnerService || !policy.AllowsMIME(input.ExpectedMIMEType) || !matchesFileExtension(input.OriginalFileName, input.ExpectedMIMEType) || input.OwnerType == "" || input.OwnerID == "" || !policy.AllowsSize(input.ExpectedMIMEType, input.MaxSizeBytes) || idempotencyKey == "" {
 		return CreatedUpload{}, ErrInvalidInput
 	}
@@ -63,7 +69,7 @@ func (s *Service) CreateUploadSession(ctx context.Context, input CreateUploadInp
 	sessionID := newID()
 	objectKey := path.Join(environmentPrefix(), input.Namespace, now.Format("2006"), now.Format("01"), assetID, "original")
 	stagingObjectKey := path.Join(environmentPrefix(), input.Namespace, now.Format("2006"), now.Format("01"), assetID, "staging", sessionID)
-	asset := Asset{ID: assetID, Namespace: input.Namespace, OwnerService: input.OwnerService, OwnerType: input.OwnerType, OwnerID: input.OwnerID, Purpose: input.Purpose, Locale: input.Locale, OriginalFileName: sanitizeFileName(input.OriginalFileName), ObjectKey: objectKey, ExpectedMIMEType: input.ExpectedMIMEType, UploadStatus: UploadCreated, ScanStatus: ScanPending, ProcessingStatus: policy.Processing, Visibility: input.Visibility, CreatedAt: now, UpdatedAt: now}
+	asset := Asset{ID: assetID, Namespace: input.Namespace, UploadProfiles: input.UploadProfiles, OwnerService: input.OwnerService, OwnerType: input.OwnerType, OwnerID: input.OwnerID, Purpose: input.Purpose, Locale: input.Locale, OriginalFileName: sanitizeFileName(input.OriginalFileName), ObjectKey: objectKey, ExpectedMIMEType: input.ExpectedMIMEType, UploadStatus: UploadCreated, ScanStatus: ScanPending, ProcessingStatus: policy.Processing, Visibility: input.Visibility, CreatedAt: now, UpdatedAt: now}
 	session := UploadSession{ID: sessionID, AssetID: assetID, IdempotencyKey: idempotencyKey, CallerService: input.OwnerService, Operation: "create_upload", Fingerprint: requestFingerprint(input), StagingObjectKey: stagingObjectKey, MaxSizeBytes: input.MaxSizeBytes, Status: UploadCreated, ExpiresAt: now.Add(uploadTTL), CreatedAt: now}
 	stage = diagnostics.UploadSign
 	target, err := s.blobs.CreateUploadTarget(ctx, stagingObjectKey, input.MaxSizeBytes, session.ExpiresAt)
@@ -143,7 +149,7 @@ func (s *Service) completeUpload(ctx context.Context, assetID string, input Comp
 		}
 		return Asset{}, ErrInvalidUpload
 	}
-	policy, ok := PolicyFor(asset.Namespace)
+	policy, ok := policyForAsset(asset)
 	if !ok {
 		return Asset{}, ErrInvalidUpload
 	}
@@ -209,30 +215,16 @@ func (s *Service) completeUpload(ctx context.Context, assetID string, input Comp
 			return Asset{}, closeErr
 		}
 	}
-	if policy.Width > 0 || policy.Height > 0 {
-		download, openErr := s.blobs.Open(ctx, sourceKey, ByteRange{Offset: 0, Count: policy.MaxSizeBytes}, observed.ETag)
-		if openErr != nil {
-			if errors.Is(openErr, ErrInvalidUpload) {
-				if rejectErr := s.rejectUpload(ctx, asset, session); rejectErr != nil {
-					return Asset{}, rejectErr
-				}
-				return Asset{}, ErrInvalidUpload
-			}
-			return Asset{}, fmt.Errorf("open image dimensions: %w", openErr)
-		}
-		config, _, decodeErr := image.DecodeConfig(io.LimitReader(&contextReader{ctx: ctx, reader: download.Body}, policy.MaxSizeBytes))
-		closeErr := download.Body.Close()
-		if decodeErr != nil || config.Width != policy.Width || config.Height != policy.Height {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return Asset{}, ctxErr
+	delegatedDimensions := s.delegateBannerSize && asset.Namespace == "cms.home.banner" && asset.UploadProfiles != (UploadProfiles{})
+	if !delegatedDimensions && (policy.Width > 0 || policy.Height > 0) {
+		if err := s.validateDimensions(ctx, sourceKey, observed.ETag, policy); err != nil {
+			if !errors.Is(err, ErrInvalidUpload) {
+				return Asset{}, err
 			}
 			if rejectErr := s.rejectUpload(ctx, asset, session); rejectErr != nil {
 				return Asset{}, rejectErr
 			}
 			return Asset{}, ErrInvalidUpload
-		}
-		if closeErr != nil {
-			return Asset{}, fmt.Errorf("close image dimensions: %w", closeErr)
 		}
 	}
 	if observed.Size != metadata.Size || (metadata.ETag != "" && observed.ETag != metadata.ETag) || observed.Size != input.SizeBytes || observed.DetectedMIMEType == "" || observed.DetectedMIMEType != input.MIMEType || !strings.EqualFold(observed.ChecksumSHA256, input.ChecksumSHA256) {
@@ -293,6 +285,25 @@ func (s *Service) completeUpload(ctx context.Context, assetID string, input Comp
 	return asset, nil
 }
 
+func (s *Service) validateDimensions(ctx context.Context, key, etag string, policy NamespacePolicy) error {
+	download, err := s.blobs.Open(ctx, key, ByteRange{Offset: 0, Count: policy.MaxSizeBytes}, etag)
+	if err != nil {
+		return fmt.Errorf("open image dimensions: %w", err)
+	}
+	config, _, decodeErr := image.DecodeConfig(io.LimitReader(&contextReader{ctx: ctx, reader: download.Body}, policy.MaxSizeBytes))
+	closeErr := download.Body.Close()
+	if decodeErr != nil || config.Width != policy.Width || config.Height != policy.Height {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return ErrInvalidUpload
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close image dimensions: %w", closeErr)
+	}
+	return nil
+}
+
 func (s *Service) rejectUpload(ctx context.Context, asset Asset, session UploadSession) error {
 	if err := s.repository.FailUpload(ctx, asset.ID, s.now().UTC()); err != nil {
 		return fmt.Errorf("mark upload failed: %w", err)
@@ -319,13 +330,25 @@ func (s *Service) CreateGrant(ctx context.Context, assetID string, input CreateG
 		return Grant{}, ErrNotFound
 	}
 	if input.SubjectType == SubjectPublic {
-		policy, ok := PolicyFor(asset.Namespace)
+		policy, ok := policyForAsset(asset)
 		if !ok || !policy.AllowsVisibility(VisibilityPublic) {
 			return Grant{}, ErrInvalidInput
 		}
-	}
-	if input.SubjectType == SubjectPublic && input.Permission == PermissionRead && (asset.UploadStatus != UploadCompleted || asset.ScanStatus != ScanClean || (asset.ProcessingStatus != ProcessingReady && asset.ProcessingStatus != ProcessingNotRequired)) {
-		return Grant{}, ErrInvalidUpload
+		if input.Permission == PermissionRead {
+			if asset.UploadStatus != UploadCompleted || asset.ScanStatus != ScanClean ||
+				(asset.ProcessingStatus != ProcessingReady && asset.ProcessingStatus != ProcessingNotRequired) {
+				return Grant{}, ErrInvalidUpload
+			}
+			// A profiled banner could have completed while CMS owned the dimension check.
+			if !s.delegateBannerSize && asset.Namespace == "cms.home.banner" && asset.UploadProfiles != (UploadProfiles{}) {
+				if asset.ETag == "" || asset.DetectedMIMEType != "image/jpeg" {
+					return Grant{}, ErrInvalidUpload
+				}
+				if err := s.validateDimensions(ctx, asset.ObjectKey, asset.ETag, policy); err != nil {
+					return Grant{}, err
+				}
+			}
+		}
 	}
 	grant := Grant{ID: newID(), AssetID: assetID, SubjectType: input.SubjectType, SubjectID: input.SubjectID, Permission: input.Permission, IdempotencyKey: input.IdempotencyKey, CallerService: asset.OwnerService, Operation: "create_grant", Fingerprint: requestFingerprint(input), ExpiresAt: input.ExpiresAt, CreatedAt: s.now().UTC()}
 	value, err := s.repository.CreateGrant(ctx, grant)
@@ -779,7 +802,7 @@ func (s *Service) PublicMetadata(ctx context.Context, assetID, variant string) (
 	if err != nil {
 		return PublicDownloadMetadata{}, err
 	}
-	policy, ok := PolicyFor(asset.Namespace)
+	policy, ok := policyForAsset(asset)
 	if !ok || !policy.AllowsVisibility(VisibilityPublic) {
 		return PublicDownloadMetadata{}, ErrNotFound
 	}

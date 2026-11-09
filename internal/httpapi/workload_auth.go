@@ -103,6 +103,19 @@ func (h *Handler) verifyWorkload(r *http.Request) (principal, caller string, err
 	return principal, caller, nil
 }
 
+func (h *Handler) uploadProfilesAllowed(r *http.Request, input assets.CreateUploadInput) bool {
+	principal, _ := r.Context().Value(workloadPrincipalKey{}).(string)
+	if principal == "" || h.workloadAuth == nil {
+		return false
+	}
+	for _, scope := range h.workloadAuth.config.UploadProfileScopes[principal] {
+		if scope.Allows(input.Namespace, input.UploadProfiles) {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *Handler) legacyWorkloadAllowed(caller string) bool {
 	return h.workloadAuth == nil || !slices.Contains(h.workloadAuth.config.DisableLegacyCallers, caller)
 }
