@@ -154,12 +154,12 @@ func TestLegacyReaderRejectsMixedCallerHeaders(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "https://asset.internal/api/assets/collections", nil)
 	r.Header.Set("Dapr-Caller-App-Id", "api-gateway")
 	r.Header.Set("dapr-api-token", "token")
-	if !h.gatewayReader(r) {
+	if h.gatewayReader(r) != nil {
 		t.Fatal("legacy reader rejected")
 	}
 	for _, header := range []string{"api-gateway", " api-gateway", ""} {
 		r.Header.Set("X-HHC-Caller-App-Id", header)
-		if h.gatewayReader(r) {
+		if h.gatewayReader(r) == nil {
 			t.Fatalf("mixed reader header %q accepted", header)
 		}
 	}

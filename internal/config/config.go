@@ -44,6 +44,7 @@ type Config struct {
 	DBConnMaxLifetime         time.Duration
 	AllowedCallers            map[string]bool
 	ReaderCallerAppID         string
+	WorkloadAuth              *WorkloadAuth
 	AllowDevCallerHeader      bool
 	AppAPIToken               string
 	ShutdownTimeout           time.Duration
@@ -132,6 +133,10 @@ func Load() (Config, error) {
 	}
 	if cfg.AllowedCallers[cfg.ReaderCallerAppID] {
 		return Config{}, fmt.Errorf("ASSET_READER_CALLER_APP_ID must not be in ASSET_ALLOWED_CALLERS")
+	}
+	cfg.WorkloadAuth, err = loadWorkloadAuth(os.Getenv("ASSET_WORKLOAD_AUTH"), cfg)
+	if err != nil {
+		return Config{}, err
 	}
 	if value := strings.TrimSpace(os.Getenv("ASSET_SCAN_DISPATCH_ENABLED")); value != "" {
 		enabled, err := strconv.ParseBool(value)
