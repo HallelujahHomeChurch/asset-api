@@ -1,0 +1,86 @@
+{
+  "id": "portable-fixture",
+  "name": "Portable fixture",
+  "schemaVersion": 1,
+  "width": 1920,
+  "height": 1080,
+  "defaultSlideBackground": {
+    "type": "solid",
+    "color": "#ffffff",
+    "transparency": 0
+  },
+  "slideOrder": [
+    "slide"
+  ],
+  "slides": {
+    "slide": {
+      "id": "slide",
+      "name": "Slide 1",
+      "background": {
+        "type": "solid",
+        "color": "#ffffff",
+        "transparency": 0
+      },
+      "elementOrder": [
+        "element"
+      ],
+      "elements": {
+        "element": {
+          "id": "element",
+          "type": "image",
+          "assetId": "missing",
+          "x": 960,
+          "y": 540,
+          "width": 1,
+          "height": 1,
+          "rotation": 0,
+          "opacity": 1
+        }
+      },
+      "notes": "Portable speaker notes",
+      "themeId": "office-default"
+    }
+  },
+  "assets": {
+    "image": {
+      "id": "image",
+      "name": "Fixture image",
+      "mimeType": "image/png",
+      "dataUrl": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6ZaoAAAAASUVORK5CYII="
+    }
+  },
+  "themes": {
+    "office-default": {
+      "id": "office-default",
+      "defaultTextStyle": {
+        "fontFamily": "Inter Variable",
+        "fontSize": 48,
+        "bold": false,
+        "italic": false,
+        "underline": false,
+        "strikethrough": false,
+        "baseline": "normal",
+        "characterSpacing": 0,
+        "color": "#111827",
+        "highlightColor": null
+      },
+      "colorScheme": {
+        "dk1": "#000000",
+        "dk2": "#44546a",
+        "lt1": "#ffffff",
+        "lt2": "#e7e6e6",
+        "accent1": "#4472c4",
+        "accent2": "#ed7d31",
+        "accent3": "#a5a5a5",
+        "accent4": "#ffc000",
+        "accent5": "#5b9bd5",
+        "accent6": "#70ad47",
+        "hlink": "#0563c1",
+        "folHlink": "#954f72"
+      }
+    }
+  },
+  "defaultThemeId": "office-default",
+  "createdAt": 1,
+  "updatedAt": 1
+}
