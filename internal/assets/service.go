@@ -337,7 +337,10 @@ func (s *Service) CreateGrant(ctx context.Context, assetID string, input CreateG
 
 func (s *Service) GetAsset(ctx context.Context, assetID string) (Asset, error) {
 	asset, err := s.repository.GetAsset(ctx, assetID)
-	if err != nil || !asset.DeletedAt.IsZero() {
+	if err != nil {
+		return Asset{}, err
+	}
+	if !asset.DeletedAt.IsZero() {
 		return Asset{}, ErrNotFound
 	}
 	return asset, nil
@@ -540,7 +543,7 @@ func (s *Service) AuthorizedCollectionContentMetadata(ctx context.Context, colle
 	}
 	asset, err := s.repository.GetAsset(ctx, item.AssetID)
 	if err != nil {
-		return PublicDownloadMetadata{}, ErrNotFound
+		return PublicDownloadMetadata{}, err
 	}
 	metadata, err := collectionContentMetadata(asset, item.ETag)
 	if err != nil {
@@ -764,7 +767,7 @@ func (s *Service) PublicMetadata(ctx context.Context, assetID, variant string) (
 	}
 	asset, err := s.repository.GetAsset(ctx, assetID)
 	if err != nil {
-		return PublicDownloadMetadata{}, ErrNotFound
+		return PublicDownloadMetadata{}, err
 	}
 	policy, ok := PolicyFor(asset.Namespace)
 	if !ok || !policy.AllowsVisibility(VisibilityPublic) {
@@ -774,7 +777,10 @@ func (s *Service) PublicMetadata(ctx context.Context, assetID, variant string) (
 		return PublicDownloadMetadata{}, ErrNotFound
 	}
 	allowed, err := s.repository.HasActiveGrant(ctx, assetID, SubjectPublic, "*", PermissionRead, s.now().UTC())
-	if err != nil || !allowed {
+	if err != nil {
+		return PublicDownloadMetadata{}, err
+	}
+	if !allowed {
 		return PublicDownloadMetadata{}, ErrNotFound
 	}
 	metadata := PublicDownloadMetadata{
@@ -790,7 +796,7 @@ func (s *Service) PublicMetadata(ctx context.Context, assetID, variant string) (
 		}
 		derivative, err := repository.GetDerivative(ctx, assetID, variant)
 		if err != nil {
-			return PublicDownloadMetadata{}, ErrNotFound
+			return PublicDownloadMetadata{}, err
 		}
 		metadata.Size, metadata.ContentType, metadata.ETag = derivative.SizeBytes, derivative.MIMEType, derivative.ETag
 		metadata.FileName = ""
@@ -805,11 +811,17 @@ func (s *Service) AuthorizedMetadata(ctx context.Context, assetID string, subjec
 		return PublicDownloadMetadata{}, ErrInvalidInput
 	}
 	asset, err := s.repository.GetAsset(ctx, assetID)
-	if err != nil || asset.UploadStatus != UploadCompleted || asset.ScanStatus != ScanClean || !asset.DeletedAt.IsZero() || (asset.ProcessingStatus != ProcessingReady && asset.ProcessingStatus != ProcessingNotRequired) {
+	if err != nil {
+		return PublicDownloadMetadata{}, err
+	}
+	if asset.UploadStatus != UploadCompleted || asset.ScanStatus != ScanClean || !asset.DeletedAt.IsZero() || (asset.ProcessingStatus != ProcessingReady && asset.ProcessingStatus != ProcessingNotRequired) {
 		return PublicDownloadMetadata{}, ErrNotFound
 	}
 	allowed, err := s.repository.HasActiveGrant(ctx, assetID, subject, subjectID, PermissionRead, s.now().UTC())
-	if err != nil || !allowed {
+	if err != nil {
+		return PublicDownloadMetadata{}, err
+	}
+	if !allowed {
 		return PublicDownloadMetadata{}, ErrNotFound
 	}
 	return PublicDownloadMetadata{

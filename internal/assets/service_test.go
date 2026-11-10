@@ -21,6 +21,77 @@ import (
 	"time"
 )
 
+func TestAssetReadsDistinguishMissingFromRepositoryFailure(t *testing.T) {
+	ctx := context.Background()
+	ready := Asset{
+		ID: "asset", Namespace: "cms.news.cover", Visibility: VisibilityPublic,
+		UploadStatus: UploadCompleted, ScanStatus: ScanClean, ProcessingStatus: ProcessingReady,
+	}
+	for _, test := range []struct {
+		name string
+		read func(*Service) error
+		fail func(*metadataReadRepository, error)
+	}{
+		{"asset", func(s *Service) error {
+			_, err := s.GetAsset(ctx, ready.ID)
+			return err
+		}, func(r *metadataReadRepository, err error) { r.assetErr = err }},
+		{"collection content asset", func(s *Service) error {
+			_, err := s.AuthorizedCollectionContentMetadata(ctx, "collection", "item", CollectionSubject{UserID: "reader"})
+			return err
+		}, func(r *metadataReadRepository, err error) { r.assetErr = err }},
+		{"public asset", func(s *Service) error {
+			_, err := s.PublicMetadata(ctx, ready.ID, "")
+			return err
+		}, func(r *metadataReadRepository, err error) { r.assetErr = err }},
+		{"public grant", func(s *Service) error {
+			_, err := s.PublicMetadata(ctx, ready.ID, "")
+			return err
+		}, func(r *metadataReadRepository, err error) { r.grantErr = err }},
+		{"public derivative", func(s *Service) error {
+			_, err := s.PublicMetadata(ctx, ready.ID, "small")
+			return err
+		}, func(r *metadataReadRepository, err error) { r.derivativeErr = err }},
+		{"authorized asset", func(s *Service) error {
+			_, err := s.AuthorizedMetadata(ctx, ready.ID, SubjectUser, "reader")
+			return err
+		}, func(r *metadataReadRepository, err error) { r.assetErr = err }},
+		{"authorized grant", func(s *Service) error {
+			_, err := s.AuthorizedMetadata(ctx, ready.ID, SubjectUser, "reader")
+			return err
+		}, func(r *metadataReadRepository, err error) { r.grantErr = err }},
+	} {
+		for _, wantErr := range []error{ErrNotFound, context.DeadlineExceeded, context.Canceled} {
+			t.Run(test.name+"/"+wantErr.Error(), func(t *testing.T) {
+				repository := &metadataReadRepository{asset: ready}
+				test.fail(repository, fmt.Errorf("read asset metadata: %w", wantErr))
+				service := NewService(repository, nil, "", time.Now)
+				if err := test.read(service); !errors.Is(err, wantErr) {
+					t.Fatalf("error = %v, want %v", err, wantErr)
+				}
+			})
+		}
+	}
+}
+
+type metadataReadRepository struct {
+	collectionServiceRepository
+	asset                             Asset
+	assetErr, grantErr, derivativeErr error
+}
+
+func (r *metadataReadRepository) GetAsset(context.Context, string) (Asset, error) {
+	return r.asset, r.assetErr
+}
+
+func (r *metadataReadRepository) HasActiveGrant(context.Context, string, SubjectType, string, Permission, time.Time) (bool, error) {
+	return r.grantErr == nil, r.grantErr
+}
+
+func (r *metadataReadRepository) GetDerivative(context.Context, string, string) (Derivative, error) {
+	return Derivative{}, r.derivativeErr
+}
+
 func TestCompleteUploadValidatesObservedBlobAndLeavesDownloadPending(t *testing.T) {
 	ctx := context.Background()
 	repo := newMemoryRepository()

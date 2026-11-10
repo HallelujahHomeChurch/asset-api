@@ -1535,6 +1535,99 @@ func TestPublicDownloadUnsatisfiedRangeDoesNotOpenBlob(t *testing.T) {
 	}
 }
 
+func TestAssetRepositoryErrorsAreSanitizedAndNotCacheable(t *testing.T) {
+	const assetID = "asset-1"
+	paths := []struct {
+		name, path, failure string
+	}{
+		{"private metadata", "/priv/assets/asset-1", "asset"},
+		{"private owner check", "/priv/assets/asset-1/download", "asset"},
+		{"private download metadata", "/priv/assets/asset-1/download", "second asset"},
+		{"private grant", "/priv/assets/asset-1/download", "grant"},
+		{"collection content", "/api/assets/collections/collection/items/item/content", "asset"},
+		{"public metadata", "/api/assets/public/asset-1", "asset"},
+		{"public grant", "/api/assets/public/asset-1", "grant"},
+		{"public derivative", "/api/assets/public/asset-1/small", "derivative"},
+	}
+	for _, path := range paths {
+		for _, test := range []struct {
+			name, body string
+			err        error
+			status     int
+		}{
+			{"not found", `{"error":{"code":"AST_NOT_FOUND","message":"asset not found"}}`, assets.ErrNotFound, http.StatusNotFound},
+			{"timeout", `{"error":{"code":"AST_INTERNAL","message":"internal error"}}`, context.DeadlineExceeded, http.StatusInternalServerError},
+			{"cancelled", `{"error":{"code":"AST_INTERNAL","message":"internal error"}}`, context.Canceled, http.StatusInternalServerError},
+		} {
+			t.Run(path.name+"/"+test.name, func(t *testing.T) {
+				request := httptest.NewRequest(http.MethodGet, path.path, nil)
+				if path.name == "collection content" {
+					request = collectionReaderRequest(http.MethodGet, path.path)
+					request.Header.Set("X-HHC-Token-Expires-At", strconv.FormatInt(collectionContentNow.Add(time.Minute).Unix(), 10))
+				} else if strings.HasPrefix(path.path, "/priv/") {
+					request.Header.Set("X-HHC-Caller-App-Id", "hhc-web-api")
+					request.Header.Set("X-Asset-Subject-Type", "service")
+					request.Header.Set("X-Asset-Subject-Id", "hhc-web-api")
+				}
+				repository := &failingDownloadRepository{
+					downloadRepository: downloadRepository{
+						grantActive: true,
+						asset: assets.Asset{
+							ID: assetID, Namespace: "cms.news.cover", OwnerService: "hhc-web-api",
+							Visibility: assets.VisibilityPublic, UploadStatus: assets.UploadCompleted,
+							ScanStatus: assets.ScanClean, ProcessingStatus: assets.ProcessingReady,
+						},
+					},
+					failure: path.failure,
+					err:     fmt.Errorf("SELECT synthetic_sensitive_metadata: %w", test.err),
+				}
+				blobs := &downloadBlobStore{}
+				service := assets.NewService(repository, blobs, "", func() time.Time { return collectionContentNow })
+				handler := New(service, nil, map[string]bool{"hhc-web-api": true}, false, "token", CallerConfig{ReaderCallerAppID: "api-gateway"}, nil).Routes()
+				response := httptest.NewRecorder()
+				handler.ServeHTTP(response, request)
+				if response.Code != test.status || strings.TrimSpace(response.Body.String()) != test.body ||
+					response.Header().Get("Cache-Control") != "private, no-store" || blobs.openCalls != 0 {
+					t.Fatalf("status=%d body=%q cache=%q blob reads=%d", response.Code, response.Body.String(), response.Header().Get("Cache-Control"), blobs.openCalls)
+				}
+			})
+		}
+	}
+}
+
+type failingDownloadRepository struct {
+	downloadRepository
+	failure    string
+	err        error
+	assetReads int
+}
+
+func (r *failingDownloadRepository) GetAsset(ctx context.Context, id string) (assets.Asset, error) {
+	r.assetReads++
+	if r.failure == "asset" || (r.failure == "second asset" && r.assetReads == 2) {
+		return assets.Asset{}, r.err
+	}
+	return r.downloadRepository.GetAsset(ctx, id)
+}
+
+func (r *failingDownloadRepository) HasActiveGrant(ctx context.Context, id string, subject assets.SubjectType, subjectID string, permission assets.Permission, now time.Time) (bool, error) {
+	if r.failure == "grant" {
+		return false, r.err
+	}
+	return r.downloadRepository.HasActiveGrant(ctx, id, subject, subjectID, permission, now)
+}
+
+func (r *failingDownloadRepository) GetDerivative(ctx context.Context, id, variant string) (assets.Derivative, error) {
+	if r.failure == "derivative" {
+		return assets.Derivative{}, r.err
+	}
+	return r.downloadRepository.GetDerivative(ctx, id, variant)
+}
+
+func (r *failingDownloadRepository) GetAuthorizedCollectionItem(context.Context, string, string, assets.CollectionSubject) (assets.CollectionItem, error) {
+	return assets.CollectionItem{AssetID: r.asset.ID}, nil
+}
+
 func TestAssetErrorsAreNotCacheable(t *testing.T) {
 	handler, _ := publicDownloadHandler(t)
 	for _, request := range []*http.Request{
