@@ -1,14 +1,16 @@
-package assets
+package presenterformat
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"math"
 	"strings"
 )
+
+var ErrInvalidDeck = errors.New("invalid portable Presenter deck")
 
 type personalDeckElement struct {
 	ID       string  `json:"id"`
@@ -22,9 +24,9 @@ type personalDeckElement struct {
 	Opacity  float64 `json:"opacity"`
 }
 
-// ValidatePersonalDeck checks the portable document graph before it can become a cloud head.
-// Legacy documents without a schema version use the same graph; clients migrate them to v1.
-func ValidatePersonalDeck(ctx context.Context, reader io.Reader) error {
+// ValidateV1 checks the legacy and v1 portable graph before a deck can become a cloud head.
+// Embedded raster bytes retain the caller's existing media validation.
+func ValidateV1(ctx context.Context, reader io.Reader, maxBytes int64, checkRaster func(context.Context, string, string, []byte) error) error {
 	var deck struct {
 		SchemaVersion *int     `json:"schemaVersion"`
 		ID            string   `json:"id"`
@@ -46,53 +48,54 @@ func ValidatePersonalDeck(ctx context.Context, reader io.Reader) error {
 		Themes         map[string]json.RawMessage `json:"themes"`
 		DefaultThemeID string                     `json:"defaultThemeId"`
 	}
-	decoder := json.NewDecoder(&contextReader{ctx: ctx, reader: io.LimitReader(reader, PersonalMaxFileSize+1)})
-	if err := decoder.Decode(&deck); err != nil {
-		return ErrInvalidUpload
-	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return ErrInvalidUpload
+	bounded := &io.LimitedReader{R: contextReader{ctx: ctx, reader: reader}, N: maxBytes + 1}
+	decoder := json.NewDecoder(bounded)
+	if decoder.Decode(&deck) != nil || decoder.Decode(&struct{}{}) != io.EOF || bounded.N == 0 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return ErrInvalidDeck
 	}
 	if deck.SchemaVersion != nil && *deck.SchemaVersion != 1 {
-		return ErrInvalidUpload
+		return ErrInvalidDeck
 	}
 	if strings.TrimSpace(deck.ID) == "" || strings.TrimSpace(deck.Name) == "" || !personalDimension(deck.Width) || !personalDimension(deck.Height) || deck.Slides == nil || len(deck.Slides) > 2000 || len(deck.Assets) > 10000 || len(deck.Themes) > 2000 || !personalOrder(deck.SlideOrder, deck.Slides) {
-		return ErrInvalidUpload
+		return ErrInvalidDeck
 	}
 	if deck.DefaultThemeID != "" && deck.Themes[deck.DefaultThemeID] == nil {
-		return ErrInvalidUpload
+		return ErrInvalidDeck
 	}
 	total := 0
 	for id, slide := range deck.Slides {
 		if id != slide.ID || (slide.ThemeID != "" && deck.Themes[slide.ThemeID] == nil) || !personalOrder(slide.ElementOrder, slide.Elements) {
-			return ErrInvalidUpload
+			return ErrInvalidDeck
 		}
 		total += len(slide.Elements)
 		if total > 100000 || len(slide.Elements) > 10000 {
-			return ErrInvalidUpload
+			return ErrInvalidDeck
 		}
 		for id, e := range slide.Elements {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
 			if e.ID != id || !personalCoordinate(e.X) || !personalCoordinate(e.Y) || !personalCoordinate(e.Rotation) || math.IsNaN(e.Opacity) || e.Opacity < 0 || e.Opacity > 1 {
-				return ErrInvalidUpload
+				return ErrInvalidDeck
 			}
 			if e.Type == "line" {
 				if !personalCoordinate(e.Width) || !personalCoordinate(e.Height) {
-					return ErrInvalidUpload
+					return ErrInvalidDeck
 				}
 			} else if !personalDimension(e.Width) || !personalDimension(e.Height) {
-				return ErrInvalidUpload
+				return ErrInvalidDeck
 			}
 			switch e.Type {
 			case "image":
 				if _, ok := deck.Assets[e.AssetID]; !ok {
-					return ErrInvalidUpload
+					return ErrInvalidDeck
 				}
 			case "text", "shape", "line", "locked":
 			default:
-				return ErrInvalidUpload
+				return ErrInvalidDeck
 			}
 		}
 	}
@@ -101,7 +104,7 @@ func ValidatePersonalDeck(ctx context.Context, reader io.Reader) error {
 			return ctx.Err()
 		}
 		if id == "" || a.ID != id {
-			return ErrInvalidUpload
+			return ErrInvalidDeck
 		}
 		extension := ""
 		switch a.MIMEType {
@@ -116,18 +119,18 @@ func ValidatePersonalDeck(ctx context.Context, reader io.Reader) error {
 		case "image/bmp":
 			extension = ".bmp"
 		default:
-			return ErrInvalidUpload
+			return ErrInvalidDeck
 		}
 		prefix := "data:" + a.MIMEType + ";base64,"
 		if !strings.HasPrefix(a.DataURL, prefix) || len(a.DataURL)-len(prefix) > base64.StdEncoding.EncodedLen(20<<20) {
-			return ErrInvalidUpload
+			return ErrInvalidDeck
 		}
 		data, err := base64.StdEncoding.Strict().DecodeString(strings.TrimPrefix(a.DataURL, prefix))
 		if err != nil || len(data) > 20<<20 {
-			return ErrInvalidUpload
+			return ErrInvalidDeck
 		}
-		if _, err = ValidateMedia(ctx, "image"+extension, a.MIMEType, data, bytes.NewReader(data), int64(len(data))); err != nil {
-			return ErrInvalidUpload
+		if err := checkRaster(ctx, "image"+extension, a.MIMEType, data); err != nil {
+			return ErrInvalidDeck
 		}
 	}
 	return ctx.Err()
@@ -149,4 +152,16 @@ func personalOrder[T any](order []string, items map[string]T) bool {
 		seen[id] = true
 	}
 	return true
+}
+
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r contextReader) Read(value []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.reader.Read(value)
 }
