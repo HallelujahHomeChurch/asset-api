@@ -28,12 +28,18 @@ import (
 )
 
 type Store struct {
-	db    *sql.DB
-	audit *auditoutbox.Store
+	db                     *sql.DB
+	audit                  *auditoutbox.Store
+	derivationProofEnabled bool
 }
 
 func New(db *sql.DB) *Store                         { return &Store{db: db} }
 func (s *Store) WithAudit(audit *auditoutbox.Store) { s.audit = audit }
+
+func (s *Store) WithDerivationProofEnabled(enabled bool) *Store {
+	s.derivationProofEnabled = enabled
+	return s
+}
 
 func (s *Store) enqueueAuditTx(ctx context.Context, tx *sql.Tx, action, resource string, metadata auditclient.Metadata, now time.Time) error {
 	if s.audit == nil {
@@ -156,10 +162,16 @@ func (s *Store) CompleteUpload(ctx context.Context, asset assets.Asset, session 
 			asset.ScanStatus != assets.ScanClean || asset.ScanSignature != assets.TrustedBulletinWatermark || request != (assets.ScanRequest{}) {
 			return assets.ErrInvalidInput
 		}
-		var err error
-		proof, err = json.Marshal(asset.Derivation)
-		if err != nil {
-			return err
+		if s.derivationProofEnabled {
+			var err error
+			proof, err = json.Marshal(asset.Derivation)
+			if err != nil {
+				return err
+			}
+		} else if asset.ScanDetails != asset.Derivation.SourceAssetID+":"+asset.Derivation.SourceSHA256 {
+			// Compatibility mode admits only the existing narrow adapter. Keep
+			// its proof transient for the transaction fence, not in the new column.
+			return assets.ErrForbidden
 		}
 	} else if request.EventID == "" || request.AssetID != asset.ID || request.ETag == "" || request.ETag != asset.ETag || request.CreatedAt.IsZero() ||
 		asset.ScanSignature == assets.TrustedBulletinWatermark {
@@ -191,7 +203,21 @@ func (s *Store) CompleteUpload(ctx context.Context, asset assets.Asset, session 
 			if err != nil {
 				return err
 			}
-			if stored.Derivation != asset.Derivation || stored.ScanStatus != assets.ScanClean ||
+			if stored.Derivation != asset.Derivation {
+				if s.derivationProofEnabled || stored.Derivation != (assets.Derivation{}) || stored.ScanDetails != asset.ScanDetails {
+					return assets.ErrConflict
+				}
+				// A legacy replay has no persisted source ETag. Validate its
+				// transient proof under the same source/output locks instead.
+				source, err := readAsset(ctx, tx, asset.Derivation.SourceAssetID, true)
+				if err != nil {
+					return err
+				}
+				if !asset.Derivation.MatchesBulletin(source, stored) {
+					return assets.ErrConflict
+				}
+			}
+			if stored.ScanStatus != assets.ScanClean || stored.ScanSignature != assets.TrustedBulletinWatermark ||
 				stored.ETag != asset.ETag || stored.ChecksumSHA256 != asset.ChecksumSHA256 ||
 				stored.SizeBytes != asset.SizeBytes || stored.DetectedMIMEType != asset.DetectedMIMEType {
 				return assets.ErrConflict

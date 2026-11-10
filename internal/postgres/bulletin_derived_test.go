@@ -31,6 +31,9 @@ func TestTrustedBulletinCompletionCommitsWithoutScanOutbox(t *testing.T) {
 		}
 	}
 	stored, err := store.GetAsset(ctx, asset.ID)
+	if stored.Derivation != (assets.Derivation{}) {
+		t.Fatal("default compatibility mode persisted structured proof")
+	}
 	if err != nil || stored.ScanStatus != assets.ScanClean || stored.ScanSignature != assets.TrustedBulletinWatermark || stored.ScanDetails != asset.ScanDetails {
 		t.Fatalf("stored=%+v err=%v", stored, err)
 	}

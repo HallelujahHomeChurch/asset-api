@@ -56,6 +56,9 @@ func (s *Service) CompleteDerivedBulletin(ctx context.Context, id string, input 
 }
 
 func (s *Service) CompleteDerivedUpload(ctx context.Context, id string, input CompleteUploadInput, proof Derivation) (Asset, error) {
+	if !s.derivationProofEnabled {
+		return Asset{}, ErrForbidden
+	}
 	if !proof.Valid() || proof.SourceAssetID == id {
 		return Asset{}, ErrInvalidInput
 	}

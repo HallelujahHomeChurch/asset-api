@@ -12,6 +12,29 @@ import (
 	"hhc/asset-api/internal/assets"
 )
 
+func TestStructuredDerivationAdmissionDefaultsOff(t *testing.T) {
+	fixture := newWorkloadAuthFixture(t)
+	h := fixture.handler()
+	h.workloadAuth.config.TrustedDerivationPrincipals = []string{"watermark"}
+	proof := assets.Derivation{SourceAssetID: "synthetic-source", SourceSHA256: strings.Repeat("c", 64), SourceETag: "source-version", Transform: "bulletin-watermark", TransformVersion: "1"}
+	asset := assets.Asset{ID: "output", OwnerService: "hhc-web-api", UploadStatus: assets.UploadCompleted, ScanStatus: assets.ScanClean, ScanSignature: assets.TrustedBulletinWatermark, ProcessingStatus: assets.ProcessingNotRequired, SizeBytes: 32, ChecksumSHA256: strings.Repeat("d", 64), DetectedMIMEType: "application/pdf", ETag: "output-etag", Derivation: proof}
+	h.service = assets.NewService(&completedDerivationRepository{asset: asset}, completedDerivationBlobStore{}, "", time.Now)
+	body, err := json.Marshal(struct {
+		assets.CompleteUploadInput
+		Derivation assets.Derivation `json:"derivation"`
+	}{assets.CompleteUploadInput{SizeBytes: 32, ChecksumSHA256: asset.ChecksumSHA256, MIMEType: "application/pdf"}, proof})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/priv/assets/output/complete", strings.NewReader(string(body)))
+	request.Header.Set(workloadHeader, fixture.bearer(t, "first", fixture.firstKey, nil, fixture.claims("watermark")))
+	response := httptest.NewRecorder()
+	h.Routes().ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("default-off proof admission status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func TestGenericDerivationScopeAndVerifiedReadiness(t *testing.T) {
 	fixture := newWorkloadAuthFixture(t)
 	h := fixture.handler()
@@ -70,7 +93,7 @@ func TestGenericDerivationScopeAndVerifiedReadiness(t *testing.T) {
 				test.change(&asset)
 			}
 			repo := &completedDerivationRepository{asset: asset}
-			h.service = assets.NewService(repo, completedDerivationBlobStore{}, "", time.Now)
+			h.service = assets.NewService(repo, completedDerivationBlobStore{}, "", time.Now).WithDerivationProofEnabled(true)
 			h.workloadAuth.config.TrustedDerivationPrincipals = nil
 			if !test.disabled {
 				h.workloadAuth.config.TrustedDerivationPrincipals = []string{"watermark"}

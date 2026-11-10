@@ -30,11 +30,12 @@ const uploadTTL = 10 * time.Minute
 const contentTicketTTL = 5 * time.Minute
 
 type Service struct {
-	repository         Repository
-	blobs              BlobStore
-	publicBaseURL      string
-	delegateBannerSize bool
-	now                func() time.Time
+	repository             Repository
+	blobs                  BlobStore
+	publicBaseURL          string
+	delegateBannerSize     bool
+	derivationProofEnabled bool
+	now                    func() time.Time
 }
 
 func NewService(repository Repository, blobs BlobStore, publicBaseURL string, now func() time.Time) *Service {
@@ -43,6 +44,11 @@ func NewService(repository Repository, blobs BlobStore, publicBaseURL string, no
 
 func (s *Service) WithHomeBannerDimensionsDelegated(delegated bool) *Service {
 	s.delegateBannerSize = delegated
+	return s
+}
+
+func (s *Service) WithDerivationProofEnabled(enabled bool) *Service {
+	s.derivationProofEnabled = enabled
 	return s
 }
 

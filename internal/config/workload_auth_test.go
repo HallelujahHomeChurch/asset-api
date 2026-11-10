@@ -5,6 +5,21 @@ import (
 	"testing"
 )
 
+func TestDerivationProofGateRequiresExplicitTrue(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://test")
+	t.Setenv("ASSET_ALLOW_DEV_CALLER_HEADER", "true")
+	for _, value := range []string{"", "false", "true", "TRUE", "1", " true", "typo"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("ASSET_DERIVATION_PROOF_ENABLED", value)
+			cfg, err := Load()
+			valid := value == "" || value == "false" || value == "true"
+			if (err == nil) != valid || (valid && cfg.DerivationProofEnabled != (value == "true")) {
+				t.Fatalf("value=%q enabled=%t err=%v", value, cfg.DerivationProofEnabled, err)
+			}
+		})
+	}
+}
+
 func TestWorkloadAuthRuntimeConfig(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://test")
 	t.Setenv("ASSET_ALLOW_DEV_CALLER_HEADER", "true")

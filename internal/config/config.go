@@ -46,6 +46,7 @@ type Config struct {
 	ReaderCallerAppID         string
 	WorkloadAuth              *WorkloadAuth
 	DelegateHomeBannerSize    bool
+	DerivationProofEnabled    bool
 	AllowDevCallerHeader      bool
 	AppAPIToken               string
 	ShutdownTimeout           time.Duration
@@ -141,6 +142,13 @@ func Load() (Config, error) {
 	cfg.WorkloadAuth, err = loadWorkloadAuth(os.Getenv("ASSET_WORKLOAD_AUTH"), cfg)
 	if err != nil {
 		return Config{}, err
+	}
+	switch os.Getenv("ASSET_DERIVATION_PROOF_ENABLED") {
+	case "", "false":
+	case "true":
+		cfg.DerivationProofEnabled = true
+	default:
+		return Config{}, fmt.Errorf("ASSET_DERIVATION_PROOF_ENABLED must be true or false")
 	}
 	switch os.Getenv("ASSET_HOME_BANNER_DIMENSIONS_DELEGATED") {
 	case "", "false":

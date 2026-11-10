@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -12,8 +13,14 @@ import (
 )
 
 func TestTrustedDerivationTransactionFencesSourceAndReplay(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("proof-enabled-%t", enabled), func(t *testing.T) { testTrustedDerivationFence(t, enabled) })
+	}
+}
+
+func testTrustedDerivationFence(t *testing.T, enabled bool) {
 	db := integrationDB(t)
-	store := New(db)
+	store := New(db).WithDerivationProofEnabled(enabled)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	now := time.Now().UTC()
@@ -69,8 +76,8 @@ func TestTrustedDerivationTransactionFencesSourceAndReplay(t *testing.T) {
 				if _, err := db.ExecContext(ctx, "UPDATE assets SET deleted_at=now() WHERE id=$1", sourceID); err != nil {
 					t.Fatal(err)
 				}
-				if err := store.CompleteUpload(ctx, asset, session, assets.ScanRequest{}); err != nil {
-					t.Fatalf("same proof replay after source deletion: %v", err)
+				if err := store.CompleteUpload(ctx, asset, session, assets.ScanRequest{}); (enabled && err != nil) || (!enabled && !errors.Is(err, assets.ErrConflict)) {
+					t.Fatalf("replay after source deletion (proof enabled=%t): %v", enabled, err)
 				}
 				changed := asset
 				changed.Derivation.SourceETag = "other-version"
@@ -116,6 +123,7 @@ func TestTrustedDerivationTransactionFencesSourceAndReplay(t *testing.T) {
 			default:
 				if mode == "wrong digest" {
 					asset.Derivation.SourceSHA256 = strings.Repeat("d", 64)
+					asset.ScanDetails = sourceID + ":" + asset.Derivation.SourceSHA256
 				} else {
 					asset.Derivation.SourceETag = "other-version"
 				}
@@ -129,7 +137,11 @@ func TestTrustedDerivationTransactionFencesSourceAndReplay(t *testing.T) {
 			}
 			switch mode {
 			case "replay":
-				if stored.Derivation != asset.Derivation || stored.ScanStatus != assets.ScanClean {
+				expected := assets.Derivation{}
+				if enabled {
+					expected = asset.Derivation
+				}
+				if stored.Derivation != expected || stored.ScanStatus != assets.ScanClean {
 					t.Fatalf("wrong stored evidence: %+v", stored)
 				}
 			case "ordinary won":
