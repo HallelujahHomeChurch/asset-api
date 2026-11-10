@@ -586,6 +586,8 @@ datasets:
       - {name: assets.upload_status, purpose: Asset upload lifecycle status, necessity: required, data_classes: [activity]}
       - {name: assets.scan_status, purpose: Asset malware scan status, necessity: required, data_classes: [security]}
       - {name: assets.scan_details, purpose: Asset malware scan details, necessity: required, data_classes: [security]}
+      - {name: assets.security_profile, purpose: Persist the fixed byte validation policy for an explicitly profiled upload, necessity: required, data_classes: [security]}
+      - {name: assets.processing_profile, purpose: Persist the fixed processing policy for an explicitly profiled upload, necessity: required, data_classes: [security, activity]}
       - {name: assets.processing_status, purpose: Asset derivative lifecycle status, necessity: required, data_classes: [activity]}
       - {name: assets.visibility, purpose: Asset access visibility policy, necessity: required, data_classes: [security]}
       - {name: assets.created_at, purpose: Asset creation timestamp, necessity: required, data_classes: [activity]}

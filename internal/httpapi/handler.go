@@ -452,9 +452,22 @@ func (h *Handler) ready(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (h *Handler) createUpload(w http.ResponseWriter, r *http.Request) {
-	var input assets.CreateUploadInput
-	if !decodeJSON(w, r, &input) {
+	var request struct {
+		assets.CreateUploadInput
+		SecurityProfile   json.RawMessage `json:"securityProfile"`
+		ProcessingProfile json.RawMessage `json:"processingProfile"`
+	}
+	if !decodeJSON(w, r, &request) {
 		return
+	}
+	input := request.CreateUploadInput
+	if request.SecurityProfile != nil || request.ProcessingProfile != nil {
+		if json.Unmarshal(request.SecurityProfile, &input.SecurityProfile) != nil ||
+			json.Unmarshal(request.ProcessingProfile, &input.ProcessingProfile) != nil ||
+			input.SecurityProfile == "" || input.ProcessingProfile == "" {
+			handleError(w, assets.ErrInvalidInput)
+			return
+		}
 	}
 	caller := callerFromRequest(r, h.allowDevCallerHeader)
 	if requestService(r) == extractorCaller && !extractorIllustration(input.Namespace, input.OwnerType, input.OwnerID,
@@ -462,7 +475,17 @@ func (h *Handler) createUpload(w http.ResponseWriter, r *http.Request) {
 		handleError(w, assets.ErrForbidden)
 		return
 	}
-	policy, ok := assets.PolicyFor(input.Namespace)
+	policy, ok := assets.UploadPolicy(input.Namespace, input.UploadProfiles)
+	if input.UploadProfiles != (assets.UploadProfiles{}) {
+		if !ok {
+			handleError(w, assets.ErrInvalidInput)
+			return
+		}
+		if !h.uploadProfilesAllowed(r, input) {
+			handleError(w, assets.ErrForbidden)
+			return
+		}
+	}
 	if !ok || input.OwnerService != caller || policy.OwnerService != caller {
 		writeError(w, http.StatusForbidden, "AST_FORBIDDEN", "caller cannot use this asset namespace")
 		return
