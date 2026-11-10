@@ -14,7 +14,7 @@ func TestWorkloadAuthRuntimeConfig(t *testing.T) {
 		t.Fatalf("default workload verifier config is not disabled: %v", err)
 	}
 
-	valid := `{"issuer":"https://issuer.example/tenant","audience":"asset-fixture","jwksUrl":"https://issuer.example/keys","principalClaim":"oid","principals":{"cms-id":"hhc-web-api","reader-id":"api-gateway"},"disableLegacyCallers":["hhc-web-api"]}`
+	valid := `{"issuer":"https://issuer.example/tenant","audience":"asset-fixture","jwksUrl":"https://issuer.example/keys","principalClaim":"oid","principals":{"cms-id":"hhc-web-api","reader-id":"api-gateway","extractor-id":"hhc-web-extractor"},"disableLegacyCallers":["hhc-web-api"]}`
 	for _, test := range []struct {
 		name, raw string
 		valid     bool
@@ -32,7 +32,8 @@ func TestWorkloadAuthRuntimeConfig(t *testing.T) {
 			t.Setenv("ASSET_WORKLOAD_AUTH", test.raw)
 			cfg, err := Load()
 			if test.valid {
-				if err != nil || cfg.WorkloadAuth == nil || cfg.WorkloadAuth.Principals["cms-id"] != "hhc-web-api" {
+				if err != nil || cfg.WorkloadAuth == nil || cfg.WorkloadAuth.Principals["cms-id"] != "hhc-web-api" ||
+					cfg.WorkloadAuth.Principals["extractor-id"] != BulletinExtractorCaller {
 					t.Fatalf("synthetic configuration rejected: %v", err)
 				}
 			} else if err == nil || !strings.Contains(err.Error(), "ASSET_WORKLOAD_AUTH") || strings.Contains(err.Error(), "sensitive fixture") {

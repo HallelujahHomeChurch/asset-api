@@ -8,6 +8,8 @@ import (
 	"strings"
 )
 
+const BulletinExtractorCaller = "hhc-web-extractor"
+
 type WorkloadAuth struct {
 	Issuer               string            `json:"issuer"`
 	Audience             string            `json:"audience"`
@@ -38,7 +40,7 @@ func loadWorkloadAuth(raw string, cfg Config) (*WorkloadAuth, error) {
 	}
 	allowed := func(caller string) bool {
 		return caller != "" && (cfg.AllowedCallers[caller] || caller == cfg.ReaderCallerAppID ||
-			(caller == "hhc-web-bulletin-worker" && cfg.AllowedCallers["hhc-web-api"]))
+			((caller == "hhc-web-bulletin-worker" || caller == BulletinExtractorCaller) && cfg.AllowedCallers["hhc-web-api"]))
 	}
 	for principal, caller := range auth.Principals {
 		if !workloadValue(principal) || !allowed(caller) {
