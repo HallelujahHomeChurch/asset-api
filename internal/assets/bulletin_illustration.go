@@ -17,11 +17,8 @@ func (s *Service) BulletinIllustrationMetadata(ctx context.Context, caller, issu
 	if err != nil {
 		return PublicDownloadMetadata{}, err
 	}
-	if asset.ID != assetID || asset.OwnerService != caller || asset.OwnerType != "bulletin_issue" || asset.OwnerID != issueID || asset.Namespace != "cms.weekly.image" || asset.Purpose != "online_bulletin_illustration" || asset.Locale != "zh-Hant" || asset.Visibility != VisibilityPrivate || !asset.DeletedAt.IsZero() || asset.ChecksumSHA256 != checksum || asset.DetectedMIMEType != "image/png" || asset.UploadStatus != UploadCompleted || asset.ScanStatus != ScanClean || asset.ProcessingStatus != ProcessingNotRequired || asset.SizeBytes < 1 || asset.SizeBytes > 2<<20 {
+	if asset.ID != assetID || asset.OwnerService != caller || asset.OwnerType != "bulletin_issue" || asset.OwnerID != issueID || asset.Namespace != "cms.weekly.image" || asset.Purpose != "online_bulletin_illustration" || asset.Locale != "zh-Hant" || asset.ChecksumSHA256 != checksum || asset.DetectedMIMEType != "image/png" || asset.ProcessingStatus != ProcessingNotRequired || asset.SizeBytes < 1 || asset.SizeBytes > 2<<20 {
 		return PublicDownloadMetadata{}, ErrNotFound
 	}
-	return PublicDownloadMetadata{
-		Size: asset.SizeBytes, ContentType: asset.DetectedMIMEType, FileName: asset.OriginalFileName, ETag: asset.ETag,
-		LastModified: asset.UpdatedAt, CacheControl: "private, no-store", objectKey: asset.ObjectKey,
-	}, nil
+	return readyOwnerContentMetadata(asset)
 }

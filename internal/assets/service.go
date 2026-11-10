@@ -868,12 +868,16 @@ func (s *Service) OpenPublicMetadata(ctx context.Context, metadata PublicDownloa
 	if err != nil {
 		return BlobDownload{}, err
 	}
+	return bindDownloadMetadata(download, metadata), nil
+}
+
+func bindDownloadMetadata(download BlobDownload, metadata PublicDownloadMetadata) BlobDownload {
 	download.ContentType = metadata.ContentType
 	download.TotalSize = metadata.Size
 	download.ETag = metadata.ETag
 	download.LastModified = metadata.LastModified
 	download.CacheControl = metadata.CacheControl
-	return download, nil
+	return download
 }
 
 func (s *Service) PublicURL(assetID string) string { return s.publicBaseURL + "/" + assetID }

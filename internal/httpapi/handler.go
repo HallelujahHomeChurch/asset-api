@@ -218,6 +218,8 @@ func (h *Handler) assetAction(w http.ResponseWriter, r *http.Request) {
 		h.authorizedDownload(w, r)
 	case "bulletin-illustration":
 		h.bulletinIllustrationDownload(w, r)
+	case "owner-content":
+		h.ownerContent(w, r)
 	case "public-url":
 		h.publicURL(w, r)
 	default:
@@ -1172,6 +1174,12 @@ func (h *Handler) servePublicDownload(w http.ResponseWriter, r *http.Request, va
 }
 
 func (h *Handler) serveDownload(w http.ResponseWriter, r *http.Request, metadata assets.PublicDownloadMetadata) {
+	h.serveBoundDownload(w, r, metadata, h.service.OpenPublicMetadata)
+}
+
+func (h *Handler) serveBoundDownload(w http.ResponseWriter, r *http.Request, metadata assets.PublicDownloadMetadata,
+	open func(context.Context, assets.PublicDownloadMetadata, assets.ByteRange) (assets.BlobDownload, error),
+) {
 	if matchesETag(r.Header.Get("If-None-Match"), metadata.ETag) {
 		setPublicHeaders(w, metadata, -1, requestedDownloadName(r, metadata.FileName))
 		w.WriteHeader(http.StatusNotModified)
@@ -1205,7 +1213,7 @@ func (h *Handler) serveDownload(w http.ResponseWriter, r *http.Request, metadata
 		}
 		return
 	}
-	download, err := h.service.OpenPublicMetadata(r.Context(), metadata, requested)
+	download, err := open(r.Context(), metadata, requested)
 	if err != nil {
 		handleError(w, err)
 		return
