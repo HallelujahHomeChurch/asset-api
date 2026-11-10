@@ -82,6 +82,7 @@ func TestDataGovernanceManifest(t *testing.T) {
 		"asset.recording-packages",
 		"asset.recording-processing-slots", "asset.recording-package-attempts", "asset.recording-live-previews", "asset.recording-preview-attempts",
 		"asset.recording-audio", "asset.recording-audio-attempts",
+		"asset.bulletin-derivation-proof",
 		"asset.account-artifact-content", "asset.account-artifact-metadata", "asset.account-upload-sessions",
 		"asset.account-grants", "asset.account-scan-and-derivative-state", "asset.account-poison-events", "asset.account-purge-lifecycle",
 		"asset.account-cleanup-receipts",

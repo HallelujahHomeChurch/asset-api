@@ -514,23 +514,8 @@ func (h *Handler) cleanupAccount(w http.ResponseWriter, r *http.Request) {
 }
 func (h *Handler) getAsset(w http.ResponseWriter, r *http.Request) {
 	if asset, ok := h.ownedAsset(w, r); ok {
-		writeJSON(w, http.StatusOK, asset)
+		writePrivateAsset(w, r, asset)
 	}
-}
-func (h *Handler) completeUpload(w http.ResponseWriter, r *http.Request) {
-	if !h.requireOwnedAsset(w, r) {
-		return
-	}
-	var input assets.CompleteUploadInput
-	if !decodeJSON(w, r, &input) {
-		return
-	}
-	asset, err := h.service.CompleteUpload(r.Context(), r.PathValue("assetID"), input)
-	if err != nil {
-		handleError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, asset)
 }
 func (h *Handler) createGrant(w http.ResponseWriter, r *http.Request) {
 	if !h.requireOwnedAsset(w, r) {

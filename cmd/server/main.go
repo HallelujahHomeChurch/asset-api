@@ -103,10 +103,10 @@ func run() error {
 		blobStore = store
 		localUpload = store.PutHandler
 	}
-	repository := postgres.New(db)
+	repository := postgres.New(db).WithDerivationProofEnabled(cfg.DerivationProofEnabled)
 	auditStore := auditoutbox.New(db)
 	repository.WithAudit(auditStore)
-	service := assets.NewService(repository, blobStore, cfg.PublicBaseURL, time.Now).WithHomeBannerDimensionsDelegated(cfg.DelegateHomeBannerSize)
+	service := assets.NewService(repository, blobStore, cfg.PublicBaseURL, time.Now).WithHomeBannerDimensionsDelegated(cfg.DelegateHomeBannerSize).WithDerivationProofEnabled(cfg.DerivationProofEnabled)
 	handler := httpapi.New(service, db, cfg.AllowedCallers, cfg.AllowDevCallerHeader, cfg.AppAPIToken, httpapi.CallerConfig{ReaderCallerAppID: cfg.ReaderCallerAppID}, localUpload).WithAudit(auditStore).WithWorkloadAuth(cfg.WorkloadAuth)
 	if cfg.R2AccountID != "" {
 		objects, err := r2storage.New(cfg.R2AccountID, cfg.R2Bucket, cfg.R2AccessKeyID, cfg.R2SecretAccessKey)

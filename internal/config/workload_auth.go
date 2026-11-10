@@ -13,14 +13,15 @@ import (
 const BulletinExtractorCaller = "hhc-web-extractor"
 
 type WorkloadAuth struct {
-	Issuer                 string                                 `json:"issuer"`
-	Audience               string                                 `json:"audience"`
-	JWKSURL                string                                 `json:"jwksUrl"`
-	PrincipalClaim         string                                 `json:"principalClaim"`
-	Principals             map[string]string                      `json:"principals"`
-	DisableLegacyCallers   []string                               `json:"disableLegacyCallers"`
-	OwnerContentPrincipals []string                               `json:"ownerContentPrincipals"`
-	UploadProfileScopes    map[string][]assets.UploadProfileScope `json:"uploadProfileScopes"`
+	Issuer                      string                                 `json:"issuer"`
+	Audience                    string                                 `json:"audience"`
+	JWKSURL                     string                                 `json:"jwksUrl"`
+	PrincipalClaim              string                                 `json:"principalClaim"`
+	Principals                  map[string]string                      `json:"principals"`
+	DisableLegacyCallers        []string                               `json:"disableLegacyCallers"`
+	OwnerContentPrincipals      []string                               `json:"ownerContentPrincipals"`
+	TrustedDerivationPrincipals []string                               `json:"trustedDerivationPrincipals"`
+	UploadProfileScopes         map[string][]assets.UploadProfileScope `json:"uploadProfileScopes"`
 }
 
 func loadWorkloadAuth(raw string, cfg Config) (*WorkloadAuth, error) {
@@ -67,11 +68,16 @@ func loadWorkloadAuth(raw string, cfg Config) (*WorkloadAuth, error) {
 			}
 		}
 	}
-	if len(auth.OwnerContentPrincipals) > 64 {
+	if len(auth.OwnerContentPrincipals) > 64 || len(auth.TrustedDerivationPrincipals) > 64 {
 		return nil, invalid
 	}
 	for _, principal := range auth.OwnerContentPrincipals {
 		if auth.Principals[principal] != "hhc-web-api" {
+			return nil, invalid
+		}
+	}
+	for _, principal := range auth.TrustedDerivationPrincipals {
+		if auth.Principals[principal] != "hhc-web-bulletin-worker" {
 			return nil, invalid
 		}
 	}

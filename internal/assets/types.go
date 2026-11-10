@@ -80,6 +80,7 @@ const (
 )
 
 type Asset struct {
+	Derivation             Derivation       `json:"-"`
 	UploadProfiles         UploadProfiles   `json:"-"`
 	ID                     string           `json:"id"`
 	Namespace              string           `json:"namespace"`

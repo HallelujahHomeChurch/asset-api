@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -20,8 +21,14 @@ import (
 )
 
 func TestDerivedBulletinWorkerHTTPCompletionUsesRealByteAndDatabasePath(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("proof-enabled-%t", enabled), func(t *testing.T) { testDerivedBulletinHTTPCompatibility(t, enabled) })
+	}
+}
+
+func testDerivedBulletinHTTPCompatibility(t *testing.T, enabled bool) {
 	db := integrationDB(t)
-	store, ctx, now := New(db), context.Background(), time.Now().UTC()
+	store, ctx, now := New(db).WithDerivationProofEnabled(enabled), context.Background(), time.Now().UTC()
 	sourceID, sourceHash := strings.Repeat("b", 32), strings.Repeat("c", 64)
 	insertAsset(t, db, sourceID, assets.UploadCompleted, assets.ScanClean, assets.ProcessingNotRequired, now, time.Time{})
 	if _, err := db.Exec(`UPDATE assets SET namespace='cms.weekly.pdf',owner_service='hhc-web-api',owner_type='bulletin_issue',purpose='weekly_bulletin',locale='zh-Hant',visibility='private',detected_mime_type='application/pdf',checksum_sha256=$2,etag='source-etag' WHERE id=$1`, sourceID, sourceHash); err != nil {
@@ -57,6 +64,27 @@ func TestDerivedBulletinWorkerHTTPCompletionUsesRealByteAndDatabasePath(t *testi
 	asset, err := store.GetAsset(ctx, created.Asset.ID)
 	if err != nil || asset.ScanStatus != assets.ScanClean || asset.ScanSignature != assets.TrustedBulletinWatermark || asset.ChecksumSHA256 != hex.EncodeToString(sum[:]) {
 		t.Fatalf("asset=%+v err=%v", asset, err)
+	}
+	// A compatible rollback toggles admission off but must preserve and replay
+	// either previously written representation without upgrading or erasing it.
+	if (asset.Derivation != (assets.Derivation{})) != enabled {
+		t.Fatalf("unexpected persisted format with gate=%t: %+v", enabled, asset.Derivation)
+	}
+	rollbackStore := New(db)
+	rollbackService := assets.NewService(rollbackStore, blobs, "https://example.invalid/assets", time.Now)
+	var input assets.CompleteDerivedBulletinInput
+	if err := json.Unmarshal(body, &input); err != nil {
+		t.Fatal(err)
+	}
+	for _, replayService := range []*assets.Service{rollbackService, service.WithDerivationProofEnabled(true)} {
+		replay, err := replayService.CompleteDerivedBulletin(ctx, asset.ID, input)
+		if err != nil || replay.Derivation != asset.Derivation || replay.ScanDetails != asset.ScanDetails || replay.ETag != asset.ETag {
+			t.Fatalf("mixed-version legacy replay changed evidence: %+v %v", replay, err)
+		}
+	}
+	stored, err := rollbackStore.GetAsset(ctx, asset.ID)
+	if err != nil || stored.Derivation != asset.Derivation {
+		t.Fatalf("rollback erased proof: %+v %v", stored, err)
 	}
 	var queued int
 	if err := db.QueryRow(`SELECT count(*) FROM asset_scan_outbox WHERE asset_id=$1`, asset.ID).Scan(&queued); err != nil || queued != 0 {
