@@ -31,6 +31,7 @@ type Handler struct {
 	allowDevCallerHeader bool
 	appAPIToken          string
 	callerConfig         CallerConfig
+	workloadAuth         *workloadVerifier
 	localUpload          http.HandlerFunc
 	audit                *auditoutbox.Store
 	recordingPackages    *assets.RecordingPackageService
@@ -243,7 +244,11 @@ func localUploadCORS(next http.Handler) http.Handler {
 
 func (h *Handler) internal(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		service := h.authenticatedService(r)
+		principal, service, err := h.authenticateWorkload(r, h.authenticatedService)
+		if err != nil {
+			writeWorkloadAuthError(w, err)
+			return
+		}
 		caller := service
 		// The bulletin worker owns no assets of its own; it acts for CMS.
 		if caller == "hhc-web-bulletin-worker" {
@@ -255,6 +260,9 @@ func (h *Handler) internal(next http.Handler) http.Handler {
 		}
 		ctx := context.WithValue(r.Context(), callerContextKey{}, caller)
 		ctx = context.WithValue(ctx, serviceContextKey{}, service)
+		if principal != "" {
+			ctx = context.WithValue(ctx, workloadPrincipalKey{}, principal)
+		}
 		actor, request := strings.TrimSpace(r.Header.Get("X-HHC-Actor-ID")), strings.TrimSpace(r.Header.Get("X-HHC-Request-ID"))
 		if len(r.Header.Values("X-HHC-Actor-ID")) == 1 && len(r.Header.Values("X-HHC-Request-ID")) == 1 && auditclient.ValidUserRequest(actor, request) {
 			ctx = auditclient.WithProvenance(ctx, "user", actor, request)
@@ -291,8 +299,8 @@ func (h *Handler) adminUserManager(next http.Handler) http.Handler {
 
 func (h *Handler) collectionReader(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !h.gatewayReader(r) {
-			writeError(w, http.StatusForbidden, "AST_FORBIDDEN", "caller is not allowed")
+		if err := h.gatewayReader(r); err != nil {
+			writeWorkloadAuthError(w, err)
 			return
 		}
 		identity, ok := parseCollectionReaderIdentity(r)
@@ -308,8 +316,8 @@ func (h *Handler) collectionTicket(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "private, no-store")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		if !h.gatewayReader(r) {
-			writeError(w, http.StatusForbidden, "AST_FORBIDDEN", "caller is not allowed")
+		if err := h.gatewayReader(r); err != nil {
+			writeWorkloadAuthError(w, err)
 			return
 		}
 		ticket := r.URL.Query().Get("ticket")
@@ -358,23 +366,38 @@ type gatewayIngressKey struct{}
 
 func (h *Handler) gatewayIngress(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		reader := h.callerConfig.ReaderCallerAppID
-		caller := h.internalCaller(r)
-		if reader == "" || caller != reader || len(r.Header.Values("Dapr-Caller-App-Id")) != 0 || len(r.Header.Values("dapr-api-token")) != 0 {
-			writeError(w, http.StatusForbidden, "AST_FORBIDDEN", "caller is not allowed")
+		principal, caller, err := h.authenticateWorkload(r, h.internalCaller)
+		if err != nil {
+			writeWorkloadAuthError(w, err)
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), gatewayIngressKey{}, true)))
+		if caller != h.callerConfig.ReaderCallerAppID {
+			writeWorkloadAuthError(w, assets.ErrForbidden)
+			return
+		}
+		ctx := context.WithValue(r.Context(), gatewayIngressKey{}, true)
+		if principal != "" {
+			ctx = context.WithValue(ctx, workloadPrincipalKey{}, principal)
+		}
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
-func (h *Handler) gatewayReader(r *http.Request) bool {
-	ingress, _ := r.Context().Value(gatewayIngressKey{}).(bool)
-	if _, present := r.Header[http.CanonicalHeaderKey("X-HHC-Caller-App-Id")]; present && !ingress {
-		return false
+func (h *Handler) gatewayReader(r *http.Request) error {
+	if ingress, _ := r.Context().Value(gatewayIngressKey{}).(bool); ingress {
+		return nil
+	}
+	if workloadHeaderPresent(r) {
+		return assets.ErrUnauthorized
+	}
+	if _, present := r.Header[http.CanonicalHeaderKey("X-HHC-Caller-App-Id")]; present {
+		return assets.ErrForbidden
 	}
 	reader := h.callerConfig.ReaderCallerAppID
-	return reader != "" && (ingress || h.daprCaller(r) == reader)
+	if reader == "" || !h.legacyWorkloadAllowed(reader) || h.daprCaller(r) != reader {
+		return assets.ErrForbidden
+	}
+	return nil
 }
 
 // requestService is the authenticated service before CMS aliasing.

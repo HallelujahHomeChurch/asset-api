@@ -26,9 +26,71 @@ its original service identity gates derivative completion.
 A request without the internal header can still use an exact app-channel token
 and Dapr caller identity. Local-only `ASSET_ALLOW_DEV_CALLER_HEADER` remains a
 development convenience. Without Dapr, production still requires direct HTTPS
-Audit dispatch. No Entra client, tenant, audience, object or app-role settings
-are required for Asset caller admission. Managed identities for Blob, queues,
-Key Vault and image pulling retain their separate responsibilities.
+Audit dispatch. With the workload verifier off, legacy admission requires no
+Entra identity settings. Managed identities for Blob, queues, Key Vault and
+image pulling retain their separate responsibilities.
+
+## Audience-bound workload verifier
+
+`ASSET_WORKLOAD_AUTH` is unset by default. It accepts a single JSON object
+when explicitly configured. The following values are synthetic examples.
+
+```json
+{
+  "issuer": "https://issuer.example/workload-issuer",
+  "audience": "asset-fixture",
+  "jwksUrl": "https://issuer.example/workload-keys",
+  "principalClaim": "oid",
+  "principals": {
+    "cms-fixture-object": "hhc-web-api",
+    "extractor-fixture-object": "hhc-web-api",
+    "watermark-fixture-object": "hhc-web-bulletin-worker",
+    "gateway-fixture-object": "api-gateway"
+  },
+  "disableLegacyCallers": []
+}
+```
+
+Configure one exact trusted issuer and its trusted HTTPS signing-key endpoint
+after verifying the issuer metadata. The verifier never fetches token-supplied
+URLs or follows redirects. Choose `oid` or `sub` only after confirming the
+issuer's actual app-only principal claim. Each known principal maps to one
+existing caller alias. Distinct principal IDs remain separate even if they
+share a compatibility alias. Caller, stored owner, end-user actor and audit
+provenance retain separate meanings. The watermark worker keeps its original
+caller identity and the existing CMS owner delegation.
+
+Workloads send exactly one `X-HHC-Workload-Authorization: Bearer <token>`.
+The verified RS256 token must have the exact issuer and single audience,
+valid required expiry and not-before, and an admitted principal. Delegated
+`scp` tokens and explicit non-app identity types are rejected. The ordinary
+end-user `Authorization` header is separate. A matching single legacy HTTPS
+alias is optional. Mixed Dapr or development credentials, mismatched aliases
+and invalid tokens fail closed, including when the verifier is off. A token
+is verified at private ingress or at the protected Gateway reader ingress.
+The direct Dapr reader fallback cannot accept a mixed workload token.
+
+Legacy callers continue through the same authorized routes. Add an exact
+compatibility alias to `disableLegacyCallers` only after that caller's workload
+verification and rollback are proven. This disables its legacy HTTPS and Dapr
+admission. The separate Gateway alias remains confined to its reader routes.
+A missing workload token during dual acceptance follows legacy admission.
+Generic derivation, owner reads and other new privileged capabilities have no
+admission through this verifier change.
+
+The verifier loads public keys on demand. Fetches have a two-second deadline,
+a 256 KiB response limit, a five-minute cache lifetime and a shared 30-second
+refresh interval across misses and failures. A new key can take up to one
+refresh interval to be recognized. Still-fresh known keys remain usable during
+an outage. Failed refresh with no valid key returns a sanitized 503. Invalid
+credentials return 401 and authenticated unknown principals or wrong route
+permissions return 403. Responses exclude tokens, keys and upstream details.
+
+Keep the runtime verifier unset until Gateway stripping, authenticated caller
+claims, owner mapping and dual-mode rollback have been verified. Local fixtures
+use an isolated issuer and keys. They do not certify production identity
+readiness. Existing Dapr fallback stays available for the permitted aliases.
+
 
 ## Trusted bulletin derivative completion
 
