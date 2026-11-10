@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"hhc/asset-api/internal/dbphase"
 	"hhc/asset-api/internal/derivativequeue"
@@ -23,7 +25,9 @@ func main() {
 		slog.Error("invalid logging configuration", "error", err)
 		os.Exit(1)
 	}
-	if err := run(context.Background()); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := run(ctx); err != nil {
 		slog.Error("asset derivative worker failed")
 		os.Exit(1)
 	}

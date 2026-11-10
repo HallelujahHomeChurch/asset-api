@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"hhc/asset-api/internal/assets"
@@ -122,7 +123,91 @@ func TestDecodeEventRejectsWrongVersionUnknownFieldsAndTrailingContent(t *testin
 	}
 }
 
+func TestJobStopsStalledWorkBeforeTheDatabaseLease(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+		defer cancel()
+		queue := &jobQueue{message: derivativeMessage(1)}
+		processor := &jobProcessor{process: func(ctx context.Context) (derivatives.ProcessResult, error) {
+			<-ctx.Done()
+			return derivatives.ProcessResult{State: derivatives.ProcessSatisfied}, nil
+		}}
+		start := time.Now()
+		job := NewJob(processor, &jobPoisonRepository{}, queue)
+		processed, err := job.RunOnce(ctx)
+		if err != nil || !processed || queue.acked || !queue.retried || time.Since(start) >= 3*time.Minute {
+			t.Fatalf("processed=%v err=%v elapsed=%v queue=%+v", processed, err, time.Since(start), queue)
+		}
+	})
+}
+
+func TestJobDoesNotSettleAfterLateProcessingReturn(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		queue := &jobQueue{message: derivativeMessage(1)}
+		processor := &jobProcessor{process: func(context.Context) (derivatives.ProcessResult, error) {
+			// Image library calls cannot all observe context until they return.
+			time.Sleep(3*time.Minute + time.Second)
+			return derivatives.ProcessResult{State: derivatives.ProcessSatisfied}, nil
+		}}
+		job := NewJob(processor, &jobPoisonRepository{}, queue)
+		processed, err := job.RunOnce(context.Background())
+		if !errors.Is(err, context.DeadlineExceeded) || !processed || queue.acked || queue.retried || queue.poisoned {
+			t.Fatalf("processed=%v err=%v queue=%+v", processed, err, queue)
+		}
+	})
+}
+
+func TestJobDoesNotProcessOrSettleAfterCancellation(t *testing.T) {
+	for _, phase := range []string{"receive", "processing"} {
+		t.Run(phase, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			queue := &jobQueue{message: derivativeMessage(1)}
+			processor := &jobProcessor{result: derivatives.ProcessResult{State: derivatives.ProcessSatisfied}}
+			if phase == "receive" {
+				queue.receive = func(context.Context) error { cancel(); return nil }
+			} else {
+				processor.process = func(context.Context) (derivatives.ProcessResult, error) {
+					cancel()
+					return derivatives.ProcessResult{State: derivatives.ProcessSatisfied}, nil
+				}
+			}
+			job := NewJob(processor, &jobPoisonRepository{}, queue)
+			processed, err := job.RunOnce(ctx)
+			if !errors.Is(err, context.Canceled) || processed != (phase == "processing") ||
+				processor.called != (phase == "processing") || queue.acked || queue.retried || queue.poisoned {
+				t.Fatalf("processed=%v err=%v processor=%+v queue=%+v", processed, err, processor, queue)
+			}
+		})
+	}
+}
+
+func TestJobBoundsStalledQueueControl(t *testing.T) {
+	for _, phase := range []string{"receive", "ack"} {
+		t.Run(phase, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+				defer cancel()
+				stall := func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }
+				queue := &jobQueue{message: derivativeMessage(1)}
+				if phase == "receive" {
+					queue.receive = stall
+				} else {
+					queue.ack = stall
+				}
+				job := NewJob(&jobProcessor{result: derivatives.ProcessResult{State: derivatives.ProcessSatisfied}}, &jobPoisonRepository{}, queue)
+				start := time.Now()
+				processed, err := job.RunOnce(ctx)
+				if !errors.Is(err, context.DeadlineExceeded) || processed != (phase == "ack") || time.Since(start) > 10*time.Second {
+					t.Fatalf("processed=%v elapsed=%v err=%v", processed, time.Since(start), err)
+				}
+			})
+		})
+	}
+}
+
 type jobProcessor struct {
+	process func(context.Context) (derivatives.ProcessResult, error)
 	assetID string
 	etag    string
 	called  bool
@@ -131,8 +216,11 @@ type jobProcessor struct {
 	results []derivatives.ProcessResult
 }
 
-func (p *jobProcessor) ProcessAsset(_ context.Context, assetID, etag string) (derivatives.ProcessResult, error) {
+func (p *jobProcessor) ProcessAsset(ctx context.Context, assetID, etag string) (derivatives.ProcessResult, error) {
 	p.assetID, p.etag, p.called = assetID, etag, true
+	if p.process != nil {
+		return p.process(ctx)
+	}
 	if len(p.results) > 0 {
 		result := p.results[0]
 		p.results = p.results[1:]
@@ -142,17 +230,26 @@ func (p *jobProcessor) ProcessAsset(_ context.Context, assetID, etag string) (de
 }
 
 type jobQueue struct {
-	message    Message
-	acked      bool
-	retried    bool
-	poisoned   bool
-	retryDelay time.Duration
+	receive, ack func(context.Context) error
+	message      Message
+	acked        bool
+	retried      bool
+	poisoned     bool
+	retryDelay   time.Duration
 }
 
-func (q *jobQueue) Receive(context.Context, time.Duration) (Message, bool, error) {
+func (q *jobQueue) Receive(ctx context.Context, _ time.Duration) (Message, bool, error) {
+	if q.receive != nil {
+		if err := q.receive(ctx); err != nil {
+			return Message{}, false, err
+		}
+	}
 	return q.message, q.message.ID != "", nil
 }
-func (q *jobQueue) Ack(context.Context, Message) error {
+func (q *jobQueue) Ack(ctx context.Context, _ Message) error {
+	if q.ack != nil {
+		return q.ack(ctx)
+	}
 	q.acked = true
 	return nil
 }

@@ -14,7 +14,12 @@ import (
 	"hhc/asset-api/internal/derivatives"
 )
 
-const messageVisibility = 3*time.Minute + 30*time.Second
+const (
+	messageVisibility = derivatives.ProcessingLease + 30*time.Second
+	// Processing starts before claiming the database lease and leaves time for settlement.
+	processingBudget   = derivatives.ProcessingLease - 15*time.Second
+	queueControlBudget = 10 * time.Second
+)
 
 type Processor interface {
 	ProcessAsset(context.Context, string, string) (derivatives.ProcessResult, error)
@@ -45,31 +50,61 @@ func NewJob(processor Processor, repository PoisonRepository, queue MessageQueue
 }
 
 func (j *Job) RunOnce(ctx context.Context) (bool, error) {
-	message, ok, err := j.queue.Receive(ctx, messageVisibility)
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	receive, cancelReceive := context.WithTimeout(ctx, queueControlBudget)
+	message, ok, err := j.queue.Receive(receive, messageVisibility)
+	if err == nil {
+		err = receive.Err()
+	}
+	cancelReceive()
 	if err != nil || !ok {
 		return false, err
 	}
-	event, err := decodeEvent(message.Body)
-	if err != nil {
-		return true, j.poison(ctx, message, nil, "invalid_payload", err.Error(), derivatives.ProcessResult{})
+	receivedAt := time.Now()
+	event, decodeErr := decodeEvent(message.Body)
+	var result derivatives.ProcessResult
+	if decodeErr == nil {
+		work, cancelWork := context.WithDeadline(ctx, receivedAt.Add(processingBudget))
+		result, err = j.processor.ProcessAsset(work, event.AssetID, event.ETag)
+		if err == nil {
+			err = work.Err()
+		}
+		cancelWork()
 	}
-	result, err := j.processor.ProcessAsset(ctx, event.AssetID, event.ETag)
+	if err := ctx.Err(); err != nil {
+		return true, err
+	}
+	settlementDeadline := time.Now().Add(queueControlBudget)
+	leaseBudgetEnd := receivedAt.Add(processingBudget + queueControlBudget)
+	if leaseBudgetEnd.Before(settlementDeadline) {
+		settlementDeadline = leaseBudgetEnd
+	}
+	settlement, cancelSettlement := context.WithDeadline(ctx, settlementDeadline)
+	defer cancelSettlement()
+	if err := settlement.Err(); err != nil {
+		return true, err
+	}
+	if decodeErr != nil {
+		return true, j.poison(settlement, message, nil, "invalid_payload", decodeErr.Error(), derivatives.ProcessResult{})
+	}
 	if err != nil {
-		return true, j.queue.Retry(ctx, message, 15*time.Second)
+		return true, j.queue.Retry(settlement, message, 15*time.Second)
 	}
 	switch result.State {
 	case derivatives.ProcessSatisfied:
-		return true, j.queue.Ack(ctx, message)
+		return true, j.queue.Ack(settlement, message)
 	case derivatives.ProcessRetry:
 		delay := result.RetryAt.Sub(j.now().UTC())
 		if delay < time.Second {
 			delay = time.Second
 		}
-		return true, j.queue.Retry(ctx, message, delay)
+		return true, j.queue.Retry(settlement, message, delay)
 	case derivatives.ProcessTerminal:
-		return true, j.poison(ctx, message, &event, "processing_failed", result.Details, result)
+		return true, j.poison(settlement, message, &event, "processing_failed", result.Details, result)
 	default:
-		return true, j.queue.Retry(ctx, message, 15*time.Second)
+		return true, j.queue.Retry(settlement, message, 15*time.Second)
 	}
 }
 
