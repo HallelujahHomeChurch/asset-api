@@ -1,0 +1,269 @@
+{
+  "active": {
+    "collection": {
+      "aclRevision": 1,
+      "sourcePolicyVersion": 1,
+      "bindingGeneration": 1,
+      "id": "cccccccccccccccccccccccccccccccc",
+      "namespace": "line.group.media-sync",
+      "name": "Fixture",
+      "revision": 1,
+      "retentionDays": 0,
+      "createdAt": "2026-11-13T00:00:00Z",
+      "updatedAt": "2026-11-13T00:00:00Z",
+      "deletedAt": "0001-01-01T00:00:00Z"
+    },
+    "item": {
+      "publicationState": "active",
+      "sourceExpiresAt": "2027-02-11T00:00:00Z",
+      "id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "collectionId": "cccccccccccccccccccccccccccccccc",
+      "assetId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "remoteItemId": "11111111-1111-4111-8111-111111111111",
+      "displayName": "",
+      "sourceRevision": "44444444-4444-4444-8444-444444444444",
+      "createdRevision": 0,
+      "retentionExempt": false,
+      "updatedRevision": 0,
+      "createdAt": "2026-11-13T00:00:00Z",
+      "updatedAt": "2026-11-13T00:00:00Z",
+      "deletedAt": "0001-01-01T00:00:00Z"
+    },
+    "tombstone": {
+      "id": "",
+      "remoteItemId": "",
+      "deletedRevision": 0,
+      "deletedAt": "0001-01-01T00:00:00Z"
+    }
+  },
+  "collection": {
+    "collection": {
+      "aclRevision": 1,
+      "sourcePolicyVersion": 1,
+      "bindingGeneration": 1,
+      "id": "cccccccccccccccccccccccccccccccc",
+      "namespace": "line.group.media-sync",
+      "name": "Fixture",
+      "revision": 1,
+      "retentionDays": 0,
+      "createdAt": "2026-11-13T00:00:00Z",
+      "updatedAt": "2026-11-13T00:00:00Z",
+      "deletedAt": "0001-01-01T00:00:00Z"
+    },
+    "acls": [
+      {
+        "id": "dddddddddddddddddddddddddddddddd",
+        "collectionId": "cccccccccccccccccccccccccccccccc",
+        "subjectType": "user",
+        "subjectId": "33333333-3333-4333-8333-333333333333",
+        "permission": "read",
+        "createdAt": "2026-11-13T00:00:00Z",
+        "revokedAt": "0001-01-01T00:00:00Z"
+      }
+    ]
+  },
+  "collectionCreated": {
+    "aclRevision": 1,
+    "sourcePolicyVersion": 1,
+    "bindingGeneration": 1,
+    "id": "cccccccccccccccccccccccccccccccc",
+    "namespace": "line.group.media-sync",
+    "name": "Fixture",
+    "revision": 1,
+    "retentionDays": 0,
+    "createdAt": "2026-11-13T00:00:00Z",
+    "updatedAt": "2026-11-13T00:00:00Z",
+    "deletedAt": "0001-01-01T00:00:00Z"
+  },
+  "collections": {
+    "collections": [
+      {
+        "collection": {
+          "aclRevision": 1,
+          "sourcePolicyVersion": 1,
+          "bindingGeneration": 1,
+          "id": "cccccccccccccccccccccccccccccccc",
+          "namespace": "line.group.media-sync",
+          "name": "Fixture",
+          "revision": 1,
+          "retentionDays": 0,
+          "createdAt": "2026-11-13T00:00:00Z",
+          "updatedAt": "2026-11-13T00:00:00Z",
+          "deletedAt": "0001-01-01T00:00:00Z"
+        },
+        "acls": [
+          {
+            "id": "dddddddddddddddddddddddddddddddd",
+            "collectionId": "cccccccccccccccccccccccccccccccc",
+            "subjectType": "user",
+            "subjectId": "33333333-3333-4333-8333-333333333333",
+            "permission": "read",
+            "createdAt": "2026-11-13T00:00:00Z",
+            "revokedAt": "0001-01-01T00:00:00Z"
+          }
+        ]
+      }
+    ],
+    "hasMore": false
+  },
+  "created": {
+    "asset": {
+      "sourcePolicy": {
+        "ref": "11111111-1111-4111-8111-111111111111",
+        "revision": "22222222-2222-4222-8222-222222222222",
+        "publishedAt": "2026-11-13T00:00:00Z",
+        "version": 1,
+        "expiresAt": "2027-02-11T00:00:00Z"
+      },
+      "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "namespace": "line.group.file",
+      "ownerService": "hhc-line-harness",
+      "ownerType": "line_message",
+      "ownerId": "11111111-1111-4111-8111-111111111111",
+      "purpose": "original",
+      "originalFileName": "fixture.pdf",
+      "expectedMimeType": "application/pdf",
+      "uploadStatus": "created",
+      "scanStatus": "pending",
+      "processingStatus": "not_required",
+      "visibility": "restricted",
+      "createdAt": "2026-11-13T00:00:00Z",
+      "updatedAt": "2026-11-13T00:00:00Z",
+      "deletedAt": "0001-01-01T00:00:00Z"
+    },
+    "session": {
+      "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "assetId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "maxSizeBytes": 0,
+      "status": "",
+      "expiresAt": "0001-01-01T00:00:00Z",
+      "createdAt": "0001-01-01T00:00:00Z",
+      "completedAt": "0001-01-01T00:00:00Z"
+    },
+    "uploadTarget": {
+      "url": "https://blob.invalid/original",
+      "method": "PUT",
+      "headers": {
+        "x-ms-blob-type": "BlockBlob"
+      },
+      "expiresAt": "2026-11-13T01:00:00Z"
+    }
+  },
+  "lookup": {
+    "asset": {
+      "sourcePolicy": {
+        "ref": "11111111-1111-4111-8111-111111111111",
+        "revision": "22222222-2222-4222-8222-222222222222",
+        "publishedAt": "2026-11-13T00:00:00Z",
+        "version": 1,
+        "expiresAt": "2027-02-11T00:00:00Z"
+      },
+      "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "namespace": "line.group.file",
+      "ownerService": "hhc-line-harness",
+      "ownerType": "line_message",
+      "ownerId": "11111111-1111-4111-8111-111111111111",
+      "purpose": "original",
+      "originalFileName": "fixture.pdf",
+      "expectedMimeType": "application/pdf",
+      "detectedMimeType": "application/pdf",
+      "sizeBytes": 16,
+      "checksumSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "etag": "fixture-etag",
+      "uploadStatus": "completed",
+      "scanStatus": "not_required",
+      "processingStatus": "not_required",
+      "visibility": "restricted",
+      "createdAt": "2026-11-13T00:00:00Z",
+      "updatedAt": "2026-11-13T00:00:00Z",
+      "deletedAt": "0001-01-01T00:00:00Z"
+    },
+    "session": {
+      "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "assetId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "maxSizeBytes": 0,
+      "status": "",
+      "expiresAt": "0001-01-01T00:00:00Z",
+      "createdAt": "0001-01-01T00:00:00Z",
+      "completedAt": "0001-01-01T00:00:00Z"
+    },
+    "uploadTarget": {
+      "url": "",
+      "method": "",
+      "headers": null,
+      "expiresAt": "0001-01-01T00:00:00Z"
+    }
+  },
+  "ready": {
+    "sourcePolicy": {
+      "ref": "11111111-1111-4111-8111-111111111111",
+      "revision": "22222222-2222-4222-8222-222222222222",
+      "publishedAt": "2026-11-13T00:00:00Z",
+      "version": 1,
+      "expiresAt": "2027-02-11T00:00:00Z"
+    },
+    "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "namespace": "line.group.file",
+    "ownerService": "hhc-line-harness",
+    "ownerType": "line_message",
+    "ownerId": "11111111-1111-4111-8111-111111111111",
+    "purpose": "original",
+    "originalFileName": "fixture.pdf",
+    "expectedMimeType": "application/pdf",
+    "detectedMimeType": "application/pdf",
+    "sizeBytes": 16,
+    "checksumSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "etag": "fixture-etag",
+    "uploadStatus": "completed",
+    "scanStatus": "not_required",
+    "processingStatus": "not_required",
+    "visibility": "restricted",
+    "createdAt": "2026-11-13T00:00:00Z",
+    "updatedAt": "2026-11-13T00:00:00Z",
+    "deletedAt": "0001-01-01T00:00:00Z",
+    "processingReadiness": {
+      "version": 2,
+      "state": "ready"
+    },
+    "safetyEvidence": {
+      "kind": "not-scanned"
+    }
+  },
+  "staged": {
+    "collection": {
+      "aclRevision": 1,
+      "sourcePolicyVersion": 1,
+      "bindingGeneration": 1,
+      "id": "cccccccccccccccccccccccccccccccc",
+      "namespace": "line.group.media-sync",
+      "name": "Fixture",
+      "revision": 1,
+      "retentionDays": 0,
+      "createdAt": "2026-11-13T00:00:00Z",
+      "updatedAt": "2026-11-13T00:00:00Z",
+      "deletedAt": "0001-01-01T00:00:00Z"
+    },
+    "item": {
+      "publicationState": "staged",
+      "sourceExpiresAt": "2027-02-11T00:00:00Z",
+      "id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "collectionId": "cccccccccccccccccccccccccccccccc",
+      "assetId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "remoteItemId": "11111111-1111-4111-8111-111111111111",
+      "displayName": "",
+      "sourceRevision": "44444444-4444-4444-8444-444444444444",
+      "createdRevision": 0,
+      "retentionExempt": false,
+      "updatedRevision": 0,
+      "createdAt": "2026-11-13T00:00:00Z",
+      "updatedAt": "2026-11-13T00:00:00Z",
+      "deletedAt": "0001-01-01T00:00:00Z"
+    },
+    "tombstone": {
+      "id": "",
+      "remoteItemId": "",
+      "deletedRevision": 0,
+      "deletedAt": "0001-01-01T00:00:00Z"
+    }
+  }
+}
