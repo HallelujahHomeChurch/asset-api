@@ -55,13 +55,23 @@ func (w *Worker) Run(ctx context.Context) error {
 
 func (w *Worker) ProcessOne(ctx context.Context) (bool, error) {
 	now := w.now().UTC()
+	expired := false
+	if source, ok := w.repository.(interface {
+		ExpireLineSource(context.Context, time.Time) (bool, error)
+	}); ok {
+		var err error
+		expired, err = source.ExpireLineSource(ctx, now)
+		if err != nil {
+			return false, err
+		}
+	}
 	candidate, found, err := w.repository.ClaimPurge(ctx, now, time.Minute)
 	if err != nil {
 		return false, err
 	}
 	if !found {
 		deleted, err := w.repository.DeleteExpiredPurge(ctx, now.Add(-180*24*time.Hour), 100)
-		return deleted > 0, err
+		return expired || deleted > 0, err
 	}
 	for _, key := range candidate.Keys {
 		if key == "" {

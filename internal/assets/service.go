@@ -30,6 +30,8 @@ const uploadTTL = 10 * time.Minute
 const contentTicketTTL = 5 * time.Minute
 
 type Service struct {
+	sourceAuthority        SourceAuthority
+	currentSubjects        CurrentSubjectResolver
 	repository             Repository
 	blobs                  BlobStore
 	publicBaseURL          string
@@ -598,37 +600,98 @@ func (s *Service) ListAuthorizedCollections(ctx context.Context, subject Collect
 	if !validCollectionSubject(subject) {
 		return CollectionPage{}, ErrForbidden
 	}
-	return s.repository.ListAuthorizedCollections(ctx, subject, cursor, limit)
+	if s.currentSubjects != nil {
+		current, err := s.currentSubjects.CurrentSubject(ctx, subject.UserID)
+		if errors.Is(err, ErrForbidden) || errors.Is(err, ErrUnauthorized) {
+			return CollectionPage{}, sourceACLRevoked()
+		}
+		if err != nil || current.UserID != subject.UserID || !validCollectionSubject(current) {
+			return CollectionPage{}, sourceUnavailable()
+		}
+		subject = current
+	}
+	page, err := s.repository.ListAuthorizedCollections(ctx, subject, cursor, limit)
+	if err != nil {
+		return CollectionPage{}, err
+	}
+	visible := make([]Collection, 0, len(page.Collections))
+	for _, c := range page.Collections {
+		if c.SourcePolicyVersion != 0 {
+			if s.currentSubjects == nil || c.SourcePolicyVersion != 1 {
+				return CollectionPage{}, sourceUnavailable()
+			}
+			_, err := s.checkSource(ctx, sourceRequest(CollectionSourcePolicy{Version: 1, CollectionID: c.ID, ACLRevision: c.ACLRevision, BindingGeneration: c.BindingGeneration}, "control", Asset{}, CollectionItem{}))
+			if err != nil {
+				var access *SourceAccessError
+				if errors.As(err, &access) && access.Scope != "dependency" {
+					continue
+				}
+				return CollectionPage{}, err
+			}
+		}
+		visible = append(visible, c)
+	}
+	page.Collections = visible
+	return page, nil
 }
 
 func (s *Service) GetAuthorizedCollection(ctx context.Context, id string, subject CollectionSubject) (Collection, error) {
 	if id == "" || !validCollectionSubject(subject) {
 		return Collection{}, ErrForbidden
 	}
-	return s.repository.GetAuthorizedCollection(ctx, id, subject)
+	current, p, err := s.currentSourceSubject(ctx, id, subject)
+	if err != nil {
+		return Collection{}, err
+	}
+	c, err := s.repository.GetAuthorizedCollection(ctx, id, current)
+	if err != nil {
+		if p.Version > 0 && (errors.Is(err, ErrNotFound) || errors.Is(err, ErrForbidden)) {
+			err = sourceACLRevoked()
+		}
+		return Collection{}, err
+	}
+	if p.Version > 0 {
+		if _, err := s.checkSource(ctx, sourceRequest(p, "collection", Asset{}, CollectionItem{})); err != nil {
+			return Collection{}, err
+		}
+	}
+	return c, nil
 }
 
 func (s *Service) GetAuthorizedCollectionItem(ctx context.Context, collectionID, itemID string, subject CollectionSubject) (CollectionItem, error) {
 	if collectionID == "" || itemID == "" || !validCollectionSubject(subject) {
 		return CollectionItem{}, ErrForbidden
 	}
-	return s.repository.GetAuthorizedCollectionItem(ctx, collectionID, itemID, subject)
+	item, _, err := s.sourceAuthorizedItem(ctx, collectionID, itemID, subject)
+	return item, err
 }
 
 func (s *Service) RecordSyncReceipt(ctx context.Context, receipt SyncReceipt, subject CollectionSubject) error {
 	if receipt.State != "available-offline" || !validReceiptValue(receipt.CollectionItemID, 255) || !validReceiptValue(receipt.ContentVersion, 255) || !validReceiptValue(receipt.AppVersion, 64) || !validCollectionSubject(subject) {
 		return ErrInvalidInput
 	}
-	_, err := s.repository.GetAuthorizedCollectionItemByID(ctx, receipt.CollectionItemID, subject)
+	item, err := s.repository.GetAuthorizedCollectionItemByID(ctx, receipt.CollectionItemID, subject)
+	if err != nil {
+		return err
+	}
+	if _, ok := s.repository.(SourcePublicationRepository); ok {
+		_, err = s.GetAuthorizedCollectionItem(ctx, item.CollectionID, item.ID, subject)
+	}
 	return err
 }
 
 func (s *Service) AuthorizedCollectionContentMetadata(ctx context.Context, collectionID, itemID string, subject CollectionSubject) (PublicDownloadMetadata, error) {
-	item, err := s.GetAuthorizedCollectionItem(ctx, collectionID, itemID, subject)
+	if collectionID == "" || itemID == "" || !validCollectionSubject(subject) {
+		return PublicDownloadMetadata{}, ErrForbidden
+	}
+	item, asset, err := s.sourceAuthorizedItem(ctx, collectionID, itemID, subject)
 	if err != nil {
 		return PublicDownloadMetadata{}, err
 	}
-	asset, err := s.repository.GetAsset(ctx, item.AssetID)
+	if asset.IsLineSource() {
+		return PublicDownloadMetadata{SourceExpiresAt: asset.Source.ExpiresAt, Size: asset.SizeBytes, ContentType: asset.DetectedMIMEType, FileName: item.DisplayName, ETag: asset.ETag, LastModified: asset.UpdatedAt, CacheControl: "private, no-store", objectKey: asset.ObjectKey}, nil
+	}
+	asset, err = s.repository.GetAsset(ctx, item.AssetID)
 	if err != nil {
 		return PublicDownloadMetadata{}, err
 	}
@@ -645,6 +708,11 @@ func (s *Service) IssueCollectionContentTicket(ctx context.Context, collectionID
 	if !tokenExpiresAt.After(now) {
 		return ContentTicketResponse{}, ErrUnauthorized
 	}
+	current, _, err := s.currentSourceSubject(ctx, collectionID, subject)
+	if err != nil {
+		return ContentTicketResponse{}, err
+	}
+	subject = current
 	item, err := s.GetAuthorizedCollectionItem(ctx, collectionID, itemID, subject)
 	if err != nil {
 		return ContentTicketResponse{}, err
@@ -652,6 +720,9 @@ func (s *Service) IssueCollectionContentTicket(ctx context.Context, collectionID
 	expiresAt := tokenExpiresAt.UTC()
 	if maximum := now.Add(contentTicketTTL); expiresAt.After(maximum) {
 		expiresAt = maximum
+	}
+	if !item.SourceExpiresAt.IsZero() && expiresAt.After(item.SourceExpiresAt) {
+		expiresAt = item.SourceExpiresAt
 	}
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
@@ -682,7 +753,7 @@ func (s *Service) IssueManagedContentTickets(ctx context.Context, collectionID, 
 	if err != nil {
 		return ManagedContentTicketBatch{}, err
 	}
-	if collection.Collection.Namespace != "line.group.media-sync" {
+	if collection.Collection.Namespace != "line.group.media-sync" || collection.Collection.SourcePolicyVersion != 0 {
 		return ManagedContentTicketBatch{}, ErrNotFound
 	}
 	now := s.now().UTC()
@@ -722,12 +793,35 @@ func (s *Service) IssueManagedContentTickets(ctx context.Context, collectionID, 
 }
 
 func (s *Service) ContentTicketMetadata(ctx context.Context, token string) (PublicDownloadMetadata, error) {
+	return s.ContentTicketMetadataForSubject(ctx, token, CollectionSubject{})
+}
+
+func (s *Service) ContentTicketMetadataForSubject(ctx context.Context, token string, subject CollectionSubject) (PublicDownloadMetadata, error) {
 	raw, err := base64.RawURLEncoding.DecodeString(token)
 	canonical := base64.RawURLEncoding.EncodeToString(raw)
 	if err != nil || len(raw) != 32 || subtle.ConstantTimeCompare([]byte(canonical), []byte(token)) != 1 {
 		return PublicDownloadMetadata{}, ErrUnauthorized
 	}
 	hash := sha256.Sum256(raw)
+	if repo, ok := s.repository.(SourcePublicationRepository); ok {
+		ticket, found, err := repo.SourceContentTicket(ctx, hex.EncodeToString(hash[:]), s.now().UTC())
+		if err != nil {
+			return PublicDownloadMetadata{}, err
+		}
+		if found {
+			if ticket.AccessMode != "reader" || subject.UserID == "" || subject.UserID != ticket.UserID {
+				return PublicDownloadMetadata{}, ErrUnauthorized
+			}
+			metadata, err := s.AuthorizedCollectionContentMetadata(ctx, ticket.CollectionID, ticket.CollectionItemID, subject)
+			if err != nil {
+				return PublicDownloadMetadata{}, err
+			}
+			if metadata.ETag != ticket.AssetETag {
+				return PublicDownloadMetadata{}, ErrUnauthorized
+			}
+			return metadata, nil
+		}
+	}
 	asset, err := s.repository.RedeemContentTicket(ctx, hex.EncodeToString(hash[:]), s.now().UTC())
 	if err != nil {
 		return PublicDownloadMetadata{}, err
@@ -749,7 +843,7 @@ func (s *Service) CollectionChanges(ctx context.Context, id, cursor string, subj
 	if id == "" || !validCollectionSubject(subject) {
 		return CollectionChangePage{}, ErrForbidden
 	}
-	return s.repository.CollectionChanges(ctx, id, cursor, subject)
+	return s.sourceChanges(ctx, id, cursor, subject)
 }
 
 func (s *Service) ListManagedCollections(ctx context.Context, callerService, cursor string, limit int) (ManagedCollectionPage, error) {
@@ -918,6 +1012,10 @@ func (s *Service) AuthorizedMetadata(ctx context.Context, assetID string, subjec
 }
 
 func (s *Service) OpenPublicMetadata(ctx context.Context, metadata PublicDownloadMetadata, byteRange ByteRange) (BlobDownload, error) {
+	if err := s.CheckContentDeadline(metadata); err != nil {
+		return BlobDownload{}, err
+	}
+
 	download, err := s.blobs.Open(ctx, metadata.objectKey, byteRange, metadata.ETag)
 	if err != nil {
 		return BlobDownload{}, err

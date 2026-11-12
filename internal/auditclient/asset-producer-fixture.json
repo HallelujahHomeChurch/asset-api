@@ -198,7 +198,8 @@
       ],
       "actorIdGrammar": "user=account_uuid; anonymous=empty; service=servicePrincipals",
       "servicePrincipals": [
-        "hhc-line-function-bot"
+        "hhc-line-function-bot",
+        "hhc-line-harness"
       ],
       "eventIdGrammar": "uuid",
       "identityStrategy": "mutation_uuid_v4",
@@ -256,10 +257,13 @@
       "resourceType": "collection",
       "resourceIdGrammar": "asset_hex",
       "actorTypes": [
-        "user"
+        "user",
+        "service"
       ],
       "actorIdGrammar": "user=account_uuid; anonymous=empty; service=servicePrincipals",
-      "servicePrincipals": [],
+      "servicePrincipals": [
+        "hhc-line-harness"
+      ],
       "eventIdGrammar": "uuid",
       "identityStrategy": "mutation_uuid_v4",
       "outcome": "success",
@@ -410,6 +414,72 @@
       "metadataClassification": "internal",
       "retentionClass": "standard",
       "metadataSchema": "upload"
+    },
+    {
+      "action": "asset.collection_item.stage",
+      "sourceService": "asset-api",
+      "category": "asset",
+      "resourceOwnerService": "asset-api",
+      "resourceType": "collection_item",
+      "resourceIdGrammar": "asset_hex",
+      "actorTypes": [
+        "service",
+        "user"
+      ],
+      "actorIdGrammar": "user=account_uuid; anonymous=empty; service=servicePrincipals",
+      "servicePrincipals": [
+        "hhc-line-harness"
+      ],
+      "eventIdGrammar": "uuid",
+      "identityStrategy": "mutation_uuid_v4",
+      "outcome": "success",
+      "severity": "info",
+      "metadataClassification": "internal",
+      "retentionClass": "standard",
+      "metadataSchema": "collection_parent"
+    },
+    {
+      "action": "asset.collection_item.activate",
+      "sourceService": "asset-api",
+      "category": "asset",
+      "resourceOwnerService": "asset-api",
+      "resourceType": "collection_item",
+      "resourceIdGrammar": "asset_hex",
+      "actorTypes": [
+        "service",
+        "user"
+      ],
+      "actorIdGrammar": "user=account_uuid; anonymous=empty; service=servicePrincipals",
+      "servicePrincipals": [
+        "hhc-line-harness"
+      ],
+      "eventIdGrammar": "uuid",
+      "identityStrategy": "mutation_uuid_v4",
+      "outcome": "success",
+      "severity": "info",
+      "metadataClassification": "internal",
+      "retentionClass": "standard",
+      "metadataSchema": "collection_parent"
+    },
+    {
+      "action": "asset.collection.bind",
+      "sourceService": "asset-api",
+      "category": "asset",
+      "resourceOwnerService": "asset-api",
+      "resourceType": "collection",
+      "resourceIdGrammar": "asset_hex",
+      "actorTypes": [
+        "user"
+      ],
+      "actorIdGrammar": "user=account_uuid; anonymous=empty; service=servicePrincipals",
+      "servicePrincipals": [],
+      "eventIdGrammar": "uuid",
+      "identityStrategy": "mutation_uuid_v4",
+      "outcome": "success",
+      "severity": "info",
+      "metadataClassification": "internal",
+      "retentionClass": "standard",
+      "metadataSchema": "empty"
     }
   ],
   "metadataSchemas": {
@@ -979,5 +1049,5 @@
       "eventId": "47df88725140013edd36ef6b51f433322b7070b244a68b98bd3fb70296fa0429"
     }
   ],
-  "checksum": "sha256:24e664f416d85b5401a202d5fa8a7deaa231fe46c7526e0cadb746f062b4ff69"
+  "checksum": "sha256:aad69f231c56bfc18a309279467d38845c8cc144c1c68286b2f95e067f9c8782"
 }

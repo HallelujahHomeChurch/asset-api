@@ -25,6 +25,7 @@ import (
 	"hhc/asset-api/internal/postgres"
 	"hhc/asset-api/internal/recordingqueue"
 	"hhc/asset-api/internal/scanqueue"
+	"hhc/asset-api/internal/sourceauthority"
 	azurestorage "hhc/asset-api/internal/storage/azure"
 	localstorage "hhc/asset-api/internal/storage/local"
 	r2storage "hhc/asset-api/internal/storage/r2"
@@ -107,6 +108,13 @@ func run() error {
 	auditStore := auditoutbox.New(db)
 	repository.WithAudit(auditStore)
 	service := assets.NewService(repository, blobStore, cfg.PublicBaseURL, time.Now).WithHomeBannerDimensionsDelegated(cfg.DelegateHomeBannerSize).WithDerivationProofEnabled(cfg.DerivationProofEnabled)
+	if cfg.SourceAccess != nil {
+		authority, err := sourceauthority.New(cfg.SourceAccess.GateOrigin, cfg.SourceAccess.GateToken, cfg.SourceAccess.AccountOrigin, cfg.SourceAccess.AccountToken)
+		if err != nil {
+			return err
+		}
+		service.WithSourceAuthority(authority, authority)
+	}
 	handler := httpapi.New(service, db, cfg.AllowedCallers, cfg.AllowDevCallerHeader, cfg.AppAPIToken, httpapi.CallerConfig{ReaderCallerAppID: cfg.ReaderCallerAppID}, localUpload).WithAudit(auditStore).WithWorkloadAuth(cfg.WorkloadAuth)
 	if cfg.R2AccountID != "" {
 		objects, err := r2storage.New(cfg.R2AccountID, cfg.R2Bucket, cfg.R2AccessKeyID, cfg.R2SecretAccessKey)
