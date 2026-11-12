@@ -205,3 +205,27 @@ func TestSourcePublicationAuditedTransaction(t *testing.T) {
 		t.Fatalf("outbox %d %v", count, err)
 	}
 }
+
+func TestLegacyBotCannotMutateHarnessCollection(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	c, err := store.CreateCollection(ctx, assets.CreateCollectionInput{Namespace: "line.group.media-sync", Name: "Harness group", CallerService: assets.LineHarnessCaller, IdempotencyKey: "new-owner", BindingGeneration: 1}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := "hhc-line-function-bot"
+	_, err = store.AddCollectionACL(ctx, assets.AddCollectionACLInput{CollectionID: c.ID, CallerService: legacy, ActorUserID: testAuditActorUserID, RequestID: testAuditRequestID, IdempotencyKey: "legacy-acl", ExpectedACLRevision: 1, SubjectType: assets.SubjectUser, SubjectID: testAuditActorUserID, Permission: assets.PermissionRead}, now)
+	if !errors.Is(err, assets.ErrForbidden) {
+		t.Fatalf("legacy ACL: %v", err)
+	}
+	_, err = store.DeleteCollection(ctx, assets.DeleteCollectionInput{CollectionID: c.ID, CallerService: legacy, IdempotencyKey: "legacy-delete"}, now)
+	if !errors.Is(err, assets.ErrForbidden) {
+		t.Fatalf("legacy delete: %v", err)
+	}
+	_, err = store.BindSourceCollection(ctx, assets.BindSourceCollectionInput{CollectionID: c.ID, CallerService: legacy, IdempotencyKey: "legacy-bind", ExpectedBindingGeneration: 1, BindingGeneration: 2, ExpectedACLRevision: 1}, now)
+	if !errors.Is(err, assets.ErrForbidden) {
+		t.Fatalf("legacy binding: %v", err)
+	}
+}
