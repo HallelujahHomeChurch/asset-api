@@ -127,3 +127,13 @@ func (h *Handler) bindSourceCollection(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, result)
 }
+
+func (h *Handler) getSourceUpload(w http.ResponseWriter, r *http.Request) {
+	result, err := h.service.GetSourceUpload(r.Context(), r.PathValue("operationID"), authenticatedCaller(r))
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "private, no-store")
+	writeJSON(w, http.StatusOK, result)
+}

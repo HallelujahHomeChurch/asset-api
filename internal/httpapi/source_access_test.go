@@ -75,3 +75,41 @@ func TestSourceContentChecksAuthorityBeforeGETHEADRangeAndConditionalResponse(t 
 		}
 	}
 }
+
+type recoveryUploadRepository struct {
+	assets.Repository
+	asset   assets.Asset
+	session assets.UploadSession
+}
+
+func (r *recoveryUploadRepository) FindUploadByIdempotency(_ context.Context, caller, operation, key string) (assets.Asset, assets.UploadSession, error) {
+	if caller != assets.LineHarnessCaller || operation != "create_upload" || key != "recovery_operation_123" {
+		return assets.Asset{}, assets.UploadSession{}, assets.ErrNotFound
+	}
+	return r.asset, r.session, nil
+}
+func TestSourceUploadRecoveryRequiresDedicatedPrincipalAndReturnsNoTarget(t *testing.T) {
+	f := newWorkloadAuthFixture(t)
+	h := f.handler()
+	h.allowedCallers[assets.LineHarnessCaller] = true
+	h.workloadAuth.config.Principals["harness"] = assets.LineHarnessCaller
+	now := time.Now().UTC()
+	a := assets.Asset{ID: "original", OwnerService: assets.LineHarnessCaller, Namespace: "line.group.file", UploadProfiles: assets.UploadProfiles{SecurityProfile: assets.LineSourceSecurityProfile, ProcessingProfile: "no-processing-v1"}, Source: &assets.SourcePolicy{Version: 1, SourceReference: assets.SourceReference{Ref: "source_opaque_123", Revision: "revision_opaque_123", PublishedAt: now}, ExpiresAt: now.Add(assets.SourceLifetime)}}
+	h.service = assets.NewService(&recoveryUploadRepository{asset: a, session: assets.UploadSession{ID: "session", AssetID: a.ID, CallerService: assets.LineHarnessCaller}}, nil, "", func() time.Time { return now })
+	for _, principal := range []string{"harness", "cms", ""} {
+		r := httptest.NewRequest("GET", "/priv/assets/upload-sessions/recovery_operation_123", nil)
+		if principal != "" {
+			r.Header.Set(workloadHeader, f.bearer(t, "first", f.firstKey, nil, f.claims(principal)))
+		}
+		w := httptest.NewRecorder()
+		h.Routes().ServeHTTP(w, r)
+		if principal == "harness" {
+			var result assets.CreatedUpload
+			if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil || w.Code != 200 || result.Asset.ID != a.ID || result.Target.URL != "" {
+				t.Fatalf("recovery status=%d body=%s", w.Code, w.Body)
+			}
+		} else if w.Code < 400 {
+			t.Fatalf("principal %s allowed", principal)
+		}
+	}
+}

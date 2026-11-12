@@ -90,3 +90,24 @@ func TestLineSourceCompletionValidatesBytesWithoutScan(t *testing.T) {
 		t.Fatalf("expired completion: %v", err)
 	}
 }
+
+func TestSourceUploadRecoveryIsOwnerMetadataWithoutSigningOrSourceGate(t *testing.T) {
+	now := time.Now().UTC()
+	repo := newMemoryRepository()
+	svc := NewService(repo, newMemoryBlobStore(), "", func() time.Time { return now })
+	created, err := svc.CreateUploadSession(context.Background(), CreateUploadInput{Namespace: "line.group.file", OwnerService: LineHarnessCaller, OwnerType: "line_message", OwnerID: "opaque", Purpose: "original", OriginalFileName: "file.pdf", ExpectedMIMEType: "application/pdf", MaxSizeBytes: 1024, UploadProfiles: UploadProfiles{LineSourceSecurityProfile, noProcessing}, Source: &SourceReference{Ref: "source_opaque_123", Revision: "revision_opaque_123", PublishedAt: now}}, "recovery_operation_123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc = NewService(repo, nil, "", func() time.Time { return now.Add(100 * 24 * time.Hour) })
+	recovered, err := svc.GetSourceUpload(context.Background(), "recovery_operation_123", LineHarnessCaller)
+	if err != nil || recovered.Asset.ID != created.Asset.ID || recovered.Target.URL != "" {
+		t.Fatalf("recovery %+v %v", recovered, err)
+	}
+	if _, err = svc.GetSourceUpload(context.Background(), "recovery_operation_123", "hhc-line-function-bot"); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("legacy recovery: %v", err)
+	}
+	if _, err = svc.GetSourceUpload(context.Background(), "missing_operation_123", LineHarnessCaller); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing: %v", err)
+	}
+}

@@ -398,3 +398,27 @@ func (s *Service) CheckContentDeadline(metadata PublicDownloadMetadata) error {
 	}
 	return nil
 }
+
+// GetSourceUpload recovers an uncertain create without issuing another upload target.
+func (s *Service) GetSourceUpload(ctx context.Context, operation, caller string) (CreatedUpload, error) {
+	if caller != LineHarnessCaller {
+		return CreatedUpload{}, ErrForbidden
+	}
+	if !opaqueSourceID.MatchString(operation) {
+		return CreatedUpload{}, ErrInvalidInput
+	}
+	repo, ok := s.repository.(interface {
+		FindUploadByIdempotency(context.Context, string, string, string) (Asset, UploadSession, error)
+	})
+	if !ok {
+		return CreatedUpload{}, sourceUnavailable()
+	}
+	asset, session, err := repo.FindUploadByIdempotency(ctx, caller, "create_upload", operation)
+	if err != nil {
+		return CreatedUpload{}, err
+	}
+	if !asset.IsLineSource() || asset.OwnerService != caller || session.CallerService != caller {
+		return CreatedUpload{}, ErrForbidden
+	}
+	return CreatedUpload{Asset: asset, Session: session}, nil
+}

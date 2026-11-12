@@ -14,6 +14,8 @@ Source errors use `error.code` and `error.scope` (`item`, `collection`, `depende
 
 ## Publication and mutation
 
+`GET /priv/assets/upload-sessions/{operationID}` recovers the dedicated owner’s original asset/session metadata after an uncertain create, including expiry/deletion. It never creates an upload or signs a target and does not depend on source availability. A missing operation returns 404; failures remain retryable. This lets the producer reconcile revocation racing with creation without creating an orphan merely to discover its identity.
+
 Create source collections with a positive `bindingGeneration`. ACL add requires `expectedAclRevision`; ACL revoke requires an exact quoted decimal `If-Match`, such as `"7"`. Every ACL row mutation increments the persisted revision transactionally.
 
 1. `POST /priv/assets/collections/{collectionID}/staged-items` accepts the existing item input plus binding generation and expected ACL revision. It creates a hidden item without advancing the reader cursor.
@@ -31,3 +33,5 @@ The producer fixture adds `asset.collection_item.stage`, `asset.collection_item.
 The source reference uniquely identifies one original within the producer; separate messages may contain identical bytes. Source metadata and publication deadline are immutable. The existing lifecycle worker first expires an eligible source through the existing collection-first soft-delete transaction, including sources without collection references. This creates permanent tombstones before normal byte purge. Collection retention/exemption cannot extend source lifetime. This code does not enable a worker, change cloud storage, or perform a backfill.
 
 Local PostgreSQL, HTTP and TLS fixtures test these contracts. They do not establish CI, central-service deployment, LINE acceptance or Presenter offline behavior.
+
+Harness startup must require `sourceUploadRecoveryVersion: 1` from upload-policy. Contract v2 without this capability is insufficient for safe ambiguous upload recovery. Legacy scan-required contracts omit the field.

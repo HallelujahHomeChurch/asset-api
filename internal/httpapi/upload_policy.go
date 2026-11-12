@@ -45,19 +45,22 @@ func (h *Handler) uploadPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 	slices.Sort(visibilities)
 	version, scanRequired := 1, true
+	recoveryVersion := 0
 	if input.SecurityProfile == assets.LineSourceSecurityProfile {
 		version, scanRequired = 2, false
+		recoveryVersion = 1
 	}
 	w.Header().Set("Cache-Control", "private, no-store")
 	writeJSON(w, http.StatusOK, struct {
 		Version   int    `json:"version"`
 		Namespace string `json:"namespace"`
 		assets.UploadProfiles
-		ScanRequired     bool                `json:"scanRequired"`
-		ReadinessVersion int                 `json:"readinessVersion"`
-		MIMETypes        []string            `json:"mimeTypes"`
-		MaxSizeBytes     int64               `json:"maxSizeBytes"`
-		MIMEMaxSizeBytes map[string]int64    `json:"mimeMaxSizeBytes,omitempty"`
-		Visibilities     []assets.Visibility `json:"visibilities"`
-	}{version, input.Namespace, input.UploadProfiles, scanRequired, version, mimes, policy.MaxSizeBytes, policy.MIMEMaxSizeBytes, visibilities})
+		ScanRequired                bool                `json:"scanRequired"`
+		SourceUploadRecoveryVersion int                 `json:"sourceUploadRecoveryVersion,omitempty"`
+		ReadinessVersion            int                 `json:"readinessVersion"`
+		MIMETypes                   []string            `json:"mimeTypes"`
+		MaxSizeBytes                int64               `json:"maxSizeBytes"`
+		MIMEMaxSizeBytes            map[string]int64    `json:"mimeMaxSizeBytes,omitempty"`
+		Visibilities                []assets.Visibility `json:"visibilities"`
+	}{version, input.Namespace, input.UploadProfiles, scanRequired, recoveryVersion, version, mimes, policy.MaxSizeBytes, policy.MIMEMaxSizeBytes, visibilities})
 }

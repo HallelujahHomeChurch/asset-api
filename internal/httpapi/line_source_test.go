@@ -33,11 +33,12 @@ func TestLineSourcePolicyRequiresNewVerifiedProducer(t *testing.T) {
 			continue
 		}
 		var body struct {
-			Version          int
-			ScanRequired     bool
-			ReadinessVersion int
+			Version                     int
+			ScanRequired                bool
+			ReadinessVersion            int
+			SourceUploadRecoveryVersion int
 		}
-		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || w.Code != 200 || body.Version != 2 || body.ScanRequired || body.ReadinessVersion != 2 {
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || w.Code != 200 || body.Version != 2 || body.ScanRequired || body.ReadinessVersion != 2 || body.SourceUploadRecoveryVersion != 1 {
 			t.Fatalf("preflight %d %s %v", w.Code, w.Body, err)
 		}
 	}
