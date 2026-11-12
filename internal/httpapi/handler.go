@@ -121,6 +121,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.Handle("GET /api/assets/collections/{collectionID}/items/{itemID}/content", h.collectionReader(http.HandlerFunc(h.collectionContent)))
 	mux.Handle("GET /api/assets/content", h.collectionTicket(http.HandlerFunc(h.ticketContent)))
 	mux.Handle("POST /priv/assets/upload-sessions", h.internal(http.HandlerFunc(h.createUpload)))
+	mux.Handle("POST /priv/assets/upload-policy", h.internal(http.HandlerFunc(h.uploadPolicy)))
 	mux.Handle("POST /priv/recording-captures", h.captureInternal(h.createRecordingCapture))
 	mux.Handle("GET /priv/recording-captures/{captureID}", h.captureInternal(h.getRecordingCapture))
 	mux.Handle("POST /priv/recording-captures/{captureID}/objects", h.captureInternal(h.declareRecordingCapture))

@@ -135,6 +135,17 @@ rollback path. No database, media, retention, or permission migration is needed.
 
 ## Upload profile pairs
 
+`POST /priv/assets/upload-policy` is a read-only preflight for an explicit
+`namespace`, `securityProfile` and `processingProfile`. Only verified workloads
+with the matching configured scope and storage owner can query it. Header-only
+or Dapr legacy callers cannot use this new route. It creates no upload, grant or
+scan work and does not authorize later operations. The version 1 response reports
+the registry's MIME/size/visibility limits and readiness version; ordinary
+completion always reports `scanRequired: true`, including `no-processing-v1`.
+Privileged trusted-derivative completion remains a separate contract. Unknown or
+partial pairs return 400; unapproved scopes return 403. Consumers must reject
+unknown contract versions. No unscanned LINE profile is admitted by this increment.
+
 Omitting both `securityProfile` and `processingProfile` selects the existing
 namespace policy. Legacy upload fingerprints and response fields stay compatible.
 An explicit pair must match the existing mapping for a known namespace and a

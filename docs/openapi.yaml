@@ -18,6 +18,56 @@ tags:
   - name: Private
     description: Dapr-authenticated service operations.
 paths:
+  /priv/assets/upload-policy:
+    post:
+      operationId: queryVerifiedUploadPolicy
+      summary: Inspect an explicitly scoped upload profile without creating an asset
+      description: >-
+        Requires a verified workload principal and its current explicit namespace/profile scope.
+        No legacy pair inference or header-only authentication. This read-only preflight is not
+        upload or content authorization; upload creation still rechecks all policy. Version 1
+        describes ordinary completion, which requires scanning even for no-processing-v1.
+        It does not enable unscanned LINE sources or describe privileged derivative completion.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-cache: private, no-store
+      security: [{verifiedAssetWorkload: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [namespace, securityProfile, processingProfile]
+              properties:
+                namespace: {type: string, minLength: 1}
+                securityProfile: {type: string, minLength: 1}
+                processingProfile: {type: string, minLength: 1}
+      responses:
+        '200':
+          description: Current admitted pair and ordinary-upload limits; no storage or scan writes.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [version, namespace, securityProfile, processingProfile, scanRequired, readinessVersion, mimeTypes, maxSizeBytes, visibilities]
+                properties:
+                  version: {type: integer, const: 1}
+                  namespace: {type: string}
+                  securityProfile: {type: string}
+                  processingProfile: {type: string}
+                  scanRequired: {type: boolean, const: true}
+                  readinessVersion: {type: integer, const: 1}
+                  mimeTypes: {type: array, minItems: 1, items: {type: string}}
+                  maxSizeBytes: {type: integer, format: int64, minimum: 1}
+                  mimeMaxSizeBytes: {type: object, additionalProperties: {type: integer, format: int64, minimum: 1}}
+                  visibilities: {type: array, minItems: 1, items: {type: string, enum: [public, private, restricted, authenticated]}}
+        '400': {$ref: '#/components/responses/Error'}
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
   /priv/recordings/lifecycle:
     post:
       operationId: getRecordingLifecycleSnapshot
