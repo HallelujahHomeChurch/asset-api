@@ -19,6 +19,8 @@ func (h *Handler) sourceContent(w http.ResponseWriter, r *http.Request) {
 func writeSourceError(w http.ResponseWriter, err *assets.SourceAccessError) {
 	status := http.StatusServiceUnavailable
 	switch err.Code {
+	case "AST_SOURCE_CLIENT_UPGRADE":
+		status = http.StatusUpgradeRequired
 	case "AST_SOURCE_PAUSED":
 		status = http.StatusLocked
 	case "AST_SOURCE_EXPIRED", "AST_SOURCE_REVOKED":
@@ -27,7 +29,7 @@ func writeSourceError(w http.ResponseWriter, err *assets.SourceAccessError) {
 		status = http.StatusForbidden
 	}
 	w.Header().Set("Cache-Control", "private, no-store")
-	writeJSON(w, status, map[string]any{"error": map[string]string{"code": err.Code, "scope": err.Scope, "message": "source access is unavailable"}})
+	writeJSON(w, status, map[string]any{"error": map[string]any{"version": 1, "code": err.Code, "scope": err.Scope, "message": "source access is unavailable"}})
 }
 
 func (h *Handler) collectionControl(w http.ResponseWriter, r *http.Request) {

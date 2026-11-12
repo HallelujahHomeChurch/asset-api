@@ -165,6 +165,16 @@ func (s *Service) currentSourceSubject(ctx context.Context, id string, subject C
 	if err != nil || current.UserID != subject.UserID || !validCollectionSubject(current) {
 		return CollectionSubject{}, p, sourceUnavailable()
 	}
+	if subject.SourcePolicyVersion != 1 {
+		if _, err := s.repository.GetAuthorizedCollection(ctx, id, current); err != nil {
+			if errors.Is(err, ErrNotFound) || errors.Is(err, ErrForbidden) {
+				err = sourceACLRevoked()
+			}
+			return CollectionSubject{}, p, err
+		}
+		return CollectionSubject{}, p, &SourceAccessError{Code: "AST_SOURCE_CLIENT_UPGRADE", Scope: "collection"}
+	}
+	current.SourcePolicyVersion = subject.SourcePolicyVersion
 	return current, p, nil
 }
 

@@ -35,3 +35,8 @@ The source reference uniquely identifies one original within the producer; separ
 Local PostgreSQL, HTTP and TLS fixtures test these contracts. They do not establish CI, central-service deployment, LINE acceptance or Presenter offline behavior.
 
 Harness startup must require `sourceUploadRecoveryVersion: 1` from upload-policy. Contract v2 without this capability is insufficient for safe ambiguous upload recovery. Legacy scan-required contracts omit the field.
+
+
+### Presenter protocol admission
+
+New-source reader requests must send exactly one `X-HHC-Source-Policy-Version: 1` header. The header advertises client compatibility; it grants no identity or ACL rights. Asset resolves current Account roles and checks collection ACL before returning `426 AST_SOURCE_CLIENT_UPGRADE` for absent/unsupported versions. Legacy collections retain their existing contract. Source failures carry `{error:{version:1,code,scope,message}}`; consumers must keep dependency/unknown failures recoverable and distinguish item deletion from collection revocation. Authorized source content, including HEAD/Range/304, carries `X-HHC-Source-Expires-At` with the immutable UTC deadline. Presenter persists this deadline in local metadata and native file policy and stops active playback at expiry. Public anonymous tickets remain unsupported for new sources; browser Presenter uses authenticated content with a bounded ephemeral object URL.

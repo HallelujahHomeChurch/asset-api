@@ -4184,9 +4184,10 @@ components:
           type: object
           required: [code, message]
           properties:
-            code: { type: string, enum: [AST_INVALID_REQUEST, AST_INVALID_RANGE, AST_INVALID_TICKET, AST_UNAUTHORIZED, AST_FORBIDDEN, AST_NOT_FOUND, AST_CONFLICT, AST_NOT_READY, AST_INTERNAL, AST_SOURCE_UNAVAILABLE, AST_SOURCE_PAUSED, AST_SOURCE_REVOKED, AST_SOURCE_EXPIRED, AST_SOURCE_ACL_REVOKED, asset-not-ready, quota-exceeded] }
+            code: { type: string, enum: [AST_INVALID_REQUEST, AST_INVALID_RANGE, AST_INVALID_TICKET, AST_UNAUTHORIZED, AST_FORBIDDEN, AST_NOT_FOUND, AST_CONFLICT, AST_NOT_READY, AST_INTERNAL, AST_SOURCE_UNAVAILABLE, AST_SOURCE_PAUSED, AST_SOURCE_REVOKED, AST_SOURCE_EXPIRED, AST_SOURCE_ACL_REVOKED, AST_SOURCE_CLIENT_UPGRADE, asset-not-ready, quota-exceeded] }
             message: { type: string }
             scope: { type: string, enum: [dependency, collection, item] }
+            version: { type: integer, enum: [1], description: Present for scoped source errors. }
             data: { type: object, additionalProperties: true }
     Asset:
       type: object

@@ -14,12 +14,17 @@ func TestSourceErrorsPreserveScopeAndRecoverability(t *testing.T) {
 		code, scope string
 		status      int
 	}{
-		{"AST_SOURCE_PAUSED", "collection", 423}, {"AST_SOURCE_EXPIRED", "item", 410}, {"AST_SOURCE_REVOKED", "collection", 410}, {"AST_SOURCE_UNAVAILABLE", "dependency", 503},
+		{"AST_SOURCE_CLIENT_UPGRADE", "collection", 426}, {"AST_SOURCE_PAUSED", "collection", 423}, {"AST_SOURCE_EXPIRED", "item", 410}, {"AST_SOURCE_REVOKED", "collection", 410}, {"AST_SOURCE_UNAVAILABLE", "dependency", 503},
 	} {
 		w := httptest.NewRecorder()
 		handleError(w, &assets.SourceAccessError{Code: tc.code, Scope: tc.scope})
-		var body struct{ Error struct{ Code, Scope string } }
-		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || w.Code != tc.status || body.Error.Code != tc.code || body.Error.Scope != tc.scope || w.Header().Get("Cache-Control") != "private, no-store" {
+		var body struct {
+			Error struct {
+				Code, Scope string
+				Version     int
+			}
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || w.Code != tc.status || body.Error.Version != 1 || body.Error.Code != tc.code || body.Error.Scope != tc.scope || w.Header().Get("Cache-Control") != "private, no-store" {
 			t.Fatalf("%+v: %d %s", tc, w.Code, w.Body)
 		}
 	}
@@ -69,6 +74,9 @@ func TestSourceContentChecksAuthorityBeforeGETHEADRangeAndConditionalResponse(t 
 			if state == "unknown" {
 				want = 503
 			}
+			if state == "active" && w.Header().Get("X-HHC-Source-Expires-At") != a.Source.ExpiresAt.UTC().Format(time.RFC3339Nano) {
+				t.Fatal("source deadline missing from content response")
+			}
 			if w.Code != want || authority.calls != beforeCalls+1 || (state != "active" && blobs.openCalls != beforeOpen) {
 				t.Fatalf("%s %s: status=%d calls=%d opens=%d body=%s", tc.method, state, w.Code, authority.calls-beforeCalls, blobs.openCalls-beforeOpen, w.Body)
 			}
@@ -110,6 +118,25 @@ func TestSourceUploadRecoveryRequiresDedicatedPrincipalAndReturnsNoTarget(t *tes
 			}
 		} else if w.Code < 400 {
 			t.Fatalf("principal %s allowed", principal)
+		}
+	}
+}
+
+func TestSourceProtocolHeaderIsSingleExactCapability(t *testing.T) {
+	for _, values := range [][]string{nil, {"1"}, {"2"}, {"1", "1"}, {"1, 1"}, {"01"}} {
+		r := httptest.NewRequest("GET", "/api/assets/collections", nil)
+		r.Header.Set("X-HHC-User-ID", "reader")
+		r.Header.Set("X-HHC-Token-Expires-At", "2000000000")
+		for _, v := range values {
+			r.Header.Add("X-HHC-Source-Policy-Version", v)
+		}
+		identity, ok := parseCollectionReaderIdentity(r)
+		want := 0
+		if len(values) == 1 && values[0] == "1" {
+			want = 1
+		}
+		if !ok || identity.Subject.SourcePolicyVersion != want {
+			t.Fatalf("%v: %+v", values, identity)
 		}
 	}
 }

@@ -68,7 +68,7 @@ func TestSourceReaderTicketsRecheckIdentityRolesAndAuthority(t *testing.T) {
 	authority := &readerSourceAuthority{state: "active"}
 	subjects := &readerCurrentSubjects{roles: []string{"allowed"}}
 	svc := assets.NewService(store, nil, "", func() time.Time { return now }).WithSourceAuthority(authority, subjects)
-	subject := assets.CollectionSubject{UserID: "reader", RoleIDs: []string{"stale"}}
+	subject := assets.CollectionSubject{UserID: "reader", RoleIDs: []string{"stale"}, SourcePolicyVersion: 1}
 	metadata, err := svc.AuthorizedCollectionContentMetadata(ctx, c.ID, item.ID, subject)
 	if err != nil || metadata.ETag != a.ETag {
 		t.Fatalf("content %+v %v", metadata, err)
@@ -170,5 +170,28 @@ func TestSourceExpiryTombstonesCollectionsAndUnattachedOriginals(t *testing.T) {
 	}
 	if changed, err := store.ExpireLineSource(ctx, original.Source.ExpiresAt); err != nil || changed {
 		t.Fatalf("expiry replay %v %v", changed, err)
+	}
+}
+
+func TestSourceReaderProtocolGateDoesNotExposeUnownedCollections(t *testing.T) {
+	store, c, item, _, now := sourceReaderFixture(t)
+	subjects := &readerCurrentSubjects{roles: []string{"allowed"}}
+	svc := assets.NewService(store, nil, "", func() time.Time { return now }).WithSourceAuthority(&readerSourceAuthority{state: "active"}, subjects)
+	subject := assets.CollectionSubject{UserID: "reader"}
+	_, err := svc.GetAuthorizedCollectionItem(context.Background(), c.ID, item.ID, subject)
+	if sourceCode(err) != "AST_SOURCE_CLIENT_UPGRADE" {
+		t.Fatalf("old reader: %v", err)
+	}
+	subject.SourcePolicyVersion = 1
+	if _, err = svc.GetAuthorizedCollectionItem(context.Background(), c.ID, item.ID, subject); err != nil {
+		t.Fatal(err)
+	}
+	subject.SourcePolicyVersion = 2
+	if _, err = svc.GetAuthorizedCollectionItem(context.Background(), c.ID, item.ID, subject); sourceCode(err) != "AST_SOURCE_CLIENT_UPGRADE" {
+		t.Fatalf("future reader: %v", err)
+	}
+	subjects.roles = nil
+	if _, err = svc.GetAuthorizedCollectionItem(context.Background(), c.ID, item.ID, subject); sourceCode(err) != "AST_SOURCE_ACL_REVOKED" {
+		t.Fatalf("unowned: %v", err)
 	}
 }

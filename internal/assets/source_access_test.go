@@ -123,20 +123,20 @@ func TestSourceReaderRefreshesRolesAndUsesStoredPublicationContext(t *testing.T)
 		subjectCalls++
 		return CollectionSubject{UserID: id, RoleIDs: []string{"allowed"}}, nil
 	}))
-	item, err := svc.GetAuthorizedCollectionItem(context.Background(), "collection", "item", CollectionSubject{UserID: "reader", RoleIDs: []string{"stale"}})
+	item, err := svc.GetAuthorizedCollectionItem(context.Background(), "collection", "item", CollectionSubject{UserID: "reader", SourcePolicyVersion: 1, RoleIDs: []string{"stale"}})
 	if err != nil || item.ID != "item" || subjectCalls != 1 || sourceCalls != 1 || !item.SourceExpiresAt.Equal(repo.asset.Source.ExpiresAt) {
 		t.Fatalf("reader %+v %v subject=%d source=%d", item, err, subjectCalls, sourceCalls)
 	}
 	svc.WithSourceAuthority(authority, subjectResolverFunc(func(_ context.Context, id string) (CollectionSubject, error) {
 		return CollectionSubject{UserID: id, RoleIDs: []string{}}, nil
 	}))
-	_, err = svc.GetAuthorizedCollectionItem(context.Background(), "collection", "item", CollectionSubject{UserID: "reader", RoleIDs: []string{"allowed"}})
+	_, err = svc.GetAuthorizedCollectionItem(context.Background(), "collection", "item", CollectionSubject{UserID: "reader", SourcePolicyVersion: 1, RoleIDs: []string{"allowed"}})
 	var access *SourceAccessError
 	if !errors.As(err, &access) || access.Code != "AST_SOURCE_ACL_REVOKED" || sourceCalls != 1 {
 		t.Fatalf("stale roles granted: %v", err)
 	}
 	svc.WithSourceAuthority(authority, nil)
-	if _, err := svc.GetAuthorizedCollectionItem(context.Background(), "collection", "item", CollectionSubject{UserID: "reader", RoleIDs: []string{"allowed"}}); err == nil {
+	if _, err := svc.GetAuthorizedCollectionItem(context.Background(), "collection", "item", CollectionSubject{UserID: "reader", SourcePolicyVersion: 1, RoleIDs: []string{"allowed"}}); err == nil {
 		t.Fatal("missing current subject allowed")
 	}
 }

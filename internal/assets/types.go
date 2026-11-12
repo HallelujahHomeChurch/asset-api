@@ -344,8 +344,9 @@ type AccountCleanupResult struct {
 }
 
 type CollectionSubject struct {
-	UserID  string
-	RoleIDs []string
+	SourcePolicyVersion int
+	UserID              string
+	RoleIDs             []string
 }
 
 type Collection struct {

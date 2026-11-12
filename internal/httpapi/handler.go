@@ -1248,6 +1248,9 @@ func (h *Handler) serveBoundDownload(w http.ResponseWriter, r *http.Request, met
 }
 
 func (h *Handler) serveCollectionDownload(w http.ResponseWriter, r *http.Request, metadata assets.PublicDownloadMetadata) {
+	if !metadata.SourceExpiresAt.IsZero() {
+		w.Header().Set("X-HHC-Source-Expires-At", metadata.SourceExpiresAt.UTC().Format(time.RFC3339Nano))
+	}
 	w.Header().Set("Cache-Control", "private, no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("Accept-Ranges", "bytes")
@@ -1500,8 +1503,12 @@ func parseCollectionReaderIdentity(r *http.Request) (collectionReaderIdentity, b
 			roleIDs = append(roleIDs, value)
 		}
 	}
+	version := 0
+	if values := r.Header.Values("X-HHC-Source-Policy-Version"); len(values) == 1 && values[0] == "1" {
+		version = 1
+	}
 	return collectionReaderIdentity{
-		Subject: assets.CollectionSubject{UserID: userID, RoleIDs: roleIDs}, TokenID: strings.TrimSpace(r.Header.Get("X-HHC-Token-ID")),
+		Subject: assets.CollectionSubject{UserID: userID, RoleIDs: roleIDs, SourcePolicyVersion: version}, TokenID: strings.TrimSpace(r.Header.Get("X-HHC-Token-ID")),
 		TokenExpiresAt: time.Unix(expires, 0).UTC(), SessionID: strings.TrimSpace(r.Header.Get("X-HHC-Session-ID")),
 		AuthProvider: strings.TrimSpace(r.Header.Get("X-HHC-Auth-Provider")),
 	}, true
