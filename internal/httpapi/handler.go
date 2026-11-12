@@ -252,6 +252,10 @@ func (h *Handler) internal(next http.Handler) http.Handler {
 			writeWorkloadAuthError(w, err)
 			return
 		}
+		if service == assets.LineHarnessCaller && principal == "" {
+			writeWorkloadAuthError(w, assets.ErrForbidden)
+			return
+		}
 		caller := service
 		if service == extractorCaller {
 			if principal == "" || !extractorRouteAllowed(r) {
@@ -276,7 +280,7 @@ func (h *Handler) internal(next http.Handler) http.Handler {
 		actor, request := strings.TrimSpace(r.Header.Get("X-HHC-Actor-ID")), strings.TrimSpace(r.Header.Get("X-HHC-Request-ID"))
 		if len(r.Header.Values("X-HHC-Actor-ID")) == 1 && len(r.Header.Values("X-HHC-Request-ID")) == 1 && auditclient.ValidUserRequest(actor, request) {
 			ctx = auditclient.WithProvenance(ctx, "user", actor, request)
-		} else if (caller == "hhc-line-function-bot" || caller == "account-api") && actor == "" && len(r.Header.Values("X-HHC-Actor-ID")) <= 1 && len(r.Header.Values("X-HHC-Request-ID")) == 1 && auditclient.ValidServiceRequest(request) {
+		} else if (caller == "hhc-line-function-bot" || caller == assets.LineHarnessCaller || caller == "account-api") && actor == "" && len(r.Header.Values("X-HHC-Actor-ID")) <= 1 && len(r.Header.Values("X-HHC-Request-ID")) == 1 && auditclient.ValidServiceRequest(request) {
 			ctx = auditclient.WithProvenance(ctx, "service", caller, request)
 		}
 		next.ServeHTTP(w, r.WithContext(ctx))

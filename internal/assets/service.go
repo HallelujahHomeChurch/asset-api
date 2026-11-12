@@ -63,6 +63,15 @@ func (s *Service) CreateUploadSession(ctx context.Context, input CreateUploadInp
 	if !policy.AllowsVisibility(input.Visibility) {
 		return CreatedUpload{}, ErrInvalidInput
 	}
+	var source *SourcePolicy
+	if input.SecurityProfile == LineSourceSecurityProfile {
+		if input.Source == nil || !input.Source.Valid() || input.Source.PublishedAt.After(s.now()) || !s.now().Before(input.Source.PublishedAt.Add(SourceLifetime)) {
+			return CreatedUpload{}, ErrInvalidInput
+		}
+		source = &SourcePolicy{SourceReference: *input.Source, Version: 1, ExpiresAt: input.Source.PublishedAt.Add(SourceLifetime)}
+	} else if input.Source != nil {
+		return CreatedUpload{}, ErrInvalidInput
+	}
 	stage := diagnostics.UploadReplay
 	if input.Namespace == "cms.weekly.image" {
 		defer func() { diagnostics.BulletinUploadFailure(ctx, stage, err) }()
@@ -75,7 +84,7 @@ func (s *Service) CreateUploadSession(ctx context.Context, input CreateUploadInp
 	sessionID := newID()
 	objectKey := path.Join(environmentPrefix(), input.Namespace, now.Format("2006"), now.Format("01"), assetID, "original")
 	stagingObjectKey := path.Join(environmentPrefix(), input.Namespace, now.Format("2006"), now.Format("01"), assetID, "staging", sessionID)
-	asset := Asset{ID: assetID, Namespace: input.Namespace, UploadProfiles: input.UploadProfiles, OwnerService: input.OwnerService, OwnerType: input.OwnerType, OwnerID: input.OwnerID, Purpose: input.Purpose, Locale: input.Locale, OriginalFileName: sanitizeFileName(input.OriginalFileName), ObjectKey: objectKey, ExpectedMIMEType: input.ExpectedMIMEType, UploadStatus: UploadCreated, ScanStatus: ScanPending, ProcessingStatus: policy.Processing, Visibility: input.Visibility, CreatedAt: now, UpdatedAt: now}
+	asset := Asset{Source: source, ID: assetID, Namespace: input.Namespace, UploadProfiles: input.UploadProfiles, OwnerService: input.OwnerService, OwnerType: input.OwnerType, OwnerID: input.OwnerID, Purpose: input.Purpose, Locale: input.Locale, OriginalFileName: sanitizeFileName(input.OriginalFileName), ObjectKey: objectKey, ExpectedMIMEType: input.ExpectedMIMEType, UploadStatus: UploadCreated, ScanStatus: ScanPending, ProcessingStatus: policy.Processing, Visibility: input.Visibility, CreatedAt: now, UpdatedAt: now}
 	session := UploadSession{ID: sessionID, AssetID: assetID, IdempotencyKey: idempotencyKey, CallerService: input.OwnerService, Operation: "create_upload", Fingerprint: requestFingerprint(input), StagingObjectKey: stagingObjectKey, MaxSizeBytes: input.MaxSizeBytes, Status: UploadCreated, ExpiresAt: now.Add(uploadTTL), CreatedAt: now}
 	stage = diagnostics.UploadSign
 	target, err := s.blobs.CreateUploadTarget(ctx, stagingObjectKey, input.MaxSizeBytes, session.ExpiresAt)
@@ -132,6 +141,10 @@ func (s *Service) completeUpload(ctx context.Context, assetID string, input Comp
 	if err != nil {
 		return Asset{}, err
 	}
+	if asset.UploadProfiles.SecurityProfile == LineSourceSecurityProfile && !asset.SourceAvailable(s.now()) {
+		return Asset{}, ErrNotFound
+	}
+
 	session, err := s.repository.GetUploadSession(ctx, assetID)
 	if err != nil {
 		return Asset{}, err
@@ -299,6 +312,13 @@ func (s *Service) completeUpload(ctx context.Context, assetID string, input Comp
 		if legacy {
 			asset.ScanDetails = derivation.legacyDetails()
 		}
+		request = ScanRequest{}
+	}
+	if asset.IsLineSource() {
+		if !asset.SourceAvailable(now) {
+			return Asset{}, ErrNotFound
+		}
+		asset.ScanStatus = ScanNotRequired
 		request = ScanRequest{}
 	}
 	if err := s.repository.CompleteUpload(ctx, asset, session, request); err != nil {

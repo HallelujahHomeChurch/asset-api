@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"slices"
+	"time"
 
 	"hhc/asset-api/internal/assets"
 )
@@ -67,7 +68,18 @@ func writePrivateAsset(w http.ResponseWriter, r *http.Request, asset assets.Asse
 	}
 	readiness := assetReadiness{Version: 1, State: "rejected"}
 	var evidence *assetSafetyEvidence
-	if asset.DeletedAt.IsZero() && asset.PurgedAt.IsZero() {
+	if asset.UploadProfiles.SecurityProfile == assets.LineSourceSecurityProfile {
+		readiness.Version = 2
+		if asset.SourceAvailable(time.Now()) {
+			if asset.UploadStatus == assets.UploadCreated && asset.ScanStatus == assets.ScanPending {
+				readiness.State = "pending"
+			}
+			if asset.UploadStatus == assets.UploadCompleted && asset.ScanStatus == assets.ScanNotRequired && asset.ProcessingStatus == assets.ProcessingNotRequired {
+				readiness.State = "ready"
+				evidence = &assetSafetyEvidence{Kind: "not-scanned"}
+			}
+		}
+	} else if asset.DeletedAt.IsZero() && asset.PurgedAt.IsZero() {
 		switch asset.UploadStatus {
 		case assets.UploadCreated:
 			if asset.ScanStatus == assets.ScanPending {

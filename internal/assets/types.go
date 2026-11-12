@@ -37,6 +37,8 @@ const (
 
 type ScanStatus string
 
+const ScanNotRequired ScanStatus = "not_required"
+
 const (
 	ScanPending  ScanStatus = "pending"
 	ScanClean    ScanStatus = "clean"
@@ -80,6 +82,7 @@ const (
 )
 
 type Asset struct {
+	Source                 *SourcePolicy    `json:"sourcePolicy,omitempty"`
 	Derivation             Derivation       `json:"-"`
 	UploadProfiles         UploadProfiles   `json:"-"`
 	ID                     string           `json:"id"`
@@ -182,16 +185,17 @@ type UploadProfiles struct {
 }
 
 type CreateUploadInput struct {
-	Namespace        string     `json:"namespace"`
-	OwnerService     string     `json:"ownerService"`
-	OwnerType        string     `json:"ownerType"`
-	OwnerID          string     `json:"ownerId"`
-	Purpose          string     `json:"purpose"`
-	Locale           string     `json:"locale"`
-	OriginalFileName string     `json:"originalFileName"`
-	ExpectedMIMEType string     `json:"expectedMimeType"`
-	MaxSizeBytes     int64      `json:"maxSizeBytes"`
-	Visibility       Visibility `json:"visibility"`
+	Source           *SourceReference `json:"source,omitempty"`
+	Namespace        string           `json:"namespace"`
+	OwnerService     string           `json:"ownerService"`
+	OwnerType        string           `json:"ownerType"`
+	OwnerID          string           `json:"ownerId"`
+	Purpose          string           `json:"purpose"`
+	Locale           string           `json:"locale"`
+	OriginalFileName string           `json:"originalFileName"`
+	ExpectedMIMEType string           `json:"expectedMimeType"`
+	MaxSizeBytes     int64            `json:"maxSizeBytes"`
+	Visibility       Visibility       `json:"visibility"`
 	UploadProfiles
 }
 

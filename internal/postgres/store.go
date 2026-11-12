@@ -68,6 +68,22 @@ func auditUploadMetadata(asset assets.Asset) (auditclient.Metadata, bool) {
 }
 
 func (s *Store) CreateUpload(ctx context.Context, asset assets.Asset, session assets.UploadSession) error {
+	var source []byte
+	var expires any
+	if asset.Source != nil {
+		if !asset.SourceAvailable(asset.CreatedAt) {
+			return assets.ErrInvalidInput
+		}
+		var err error
+		source, err = json.Marshal(asset.Source)
+		if err != nil {
+			return err
+		}
+		expires = asset.Source.ExpiresAt
+	} else if asset.UploadProfiles.SecurityProfile == assets.LineSourceSecurityProfile {
+		return assets.ErrInvalidInput
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -85,7 +101,7 @@ func (s *Store) CreateUpload(ctx context.Context, asset assets.Asset, session as
 			return assets.ErrConflict
 		}
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO assets (id,namespace,owner_service,owner_type,owner_id,purpose,locale,original_file_name,object_key,expected_mime_type,upload_status,scan_status,processing_status,visibility,created_at,updated_at,security_profile,processing_profile) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`, asset.ID, asset.Namespace, asset.OwnerService, asset.OwnerType, asset.OwnerID, asset.Purpose, asset.Locale, asset.OriginalFileName, asset.ObjectKey, asset.ExpectedMIMEType, asset.UploadStatus, asset.ScanStatus, asset.ProcessingStatus, asset.Visibility, asset.CreatedAt, asset.UpdatedAt, asset.UploadProfiles.SecurityProfile, asset.UploadProfiles.ProcessingProfile)
+	_, err = tx.ExecContext(ctx, `INSERT INTO assets (id,namespace,owner_service,owner_type,owner_id,purpose,locale,original_file_name,object_key,expected_mime_type,upload_status,scan_status,processing_status,visibility,created_at,updated_at,security_profile,processing_profile,source_policy,source_expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`, asset.ID, asset.Namespace, asset.OwnerService, asset.OwnerType, asset.OwnerID, asset.Purpose, asset.Locale, asset.OriginalFileName, asset.ObjectKey, asset.ExpectedMIMEType, asset.UploadStatus, asset.ScanStatus, asset.ProcessingStatus, asset.Visibility, asset.CreatedAt, asset.UpdatedAt, asset.UploadProfiles.SecurityProfile, asset.UploadProfiles.ProcessingProfile, source, expires)
 	if err != nil {
 		return err
 	}
@@ -115,12 +131,18 @@ type assetRowReader interface {
 }
 
 func readAsset(ctx context.Context, db assetRowReader, id string, includePurged bool) (assets.Asset, error) {
-	row := db.QueryRowContext(ctx, `SELECT id,namespace,owner_service,owner_type,owner_id,purpose,locale,original_file_name,object_key,expected_mime_type,detected_mime_type,size_bytes,checksum_sha256,etag,upload_status,scan_status,scan_details,scan_signature_version,scan_failure_category,processing_status,visibility,created_at,updated_at,COALESCE(deleted_at,'0001-01-01'::timestamptz),scan_attempts,scan_event_id,processing_attempts,processing_error,COALESCE(processing_next_attempt_at,'0001-01-01'::timestamptz),COALESCE(processing_claimed_until,'0001-01-01'::timestamptz),COALESCE(purged_at,'0001-01-01'::timestamptz),security_profile,processing_profile,derivation_proof FROM assets WHERE id=$1 AND ($2 OR purged_at IS NULL)`, id, includePurged)
+	row := db.QueryRowContext(ctx, `SELECT id,namespace,owner_service,owner_type,owner_id,purpose,locale,original_file_name,object_key,expected_mime_type,detected_mime_type,size_bytes,checksum_sha256,etag,upload_status,scan_status,scan_details,scan_signature_version,scan_failure_category,processing_status,visibility,created_at,updated_at,COALESCE(deleted_at,'0001-01-01'::timestamptz),scan_attempts,scan_event_id,processing_attempts,processing_error,COALESCE(processing_next_attempt_at,'0001-01-01'::timestamptz),COALESCE(processing_claimed_until,'0001-01-01'::timestamptz),COALESCE(purged_at,'0001-01-01'::timestamptz),security_profile,processing_profile,derivation_proof,source_policy FROM assets WHERE id=$1 AND ($2 OR purged_at IS NULL)`, id, includePurged)
 	var value assets.Asset
-	var proof []byte
-	err := row.Scan(&value.ID, &value.Namespace, &value.OwnerService, &value.OwnerType, &value.OwnerID, &value.Purpose, &value.Locale, &value.OriginalFileName, &value.ObjectKey, &value.ExpectedMIMEType, &value.DetectedMIMEType, &value.SizeBytes, &value.ChecksumSHA256, &value.ETag, &value.UploadStatus, &value.ScanStatus, &value.ScanDetails, &value.ScanSignature, &value.ScanFailure, &value.ProcessingStatus, &value.Visibility, &value.CreatedAt, &value.UpdatedAt, &value.DeletedAt, &value.ScanAttempts, &value.ScanEventID, &value.ProcessingAttempts, &value.ProcessingError, &value.ProcessingNextAt, &value.ProcessingClaimedUntil, &value.PurgedAt, &value.UploadProfiles.SecurityProfile, &value.UploadProfiles.ProcessingProfile, &proof)
+	var proof, source []byte
+	err := row.Scan(&value.ID, &value.Namespace, &value.OwnerService, &value.OwnerType, &value.OwnerID, &value.Purpose, &value.Locale, &value.OriginalFileName, &value.ObjectKey, &value.ExpectedMIMEType, &value.DetectedMIMEType, &value.SizeBytes, &value.ChecksumSHA256, &value.ETag, &value.UploadStatus, &value.ScanStatus, &value.ScanDetails, &value.ScanSignature, &value.ScanFailure, &value.ProcessingStatus, &value.Visibility, &value.CreatedAt, &value.UpdatedAt, &value.DeletedAt, &value.ScanAttempts, &value.ScanEventID, &value.ProcessingAttempts, &value.ProcessingError, &value.ProcessingNextAt, &value.ProcessingClaimedUntil, &value.PurgedAt, &value.UploadProfiles.SecurityProfile, &value.UploadProfiles.ProcessingProfile, &proof, &source)
 	if errors.Is(err, sql.ErrNoRows) {
 		return assets.Asset{}, assets.ErrNotFound
+	}
+	if err == nil && source != nil {
+		err = json.Unmarshal(source, &value.Source)
+		if err == nil && !value.IsLineSource() {
+			err = errors.New("invalid stored source policy")
+		}
 	}
 	if err == nil && proof != nil {
 		if err = json.Unmarshal(proof, &value.Derivation); err == nil && !value.Derivation.Valid() {
@@ -156,6 +178,11 @@ func (s *Store) FindUploadByIdempotency(ctx context.Context, caller, operation, 
 
 func (s *Store) CompleteUpload(ctx context.Context, asset assets.Asset, session assets.UploadSession, request assets.ScanRequest) error {
 	trusted := asset.Derivation != (assets.Derivation{})
+	unscanned := asset.IsLineSource()
+	if unscanned && (!asset.SourceAvailable(asset.UpdatedAt) || asset.ScanStatus != assets.ScanNotRequired || asset.ScanSignature != "" || trusted || request != (assets.ScanRequest{})) {
+		return assets.ErrInvalidInput
+	}
+
 	var proof []byte
 	if trusted {
 		if !asset.Derivation.Valid() || asset.Derivation.SourceAssetID == asset.ID || session.AssetID != asset.ID ||
@@ -173,8 +200,8 @@ func (s *Store) CompleteUpload(ctx context.Context, asset assets.Asset, session 
 			// its proof transient for the transaction fence, not in the new column.
 			return assets.ErrForbidden
 		}
-	} else if request.EventID == "" || request.AssetID != asset.ID || request.ETag == "" || request.ETag != asset.ETag || request.CreatedAt.IsZero() ||
-		asset.ScanSignature == assets.TrustedBulletinWatermark {
+	} else if !unscanned && (request.EventID == "" || request.AssetID != asset.ID || request.ETag == "" || request.ETag != asset.ETag || request.CreatedAt.IsZero() ||
+		asset.ScanSignature == assets.TrustedBulletinWatermark) {
 		return assets.ErrInvalidInput
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -190,12 +217,24 @@ func (s *Store) CompleteUpload(ctx context.Context, asset assets.Asset, session 
 		}
 	}
 	var assetStatus, sessionStatus string
-	err = tx.QueryRowContext(ctx, `SELECT a.upload_status,u.status FROM assets a JOIN upload_sessions u ON u.asset_id=a.id WHERE a.id=$1 AND a.purged_at IS NULL AND (NOT $2 OR a.deleted_at IS NULL) FOR UPDATE OF a,u`, asset.ID, trusted).Scan(&assetStatus, &sessionStatus)
+	err = tx.QueryRowContext(ctx, `SELECT a.upload_status,u.status FROM assets a JOIN upload_sessions u ON u.asset_id=a.id WHERE a.id=$1 AND a.purged_at IS NULL AND (NOT $2 OR a.deleted_at IS NULL) FOR UPDATE OF a,u`, asset.ID, trusted || unscanned).Scan(&assetStatus, &sessionStatus)
 	if errors.Is(err, sql.ErrNoRows) {
 		return assets.ErrNotFound
 	}
 	if err != nil {
 		return err
+	}
+	if unscanned {
+		stored, err := readAsset(ctx, tx, asset.ID, false)
+		if err != nil {
+			return err
+		}
+		if !stored.SourceAvailable(asset.UpdatedAt) || !stored.Source.Matches(*asset.Source) || stored.UploadProfiles != asset.UploadProfiles {
+			return assets.ErrConflict
+		}
+		if stored.UploadStatus == assets.UploadCompleted && (stored.ScanStatus != assets.ScanNotRequired || stored.ETag != asset.ETag || stored.ChecksumSHA256 != asset.ChecksumSHA256 || stored.SizeBytes != asset.SizeBytes || stored.DetectedMIMEType != asset.DetectedMIMEType) {
+			return assets.ErrConflict
+		}
 	}
 	if assetStatus == string(assets.UploadCompleted) && sessionStatus == string(assets.UploadCompleted) {
 		if trusted {
@@ -255,7 +294,7 @@ func (s *Store) CompleteUpload(ctx context.Context, asset assets.Asset, session 
 	if affected, _ := result.RowsAffected(); affected != 1 {
 		return assets.ErrNotFound
 	}
-	if !trusted {
+	if !trusted && !unscanned {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO asset_scan_outbox(event_id,asset_id,asset_etag,available_at,created_at) VALUES($1,$2,$3,$4,$4)`, request.EventID, request.AssetID, request.ETag, request.CreatedAt); err != nil {
 			return err
 		}

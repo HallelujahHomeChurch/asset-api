@@ -27,7 +27,7 @@ paths:
         No legacy pair inference or header-only authentication. This read-only preflight is not
         upload or content authorization; upload creation still rechecks all policy. Version 1
         describes ordinary completion, which requires scanning even for no-processing-v1.
-        It does not enable unscanned LINE sources or describe privileged derivative completion.
+        Version 2 describes the dedicated LINE unscanned pair; readiness is not source access authorization.
       tags: [Private]
       x-hhc-visibility: private
       x-hhc-cache: private, no-store
@@ -54,12 +54,12 @@ paths:
                 additionalProperties: false
                 required: [version, namespace, securityProfile, processingProfile, scanRequired, readinessVersion, mimeTypes, maxSizeBytes, visibilities]
                 properties:
-                  version: {type: integer, const: 1}
+                  version: {type: integer, enum: [1, 2]}
                   namespace: {type: string}
                   securityProfile: {type: string}
                   processingProfile: {type: string}
-                  scanRequired: {type: boolean, const: true}
-                  readinessVersion: {type: integer, const: 1}
+                  scanRequired: {type: boolean}
+                  readinessVersion: {type: integer, enum: [1, 2]}
                   mimeTypes: {type: array, minItems: 1, items: {type: string}}
                   maxSizeBytes: {type: integer, format: int64, minimum: 1}
                   mimeMaxSizeBytes: {type: object, additionalProperties: {type: integer, format: int64, minimum: 1}}
@@ -4049,6 +4049,7 @@ components:
       required: [id, namespace, ownerService, ownerType, ownerId, purpose, originalFileName, expectedMimeType, uploadStatus, scanStatus, processingStatus, visibility, createdAt, updatedAt]
       properties:
         id: { $ref: '#/components/schemas/OpaqueID' }
+        sourcePolicy: { $ref: '#/components/schemas/LineSourcePolicy' }
         namespace: { type: string }
         ownerService: { type: string }
         ownerType: { type: string }
@@ -4062,7 +4063,7 @@ components:
         checksumSha256: { type: string, description: SHA-256 checksum of completed bytes. }
         etag: { type: string }
         uploadStatus: { type: string, enum: [created, completed, failed] }
-        scanStatus: { type: string, enum: [pending, clean, infected, failed] }
+        scanStatus: { type: string, enum: [pending, clean, infected, failed, not_required] }
         scanDetails: { type: string }
         scanSignatureVersion: { type: string }
         scanFailureCategory: { type: string }
@@ -4081,13 +4082,13 @@ components:
               type: object
               required: [version, state]
               properties:
-                version: { type: integer, const: 1 }
+                version: { type: integer, enum: [1, 2] }
                 state: { type: string, enum: [pending, ready, rejected] }
             safetyEvidence:
               type: object
               required: [kind]
               properties:
-                kind: { type: string, enum: [scanned, trusted-derived] }
+                kind: { type: string, enum: [scanned, trusted-derived, not-scanned] }
     UploadSession:
       type: object
       required: [id, assetId, maxSizeBytes, status, expiresAt, createdAt]
@@ -4114,11 +4115,29 @@ components:
         asset: { $ref: '#/components/schemas/Asset' }
         session: { $ref: '#/components/schemas/UploadSession' }
         uploadTarget: { $ref: '#/components/schemas/UploadTarget' }
+    LineSourceReference:
+      type: object
+      additionalProperties: false
+      required: [ref, revision, publishedAt]
+      properties:
+        ref: {type: string, pattern: '^[A-Za-z0-9_-]{12,128}$'}
+        revision: {type: string, pattern: '^[A-Za-z0-9_-]{12,128}$'}
+        publishedAt: {type: string, format: date-time}
+    LineSourcePolicy:
+      type: object
+      required: [ref, revision, publishedAt, version, expiresAt]
+      properties:
+        ref: {type: string, pattern: '^[A-Za-z0-9_-]{12,128}$'}
+        revision: {type: string, pattern: '^[A-Za-z0-9_-]{12,128}$'}
+        publishedAt: {type: string, format: date-time}
+        version: {type: integer, const: 1}
+        expiresAt: {type: string, format: date-time, description: Immutable publication time plus 2160 hours.}
     CreateUploadRequest:
       type: object
       description: For `cms.home.banner`, ownerService=hhc-web-api, expected and detected MIME must be image/jpeg, decoded dimensions must be exactly 1900x700, and successful completion returns processingStatus=not_required. After a clean scan and public grant, the granted original is served directly without derivatives. For `cms.weekly.pdf`, ownerService=hhc-web-api, expected and detected MIME must be application/pdf, visibility must be private, and public grants and public downloads are always rejected. Legacy account.dsr-export and account.dsr-supplement upload namespaces are retired and rejected.
       required: [namespace, ownerService, ownerType, ownerId, purpose, originalFileName, expectedMimeType, maxSizeBytes, visibility]
       properties:
+        source: { $ref: '#/components/schemas/LineSourceReference' }
         securityProfile: { type: string, description: Versioned security profile. Provide together with processingProfile. Requires an approved verified workload scope. }
         processingProfile: { type: string, description: Versioned processing profile for the approved pair. Omitting both fields uses the legacy namespace mapping. }
         namespace: { type: string }

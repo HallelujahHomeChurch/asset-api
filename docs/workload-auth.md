@@ -144,7 +144,27 @@ the registry's MIME/size/visibility limits and readiness version; ordinary
 completion always reports `scanRequired: true`, including `no-processing-v1`.
 Privileged trusted-derivative completion remains a separate contract. Unknown or
 partial pairs return 400; unapproved scopes return 403. Consumers must reject
-unknown contract versions. No unscanned LINE profile is admitted by this increment.
+unknown contract versions.
+
+The dedicated `hhc-line-harness` verified producer may use the exact
+`line-source-unscanned-v1` / `no-processing-v1` pair in `line.group.file` or
+`line.group.media-sync` only when its principal has that exact configured scope.
+The producer is absent from default allowed callers. Header-only/Dapr identity
+is always rejected for it. No legacy caller or other pair inherits this policy.
+Its preflight/readiness version is 2 and `scanRequired` is false. Completion
+validates actual bytes, MIME, size, checksum and immutable commit; it records
+`scanStatus: not_required` and `safetyEvidence.kind: not-scanned`, never clean.
+
+Creation requires `source: {ref, revision, publishedAt}`. Ref/revision are opaque
+12–128-character URL-safe identifiers, not LINE IDs, URLs or filenames. The
+persisted version 1 `sourcePolicy` adds `expiresAt = publishedAt + 2160 hours`.
+Future or expired publications are rejected; completion also checks the hard
+deadline. Old pairs reject source fields. The deadline participates in immutable
+upload identity and is independent of collection retention. Private owner
+metadata remains available for recovery; technical readiness is not source
+access authorization. All source-aware content/publication paths must be in
+place before enabling producer scopes or new intake. Old readers continue to
+deny the new scan state; rollback to an incompatible writer is prohibited.
 
 Omitting both `securityProfile` and `processingProfile` selects the existing
 namespace policy. Legacy upload fingerprints and response fields stay compatible.

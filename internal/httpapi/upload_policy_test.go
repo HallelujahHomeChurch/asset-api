@@ -30,7 +30,7 @@ func TestUploadPolicyRequiresVerifiedExactScopeWithoutCreatingUpload(t *testing.
 		{"wrong audience", "line", `{"namespace":"line.group.media-sync","securityProfile":"line-media-v1","processingProfile":"no-processing-v1"}`, true, 401},
 		{"unrelated principal", "cms", `{"namespace":"line.group.media-sync","securityProfile":"line-media-v1","processingProfile":"no-processing-v1"}`, false, 403},
 		{"unapproved namespace", "line", `{"namespace":"line.group.file","securityProfile":"line-attachment-v1","processingProfile":"no-processing-v1"}`, false, 403},
-		{"unimplemented unscanned profile", "line", `{"namespace":"line.group.media-sync","securityProfile":"line-source-unscanned-v1","processingProfile":"no-processing-v1"}`, false, 400},
+		{"legacy caller cannot use unscanned profile", "line", `{"namespace":"line.group.media-sync","securityProfile":"line-source-unscanned-v1","processingProfile":"no-processing-v1"}`, false, 403},
 		{"no implicit legacy pair", "line", `{"namespace":"line.group.media-sync"}`, false, 400},
 		{"partial pair", "line", `{"namespace":"line.group.media-sync","securityProfile":"line-media-v1"}`, false, 400},
 		{"skip scan rejected", "line", `{"namespace":"line.group.media-sync","securityProfile":"line-media-v1","processingProfile":"no-processing-v1","skipScan":true}`, false, 400},

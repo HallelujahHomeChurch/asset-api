@@ -562,6 +562,33 @@ datasets:
       implementation: [{path: internal/postgres/store.go, symbol: Store.DeleteExpiredPurge}]
       evidence:
         - {kind: go_test, path: internal/postgres/store_integration_test.go, test_name: TestDeleteExpiredPurgeIsBoundedAndPreservesRecentOrActiveAssets}
+  - id: asset.line-source-policy
+    owner: asset-api
+    purpose: Bind a dedicated LINE original to its opaque publication identity and immutable expiry.
+    necessity: required
+    storage: {kind: postgres, resource: assets, sources: [{path: internal/postgres/store.go, symbol: Store.CreateUpload}]}
+    subject_keys: []
+    data_classes: [identity, security]
+    fields:
+      - {name: assets.source_policy, purpose: Bind an opaque source reference and revision to publication time and fixed policy version, necessity: required, data_classes: [identity, security]}
+      - {name: assets.source_expires_at, purpose: Enforce and schedule the absolute original publication deadline, necessity: required, data_classes: [security]}
+    attribution: {mode: manual, explanation: Only opaque source references are stored here. The producer owns LINE message and member attribution.}
+    legal_basis: {status: pending_legal, reference: null}
+    retention:
+      status: enforced
+      rule:
+        trigger: age_since
+        field: assets.purged_at
+        source: {path: internal/postgres/store.go, symbol: Store.DeleteExpiredPurge}
+        duration_source: {path: internal/lifecycle/worker.go, symbol: Worker.ProcessOne}
+        predicate: purged_at < now-180d
+        description: Opaque source metadata is removed with its asset row under the existing bounded metadata purge; content access expiry is independent.
+      action: delete
+    cleanup:
+      mode: existing_worker
+      implementation: [{path: internal/postgres/store.go, symbol: Store.DeleteExpiredPurge}]
+      evidence:
+        - {kind: go_test, path: internal/postgres/store_integration_test.go, test_name: TestDeleteExpiredPurgeIsBoundedAndPreservesRecentOrActiveAssets}
   - id: asset.account-artifact-content
     owner: asset-api
     purpose: Store Account avatar Blob bytes; physically delete them idempotently only after Store.ClaimPurge finds an eligible asset.
