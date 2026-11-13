@@ -37,6 +37,8 @@ const (
 
 type ScanStatus string
 
+const ScanNotRequired ScanStatus = "not_required"
+
 const (
 	ScanPending  ScanStatus = "pending"
 	ScanClean    ScanStatus = "clean"
@@ -80,6 +82,7 @@ const (
 )
 
 type Asset struct {
+	Source                 *SourcePolicy    `json:"sourcePolicy,omitempty"`
 	Derivation             Derivation       `json:"-"`
 	UploadProfiles         UploadProfiles   `json:"-"`
 	ID                     string           `json:"id"`
@@ -182,16 +185,17 @@ type UploadProfiles struct {
 }
 
 type CreateUploadInput struct {
-	Namespace        string     `json:"namespace"`
-	OwnerService     string     `json:"ownerService"`
-	OwnerType        string     `json:"ownerType"`
-	OwnerID          string     `json:"ownerId"`
-	Purpose          string     `json:"purpose"`
-	Locale           string     `json:"locale"`
-	OriginalFileName string     `json:"originalFileName"`
-	ExpectedMIMEType string     `json:"expectedMimeType"`
-	MaxSizeBytes     int64      `json:"maxSizeBytes"`
-	Visibility       Visibility `json:"visibility"`
+	Source           *SourceReference `json:"source,omitempty"`
+	Namespace        string           `json:"namespace"`
+	OwnerService     string           `json:"ownerService"`
+	OwnerType        string           `json:"ownerType"`
+	OwnerID          string           `json:"ownerId"`
+	Purpose          string           `json:"purpose"`
+	Locale           string           `json:"locale"`
+	OriginalFileName string           `json:"originalFileName"`
+	ExpectedMIMEType string           `json:"expectedMimeType"`
+	MaxSizeBytes     int64            `json:"maxSizeBytes"`
+	Visibility       Visibility       `json:"visibility"`
 	UploadProfiles
 }
 
@@ -298,13 +302,14 @@ type BlobDownload struct {
 }
 
 type PublicDownloadMetadata struct {
-	Size         int64
-	ContentType  string
-	FileName     string
-	ETag         string
-	LastModified time.Time
-	CacheControl string
-	objectKey    string
+	SourceExpiresAt time.Time
+	Size            int64
+	ContentType     string
+	FileName        string
+	ETag            string
+	LastModified    time.Time
+	CacheControl    string
+	objectKey       string
 }
 
 type Operations struct {
@@ -339,20 +344,24 @@ type AccountCleanupResult struct {
 }
 
 type CollectionSubject struct {
-	UserID  string
-	RoleIDs []string
+	SourcePolicyVersion int
+	UserID              string
+	RoleIDs             []string
 }
 
 type Collection struct {
-	ID               string    `json:"id"`
-	Namespace        string    `json:"namespace"`
-	Name             string    `json:"name"`
-	Revision         int64     `json:"revision"`
-	RetentionDays    int       `json:"retentionDays"`
-	CreatedByService string    `json:"-"`
-	CreatedAt        time.Time `json:"createdAt"`
-	UpdatedAt        time.Time `json:"updatedAt"`
-	DeletedAt        time.Time `json:"deletedAt,omitempty"`
+	ACLRevision         int64     `json:"aclRevision,omitempty"`
+	SourcePolicyVersion int       `json:"sourcePolicyVersion,omitempty"`
+	BindingGeneration   int64     `json:"bindingGeneration,omitempty"`
+	ID                  string    `json:"id"`
+	Namespace           string    `json:"namespace"`
+	Name                string    `json:"name"`
+	Revision            int64     `json:"revision"`
+	RetentionDays       int       `json:"retentionDays"`
+	CreatedByService    string    `json:"-"`
+	CreatedAt           time.Time `json:"createdAt"`
+	UpdatedAt           time.Time `json:"updatedAt"`
+	DeletedAt           time.Time `json:"deletedAt,omitempty"`
 }
 
 type CollectionACL struct {
@@ -366,22 +375,24 @@ type CollectionACL struct {
 }
 
 type CollectionItem struct {
-	ID              string    `json:"id"`
-	CollectionID    string    `json:"collectionId"`
-	AssetID         string    `json:"assetId,omitempty"`
-	RemoteItemID    string    `json:"remoteItemId"`
-	DisplayName     string    `json:"displayName"`
-	SourceRevision  string    `json:"sourceRevision"`
-	CreatedRevision int64     `json:"createdRevision"`
-	RetentionExempt bool      `json:"retentionExempt"`
-	UpdatedRevision int64     `json:"updatedRevision"`
-	DeletedRevision int64     `json:"deletedRevision,omitempty"`
-	MIMEType        string    `json:"mimeType,omitempty"`
-	SizeBytes       int64     `json:"sizeBytes,omitempty"`
-	ETag            string    `json:"etag,omitempty"`
-	CreatedAt       time.Time `json:"createdAt"`
-	UpdatedAt       time.Time `json:"updatedAt"`
-	DeletedAt       time.Time `json:"deletedAt,omitempty"`
+	PublicationState string    `json:"publicationState,omitempty"`
+	SourceExpiresAt  time.Time `json:"sourceExpiresAt,omitzero"`
+	ID               string    `json:"id"`
+	CollectionID     string    `json:"collectionId"`
+	AssetID          string    `json:"assetId,omitempty"`
+	RemoteItemID     string    `json:"remoteItemId"`
+	DisplayName      string    `json:"displayName"`
+	SourceRevision   string    `json:"sourceRevision"`
+	CreatedRevision  int64     `json:"createdRevision"`
+	RetentionExempt  bool      `json:"retentionExempt"`
+	UpdatedRevision  int64     `json:"updatedRevision"`
+	DeletedRevision  int64     `json:"deletedRevision,omitempty"`
+	MIMEType         string    `json:"mimeType,omitempty"`
+	SizeBytes        int64     `json:"sizeBytes,omitempty"`
+	ETag             string    `json:"etag,omitempty"`
+	CreatedAt        time.Time `json:"createdAt"`
+	UpdatedAt        time.Time `json:"updatedAt"`
+	DeletedAt        time.Time `json:"deletedAt,omitempty"`
 }
 
 type CollectionTombstone struct {
@@ -474,10 +485,11 @@ type CollectionItemMutation struct {
 }
 
 type CreateCollectionInput struct {
-	Namespace      string `json:"namespace"`
-	Name           string `json:"name"`
-	CallerService  string `json:"-"`
-	IdempotencyKey string `json:"-"`
+	BindingGeneration int64  `json:"bindingGeneration,omitempty"`
+	Namespace         string `json:"namespace"`
+	Name              string `json:"name"`
+	CallerService     string `json:"-"`
+	IdempotencyKey    string `json:"-"`
 }
 
 type RenameCollectionInput struct {
@@ -494,23 +506,25 @@ type DeleteCollectionInput struct {
 }
 
 type AddCollectionACLInput struct {
-	CollectionID   string      `json:"-"`
-	SubjectType    SubjectType `json:"subjectType"`
-	SubjectID      string      `json:"subjectId"`
-	Permission     Permission  `json:"permission"`
-	CallerService  string      `json:"-"`
-	ActorUserID    string      `json:"-"`
-	RequestID      string      `json:"-"`
-	IdempotencyKey string      `json:"-"`
+	ExpectedACLRevision int64       `json:"expectedAclRevision,omitempty"`
+	CollectionID        string      `json:"-"`
+	SubjectType         SubjectType `json:"subjectType"`
+	SubjectID           string      `json:"subjectId"`
+	Permission          Permission  `json:"permission"`
+	CallerService       string      `json:"-"`
+	ActorUserID         string      `json:"-"`
+	RequestID           string      `json:"-"`
+	IdempotencyKey      string      `json:"-"`
 }
 
 type RevokeCollectionACLInput struct {
-	CollectionID   string `json:"-"`
-	ACLID          string `json:"-"`
-	CallerService  string `json:"-"`
-	ActorUserID    string `json:"-"`
-	RequestID      string `json:"-"`
-	IdempotencyKey string `json:"-"`
+	ExpectedACLRevision int64  `json:"expectedAclRevision,omitempty"`
+	CollectionID        string `json:"-"`
+	ACLID               string `json:"-"`
+	CallerService       string `json:"-"`
+	ActorUserID         string `json:"-"`
+	RequestID           string `json:"-"`
+	IdempotencyKey      string `json:"-"`
 }
 
 type AddCollectionItemInput struct {

@@ -115,12 +115,15 @@ func (h *Handler) Routes() http.Handler {
 	mux.Handle("PATCH /api/assets/admin/presenter-cloud/users/{userID}/quota", h.adminUserManager(http.HandlerFunc(h.adminPersonalQuota)))
 	mux.Handle("GET /api/assets/collections", h.collectionReader(http.HandlerFunc(h.listAuthorizedCollections)))
 	mux.Handle("POST /api/assets/sync-receipts", h.collectionReader(http.HandlerFunc(h.recordSyncReceipt)))
+	mux.Handle("GET /api/assets/collections/{collectionID}/control", h.collectionReader(http.HandlerFunc(h.collectionControl)))
 	mux.Handle("GET /api/assets/collections/{collectionID}/changes", h.collectionReader(http.HandlerFunc(h.collectionChanges)))
 	mux.Handle("GET /api/assets/collections/{collectionID}/items/{itemID}", h.collectionReader(http.HandlerFunc(h.getAuthorizedCollectionItem)))
 	mux.Handle("POST /api/assets/collections/{collectionID}/items/{itemID}/content-ticket", h.collectionReader(http.HandlerFunc(h.issueCollectionContentTicket)))
 	mux.Handle("GET /api/assets/collections/{collectionID}/items/{itemID}/content", h.collectionReader(http.HandlerFunc(h.collectionContent)))
 	mux.Handle("GET /api/assets/content", h.collectionTicket(http.HandlerFunc(h.ticketContent)))
 	mux.Handle("POST /priv/assets/upload-sessions", h.internal(http.HandlerFunc(h.createUpload)))
+	mux.Handle("GET /priv/assets/upload-sessions/{operationID}", h.internal(http.HandlerFunc(h.getSourceUpload)))
+	mux.Handle("POST /priv/assets/upload-policy", h.internal(http.HandlerFunc(h.uploadPolicy)))
 	mux.Handle("POST /priv/recording-captures", h.captureInternal(h.createRecordingCapture))
 	mux.Handle("GET /priv/recording-captures/{captureID}", h.captureInternal(h.getRecordingCapture))
 	mux.Handle("POST /priv/recording-captures/{captureID}/objects", h.captureInternal(h.declareRecordingCapture))
@@ -177,6 +180,10 @@ func (h *Handler) Routes() http.Handler {
 	mux.Handle("DELETE /priv/assets/collections/{collectionID}", h.internal(h.collectionCaller(http.HandlerFunc(h.deleteCollection))))
 	mux.Handle("POST /priv/assets/collections/{collectionID}/acl", h.internal(h.collectionCaller(http.HandlerFunc(h.addCollectionACL))))
 	mux.Handle("DELETE /priv/assets/collections/{collectionID}/acl/{aclID}", h.internal(h.collectionCaller(http.HandlerFunc(h.revokeCollectionACL))))
+	mux.Handle("PUT /priv/assets/collections/{collectionID}/source-binding", h.internal(http.HandlerFunc(h.bindSourceCollection)))
+	mux.Handle("POST /priv/assets/collections/{collectionID}/staged-items", h.internal(http.HandlerFunc(h.stageSourceItem)))
+	mux.Handle("POST /priv/assets/collections/{collectionID}/items/{itemID}/activate", h.internal(http.HandlerFunc(h.activateSourceItem)))
+	mux.Handle("GET /priv/assets/collections/{collectionID}/publications/{operationID}", h.internal(http.HandlerFunc(h.getSourcePublication)))
 	mux.Handle("POST /priv/assets/collections/{collectionID}/items", h.internal(h.collectionCaller(http.HandlerFunc(h.addCollectionItem))))
 	mux.Handle("POST /priv/assets/collections/{collectionID}/items/retention", h.internal(h.collectionCaller(http.HandlerFunc(h.setCollectionItemsRetention))))
 	mux.Handle("POST /priv/assets/collections/{collectionID}/items/delete", h.internal(h.collectionCaller(http.HandlerFunc(h.deleteCollectionItems))))
@@ -218,6 +225,8 @@ func (h *Handler) assetAction(w http.ResponseWriter, r *http.Request) {
 		h.authorizedDownload(w, r)
 	case "bulletin-illustration":
 		h.bulletinIllustrationDownload(w, r)
+	case "source-content":
+		h.sourceContent(w, r)
 	case "owner-content":
 		h.ownerContent(w, r)
 	case "public-url":
@@ -251,6 +260,10 @@ func (h *Handler) internal(next http.Handler) http.Handler {
 			writeWorkloadAuthError(w, err)
 			return
 		}
+		if service == assets.LineHarnessCaller && principal == "" {
+			writeWorkloadAuthError(w, assets.ErrForbidden)
+			return
+		}
 		caller := service
 		if service == extractorCaller {
 			if principal == "" || !extractorRouteAllowed(r) {
@@ -275,7 +288,7 @@ func (h *Handler) internal(next http.Handler) http.Handler {
 		actor, request := strings.TrimSpace(r.Header.Get("X-HHC-Actor-ID")), strings.TrimSpace(r.Header.Get("X-HHC-Request-ID"))
 		if len(r.Header.Values("X-HHC-Actor-ID")) == 1 && len(r.Header.Values("X-HHC-Request-ID")) == 1 && auditclient.ValidUserRequest(actor, request) {
 			ctx = auditclient.WithProvenance(ctx, "user", actor, request)
-		} else if (caller == "hhc-line-function-bot" || caller == "account-api") && actor == "" && len(r.Header.Values("X-HHC-Actor-ID")) <= 1 && len(r.Header.Values("X-HHC-Request-ID")) == 1 && auditclient.ValidServiceRequest(request) {
+		} else if (caller == "hhc-line-function-bot" || caller == assets.LineHarnessCaller || caller == "account-api") && actor == "" && len(r.Header.Values("X-HHC-Actor-ID")) <= 1 && len(r.Header.Values("X-HHC-Request-ID")) == 1 && auditclient.ValidServiceRequest(request) {
 			ctx = auditclient.WithProvenance(ctx, "service", caller, request)
 		}
 		next.ServeHTTP(w, r.WithContext(ctx))
@@ -424,7 +437,7 @@ func (h *Handler) daprCaller(r *http.Request) string {
 
 func (h *Handler) collectionCaller(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if authenticatedCaller(r) != "hhc-line-function-bot" {
+		if authenticatedCaller(r) != "hhc-line-function-bot" && authenticatedCaller(r) != assets.LineHarnessCaller {
 			writeError(w, http.StatusForbidden, "AST_FORBIDDEN", "caller is not allowed")
 			return
 		}
@@ -711,7 +724,8 @@ func (h *Handler) collectionContent(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) ticketContent(w http.ResponseWriter, r *http.Request) {
 	ticket, _ := r.Context().Value(contentTicketKey{}).(string)
-	metadata, err := h.service.ContentTicketMetadata(r.Context(), ticket)
+	identity, _ := parseCollectionReaderIdentity(r)
+	metadata, err := h.service.ContentTicketMetadataForSubject(r.Context(), ticket, identity.Subject)
 	if err != nil {
 		if errors.Is(err, assets.ErrUnauthorized) || errors.Is(err, assets.ErrForbidden) || errors.Is(err, assets.ErrNotFound) || errors.Is(err, assets.ErrInvalidInput) {
 			writeError(w, http.StatusUnauthorized, "AST_INVALID_TICKET", "content ticket is invalid")
@@ -737,6 +751,7 @@ func (h *Handler) authorizedCollectionItem(w http.ResponseWriter, r *http.Reques
 }
 
 type collectionReaderItem struct {
+	SourceExpiresAt time.Time `json:"sourceExpiresAt,omitzero"`
 	ID              string    `json:"id"`
 	CollectionID    string    `json:"collectionId"`
 	RemoteItemID    string    `json:"remoteItemId"`
@@ -754,12 +769,15 @@ type collectionReaderItem struct {
 }
 
 type collectionReaderCollection struct {
-	ID        string    `json:"id"`
-	Namespace string    `json:"namespace"`
-	Name      string    `json:"name"`
-	Revision  int64     `json:"revision"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	SourcePolicyVersion int       `json:"sourcePolicyVersion,omitempty"`
+	ACLRevision         int64     `json:"aclRevision,omitempty"`
+	BindingGeneration   int64     `json:"bindingGeneration,omitempty"`
+	ID                  string    `json:"id"`
+	Namespace           string    `json:"namespace"`
+	Name                string    `json:"name"`
+	Revision            int64     `json:"revision"`
+	CreatedAt           time.Time `json:"createdAt"`
+	UpdatedAt           time.Time `json:"updatedAt"`
 }
 
 type collectionReaderPage struct {
@@ -778,14 +796,21 @@ type collectionReaderChangePage struct {
 }
 
 func readerCollection(collection assets.Collection) collectionReaderCollection {
-	return collectionReaderCollection{
+	value := collectionReaderCollection{
 		ID: collection.ID, Namespace: collection.Namespace, Name: collection.Name, Revision: collection.Revision,
 		CreatedAt: collection.CreatedAt, UpdatedAt: collection.UpdatedAt,
 	}
+	if collection.SourcePolicyVersion > 0 {
+		value.SourcePolicyVersion = collection.SourcePolicyVersion
+		value.ACLRevision = collection.ACLRevision
+		value.BindingGeneration = collection.BindingGeneration
+	}
+	return value
 }
 
 func readerItem(item assets.CollectionItem) collectionReaderItem {
 	return collectionReaderItem{
+		SourceExpiresAt: item.SourceExpiresAt,
 		ID:              item.ID,
 		CollectionID:    item.CollectionID,
 		RemoteItemID:    item.RemoteItemID,
@@ -986,8 +1011,12 @@ func (h *Handler) revokeCollectionACL(w http.ResponseWriter, r *http.Request) {
 	if !ok || !requireOpaqueID(w, collectionID, "collection ID") || !requireOpaqueID(w, aclID, "ACL ID") {
 		return
 	}
+	revision, valid := sourceACLRevision(w, r)
+	if !valid {
+		return
+	}
 	value, err := h.service.RevokeCollectionACL(r.Context(), assets.RevokeCollectionACLInput{
-		CollectionID: collectionID, ACLID: aclID, CallerService: caller,
+		CollectionID: collectionID, ACLID: aclID, CallerService: caller, ExpectedACLRevision: revision,
 		ActorUserID: strings.TrimSpace(r.Header.Get("X-HHC-Actor-ID")), RequestID: strings.TrimSpace(r.Header.Get("X-HHC-Request-ID")), IdempotencyKey: key,
 	})
 	if err != nil {
@@ -1165,6 +1194,10 @@ func (h *Handler) serveDownload(w http.ResponseWriter, r *http.Request, metadata
 func (h *Handler) serveBoundDownload(w http.ResponseWriter, r *http.Request, metadata assets.PublicDownloadMetadata,
 	open func(context.Context, assets.PublicDownloadMetadata, assets.ByteRange) (assets.BlobDownload, error),
 ) {
+	if err := h.service.CheckContentDeadline(metadata); err != nil {
+		handleError(w, err)
+		return
+	}
 	if matchesETag(r.Header.Get("If-None-Match"), metadata.ETag) {
 		setPublicHeaders(w, metadata, -1, requestedDownloadName(r, metadata.FileName))
 		w.WriteHeader(http.StatusNotModified)
@@ -1215,6 +1248,9 @@ func (h *Handler) serveBoundDownload(w http.ResponseWriter, r *http.Request, met
 }
 
 func (h *Handler) serveCollectionDownload(w http.ResponseWriter, r *http.Request, metadata assets.PublicDownloadMetadata) {
+	if !metadata.SourceExpiresAt.IsZero() {
+		w.Header().Set("X-HHC-Source-Expires-At", metadata.SourceExpiresAt.UTC().Format(time.RFC3339Nano))
+	}
 	w.Header().Set("Cache-Control", "private, no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("Accept-Ranges", "bytes")
@@ -1340,6 +1376,12 @@ func decodeJSONLimit(w http.ResponseWriter, r *http.Request, destination any, li
 	return true
 }
 func handleError(w http.ResponseWriter, err error) {
+	var sourceError *assets.SourceAccessError
+	if errors.As(err, &sourceError) {
+		writeSourceError(w, sourceError)
+		return
+	}
+
 	switch {
 	case errors.Is(err, assets.ErrRecordingSourceTooLarge):
 		writeError(w, http.StatusRequestEntityTooLarge, "source_too_large", "recording source exceeds 50GB")
@@ -1461,8 +1503,12 @@ func parseCollectionReaderIdentity(r *http.Request) (collectionReaderIdentity, b
 			roleIDs = append(roleIDs, value)
 		}
 	}
+	version := 0
+	if values := r.Header.Values("X-HHC-Source-Policy-Version"); len(values) == 1 && values[0] == "1" {
+		version = 1
+	}
 	return collectionReaderIdentity{
-		Subject: assets.CollectionSubject{UserID: userID, RoleIDs: roleIDs}, TokenID: strings.TrimSpace(r.Header.Get("X-HHC-Token-ID")),
+		Subject: assets.CollectionSubject{UserID: userID, RoleIDs: roleIDs, SourcePolicyVersion: version}, TokenID: strings.TrimSpace(r.Header.Get("X-HHC-Token-ID")),
 		TokenExpiresAt: time.Unix(expires, 0).UTC(), SessionID: strings.TrimSpace(r.Header.Get("X-HHC-Session-ID")),
 		AuthProvider: strings.TrimSpace(r.Header.Get("X-HHC-Auth-Provider")),
 	}, true

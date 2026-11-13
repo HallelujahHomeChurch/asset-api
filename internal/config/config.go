@@ -11,6 +11,7 @@ import (
 )
 
 type Config struct {
+	SourceAccess              *SourceAccess
 	Port                      string
 	DatabaseURL               string
 	PublicBaseURL             string
@@ -122,6 +123,10 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("R2 media signing configuration is incomplete")
 	}
 	var err error
+	cfg.SourceAccess, err = loadSourceAccess()
+	if err != nil {
+		return Config{}, err
+	}
 	cfg.RecordingHLSEnabled, err = RecordingHLSFlag()
 	if err != nil {
 		return Config{}, err

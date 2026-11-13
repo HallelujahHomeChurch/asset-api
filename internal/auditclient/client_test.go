@@ -18,7 +18,7 @@ func TestFixtureAndEveryContractExampleValidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	contracts := fixture.Contracts()
-	if len(contracts) != 20 {
+	if len(contracts) != 23 {
 		t.Fatalf("contracts=%d", len(contracts))
 	}
 	for _, contract := range contracts {
@@ -109,5 +109,19 @@ func exampleMetadata(schema string) Metadata {
 func TestCountsRejectFractionalJSONNumber(t *testing.T) {
 	if validMetadata("ticket_count", Metadata{"normalizedUniqueItemCount": json.Number("1.5")}) {
 		t.Fatal("fractional count accepted")
+	}
+}
+
+func TestHarnessPublicationAuditContract(t *testing.T) {
+	for _, action := range []string{"asset.collection_item.stage", "asset.collection_item.activate", "asset.collection_item.delete"} {
+		if _, err := NewEvent(action, hexID, "service", "hhc-line-harness", "request-1", time.Unix(1, 0), Metadata{"collectionId": hexID}); err != nil {
+			t.Fatalf("%s: %v", action, err)
+		}
+		if _, err := NewEvent(action, hexID, "service", "other-service", "request-1", time.Unix(1, 0), Metadata{"collectionId": hexID}); err == nil {
+			t.Fatal("unregistered service accepted")
+		}
+	}
+	if _, err := NewEvent("asset.collection.bind", hexID, "user", userID, "request-1", time.Unix(1, 0), nil); err != nil {
+		t.Fatal(err)
 	}
 }

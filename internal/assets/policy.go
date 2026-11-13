@@ -46,6 +46,17 @@ var legacyUploadProfiles = map[string]UploadProfiles{
 }
 
 var uploadProfilePolicies = map[UploadProfiles]NamespacePolicy{
+	{LineSourceSecurityProfile, noProcessing}: {
+		OwnerService: LineHarnessCaller,
+		MIMETypes: map[string]bool{
+			"image/jpeg": true, "image/png": true, "image/gif": true, "image/webp": true, "image/bmp": true,
+			"application/pdf": true, "application/vnd.ms-excel": true, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": true,
+			"video/mp4": true, "video/quicktime": true, "video/webm": true, "video/ogg": true, "video/x-msvideo": true, "video/x-matroska": true, "video/x-ms-wmv": true,
+			"audio/mpeg": true, "audio/wav": true, "audio/mp4": true, "audio/aac": true, "audio/ogg": true,
+		},
+		MIMEMaxSizeBytes: map[string]int64{"application/pdf": 25 << 20, "application/vnd.ms-excel": 25 << 20, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": 25 << 20, "image/jpeg": 10 << 20, "image/png": 10 << 20, "image/gif": 10 << 20, "image/webp": 10 << 20, "image/bmp": 10 << 20},
+		MaxSizeBytes:     200 << 20, DefaultVisibility: VisibilityRestricted, Visibilities: map[Visibility]bool{VisibilityRestricted: true}, Processing: ProcessingNotRequired, CacheControl: "private, no-store",
+	},
 	{"avatar-jpeg-v1", noProcessing}: {
 		OwnerService: "account-api", MIMETypes: map[string]bool{"image/jpeg": true},
 		MaxSizeBytes: 1 << 20, DefaultVisibility: VisibilityPublic, Visibilities: map[Visibility]bool{VisibilityPublic: true}, Processing: ProcessingNotRequired,
@@ -135,6 +146,10 @@ func PolicyFor(namespace string) (NamespacePolicy, bool) {
 var uploadNamespacePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}(\.[a-z][a-z0-9-]{0,31}){1,4}$`)
 
 func UploadPolicy(namespace string, profiles UploadProfiles) (NamespacePolicy, bool) {
+	if profiles == (UploadProfiles{LineSourceSecurityProfile, noProcessing}) {
+		policy, ok := uploadProfilePolicies[profiles]
+		return policy, ok && (namespace == "line.group.file" || namespace == "line.group.media-sync")
+	}
 	legacy, mapped := legacyUploadProfiles[namespace]
 	if profiles == (UploadProfiles{}) {
 		profiles = legacy
@@ -166,6 +181,10 @@ func (scope UploadProfileScope) ValidForCaller(caller string) bool {
 	}
 	if caller == "hhc-web-api" {
 		return strings.HasPrefix(scope.NamespaceFamily, "cms.")
+	}
+	if caller == LineHarnessCaller {
+		_, ok := UploadPolicy(scope.NamespaceFamily, scope.UploadProfiles)
+		return ok
 	}
 	return legacyUploadProfiles[scope.NamespaceFamily] == scope.UploadProfiles
 }

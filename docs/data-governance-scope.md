@@ -18,3 +18,7 @@ schema_migrations.version, schema_migrations.checksum, and schema_migrations.app
 ## Broadcast policy metadata
 
 B1 capture/package epochs, recording_broadcast_ranges, and the R2 broadcast.json authority mirror are CMS-owned security and activity metadata. Raw media cleanup does not remove these fences, revoke their history, or imply a legal retention period. They contain no viewer credentials or viewer identity. Their retention remains manual and pending_legal, independently of Account-artifact purging and disposable HLS bytes.
+
+## Dedicated LINE source controls
+
+The new collection `acl_revision`, `source_policy_version`, and `binding_generation` fields are security fences. Item `publication_state` controls visibility; `publication_operation` is an opaque idempotency lookup, never a LINE message identifier. These remain in the adjacent shared/manual collection scope above. Staged items are excluded from reader metadata and cursors. Source bytes expire at their immutable 90-day publication deadline, independently of collection retention; `Store.ExpireLineSource` includes unattached originals. No existing retention schedule or worker admission is changed by this contract.

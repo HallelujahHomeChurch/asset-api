@@ -38,6 +38,11 @@ for file in "$@"; do
       # Exact additive counter-domain expansion; preserves existing rows/writes.
       legacy_hash='c2a3b6ed1ca4f3eb6ff06adee751cb650c4d0578b5baeb041ebc56f42fc4d81b'
       ;;
+    internal/migrations/sql/052_line_source_policy.sql)
+      # Exact CHECK domain expansion retains all legacy scan statuses and adds
+      # a caller/profile-bound not_required state; no existing row is rewritten.
+      legacy_hash='abaa9d2fea0a4ff1c10fb00a0c8eee2a9f263c36380e9b516ef90278bb83dfd6'
+      ;;
     internal/migrations/sql/016_drop_legacy_ticket_roles.sql)
       contract_hash='55baa077395f0347fee354efd2998f1f31bd0a6db33ec60508ad72fe22d0bc86'
       ;;

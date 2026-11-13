@@ -18,6 +18,57 @@ tags:
   - name: Private
     description: Dapr-authenticated service operations.
 paths:
+  /priv/assets/upload-policy:
+    post:
+      operationId: queryVerifiedUploadPolicy
+      summary: Inspect an explicitly scoped upload profile without creating an asset
+      description: >-
+        Requires a verified workload principal and its current explicit namespace/profile scope.
+        No legacy pair inference or header-only authentication. This read-only preflight is not
+        upload or content authorization; upload creation still rechecks all policy. Version 1
+        describes ordinary completion, which requires scanning even for no-processing-v1.
+        Version 2 describes the dedicated LINE unscanned pair; readiness is not source access authorization.
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-cache: private, no-store
+      security: [{verifiedAssetWorkload: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [namespace, securityProfile, processingProfile]
+              properties:
+                namespace: {type: string, minLength: 1}
+                securityProfile: {type: string, minLength: 1}
+                processingProfile: {type: string, minLength: 1}
+      responses:
+        '200':
+          description: Current admitted pair and ordinary-upload limits; no storage or scan writes.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [version, namespace, securityProfile, processingProfile, scanRequired, readinessVersion, mimeTypes, maxSizeBytes, visibilities]
+                properties:
+                  version: {type: integer, enum: [1, 2]}
+                  namespace: {type: string}
+                  securityProfile: {type: string}
+                  processingProfile: {type: string}
+                  scanRequired: {type: boolean}
+                  readinessVersion: {type: integer, enum: [1, 2]}
+                  sourceUploadRecoveryVersion: {type: integer, enum: [1], description: Present only for the dedicated source contract; supports read-only upload operation recovery.}
+                  mimeTypes: {type: array, minItems: 1, items: {type: string}}
+                  maxSizeBytes: {type: integer, format: int64, minimum: 1}
+                  mimeMaxSizeBytes: {type: object, additionalProperties: {type: integer, format: int64, minimum: 1}}
+                  visibilities: {type: array, minItems: 1, items: {type: string, enum: [public, private, restricted, authenticated]}}
+        '400': {$ref: '#/components/responses/Error'}
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
   /priv/recordings/lifecycle:
     post:
       operationId: getRecordingLifecycleSnapshot
@@ -709,6 +760,26 @@ paths:
         '400': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
+  /priv/assets/upload-sessions/{operationID}:
+    get:
+      operationId: getSourceUploadOperation
+      summary: Recover source upload metadata without creating or signing an upload
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-line-harness]
+      security: [ { workloadPrincipal: [] } ]
+      parameters:
+        - { name: operationID, in: path, required: true, schema: { type: string, minLength: 12, maxLength: 128, pattern: '^[A-Za-z0-9_-]+$' } }
+      responses:
+        '200':
+          description: Owner asset and session metadata. Upload target is empty, including after source expiry or deletion.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CreatedUpload' }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
   /priv/assets/operations:
     get:
       summary: Asset API operation
@@ -719,13 +790,135 @@ paths:
       security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
       responses:
         '200': { $ref: '#/components/responses/Operations' }
+  /api/assets/collections/{collectionID}/control:
+    parameters: [ { $ref: '#/components/parameters/CollectionID' } ]
+    get:
+      operationId: getSourceCollectionControl
+      summary: Read current source control and ACL revisions
+      tags: [Public]
+      x-hhc-visibility: public
+      x-hhc-callers: [api-gateway]
+      security: [ { gatewayDaprCaller: [], gatewayTrustedIdentity: [] } ]
+      responses:
+        '200':
+          description: Minimal control state, independent of content availability.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SourceControl' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '410': { $ref: '#/components/responses/Error' }
+        '423': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /priv/assets/collections/{collectionID}/staged-items:
+    parameters: [ { $ref: '#/components/parameters/CollectionID' } ]
+    post:
+      operationId: stageSourceCollectionItem
+      summary: Stage hidden source publication without advancing the reader cursor
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-line-harness]
+      security: [ { workloadPrincipal: [] } ]
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StageSourceItemRequest' }
+      responses:
+        '201': { $ref: '#/components/responses/CollectionItemMutation' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '410': { $ref: '#/components/responses/Error' }
+        '423': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /priv/assets/collections/{collectionID}/items/{itemID}/activate:
+    parameters: [ { $ref: '#/components/parameters/CollectionID' }, { $ref: '#/components/parameters/ItemID' } ]
+    post:
+      operationId: activateSourceCollectionItem
+      summary: Activate the approved persisted source publication
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-line-harness]
+      security: [ { workloadPrincipal: [] } ]
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ActivateSourceItemRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/CollectionItemMutation' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '410': { $ref: '#/components/responses/Error' }
+        '423': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /priv/assets/collections/{collectionID}/source-binding:
+    parameters: [ { $ref: '#/components/parameters/CollectionID' } ]
+    put:
+      operationId: bindSourceCollection
+      summary: Compare and set collection binding generation
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-line-harness]
+      security: [ { workloadPrincipal: [] } ]
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BindSourceCollectionRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Collection' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '410': { $ref: '#/components/responses/Error' }
+        '423': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /priv/assets/collections/{collectionID}/publications/{operationID}:
+    parameters: [ { $ref: '#/components/parameters/CollectionID' } ]
+    get:
+      parameters:
+        - { name: operationID, in: path, required: true, schema: { type: string, minLength: 1, maxLength: 128 } }
+      operationId: getSourcePublication
+      summary: Recover owner publication metadata even when content is unavailable
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-line-harness]
+      security: [ { workloadPrincipal: [] } ]
+      responses:
+        '200': { $ref: '#/components/responses/CollectionItemMutation' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '410': { $ref: '#/components/responses/Error' }
+        '423': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /priv/assets/{assetID}/source-content:
+    parameters: [ { $ref: '#/components/parameters/AssetID' } ]
+    get:
+      operationId: getSourceOriginal
+      summary: Read unscanned original after current source authorization
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [hhc-line-harness]
+      security: [ { workloadPrincipal: [] } ]
+      responses:
+        '200': { description: Original bytes; supports HEAD and Range with authorization before conditional responses. }
+        '206': { description: Requested byte range. }
+        '304': { description: Unchanged content after current authorization. }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '410': { $ref: '#/components/responses/Error' }
+        '423': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
   /priv/assets/collections:
     get:
       summary: Asset API operation
       tags: [Private]
-      description: LINE media-sync collection management is currently owned by the LINE function bot.
+      description: Collections remain isolated by verified producer ownership; the harness requires workload authentication.
       x-hhc-visibility: private
-      x-hhc-callers: [hhc-line-function-bot]
+      x-hhc-callers: [hhc-line-function-bot, hhc-line-harness]
       security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
       responses:
         '200': { $ref: '#/components/responses/ManagedCollectionPage' }
@@ -734,7 +927,7 @@ paths:
       tags: [Private]
       description: Creates a storage collection; caller-owned business context is not stored here.
       x-hhc-visibility: private
-      x-hhc-callers: [hhc-line-function-bot]
+      x-hhc-callers: [hhc-line-function-bot, hhc-line-harness]
       security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
       parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
       requestBody:
@@ -750,7 +943,7 @@ paths:
       summary: Asset API operation
       tags: [Private]
       x-hhc-visibility: private
-      x-hhc-callers: [hhc-line-function-bot]
+      x-hhc-callers: [hhc-line-function-bot, hhc-line-harness]
       security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
       parameters:
         - { name: q, in: query, schema: { type: string, maxLength: 255 } }
@@ -764,7 +957,7 @@ paths:
       summary: Asset API operation
       tags: [Private]
       x-hhc-visibility: private
-      x-hhc-callers: [hhc-line-function-bot]
+      x-hhc-callers: [hhc-line-function-bot, hhc-line-harness]
       security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
       parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
       requestBody:
@@ -778,7 +971,7 @@ paths:
       summary: Asset API operation
       tags: [Private]
       x-hhc-visibility: private
-      x-hhc-callers: [hhc-line-function-bot]
+      x-hhc-callers: [hhc-line-function-bot, hhc-line-harness]
       security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
       parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
       responses:
@@ -789,7 +982,7 @@ paths:
       summary: Asset API operation
       tags: [Private]
       x-hhc-visibility: private
-      x-hhc-callers: [hhc-line-function-bot]
+      x-hhc-callers: [hhc-line-function-bot, hhc-line-harness]
       security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
       responses:
         '200': { $ref: '#/components/responses/ManagedCollectionItemPage' }
@@ -797,7 +990,7 @@ paths:
       summary: Asset API operation
       tags: [Private]
       x-hhc-visibility: private
-      x-hhc-callers: [hhc-line-function-bot]
+      x-hhc-callers: [hhc-line-function-bot, hhc-line-harness]
       security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
       parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
       requestBody:
@@ -813,7 +1006,7 @@ paths:
       summary: Asset API operation
       tags: [Private]
       x-hhc-visibility: private
-      x-hhc-callers: [hhc-line-function-bot]
+      x-hhc-callers: [hhc-line-function-bot, hhc-line-harness]
       security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
       requestBody:
         required: true
@@ -828,7 +1021,7 @@ paths:
       summary: Asset API operation
       tags: [Private]
       x-hhc-visibility: private
-      x-hhc-callers: [hhc-line-function-bot]
+      x-hhc-callers: [hhc-line-function-bot, hhc-line-harness]
       security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
       parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
       requestBody:
@@ -844,7 +1037,7 @@ paths:
       summary: Asset API operation
       tags: [Private]
       x-hhc-visibility: private
-      x-hhc-callers: [hhc-line-function-bot]
+      x-hhc-callers: [hhc-line-function-bot, hhc-line-harness]
       security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
       parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
       requestBody:
@@ -860,7 +1053,7 @@ paths:
       summary: Asset API operation
       tags: [Private]
       x-hhc-visibility: private
-      x-hhc-callers: [hhc-line-function-bot]
+      x-hhc-callers: [hhc-line-function-bot, hhc-line-harness]
       security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
       parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
       requestBody:
@@ -874,7 +1067,7 @@ paths:
       summary: Asset API operation
       tags: [Private]
       x-hhc-visibility: private
-      x-hhc-callers: [hhc-line-function-bot]
+      x-hhc-callers: [hhc-line-function-bot, hhc-line-harness]
       security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
       parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
       responses:
@@ -885,7 +1078,7 @@ paths:
       summary: Asset API operation
       tags: [Private]
       x-hhc-visibility: private
-      x-hhc-callers: [hhc-line-function-bot]
+      x-hhc-callers: [hhc-line-function-bot, hhc-line-harness]
       security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
       parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
       requestBody:
@@ -901,7 +1094,7 @@ paths:
       summary: Asset API operation
       tags: [Private]
       x-hhc-visibility: private
-      x-hhc-callers: [hhc-line-function-bot]
+      x-hhc-callers: [hhc-line-function-bot, hhc-line-harness]
       security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
       description: Adds a user-UUID or role-UUID reader ACL. The first successful mutation and its actor are audited atomically; an idempotent replay does not append an audit event.
       parameters: [ { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/ACLActorUserID' }, { $ref: '#/components/parameters/RequestID' } ]
@@ -918,7 +1111,7 @@ paths:
       summary: Asset API operation
       tags: [Private]
       x-hhc-visibility: private
-      x-hhc-callers: [hhc-line-function-bot]
+      x-hhc-callers: [hhc-line-function-bot, hhc-line-harness]
       security: [ { daprCaller: [] }, { workloadPrincipal: [] } ]
       description: Revokes a reader ACL. The first successful mutation and its actor are audited atomically; an idempotent replay does not append an audit event.
       parameters: [ { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/ACLActorUserID' }, { $ref: '#/components/parameters/RequestID' } ]
@@ -3991,14 +4184,17 @@ components:
           type: object
           required: [code, message]
           properties:
-            code: { type: string, enum: [AST_INVALID_REQUEST, AST_INVALID_RANGE, AST_INVALID_TICKET, AST_UNAUTHORIZED, AST_FORBIDDEN, AST_NOT_FOUND, AST_CONFLICT, AST_NOT_READY, AST_INTERNAL, asset-not-ready, quota-exceeded] }
+            code: { type: string, enum: [AST_INVALID_REQUEST, AST_INVALID_RANGE, AST_INVALID_TICKET, AST_UNAUTHORIZED, AST_FORBIDDEN, AST_NOT_FOUND, AST_CONFLICT, AST_NOT_READY, AST_INTERNAL, AST_SOURCE_UNAVAILABLE, AST_SOURCE_PAUSED, AST_SOURCE_REVOKED, AST_SOURCE_EXPIRED, AST_SOURCE_ACL_REVOKED, AST_SOURCE_CLIENT_UPGRADE, asset-not-ready, quota-exceeded] }
             message: { type: string }
+            scope: { type: string, enum: [dependency, collection, item] }
+            version: { type: integer, enum: [1], description: Present for scoped source errors. }
             data: { type: object, additionalProperties: true }
     Asset:
       type: object
       required: [id, namespace, ownerService, ownerType, ownerId, purpose, originalFileName, expectedMimeType, uploadStatus, scanStatus, processingStatus, visibility, createdAt, updatedAt]
       properties:
         id: { $ref: '#/components/schemas/OpaqueID' }
+        sourcePolicy: { $ref: '#/components/schemas/LineSourcePolicy' }
         namespace: { type: string }
         ownerService: { type: string }
         ownerType: { type: string }
@@ -4012,7 +4208,7 @@ components:
         checksumSha256: { type: string, description: SHA-256 checksum of completed bytes. }
         etag: { type: string }
         uploadStatus: { type: string, enum: [created, completed, failed] }
-        scanStatus: { type: string, enum: [pending, clean, infected, failed] }
+        scanStatus: { type: string, enum: [pending, clean, infected, failed, not_required] }
         scanDetails: { type: string }
         scanSignatureVersion: { type: string }
         scanFailureCategory: { type: string }
@@ -4031,13 +4227,13 @@ components:
               type: object
               required: [version, state]
               properties:
-                version: { type: integer, const: 1 }
+                version: { type: integer, enum: [1, 2] }
                 state: { type: string, enum: [pending, ready, rejected] }
             safetyEvidence:
               type: object
               required: [kind]
               properties:
-                kind: { type: string, enum: [scanned, trusted-derived] }
+                kind: { type: string, enum: [scanned, trusted-derived, not-scanned] }
     UploadSession:
       type: object
       required: [id, assetId, maxSizeBytes, status, expiresAt, createdAt]
@@ -4064,11 +4260,29 @@ components:
         asset: { $ref: '#/components/schemas/Asset' }
         session: { $ref: '#/components/schemas/UploadSession' }
         uploadTarget: { $ref: '#/components/schemas/UploadTarget' }
+    LineSourceReference:
+      type: object
+      additionalProperties: false
+      required: [ref, revision, publishedAt]
+      properties:
+        ref: {type: string, pattern: '^[A-Za-z0-9_-]{12,128}$'}
+        revision: {type: string, pattern: '^[A-Za-z0-9_-]{12,128}$'}
+        publishedAt: {type: string, format: date-time}
+    LineSourcePolicy:
+      type: object
+      required: [ref, revision, publishedAt, version, expiresAt]
+      properties:
+        ref: {type: string, pattern: '^[A-Za-z0-9_-]{12,128}$'}
+        revision: {type: string, pattern: '^[A-Za-z0-9_-]{12,128}$'}
+        publishedAt: {type: string, format: date-time}
+        version: {type: integer, const: 1}
+        expiresAt: {type: string, format: date-time, description: Immutable publication time plus 2160 hours.}
     CreateUploadRequest:
       type: object
       description: For `cms.home.banner`, ownerService=hhc-web-api, expected and detected MIME must be image/jpeg, decoded dimensions must be exactly 1900x700, and successful completion returns processingStatus=not_required. After a clean scan and public grant, the granted original is served directly without derivatives. For `cms.weekly.pdf`, ownerService=hhc-web-api, expected and detected MIME must be application/pdf, visibility must be private, and public grants and public downloads are always rejected. Legacy account.dsr-export and account.dsr-supplement upload namespaces are retired and rejected.
       required: [namespace, ownerService, ownerType, ownerId, purpose, originalFileName, expectedMimeType, maxSizeBytes, visibility]
       properties:
+        source: { $ref: '#/components/schemas/LineSourceReference' }
         securityProfile: { type: string, description: Versioned security profile. Provide together with processingProfile. Requires an approved verified workload scope. }
         processingProfile: { type: string, description: Versioned processing profile for the approved pair. Omitting both fields uses the legacy namespace mapping. }
         namespace: { type: string }
@@ -4148,6 +4362,9 @@ components:
       type: object
       required: [id, namespace, name, revision, retentionDays, createdAt, updatedAt]
       properties:
+        sourcePolicyVersion: { type: integer, enum: [1] }
+        aclRevision: { type: integer, format: int64, minimum: 1 }
+        bindingGeneration: { type: integer, format: int64, minimum: 1 }
         id: { $ref: '#/components/schemas/OpaqueID' }
         namespace: { type: string }
         name: { type: string }
@@ -4160,6 +4377,8 @@ components:
       type: object
       required: [id, collectionId, remoteItemId, displayName, sourceRevision, createdRevision, updatedRevision, createdAt, updatedAt]
       properties:
+        publicationState: { type: string, enum: [staged, active] }
+        sourceExpiresAt: { type: string, format: date-time, description: Absolute source deadline; cached bytes must become unusable at this instant. }
         id: { $ref: '#/components/schemas/OpaqueID' }
         collectionId: { $ref: '#/components/schemas/OpaqueID' }
         assetId: { $ref: '#/components/schemas/OpaqueID' }
@@ -4179,6 +4398,9 @@ components:
       type: object
       required: [id, namespace, name, revision, createdAt, updatedAt]
       properties:
+        sourcePolicyVersion: { type: integer, enum: [1] }
+        aclRevision: { type: integer, format: int64, minimum: 1 }
+        bindingGeneration: { type: integer, format: int64, minimum: 1 }
         id: { $ref: '#/components/schemas/OpaqueID' }
         namespace: { type: string }
         name: { type: string }
@@ -4189,6 +4411,7 @@ components:
       type: object
       required: [id, collectionId, remoteItemId, displayName, sourceRevision, createdRevision, updatedRevision, createdAt, updatedAt]
       properties:
+        sourceExpiresAt: { type: string, format: date-time, description: Absolute source deadline; cached bytes must become unusable at this instant. }
         id: { $ref: '#/components/schemas/OpaqueID' }
         collectionId: { $ref: '#/components/schemas/OpaqueID' }
         remoteItemId: { type: string }
@@ -4329,11 +4552,12 @@ components:
     CreateCollectionRequest:
       type: object
       required: [namespace, name]
-      properties: { namespace: { type: string }, name: { type: string } }
+      properties: { namespace: { type: string }, name: { type: string }, bindingGeneration: { type: integer, format: int64, minimum: 1, description: Required only for the dedicated harness caller. } }
     CollectionACLRequest:
       type: object
       required: [subjectType, subjectId, permission]
       properties:
+        expectedAclRevision: { type: integer, format: int64, minimum: 1, description: Required for source collections. }
         subjectType: { type: string, enum: [user, role] }
         subjectId: { type: string, format: uuid, description: Immutable Account user or role UUID. }
         permission: { type: string, enum: [read] }
@@ -4367,3 +4591,31 @@ components:
       type: object
       required: [retentionDays]
       properties: { retentionDays: { type: integer, minimum: 1 } }
+
+    ActivateSourceItemRequest:
+      type: object
+      required: [bindingGeneration, expectedAclRevision]
+      properties:
+        bindingGeneration: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991 }
+        expectedAclRevision: { type: integer, format: int64, minimum: 1 }
+    StageSourceItemRequest:
+      allOf:
+        - { $ref: '#/components/schemas/AddCollectionItemRequest' }
+        - { $ref: '#/components/schemas/ActivateSourceItemRequest' }
+    BindSourceCollectionRequest:
+      allOf:
+        - { $ref: '#/components/schemas/ActivateSourceItemRequest' }
+        - type: object
+          required: [expectedBindingGeneration]
+          properties:
+            expectedBindingGeneration: { type: integer, format: int64, minimum: 1 }
+    SourceControl:
+      type: object
+      required: [version, collectionId, state, policyRevision, aclRevision, bindingGeneration]
+      properties:
+        version: { type: integer, enum: [1] }
+        collectionId: { $ref: '#/components/schemas/OpaqueID' }
+        state: { type: string, enum: [active, paused, revoked, expired] }
+        policyRevision: { type: integer, format: int64, minimum: 1 }
+        aclRevision: { type: integer, format: int64, minimum: 1 }
+        bindingGeneration: { type: integer, format: int64, minimum: 1 }
