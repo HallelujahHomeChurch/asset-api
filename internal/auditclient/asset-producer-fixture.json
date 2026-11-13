@@ -70,10 +70,13 @@
       "resourceType": "collection_collection",
       "resourceIdGrammar": "empty",
       "actorTypes": [
+        "service",
         "user"
       ],
       "actorIdGrammar": "user=account_uuid; anonymous=empty; service=servicePrincipals",
-      "servicePrincipals": [],
+      "servicePrincipals": [
+        "hhc-line-harness"
+      ],
       "eventIdGrammar": "hash",
       "identityStrategy": "admin_access_sha256",
       "outcome": "success",
@@ -90,10 +93,13 @@
       "resourceType": "collection",
       "resourceIdGrammar": "asset_hex",
       "actorTypes": [
+        "service",
         "user"
       ],
       "actorIdGrammar": "user=account_uuid; anonymous=empty; service=servicePrincipals",
-      "servicePrincipals": [],
+      "servicePrincipals": [
+        "hhc-line-harness"
+      ],
       "eventIdGrammar": "hash",
       "identityStrategy": "admin_access_sha256",
       "outcome": "success",
@@ -1049,5 +1055,5 @@
       "eventId": "47df88725140013edd36ef6b51f433322b7070b244a68b98bd3fb70296fa0429"
     }
   ],
-  "checksum": "sha256:727579cd9b2ebb94e1ce25f6190d10e65c42c21f3bed18da14b70a95ced7ea6b"
+  "checksum": "sha256:e63a2fbe488062a425392afcb61681dba7ffe08c1d0c84041407eecd42634df8"
 }
