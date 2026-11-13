@@ -112,6 +112,65 @@ func TestPackageCleanupFailsClosedOnInvalidScopeAndEscapedList(t *testing.T) {
 	}
 }
 
+func TestPackageCleanupSweepsOnlyDeclaredAACObjects(t *testing.T) {
+	const scope = "recordings/packages/a/final/attempt/"
+	const audio = scope + "audio/aac-hls-v1/"
+	declared := []string{audio + "current.json", audio + "audio-claim/index.m3u8", audio + "audio-claim/seg-000001.ts"}
+	const undeclared = audio + "other-claim/index.m3u8"
+	lists, deletes := 0, 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		if r.Method == http.MethodGet {
+			lists++
+			if r.URL.Query().Get("prefix") != "recordings/packages/a/final/" {
+				t.Error("wrong listing scope")
+			}
+			fmt.Fprint(w, `<ListBucketResult><IsTruncated>false</IsTruncated>`)
+			for _, key := range append(append([]string(nil), declared...), undeclared) {
+				fmt.Fprintf(w, `<Contents><Key>%s</Key></Contents>`, key)
+			}
+			fmt.Fprint(w, `</ListBucketResult>`)
+			return
+		}
+		deletes++
+		body, err := io.ReadAll(r.Body)
+		if err != nil || r.Method != http.MethodPost || !r.URL.Query().Has("delete") {
+			t.Errorf("unexpected delete request: %s %v", r.Method, err)
+		}
+		for _, key := range declared {
+			if !strings.Contains(string(body), "<Key>"+key+"</Key>") {
+				t.Errorf("missing declared key %q", key)
+			}
+		}
+		if strings.Contains(string(body), undeclared) || strings.Count(string(body), "<Key>") != len(declared) {
+			t.Error("deletion escaped declared intersection")
+		}
+		fmt.Fprint(w, `<DeleteResult/>`)
+	}))
+	defer server.Close()
+
+	remove := cleanupTestStore(server).NewPackageCleanup()
+	for _, keys := range [][]string{
+		{declared[0], "recordings/packages/a/final/other/audio/aac-hls-v1/current.json"},
+		{declared[0], "recordings/packages/b/final/attempt/audio/aac-hls-v1/current.json"},
+		{audio + "../current.json"},
+		{audio + "audio-claim/seg-1.ts"},
+	} {
+		if err := remove(context.Background(), keys); err == nil {
+			t.Fatalf("unsafe delete accepted: %v", keys)
+		}
+	}
+	if lists != 0 || deletes != 0 {
+		t.Fatal("unsafe batch reached provider")
+	}
+	if err := remove(context.Background(), declared); err != nil {
+		t.Fatal(err)
+	}
+	if lists != 1 || deletes != 1 {
+		t.Fatalf("lists=%d deletes=%d", lists, deletes)
+	}
+}
+
 func cleanupTestStore(server *httptest.Server) *Store {
 	return &Store{bucket: "test", client: s3.New(s3.Options{BaseEndpoint: aws.String(server.URL), Region: "auto", UsePathStyle: true, Credentials: credentials.NewStaticCredentialsProvider("key", "secret", ""), HTTPClient: server.Client(), RetryMaxAttempts: 1})}
 }
