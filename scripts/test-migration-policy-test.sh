@@ -59,3 +59,12 @@ if (cd "$tmp" && "$policy_script" "$broadcast_migration") 2>/dev/null; then
   echo 'broadcast epoch uniqueness expansion was not immutable' >&2
   exit 1
 fi
+
+source_migration="internal/migrations/sql/052_line_source_policy.sql"
+cp "$source_migration" "$tmp/$source_migration"
+(cd "$tmp" && "$policy_script" "$source_migration")
+printf '%s\n' '-- test mutation' >>"$tmp/$source_migration"
+if (cd "$tmp" && "$policy_script" "$source_migration") 2>/dev/null; then
+  echo 'LINE source additive CHECK replacement was not immutable' >&2
+  exit 1
+fi
