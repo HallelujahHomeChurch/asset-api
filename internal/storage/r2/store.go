@@ -206,7 +206,8 @@ func packageDeleteBatch(keys []string) (string, []types.ObjectIdentifier, error)
 		current := ""
 		if packageStagingKey.MatchString(key) {
 			current = strings.Join(parts[:4], "/") + "/"
-		} else if packageFinalKey.MatchString(key) || packageControlKey.MatchString(key) || packagePreviewKey.MatchString(key) {
+		} else if packageFinalKey.MatchString(key) || packageControlKey.MatchString(key) ||
+			packagePreviewKey.MatchString(key) || packageAudioKey.MatchString(key) {
 			current = strings.Join(parts[:5], "/") + "/"
 		} else if liveDeleteKey.MatchString(key) || livePreviewKey.MatchString(key) {
 			current = strings.Join(parts[:4], "/") + "/"
