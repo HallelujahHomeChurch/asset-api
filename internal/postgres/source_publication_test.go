@@ -229,3 +229,49 @@ func TestLegacyBotCannotMutateHarnessCollection(t *testing.T) {
 		t.Fatalf("legacy binding: %v", err)
 	}
 }
+
+func TestHarnessCollectionProjectionBoundsCurrentACLWithoutHistory(t *testing.T) {
+	db := integrationDB(t)
+	store := New(db)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	var first string
+	for i := 0; i < 25; i++ {
+		c, err := store.CreateCollection(ctx, assets.CreateCollectionInput{Namespace: "line.group.media-sync", Name: "group", CallerService: assets.LineHarnessCaller, IdempotencyKey: fmt.Sprintf("projection-%d", i), BindingGeneration: 1}, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			first = c.ID
+		}
+		_, err = db.Exec(`INSERT INTO asset_collection_acl(id,collection_id,subject_type,subject_id,permission,created_at,revoked_at) SELECT md5($1::text || n::text),$1,'user',gen_random_uuid()::text,'read',$2,CASE WHEN n=1 THEN NULL ELSE $2::timestamptz END FROM generate_series(1,201) n`, c.ID, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	page, err := store.ListManagedCollections(ctx, assets.LineHarnessCaller, "", 25)
+	if err != nil || len(page.Collections) != 25 {
+		t.Fatalf("page %d %v", len(page.Collections), err)
+	}
+	for _, c := range page.Collections {
+		if len(c.ACLs) != 0 {
+			t.Fatal("collection picker exposed ACL history")
+		}
+	}
+	encoded, err := json.Marshal(page)
+	if err != nil || len(encoded) > 128*1024 {
+		t.Fatalf("picker wire size=%d err=%v", len(encoded), err)
+	}
+	detail, err := store.GetManagedCollection(ctx, first, assets.LineHarnessCaller)
+	if err != nil || len(detail.ACLs) != 1 || !detail.ACLs[0].RevokedAt.IsZero() {
+		t.Fatalf("active projection count=%d err=%v", len(detail.ACLs), err)
+	}
+	// The bounded reader contract must reject overflow, never silently authorize a truncated audience.
+	_, err = db.Exec(`INSERT INTO asset_collection_acl(id,collection_id,subject_type,subject_id,permission,created_at) SELECT md5('extra' || n::text),$1,'user',gen_random_uuid()::text,'read',$2 FROM generate_series(1,128) n`, first, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.GetManagedCollection(ctx, first, assets.LineHarnessCaller); !errors.Is(err, assets.ErrInvalidInput) {
+		t.Fatalf("active overflow: %v", err)
+	}
+}

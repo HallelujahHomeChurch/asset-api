@@ -1527,9 +1527,13 @@ func (s *Store) ListManagedCollections(ctx context.Context, callerService, curso
 		page.Cursor = encodeListCursor(listCursor{LastID: collections[len(collections)-1].ID})
 	}
 	for _, collection := range collections {
-		acls, err := s.collectionACLs(ctx, collection.ID)
-		if err != nil {
-			return assets.ManagedCollectionPage{}, err
+		// The dedicated Harness picker needs collection metadata, not ACL history.
+		acls := []assets.CollectionACL{}
+		if callerService != assets.LineHarnessCaller {
+			acls, err = s.collectionACLs(ctx, collection.ID, false)
+			if err != nil {
+				return assets.ManagedCollectionPage{}, err
+			}
 		}
 		page.Collections = append(page.Collections, assets.ManagedCollection{Collection: collection, ACLs: acls})
 	}
@@ -1544,7 +1548,7 @@ func (s *Store) GetManagedCollection(ctx context.Context, id, callerService stri
 	if value.CreatedByService != callerService {
 		return assets.ManagedCollection{}, assets.ErrForbidden
 	}
-	acls, err := s.collectionACLs(ctx, id)
+	acls, err := s.collectionACLs(ctx, id, callerService == assets.LineHarnessCaller)
 	if err != nil {
 		return assets.ManagedCollection{}, err
 	}
@@ -1861,8 +1865,16 @@ func (s *Store) hasCollectionACL(ctx context.Context, id string, subject assets.
 	return allowed, err
 }
 
-func (s *Store) collectionACLs(ctx context.Context, id string) ([]assets.CollectionACL, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,collection_id,subject_type,subject_id,permission,created_at,COALESCE(revoked_at,'0001-01-01'::timestamptz) FROM asset_collection_acl WHERE collection_id=$1 ORDER BY created_at,id`, id)
+func (s *Store) collectionACLs(ctx context.Context, id string, currentOnly bool) ([]assets.CollectionACL, error) {
+	query := `SELECT id,collection_id,subject_type,subject_id,permission,created_at,COALESCE(revoked_at,'0001-01-01'::timestamptz) FROM asset_collection_acl WHERE collection_id=$1`
+	if currentOnly {
+		query += ` AND revoked_at IS NULL`
+	}
+	query += ` ORDER BY created_at,id`
+	if currentOnly {
+		query += ` LIMIT 129`
+	}
+	rows, err := s.db.QueryContext(ctx, query, id)
 	if err != nil {
 		return nil, err
 	}
@@ -1875,7 +1887,14 @@ func (s *Store) collectionACLs(ctx context.Context, id string) ([]assets.Collect
 		}
 		values = append(values, value)
 	}
-	return values, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Reject overflow; never let a partial audience become an approval snapshot.
+	if currentOnly && len(values) > 128 {
+		return nil, assets.ErrInvalidInput
+	}
+	return values, nil
 }
 
 func boundedCollectionLimit(limit int) int {
