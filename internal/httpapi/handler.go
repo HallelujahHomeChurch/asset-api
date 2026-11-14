@@ -647,7 +647,18 @@ func (h *Handler) listAuthorizedCollections(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	page, err := h.service.ListAuthorizedCollections(r.Context(), collectionReaderSubject(r), r.URL.Query().Get("cursor"), limit)
+	values, scoped := r.URL.Query()["sourcePolicyVersion"]
+	var page assets.CollectionPage
+	var err error
+	if scoped && (len(values) != 1 || (values[0] != "0" && values[0] != "1")) {
+		handleError(w, assets.ErrInvalidInput)
+		return
+	}
+	if scoped && values[0] == "1" {
+		page, err = h.service.ListSourceCollections(r.Context(), collectionReaderSubject(r), r.URL.Query().Get("cursor"), limit)
+	} else {
+		page, err = h.service.ListAuthorizedCollections(r.Context(), collectionReaderSubject(r), r.URL.Query().Get("cursor"), limit)
+	}
 	if err != nil {
 		handleError(w, err)
 		return

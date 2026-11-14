@@ -600,36 +600,57 @@ func (s *Service) ListAuthorizedCollections(ctx context.Context, subject Collect
 	if !validCollectionSubject(subject) {
 		return CollectionPage{}, ErrForbidden
 	}
-	if s.currentSubjects != nil {
-		current, err := s.currentSubjects.CurrentSubject(ctx, subject.UserID)
-		if errors.Is(err, ErrForbidden) || errors.Is(err, ErrUnauthorized) {
-			return CollectionPage{}, sourceACLRevoked()
-		}
-		if err != nil || current.UserID != subject.UserID || !validCollectionSubject(current) {
+	return s.repository.ListAuthorizedCollections(ctx, subject, cursor, limit)
+}
+
+func (s *Service) ListSourceCollections(ctx context.Context, subject CollectionSubject, cursor string, limit int) (CollectionPage, error) {
+	if !validCollectionSubject(subject) {
+		return CollectionPage{}, ErrForbidden
+	}
+	repo, ok := s.repository.(SourcePublicationRepository)
+	if !ok || s.currentSubjects == nil {
+		return CollectionPage{}, sourceUnavailable()
+	}
+	if subject.SourcePolicyVersion != 1 {
+		return CollectionPage{}, &SourceAccessError{Code: "AST_SOURCE_CLIENT_UPGRADE", Scope: "collection"}
+	}
+	current, err := s.currentSubjects.CurrentSubject(ctx, subject.UserID)
+	if errors.Is(err, ErrForbidden) || errors.Is(err, ErrUnauthorized) {
+		return CollectionPage{}, sourceACLRevoked()
+	}
+	if err != nil || current.UserID != subject.UserID || !validCollectionSubject(current) {
+		return CollectionPage{}, sourceUnavailable()
+	}
+	subject = current
+	page, err := repo.ListSourceCollections(ctx, subject, cursor, limit)
+	if err != nil {
+		return CollectionPage{}, err
+	}
+	if len(page.Collections) > SourceBatchLimit {
+		return CollectionPage{}, sourceUnavailable()
+	}
+	requests := make([]SourceAccessRequest, len(page.Collections))
+	for i, c := range page.Collections {
+		if c.SourcePolicyVersion != 1 {
 			return CollectionPage{}, sourceUnavailable()
 		}
-		subject = current
+		requests[i] = sourceRequest(CollectionSourcePolicy{Version: 1, CollectionID: c.ID, ACLRevision: c.ACLRevision, BindingGeneration: c.BindingGeneration}, "control", Asset{}, CollectionItem{})
 	}
-	page, err := s.repository.ListAuthorizedCollections(ctx, subject, cursor, limit)
+	decisions, err := s.checkSources(ctx, requests)
 	if err != nil {
 		return CollectionPage{}, err
 	}
 	visible := make([]Collection, 0, len(page.Collections))
-	for _, c := range page.Collections {
-		if c.SourcePolicyVersion != 0 {
-			if s.currentSubjects == nil || c.SourcePolicyVersion != 1 {
-				return CollectionPage{}, sourceUnavailable()
+	for i, d := range decisions {
+		_, err := sourceDecision(requests[i], d)
+		if err != nil {
+			var access *SourceAccessError
+			if errors.As(err, &access) && (access.Code == "AST_SOURCE_REVOKED" || access.Code == "AST_SOURCE_EXPIRED") {
+				continue
 			}
-			_, err := s.checkSource(ctx, sourceRequest(CollectionSourcePolicy{Version: 1, CollectionID: c.ID, ACLRevision: c.ACLRevision, BindingGeneration: c.BindingGeneration}, "control", Asset{}, CollectionItem{}))
-			if err != nil {
-				var access *SourceAccessError
-				if errors.As(err, &access) && access.Scope != "dependency" {
-					continue
-				}
-				return CollectionPage{}, err
-			}
+			return CollectionPage{}, err
 		}
-		visible = append(visible, c)
+		visible = append(visible, page.Collections[i])
 	}
 	page.Collections = visible
 	return page, nil

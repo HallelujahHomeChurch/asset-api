@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"testing"
 	"time"
@@ -21,7 +22,7 @@ func (a *readerSourceAuthority) CheckSource(_ context.Context, r assets.SourceAc
 	if a.fail {
 		return assets.SourceDecision{}, errors.New("synthetic unavailable")
 	}
-	return assets.SourceDecision{Version: 1, State: a.state, PolicyRevision: 4}, nil
+	return assets.SourceDecision{Version: 1, RevocationRevision: 1, State: a.state, PolicyRevision: 4}, nil
 }
 
 type readerCurrentSubjects struct {
@@ -193,5 +194,86 @@ func TestSourceReaderProtocolGateDoesNotExposeUnownedCollections(t *testing.T) {
 	subjects.roles = nil
 	if _, err = svc.GetAuthorizedCollectionItem(context.Background(), c.ID, item.ID, subject); sourceCode(err) != "AST_SOURCE_ACL_REVOKED" {
 		t.Fatalf("unowned: %v", err)
+	}
+}
+
+func TestCollectionDiscoveryScopesIsolateDependenciesAndCursors(t *testing.T) {
+	store, c, _, _, now := sourceReaderFixture(t)
+	ctx := context.Background()
+	for i := 0; i < 2; i++ {
+		legacy, err := store.CreateCollection(ctx, assets.CreateCollectionInput{Namespace: "legacy", Name: "legacy", CallerService: "helper", IdempotencyKey: fmt.Sprintf("legacy-%d", i)}, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = store.AddCollectionACL(ctx, assets.AddCollectionACLInput{CollectionID: legacy.ID, SubjectType: assets.SubjectUser, SubjectID: "reader", Permission: assets.PermissionRead, CallerService: "helper", ActorUserID: "admin", RequestID: "request", IdempotencyKey: fmt.Sprintf("legacy-acl-%d", i)}, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	authority := &readerSourceAuthority{state: "active", fail: true}
+	subjects := &readerCurrentSubjects{roles: []string{"allowed"}, fail: true}
+	svc := assets.NewService(store, nil, "", func() time.Time { return now }).WithSourceAuthority(authority, subjects)
+	subject := assets.CollectionSubject{UserID: "reader", RoleIDs: []string{"stale"}, SourcePolicyVersion: 1}
+	page, err := svc.ListAuthorizedCollections(ctx, subject, "", 1)
+	if err != nil || len(page.Collections) != 1 || !page.HasMore || page.Collections[0].SourcePolicyVersion != 0 {
+		t.Fatalf("legacy page: %+v %v", page, err)
+	}
+	next, err := svc.ListAuthorizedCollections(ctx, subject, page.Cursor, 1)
+	if err != nil || len(next.Collections) != 1 || next.HasMore || next.Collections[0].ID == page.Collections[0].ID {
+		t.Fatalf("legacy continuation: %+v %v", next, err)
+	}
+	if failed, err := svc.ListSourceCollections(ctx, subject, "", 1); sourceCode(err) != "AST_SOURCE_UNAVAILABLE" || failed.Cursor != "" {
+		t.Fatalf("source failure advanced: %+v %v", failed, err)
+	}
+	subjects.fail = false
+	authority.fail = false
+	source, err := svc.ListSourceCollections(ctx, subject, "", 1)
+	if err != nil || len(source.Collections) != 1 || source.Collections[0].ID != c.ID {
+		t.Fatalf("current roles did not discover source: %+v %v", source, err)
+	}
+	if _, err := svc.ListSourceCollections(ctx, subject, page.Cursor, 1); !errors.Is(err, assets.ErrInvalidInput) {
+		t.Fatalf("legacy cursor accepted in source: %v", err)
+	}
+	if _, err := svc.ListAuthorizedCollections(ctx, subject, encodeListCursor(listCursor{LastID: c.ID, SourcePolicyVersion: 1}), 1); !errors.Is(err, assets.ErrInvalidInput) {
+		t.Fatalf("source cursor accepted in legacy: %v", err)
+	}
+	subjects.roles = []string{}
+	if source, err := svc.ListSourceCollections(ctx, subject, "", 1); err != nil || len(source.Collections) != 0 {
+		t.Fatalf("stale role source visible: %+v %v", source, err)
+	}
+	subjects.roles = []string{"allowed"}
+	authority.state = "paused"
+	if source, err := svc.ListSourceCollections(ctx, subject, "", 1); sourceCode(err) != "AST_SOURCE_PAUSED" || source.Cursor != "" {
+		t.Fatalf("pause lost retry state: %+v %v", source, err)
+	}
+}
+
+func (a *readerSourceAuthority) CheckSources(ctx context.Context, requests []assets.SourceAccessRequest) ([]assets.SourceDecision, error) {
+	result := make([]assets.SourceDecision, 0, len(requests))
+	for _, r := range requests {
+		d, err := a.CheckSource(ctx, r)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, d)
+	}
+	return result, nil
+}
+
+func TestSourceChangePagesUseRealResetAndDeltaRows(t *testing.T) {
+	store, c, item, _, now := sourceReaderFixture(t)
+	svc := assets.NewService(store, nil, "", func() time.Time { return now }).WithSourceAuthority(&readerSourceAuthority{state: "active"}, &readerCurrentSubjects{roles: []string{"allowed"}})
+	subject := assets.CollectionSubject{UserID: "reader", SourcePolicyVersion: 1}
+	page, err := svc.CollectionChanges(context.Background(), c.ID, "", subject)
+	if err != nil || len(page.Items) != 1 || page.Items[0].ID != item.ID || !page.Reset {
+		t.Fatalf("reset items=%d err=%v", len(page.Items), err)
+	}
+	_, err = store.RenameCollectionItem(context.Background(), assets.RenameCollectionItemInput{CollectionID: c.ID, ItemID: item.ID, DisplayName: "renamed.pdf", CallerService: assets.LineHarnessCaller, IdempotencyKey: "rename-source"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delta, err := svc.CollectionChanges(context.Background(), c.ID, page.Cursor, subject)
+	if err != nil || len(delta.Items) != 1 || delta.Items[0].DisplayName != "renamed.pdf" || delta.Reset {
+		t.Fatalf("delta items=%d err=%v", len(delta.Items), err)
 	}
 }
