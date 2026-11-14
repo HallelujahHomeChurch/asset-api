@@ -629,6 +629,11 @@ paths:
       summary: Asset API operation
       tags: [Public]
       description: Returns collections with an active ACL matching the verified user UUID or an immutable role UUID. A user with no matching ACL receives 200 with an empty collections array.
+      parameters:
+        - name: sourcePolicyVersion
+          in: query
+          description: Defaults to legacy collections (0), with no Account or Harness dependency. Version 1 lists source collections using current roles and source authority and requires the source compatibility header. Cursors are scoped to this selector.
+          schema: { type: integer, enum: [0, 1], default: 0 }
       x-hhc-visibility: public
       x-hhc-callers: [api-gateway]
       security: [ { gatewayDaprCaller: [], gatewayTrustedIdentity: [] } ]

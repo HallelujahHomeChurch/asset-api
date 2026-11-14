@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -36,7 +37,7 @@ func New(gateOrigin, gateToken, accountOrigin, accountToken string) (*Client, er
 func (c *Client) CheckSource(ctx context.Context, r assets.SourceAccessRequest) (assets.SourceDecision, error) {
 	var result assets.SourceDecision
 	err := c.post(ctx, c.settings.GateOrigin, "/priv/source/check", "X-HHC-Harness-Service-", c.settings.GateToken, r, &result)
-	if err != nil || result.Version != 1 || result.PolicyRevision < 1 {
+	if err != nil || result.Version != 1 || result.PolicyRevision < 1 || result.RevocationRevision < 1 {
 		return assets.SourceDecision{}, errUnavailable
 	}
 	switch result.State {
@@ -46,6 +47,47 @@ func (c *Client) CheckSource(ctx context.Context, r assets.SourceAccessRequest) 
 		return assets.SourceDecision{}, errUnavailable
 	}
 }
+func (c *Client) CheckSources(ctx context.Context, requests []assets.SourceAccessRequest) ([]assets.SourceDecision, error) {
+	if len(requests) == 0 || len(requests) > assets.SourceBatchLimit {
+		return nil, errUnavailable
+	}
+	type entry struct {
+		ID      string                     `json:"id"`
+		Request assets.SourceAccessRequest `json:"request"`
+	}
+	input := struct {
+		Version  int     `json:"version"`
+		Requests []entry `json:"requests"`
+	}{Version: 1}
+	for i, r := range requests {
+		input.Requests = append(input.Requests, entry{strconv.Itoa(i), r})
+	}
+	var result struct {
+		Version   int `json:"version"`
+		Decisions []struct {
+			ID       string                `json:"id"`
+			Decision assets.SourceDecision `json:"decision"`
+		} `json:"decisions"`
+	}
+	if err := c.postBounded(ctx, c.settings.GateOrigin, "/priv/source/check-batch", "X-HHC-Harness-Service-", c.settings.GateToken, input, &result, 65536, 16384); err != nil || result.Version != 1 || len(result.Decisions) != len(requests) {
+		return nil, errUnavailable
+	}
+	decisions := make([]assets.SourceDecision, len(requests))
+	for i, v := range result.Decisions {
+		d := v.Decision
+		if v.ID != strconv.Itoa(i) || d.Version != 1 || d.PolicyRevision < 1 || d.RevocationRevision < 1 {
+			return nil, errUnavailable
+		}
+		switch d.State {
+		case "active", "paused", "expired", "revoked":
+		default:
+			return nil, errUnavailable
+		}
+		decisions[i] = d
+	}
+	return decisions, nil
+}
+
 func (c *Client) CurrentSubject(ctx context.Context, id string) (assets.CollectionSubject, error) {
 	var result struct {
 		Version int      `json:"version"`
@@ -70,8 +112,11 @@ func (c *Client) CurrentSubject(ctx context.Context, id string) (assets.Collecti
 	return assets.CollectionSubject{UserID: result.UserID, RoleIDs: result.RoleIDs}, nil
 }
 func (c *Client) post(ctx context.Context, origin, path, header, token string, input, output any) error {
+	return c.postBounded(ctx, origin, path, header, token, input, output, 8192, 8192)
+}
+func (c *Client) postBounded(ctx context.Context, origin, path, header, token string, input, output any, requestLimit, responseLimit int) error {
 	body, err := json.Marshal(input)
-	if err != nil || len(body) > 8192 {
+	if err != nil || len(body) > requestLimit {
 		return errUnavailable
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimSuffix(origin, "/")+path, bytes.NewReader(body))
@@ -91,11 +136,11 @@ func (c *Client) post(ctx context.Context, origin, path, header, token string, i
 		return errUnavailable
 	}
 	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK || response.ContentLength > 8192 {
+	if response.StatusCode != http.StatusOK || response.ContentLength > int64(responseLimit) {
 		return errUnavailable
 	}
-	raw, err := io.ReadAll(io.LimitReader(response.Body, 8193))
-	if err != nil || len(raw) > 8192 {
+	raw, err := io.ReadAll(io.LimitReader(response.Body, int64(responseLimit+1)))
+	if err != nil || len(raw) > responseLimit {
 		return errUnavailable
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))

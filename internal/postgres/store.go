@@ -131,7 +131,13 @@ type assetRowReader interface {
 }
 
 func readAsset(ctx context.Context, db assetRowReader, id string, includePurged bool) (assets.Asset, error) {
-	row := db.QueryRowContext(ctx, `SELECT id,namespace,owner_service,owner_type,owner_id,purpose,locale,original_file_name,object_key,expected_mime_type,detected_mime_type,size_bytes,checksum_sha256,etag,upload_status,scan_status,scan_details,scan_signature_version,scan_failure_category,processing_status,visibility,created_at,updated_at,COALESCE(deleted_at,'0001-01-01'::timestamptz),scan_attempts,scan_event_id,processing_attempts,processing_error,COALESCE(processing_next_attempt_at,'0001-01-01'::timestamptz),COALESCE(processing_claimed_until,'0001-01-01'::timestamptz),COALESCE(purged_at,'0001-01-01'::timestamptz),security_profile,processing_profile,derivation_proof,source_policy FROM assets WHERE id=$1 AND ($2 OR purged_at IS NULL)`, id, includePurged)
+	row := db.QueryRowContext(ctx, `SELECT `+assetColumns+` FROM assets WHERE id=$1 AND ($2 OR purged_at IS NULL)`, id, includePurged)
+	return scanAsset(row)
+}
+
+const assetColumns = `id,namespace,owner_service,owner_type,owner_id,purpose,locale,original_file_name,object_key,expected_mime_type,detected_mime_type,size_bytes,checksum_sha256,etag,upload_status,scan_status,scan_details,scan_signature_version,scan_failure_category,processing_status,visibility,created_at,updated_at,COALESCE(deleted_at,'0001-01-01'::timestamptz),scan_attempts,scan_event_id,processing_attempts,processing_error,COALESCE(processing_next_attempt_at,'0001-01-01'::timestamptz),COALESCE(processing_claimed_until,'0001-01-01'::timestamptz),COALESCE(purged_at,'0001-01-01'::timestamptz),security_profile,processing_profile,derivation_proof,source_policy`
+
+func scanAsset(row interface{ Scan(...any) error }) (assets.Asset, error) {
 	var value assets.Asset
 	var proof, source []byte
 	err := row.Scan(&value.ID, &value.Namespace, &value.OwnerService, &value.OwnerType, &value.OwnerID, &value.Purpose, &value.Locale, &value.OriginalFileName, &value.ObjectKey, &value.ExpectedMIMEType, &value.DetectedMIMEType, &value.SizeBytes, &value.ChecksumSHA256, &value.ETag, &value.UploadStatus, &value.ScanStatus, &value.ScanDetails, &value.ScanSignature, &value.ScanFailure, &value.ProcessingStatus, &value.Visibility, &value.CreatedAt, &value.UpdatedAt, &value.DeletedAt, &value.ScanAttempts, &value.ScanEventID, &value.ProcessingAttempts, &value.ProcessingError, &value.ProcessingNextAt, &value.ProcessingClaimedUntil, &value.PurgedAt, &value.UploadProfiles.SecurityProfile, &value.UploadProfiles.ProcessingProfile, &proof, &source)
@@ -150,6 +156,29 @@ func readAsset(ctx context.Context, db assetRowReader, id string, includePurged 
 		}
 	}
 	return value, err
+}
+
+func (s *Store) GetSourceAssets(ctx context.Context, ids []string) (map[string]assets.Asset, error) {
+	result := make(map[string]assets.Asset, len(ids))
+	if len(ids) == 0 {
+		return result, nil
+	}
+	if len(ids) > 500 {
+		return nil, assets.ErrInvalidInput
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT `+assetColumns+` FROM assets WHERE id=ANY($1::text[]) AND purged_at IS NULL`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		a, err := scanAsset(rows)
+		if err != nil {
+			return nil, err
+		}
+		result[a.ID] = a
+	}
+	return result, rows.Err()
 }
 
 func (s *Store) GetUploadSession(ctx context.Context, assetID string) (assets.UploadSession, error) {
@@ -1237,7 +1266,8 @@ const (
 )
 
 type listCursor struct {
-	LastID string `json:"i"`
+	SourcePolicyVersion int    `json:"s,omitempty"`
+	LastID              string `json:"i"`
 }
 
 type managedItemCursor struct {
@@ -1260,25 +1290,37 @@ type changeCursor struct {
 }
 
 func (s *Store) ListAuthorizedCollections(ctx context.Context, subject assets.CollectionSubject, cursor string, limit int) (assets.CollectionPage, error) {
+	return s.listAuthorizedCollections(ctx, subject, cursor, limit, 0)
+}
+func (s *Store) ListSourceCollections(ctx context.Context, subject assets.CollectionSubject, cursor string, limit int) (assets.CollectionPage, error) {
+	return s.listAuthorizedCollections(ctx, subject, cursor, limit, 1)
+}
+
+func (s *Store) listAuthorizedCollections(ctx context.Context, subject assets.CollectionSubject, cursor string, limit, version int) (assets.CollectionPage, error) {
 	if subject.UserID == "" {
 		return assets.CollectionPage{}, assets.ErrForbidden
 	}
 	lastID := ""
 	if decoded, ok := decodeListCursor(cursor); ok {
+		if cursor != "" && decoded.SourcePolicyVersion != version {
+			return assets.CollectionPage{}, assets.ErrInvalidInput
+		}
 		lastID = decoded.LastID
+	} else if cursor != "" {
+		return assets.CollectionPage{}, assets.ErrInvalidInput
 	}
 	limit = boundedCollectionLimit(limit)
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT c.id,c.namespace,c.name,c.revision,c.retention_days,c.created_by_service,c.created_at,c.updated_at,c.acl_revision,c.source_policy_version,c.binding_generation
 		FROM asset_collections c
-		WHERE c.deleted_at IS NULL AND c.id>$3
+		WHERE c.deleted_at IS NULL AND c.id>$3 AND c.source_policy_version=$5
 		  AND EXISTS (
 		    SELECT 1 FROM asset_collection_acl acl
 		    WHERE acl.collection_id=c.id AND acl.permission='read' AND acl.revoked_at IS NULL
 		      AND ((acl.subject_type='user' AND acl.subject_id=$1)
 		        OR (acl.subject_type='role' AND acl.subject_id=ANY($2::text[])))
 		  )
-		ORDER BY c.id LIMIT $4`, subject.UserID, subject.RoleIDs, lastID, limit+1)
+		ORDER BY c.id LIMIT $4`, subject.UserID, subject.RoleIDs, lastID, limit+1, version)
 	if err != nil {
 		return assets.CollectionPage{}, err
 	}
@@ -1297,7 +1339,7 @@ func (s *Store) ListAuthorizedCollections(ctx context.Context, subject assets.Co
 	if len(page.Collections) > limit {
 		page.Collections = page.Collections[:limit]
 		page.HasMore = true
-		page.Cursor = encodeListCursor(listCursor{LastID: page.Collections[len(page.Collections)-1].ID})
+		page.Cursor = encodeListCursor(listCursor{LastID: page.Collections[len(page.Collections)-1].ID, SourcePolicyVersion: version})
 	}
 	return page, nil
 }

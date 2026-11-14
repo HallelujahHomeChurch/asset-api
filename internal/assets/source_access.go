@@ -30,13 +30,17 @@ type SourceAccessRequest struct {
 }
 
 type SourceDecision struct {
-	Version        int    `json:"version"`
-	State          string `json:"state"`
-	PolicyRevision int64  `json:"policyRevision"`
+	Version            int    `json:"version"`
+	State              string `json:"state"`
+	PolicyRevision     int64  `json:"policyRevision"`
+	RevocationRevision int64  `json:"revocationRevision"`
 }
+
+const SourceBatchLimit = 100
 
 type SourceAuthority interface {
 	CheckSource(context.Context, SourceAccessRequest) (SourceDecision, error)
+	CheckSources(context.Context, []SourceAccessRequest) ([]SourceDecision, error)
 }
 
 type CurrentSubjectResolver interface {
@@ -53,7 +57,14 @@ func (s *Service) checkSource(ctx context.Context, request SourceAccessRequest) 
 		return SourceDecision{}, sourceUnavailable()
 	}
 	decision, err := s.sourceAuthority.CheckSource(ctx, request)
-	if err != nil || decision.Version != 1 || decision.PolicyRevision < 1 {
+	if err != nil {
+		return SourceDecision{}, sourceUnavailable()
+	}
+	return sourceDecision(request, decision)
+}
+
+func sourceDecision(request SourceAccessRequest, decision SourceDecision) (SourceDecision, error) {
+	if decision.Version != 1 || decision.PolicyRevision < 1 || decision.RevocationRevision < 1 {
 		return SourceDecision{}, sourceUnavailable()
 	}
 	scope := "item"
@@ -74,6 +85,27 @@ func (s *Service) checkSource(ctx context.Context, request SourceAccessRequest) 
 	}
 }
 
+func (s *Service) checkSources(ctx context.Context, requests []SourceAccessRequest) ([]SourceDecision, error) {
+	if len(requests) == 0 {
+		return []SourceDecision{}, nil
+	}
+	if s.sourceAuthority == nil || len(requests) > SourceBatchLimit {
+		return nil, sourceUnavailable()
+	}
+	decisions, err := s.sourceAuthority.CheckSources(ctx, requests)
+	if err != nil || len(decisions) != len(requests) {
+		return nil, sourceUnavailable()
+	}
+	for i, d := range decisions {
+		_, err := sourceDecision(requests[i], d)
+		var access *SourceAccessError
+		if err != nil && (!errors.As(err, &access) || access.Scope == "dependency") {
+			return nil, sourceUnavailable()
+		}
+	}
+	return decisions, nil
+}
+
 func (s *Service) LineSourceContentMetadata(ctx context.Context, id, caller string) (PublicDownloadMetadata, error) {
 	if caller != LineHarnessCaller {
 		return PublicDownloadMetadata{}, ErrForbidden
@@ -86,17 +118,8 @@ func (s *Service) LineSourceContentMetadata(ctx context.Context, id, caller stri
 }
 
 func (s *Service) sourceContentMetadata(ctx context.Context, asset Asset, request SourceAccessRequest) (PublicDownloadMetadata, error) {
-	if !asset.IsLineSource() {
-		return PublicDownloadMetadata{}, ErrForbidden
-	}
-	if !s.now().Before(asset.Source.ExpiresAt) {
-		return PublicDownloadMetadata{}, &SourceAccessError{Code: "AST_SOURCE_EXPIRED", Scope: "item"}
-	}
-	if !asset.DeletedAt.IsZero() || !asset.PurgedAt.IsZero() {
-		return PublicDownloadMetadata{}, &SourceAccessError{Code: "AST_SOURCE_REVOKED", Scope: "item"}
-	}
-	if !asset.SourceAvailable(s.now()) || asset.UploadStatus != UploadCompleted || asset.ScanStatus != ScanNotRequired || asset.ProcessingStatus != ProcessingNotRequired || asset.ETag == "" {
-		return PublicDownloadMetadata{}, ErrNotFound
+	if err := sourceAssetError(asset, s.now()); err != nil {
+		return PublicDownloadMetadata{}, err
 	}
 	if _, err := s.checkSource(ctx, request); err != nil {
 		return PublicDownloadMetadata{}, err
@@ -105,6 +128,22 @@ func (s *Service) sourceContentMetadata(ctx context.Context, asset Asset, reques
 		return PublicDownloadMetadata{}, &SourceAccessError{Code: "AST_SOURCE_EXPIRED", Scope: "item"}
 	}
 	return PublicDownloadMetadata{SourceExpiresAt: asset.Source.ExpiresAt, Size: asset.SizeBytes, ContentType: asset.DetectedMIMEType, FileName: asset.OriginalFileName, ETag: asset.ETag, LastModified: asset.UpdatedAt, CacheControl: "private, no-store", objectKey: asset.ObjectKey}, nil
+}
+
+func sourceAssetError(asset Asset, now time.Time) error {
+	if !asset.IsLineSource() {
+		return ErrForbidden
+	}
+	if !now.Before(asset.Source.ExpiresAt) {
+		return &SourceAccessError{Code: "AST_SOURCE_EXPIRED", Scope: "item"}
+	}
+	if !asset.DeletedAt.IsZero() || !asset.PurgedAt.IsZero() {
+		return &SourceAccessError{Code: "AST_SOURCE_REVOKED", Scope: "item"}
+	}
+	if !asset.SourceAvailable(now) || asset.UploadStatus != UploadCompleted || asset.ScanStatus != ScanNotRequired || asset.ProcessingStatus != ProcessingNotRequired || asset.ETag == "" {
+		return ErrNotFound
+	}
+	return nil
 }
 
 type CollectionSourcePolicy struct {
@@ -130,6 +169,8 @@ type ActivateSourceItemInput struct {
 }
 
 type SourcePublicationRepository interface {
+	GetSourceAssets(context.Context, []string) (map[string]Asset, error)
+	ListSourceCollections(context.Context, CollectionSubject, string, int) (CollectionPage, error)
 	BindSourceCollection(context.Context, BindSourceCollectionInput, time.Time) (Collection, error)
 	GetSourcePublicationItem(context.Context, string, string, string) (CollectionItemMutation, error)
 	SourceContentTicket(context.Context, string, time.Time) (ContentTicket, bool, error)
@@ -208,7 +249,7 @@ func (s *Service) sourceAuthorizedItem(ctx context.Context, collectionID, itemID
 	if err != nil {
 		return CollectionItem{}, Asset{}, err
 	}
-	if !a.IsLineSource() || item.ETag != a.ETag || item.PublicationState != "active" {
+	if !a.IsLineSource() || item.ETag != a.ETag {
 		return CollectionItem{}, Asset{}, sourceUnavailable()
 	}
 	if _, err := s.sourceContentMetadata(ctx, a, sourceRequest(p, "published", a, item)); err != nil {
@@ -272,33 +313,98 @@ func (s *Service) sourceChanges(ctx context.Context, id, cursor string, subject 
 		}
 		return CollectionChangePage{}, err
 	}
-	if _, err := s.checkSource(ctx, sourceRequest(p, "collection", Asset{}, CollectionItem{})); err != nil {
+	control, err := s.checkSource(ctx, sourceRequest(p, "collection", Asset{}, CollectionItem{}))
+	if err != nil {
 		return CollectionChangePage{}, err
 	}
 	page, err := s.repository.CollectionChanges(ctx, id, cursor, current)
 	if err != nil {
 		return CollectionChangePage{}, err
 	}
-	items := make([]CollectionItem, 0, len(page.Items))
+	if len(page.Items)+len(page.Tombstones) > 500 {
+		return CollectionChangePage{}, sourceUnavailable()
+	}
+	ids := make([]string, 0, len(page.Items))
 	for _, item := range page.Items {
-		a, err := s.repository.GetAsset(ctx, item.AssetID)
-		if err == nil {
-			if !a.IsLineSource() {
-				return CollectionChangePage{}, sourceUnavailable()
-			}
-			_, err = s.sourceContentMetadata(ctx, a, sourceRequest(p, "published", a, item))
+		ids = append(ids, item.AssetID)
+	}
+	assetsByID, err := s.repository.(SourcePublicationRepository).GetSourceAssets(ctx, ids)
+	if err != nil {
+		return CollectionChangePage{}, sourceUnavailable()
+	}
+	candidates := make([]CollectionItem, 0, len(page.Items))
+	requests := make([]SourceAccessRequest, 0, len(page.Items))
+	tombstone := func(item CollectionItem) {
+		page.Tombstones = append(page.Tombstones, CollectionTombstone{ID: item.ID, RemoteItemID: item.RemoteItemID, DeletedRevision: page.Collection.Revision, DeletedAt: s.now().UTC()})
+	}
+	permanent := func(err error) bool {
+		var access *SourceAccessError
+		return errors.Is(err, ErrNotFound) || (errors.As(err, &access) && (access.Code == "AST_SOURCE_EXPIRED" || access.Code == "AST_SOURCE_REVOKED"))
+	}
+	for _, item := range page.Items {
+		a, ok := assetsByID[item.AssetID]
+		if !ok {
+			tombstone(item)
+			continue
 		}
-		if err != nil {
-			var access *SourceAccessError
-			if errors.Is(err, ErrNotFound) || (errors.As(err, &access) && (access.Code == "AST_SOURCE_EXPIRED" || access.Code == "AST_SOURCE_REVOKED")) {
-				page.Tombstones = append(page.Tombstones, CollectionTombstone{ID: item.ID, RemoteItemID: item.RemoteItemID, DeletedRevision: page.Collection.Revision, DeletedAt: s.now().UTC()})
+		if !a.IsLineSource() || a.ID != item.AssetID {
+			return CollectionChangePage{}, sourceUnavailable()
+		}
+		if err := sourceAssetError(a, s.now()); err != nil {
+			if permanent(err) {
+				tombstone(item)
 				continue
 			}
 			return CollectionChangePage{}, err
 		}
+		if item.ETag != a.ETag {
+			return CollectionChangePage{}, sourceUnavailable()
+		}
 		item.SourceExpiresAt = a.Source.ExpiresAt
-		items = append(items, item)
+		candidates = append(candidates, item)
+		requests = append(requests, sourceRequest(p, "published", a, item))
 	}
+	items := make([]CollectionItem, 0, len(candidates))
+	for start := 0; start < len(requests); start += SourceBatchLimit {
+		end := min(start+SourceBatchLimit, len(requests))
+		decisions, err := s.checkSources(ctx, requests[start:end])
+		if err != nil {
+			return CollectionChangePage{}, err
+		}
+		for offset, d := range decisions {
+			i := start + offset
+			item := candidates[i]
+			_, err := sourceDecision(requests[i], d)
+			if err != nil {
+				if permanent(err) {
+					tombstone(item)
+					continue
+				}
+				return CollectionChangePage{}, err
+			}
+			if d.PolicyRevision != control.PolicyRevision || d.RevocationRevision != control.RevocationRevision {
+				return CollectionChangePage{}, sourceUnavailable()
+			}
+			items = append(items, item)
+		}
+	}
+	final, err := s.checkSource(ctx, sourceRequest(p, "collection", Asset{}, CollectionItem{}))
+	if err != nil {
+		return CollectionChangePage{}, err
+	}
+	if final.PolicyRevision != control.PolicyRevision || final.RevocationRevision != control.RevocationRevision {
+		return CollectionChangePage{}, sourceUnavailable()
+	}
+	// A deadline may pass while a later batch is checked.
+	live := items[:0]
+	for _, item := range items {
+		if !s.now().Before(item.SourceExpiresAt) {
+			tombstone(item)
+		} else {
+			live = append(live, item)
+		}
+	}
+	items = live
 	latest, err := s.repository.(SourcePublicationRepository).GetCollectionSourcePolicy(ctx, id)
 	if err != nil || latest != p {
 		return CollectionChangePage{}, sourceUnavailable()

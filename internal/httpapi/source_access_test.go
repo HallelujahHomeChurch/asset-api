@@ -37,7 +37,7 @@ type httpSourceAuthority struct {
 
 func (a *httpSourceAuthority) CheckSource(_ context.Context, _ assets.SourceAccessRequest) (assets.SourceDecision, error) {
 	a.calls++
-	return assets.SourceDecision{Version: 1, State: a.state, PolicyRevision: 1}, nil
+	return assets.SourceDecision{Version: 1, RevocationRevision: 1, State: a.state, PolicyRevision: 1}, nil
 }
 
 func TestSourceContentChecksAuthorityBeforeGETHEADRangeAndConditionalResponse(t *testing.T) {
@@ -139,4 +139,16 @@ func TestSourceProtocolHeaderIsSingleExactCapability(t *testing.T) {
 			t.Fatalf("%v: %+v", values, identity)
 		}
 	}
+}
+
+func (a *httpSourceAuthority) CheckSources(ctx context.Context, requests []assets.SourceAccessRequest) ([]assets.SourceDecision, error) {
+	result := make([]assets.SourceDecision, 0, len(requests))
+	for _, r := range requests {
+		d, err := a.CheckSource(ctx, r)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, d)
+	}
+	return result, nil
 }

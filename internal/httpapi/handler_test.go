@@ -1761,3 +1761,26 @@ func (b *downloadBlobStore) Open(_ context.Context, key string, byteRange assets
 	}
 	return assets.BlobDownload{Body: io.NopCloser(bytes.NewReader(value)), Size: int64(len(value))}, nil
 }
+
+func TestCollectionDiscoverySelectorKeepsLegacyRouteIndependent(t *testing.T) {
+	for _, tc := range []struct {
+		query         string
+		status, calls int
+	}{
+		{"", 200, 1}, {"?sourcePolicyVersion=0", 200, 1},
+		{"?sourcePolicyVersion=1", 503, 0},
+		{"?sourcePolicyVersion=", 400, 0}, {"?sourcePolicyVersion=2", 400, 0},
+		{"?sourcePolicyVersion=0&sourcePolicyVersion=1", 400, 0},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			handler, repo := newCollectionReaderHandler()
+			req := collectionReaderRequest(http.MethodGet, "/api/assets/collections"+tc.query)
+			req.Header.Set("X-HHC-Source-Policy-Version", "1")
+			res := httptest.NewRecorder()
+			handler.ServeHTTP(res, req)
+			if res.Code != tc.status || repo.calls != tc.calls {
+				t.Fatalf("status=%d calls=%d body=%s", res.Code, repo.calls, res.Body.String())
+			}
+		})
+	}
+}
