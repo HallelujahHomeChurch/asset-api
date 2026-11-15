@@ -12,6 +12,12 @@
       },
       "ASSET_ACCOUNT_TOKEN": {
         "secretRef": "asset-account-private-token"
+      },
+      "ASSET_ALLOWED_CALLERS": {
+        "value": "account-api,hhc-web-api,hhc-line-function-bot,hhc-line-harness"
+      },
+      "ASSET_WORKLOAD_AUTH": {
+        "value": "{\"issuer\":\"https://sts.windows.net/d560fac9-25d4-4020-a124-3ae3f41913bc/\",\"audience\":\"api://603d78de-1f3e-448f-b716-0a4ffaa58887\",\"jwksUrl\":\"https://login.microsoftonline.com/d560fac9-25d4-4020-a124-3ae3f41913bc/discovery/keys\",\"principalClaim\":\"oid\",\"principals\":{\"8011f76b-3da4-413f-91f7-ca39cf28bc2d\":\"hhc-line-harness\",\"f1ff4697-3250-4335-b099-dcce0bc33af9\":\"hhc-line-harness\"},\"disableLegacyCallers\":[\"hhc-line-harness\"],\"uploadProfileScopes\":{\"8011f76b-3da4-413f-91f7-ca39cf28bc2d\":[{\"namespaceFamily\":\"line.group.file\",\"securityProfile\":\"line-source-unscanned-v1\",\"processingProfile\":\"no-processing-v1\"},{\"namespaceFamily\":\"line.group.media-sync\",\"securityProfile\":\"line-source-unscanned-v1\",\"processingProfile\":\"no-processing-v1\"}],\"f1ff4697-3250-4335-b099-dcce0bc33af9\":[{\"namespaceFamily\":\"line.group.file\",\"securityProfile\":\"line-source-unscanned-v1\",\"processingProfile\":\"no-processing-v1\"},{\"namespaceFamily\":\"line.group.media-sync\",\"securityProfile\":\"line-source-unscanned-v1\",\"processingProfile\":\"no-processing-v1\"}]}}"
       }
     },
     "asset-clamav-signature-refresh": {},
