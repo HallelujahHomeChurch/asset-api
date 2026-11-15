@@ -1,6 +1,19 @@
 {
   "resources": {
-    "asset-api": {},
+    "asset-api": {
+      "ASSET_SOURCE_GATE_ORIGIN": {
+        "value": "https://hhc-line-harness-api.internal.gentleriver-81abd7bc.eastasia.azurecontainerapps.io"
+      },
+      "ASSET_SOURCE_GATE_TOKEN": {
+        "secretRef": "hhc-line-harness-source-gate-token"
+      },
+      "ASSET_ACCOUNT_ORIGIN": {
+        "value": "https://account-api.internal.gentleriver-81abd7bc.eastasia.azurecontainerapps.io"
+      },
+      "ASSET_ACCOUNT_TOKEN": {
+        "secretRef": "asset-account-private-token"
+      }
+    },
     "asset-clamav-signature-refresh": {},
     "asset-derivative": {},
     "asset-migrate": {},
