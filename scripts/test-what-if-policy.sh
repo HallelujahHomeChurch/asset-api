@@ -159,3 +159,20 @@ for setting in auth-still-enabled DATABASE_URL AUDIT_TOKEN ASSET_UNKNOWN_WORKLOA
     exit 1
   fi
 done
+
+# Retired LINE cron may be removed only with the effective work queue preserved.
+python3 - "$tmp/line-cron.json" <<'PYTEST'
+import json,sys
+queue = {"name":"asset-scan-queue","azureQueue":{"accountName":"alive","queueName":"asset-scan","queueLength":1,"identity":"scan"}}
+rules = [queue] + [{"name":name,"custom":{"type":"cron"}} for name in ["tue-fri-0625","thu-1155","fri-1855","sat-0855","sun-0855"]]
+change = {"resourceId":"/subscriptions/test/resourceGroups/alive/providers/Microsoft.App/containerApps/asset-scan-worker", "changeType":"Modify", "before":{"properties":{"template":{"scale":{"rules":rules}}}}, "after":{"properties":{"template":{"scale":{"rules":[queue]}}}}, "delta":[{"path":"properties.template.scale.rules","propertyChangeType":"Array","children":[{"path":str(i),"propertyChangeType":"Delete","before":r} for i,r in enumerate(rules) if i]}]}
+json.dump({"changes":[change]},open(sys.argv[1],'w'))
+PYTEST
+./scripts/check-what-if.sh "$tmp/line-cron.json"
+for mutation in '.changes[0].after.properties.template.scale.rules=[]' '.changes[0].after.properties.template.scale.rules[0].azureQueue.queueName="other"' '.changes[0].before.properties.template.scale.rules[1].name="unrelated"' '.changes[0].resourceId |= sub("asset-scan-worker$"; "asset-api")'; do
+  jq "$mutation" "$tmp/line-cron.json" > "$tmp/unsafe-line-cron.json"
+  if ./scripts/check-what-if.sh "$tmp/unsafe-line-cron.json"; then
+    echo 'LINE cron retirement widened the deletion boundary' >&2
+    exit 1
+  fi
+done

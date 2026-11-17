@@ -47,7 +47,30 @@ jq -e '
             else . end)
     else . end;
 
-  .changes |= map(ignore_reordered_asset_env | ignore_retired_asset_auth_env) |
+  # Permit only removal of the five retired LINE meeting rules, preserving the
+  # effective scanner queue configuration across the two ACA serialization shapes.
+  def scan_queue:
+    (.azureQueue // ((.custom.metadata // {}) + {identity: .custom.identity}))
+    | {accountName, queueName, queueLength: (.queueLength | tostring), identity};
+  def ignore_retired_line_cron:
+    if .changeType == "Modify"
+      and (.resourceId | endswith("/Microsoft.App/containerApps/asset-scan-worker")) then
+      .before.properties.template.scale.rules as $before
+      | .after.properties.template.scale.rules as $after
+      | if (($after | length) == 1 and $after[0].name == "asset-scan-queue"
+            and ($after[0] | scan_queue | .queueName == "asset-scan" and .queueLength == "1")
+            and ([$before[]? | select(.name == "asset-scan-queue") | scan_queue] == [$after[0] | scan_queue])) then
+          (.delta[]? | select(.path == "properties.template.scale.rules") | .children[]?) |= (
+            if .propertyChangeType == "Delete" and (.path | test("^[0-9]+$")) then
+              $before[(.path | tonumber)] as $rule
+              | if ($rule.custom.type == "cron" and
+                    (["tue-fri-0625", "thu-1155", "fri-1855", "sat-0855", "sun-0855"] | index($rule.name)) != null)
+                then .propertyChangeType = "NoChange" else . end
+            else . end)
+        else . end
+    else . end;
+
+  .changes |= map(ignore_reordered_asset_env | ignore_retired_asset_auth_env | ignore_retired_line_cron) |
   ([.changes[] | select(.changeType == "Delete" or .changeType == "Unsupported")] | length == 0)
   and
   ([.changes[]

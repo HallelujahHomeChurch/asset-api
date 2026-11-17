@@ -96,36 +96,13 @@ after the 120-second cooldown. The app uses 1.5 CPU/3 GiB; the release verifies
 the 8 GiB ephemeral-storage tier in the deployed resource readback. The legacy `asset-scan` Job remains
 Manual with its queue trigger disabled for one compatibility release.
 
-### Meeting warm windows
+### Retired LINE meeting warming
 
-During meetings the scan worker is held at one replica by five KEDA cron scale
-rules on `asset-scan-worker` (`desiredReplicas: '1'`, `timezone: 'Asia/Taipei'`).
-Each window runs from 5 minutes before the meeting starts to 10 minutes after it
-ends. KEDA uses the highest rule, so the replica count is
-max(cron, `asset-scan` queue); uploads outside a window still scale from zero.
-
-| rule | start | end | meetingKey (start) |
-|---|---|---|---|
-| `tue-fri-0625` | `25 6 * * 2,5` | `40 8 * * 2,5` | `morning-prayer` (06:30) |
-| `thu-1155` | `55 11 * * 4` | `10 14 * * 4` | `gospel-meal` (12:00) |
-| `fri-1855` | `55 18 * * 5` | `40 21 * * 5` | `discipleship-prayer` (19:00) |
-| `sat-0855` | `55 8 * * 6` | `40 11 * * 6` | `kingdom-prayer` (09:00) |
-| `sun-0855` | `55 8 * * 0` | `10 12 * * 0` | `sunday` (09:00) |
-
-The windows are hard-coded in `main.bicep`. They do not follow meeting edits in
-Operations: a meeting-time change requires editing these rules (and the
-expected list in `scripts/meeting-cron-drift.test.py`) and releasing. The
-release verifies the deployed rules against the template with
-`scripts/verify-scan-worker-scale.py`.
-
-`.github/workflows/meeting-cron-drift.yml` runs every Monday 01:00 UTC and on
-demand without Azure credentials. It reads the public
-`https://www.alive.org.tw/api/meeting-occurrences` and fails when any
-`scheduled` occurrence in the next 28 days is not covered (5 minutes before
-start to 10 minutes after end, Asia/Taipei) by one cron rule. A failure opens
-or updates the issue "Meeting cron drift: asset-scan-worker" with a suggested
-rule; a clean run closes it. Run it locally with
-`python3 scripts/meeting-cron-drift.py` (exit 0 covered, 1 gap, 2 invalid input).
+The five legacy LINE meeting cron rules and their drift workflow are removed.
+The shared scanner continues to scale from the `asset-scan` work queue with
+unchanged capacity, polling, cooldown, scanning, storage and permissions.
+New Harness sources do not wait for this legacy meeting scan path. The release
+readback rejects cron rules and verifies the scanner queue remains configured.
 
 The per-minute `asset-scan-warmer` Job is retired. The release step "Retire scan
 warmer Job" logs its last image reference and deletes it if it still exists
