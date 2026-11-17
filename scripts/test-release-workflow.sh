@@ -140,6 +140,18 @@ grep -q "param auditVaultName string = 'alive-vault'" infra/main.bicep
 grep -q "name: 'AUDIT_DISPATCH_ENABLED', value: 'true'" infra/main.bicep
 grep -q "name: 'AUDIT_APP_ID', value: 'audit-log'" infra/main.bicep
 grep -q "name: 'AUDIT_TOKEN', secretRef: 'audit-token'" infra/main.bicep
+# Every runtime override secret must survive a full image deployment.
+python3 - <<'PYREFS'
+import json
+import re
+from pathlib import Path
+source = Path('infra/main.bicep').read_text().split('resource app ', 1)[1].split('\nresource ', 1)[0]
+secrets = source.split('      secrets:', 1)[1].split('    template:', 1)[0]
+declared = set(re.findall(r"name: '([^']+)'", secrets))
+overrides = json.loads(Path('infra/runtime-env.json').read_text())['resources']['asset-api']
+required = {value['secretRef'] for value in overrides.values() if value and 'secretRef' in value}
+assert required <= declared, 'API runtime secret references must have Bicep definitions'
+PYREFS
 grep -q 'name: Verify revision health' "$workflow"
 if grep -q 'az containerapp exec' "$workflow"; then
   echo 'release verification must not use Container Apps exec' >&2
