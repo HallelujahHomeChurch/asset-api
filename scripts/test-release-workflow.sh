@@ -245,7 +245,7 @@ grep -q 'param deployScanWorker bool = false' infra/main.bicep
 grep -q 'param provisionScanWarmInfrastructure bool = false' infra/main.bicep
 grep -q "name: 'asset-scan-worker'" infra/main.bicep
 grep -q "name: 'asset-scan-warmer-identity'" infra/main.bicep
-# The per-minute warmer Job is retired in favour of scan worker cron rules.
+# The per-minute warmer Job and LINE meeting cron are retired.
 if grep -Eq "name: 'asset-scan-warmer'|deployScanWarmer|meetingApi" infra/main.bicep ||
   grep -Eq 'deployScanWarmer|meetingApi|MEETING_API|Verify scan warmer release' "$workflow"; then
   echo 'retired asset-scan-warmer Job must not be redeployed' >&2
@@ -262,14 +262,15 @@ printf '%s\n' "$scan_worker_block" | grep -q 'pollingInterval: 5$'
 grep -Fq 'properties.template.scale.pollingInterval -o tsv --only-show-errors)" == "5"' "$workflow"
 printf '%s\n' "$scan_worker_block" | grep -q "queueName: 'asset-scan'$"
 if printf '%s\n' "$scan_worker_block" | grep -Eq "name: 'asset-scan-warm'|queueName: 'asset-scan-warm'"; then
-  echo 'scan worker must warm through cron rules, not the asset-scan-warm queue rule' >&2
+  echo 'scan worker must use its work queue only' >&2
   exit 1
 fi
-test "$(printf '%s\n' "$scan_worker_block" | grep -c "type: 'cron'")" = 5
-test "$(printf '%s\n' "$scan_worker_block" | grep -c "timezone: 'Asia/Taipei'")" = 5
-test "$(printf '%s\n' "$scan_worker_block" | grep -c "desiredReplicas: '1'")" = 5
+if printf '%s\n' "$scan_worker_block" | grep -q "type: 'cron'"; then
+  echo 'retired LINE meeting cron must not return to shared scanner' >&2
+  exit 1
+fi
 grep -Fq 'python3 scripts/verify-scan-worker-scale.py' "$workflow"
-grep -Fq 'python3 scripts/meeting-cron-drift.test.py' .github/workflows/ci.yml
+grep -Fq 'python3 scripts/test-scan-worker-scale.py' .github/workflows/ci.yml
 retire_line="$(grep -n 'name: Retire scan warmer Job' "$workflow" | cut -d: -f1)"
 verify_worker_line="$(grep -n 'name: Verify scan worker release' "$workflow" | cut -d: -f1)"
 healthy_line="$(grep -n 'name: Capture healthy release' "$workflow" | cut -d: -f1)"
@@ -279,14 +280,6 @@ retire_step="$(sed -n "${retire_line},${healthy_line}p" "$workflow")"
 for expected in 'job=asset-scan-warmer' 'az containerapp job delete -g "$RESOURCE_GROUP" -n "$job" --yes' 'last image: ${image}' 'already absent' 'still exists after deletion'; do
   printf '%s\n' "$retire_step" | grep -Fq "$expected"
 done
-drift_workflow=.github/workflows/meeting-cron-drift.yml
-for expected in 'workflow_dispatch:' 'contents: read' 'issues: write' 'python3 scripts/meeting-cron-drift.py --report' 'ISSUE_TITLE: "Meeting cron drift: asset-scan-worker"'; do
-  grep -Fq "$expected" "$drift_workflow"
-done
-if grep -Eq 'azure/login|id-token|AZURE_' "$drift_workflow"; then
-  echo 'meeting cron drift check must not use Azure credentials' >&2
-  exit 1
-fi
 scan_job_block="$(sed -n '/resource scanJob /,/^}/p' infra/main.bicep)"
 printf '%s\n' "$scan_job_block" | grep -q "triggerType: 'Manual'"
 if printf '%s\n' "$scan_job_block" | grep -q 'eventTriggerConfig'; then

@@ -640,7 +640,7 @@ jobs:
           [[ "$(az containerapp show -g "$RESOURCE_GROUP" -n "$SCAN_WORKER_APP_NAME" --query properties.template.scale.pollingInterval -o tsv --only-show-errors)" == "5" ]]
           [[ "$(az containerapp show -g "$RESOURCE_GROUP" -n "$SCAN_WORKER_APP_NAME" --query properties.template.scale.cooldownPeriod -o tsv --only-show-errors)" == "120" ]]
           [[ "$(az containerapp job show -g "$RESOURCE_GROUP" -n asset-scan --query properties.configuration.triggerType -o tsv --only-show-errors)" == "Manual" ]]
-          # Meeting warm windows are the cron rules declared in infra/main.bicep.
+          # Shared scanner remains queue-triggered; retired LINE meeting cron is forbidden.
           az containerapp show -g "$RESOURCE_GROUP" -n "$SCAN_WORKER_APP_NAME" --query properties.template.scale.rules -o json --only-show-errors \
             | python3 scripts/verify-scan-worker-scale.py
       - name: Verify derivative job release
@@ -658,7 +658,7 @@ jobs:
             [[ "$(az containerapp job show -g "$RESOURCE_GROUP" -n asset-recording-validation --query properties.configuration.scheduleTriggerConfig.cronExpression -o tsv --only-show-errors)" == '*/1 * * * *' ]]
           fi
       - name: Retire scan warmer Job
-        # Planned deletion: the scan worker cron rules (verified above) replace the
+        # Planned deletion: the queue-triggered scan worker replaces the
         # per-minute warmer, and incremental Bicep deployments never delete a Job
         # the template stopped declaring. Idempotent; the last image reference is
         # logged for rollback and ACR retention before deletion.

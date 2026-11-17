@@ -1,4 +1,8 @@
-# Meeting media warm acceptance
+# Archived meeting media warm acceptance
+
+This runbook describes the retired legacy LINE flow. New Harness sources do not
+use meeting windows or this scan-wait acceptance path. Shared scanning remains
+queue-triggered for other clients; do not use this archive to restore warming.
 
 This runbook accepts the Phase 1 LINE-to-Asset-to-Presenter path. Run it only
 with a test Meeting, a test LINE group, and an authenticated test Presenter.

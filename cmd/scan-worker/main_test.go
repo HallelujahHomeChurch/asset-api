@@ -95,12 +95,12 @@ func TestDeploymentPassesWarmQueueToWorker(t *testing.T) {
 	if !strings.Contains(string(template), "resource scanWarmQueueProcessor") || strings.Count(string(template), "dependsOn: [acrPull, scanSecretAccess, scanQueueProcessor, scanQueueReader, scanWarmQueueReader, scanWarmQueueProcessor") != 2 {
 		t.Fatal("asset-scan-worker must be allowed to delete warm pulses")
 	}
-	// Meeting warmth now comes from KEDA cron rules; the worker still drains
-	// leftover pulses, but the warm queue no longer scales it.
+	// Retain bounded cleanup of leftover pulses; only the work queue scales
+	// the shared scanner after LINE meeting warming is retired.
 	if strings.Contains(string(template), "queueName: 'asset-scan-warm'") {
 		t.Fatal("asset-scan-warm must not be a scan worker scale rule")
 	}
-	if strings.Count(string(template), "type: 'cron'") != 5 {
-		t.Fatal("asset-scan-worker must declare the five meeting cron rules")
+	if strings.Contains(string(template), "type: 'cron'") {
+		t.Fatal("retired LINE meeting cron must not be restored")
 	}
 }
