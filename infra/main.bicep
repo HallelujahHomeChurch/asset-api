@@ -413,12 +413,12 @@ resource app 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
         // Keep the existing pinned credentials referenced by runtime-env.json.
         {
           name: 'hhc-line-harness-source-gate-token'
-          keyVaultUrl: '${auditVault.properties.vaultUri}secrets/hhc-line-harness-source-gate-token/c196ad60ec144c3998eaeca51cc0f9b5'
+          keyVaultUrl: 'https://${auditVaultName}${az.environment().suffixes.keyvaultDns}/secrets/hhc-line-harness-source-gate-token/c196ad60ec144c3998eaeca51cc0f9b5'
           identity: runtimeIdentity.id
         }
         {
           name: 'asset-account-private-token'
-          keyVaultUrl: '${auditVault.properties.vaultUri}secrets/asset-account-private-token/31e90139aa8b483aa70abd5ab970d78f'
+          keyVaultUrl: 'https://${auditVaultName}${az.environment().suffixes.keyvaultDns}/secrets/asset-account-private-token/31e90139aa8b483aa70abd5ab970d78f'
           identity: runtimeIdentity.id
         }
       ], memberVideoEnabled ? mediaRuntimeSecrets : [])
