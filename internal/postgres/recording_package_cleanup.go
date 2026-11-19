@@ -5,41 +5,65 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 )
 
-const packageCleanupEligible = `(state IN ('ready','failed','expired') OR (state='uploading' AND expires_at<=clock_timestamp()) OR
+const packageCleanupLimit = 10
+
+const packageCleanupEligibleAt = `(state IN ('ready','failed','expired') OR (state='uploading' AND expires_at<=%[1]s) OR
  EXISTS (SELECT 1 FROM recording_package_attempts a WHERE a.package_id=p.id AND a.state IN ('failed','abandoned','purged')))
- AND NOT EXISTS(SELECT 1 FROM recording_captures c JOIN recording_live l ON l.capture_id=c.id WHERE c.package_id=p.id AND NOT (` + captureCleanupSafe + `))`
+ AND NOT EXISTS(SELECT 1 FROM recording_captures c JOIN recording_live l ON l.capture_id=c.id WHERE c.package_id=p.id AND NOT (` + captureCleanupSafeAt + `))`
+
+var packageCleanupEligible = fmt.Sprintf(packageCleanupEligibleAt, "clock_timestamp()")
 
 func (s *RecordingPackageStore) PackageCleanupCandidates(ctx context.Context) ([]string, error) {
+	ids, _, err := s.packageCleanupCandidates(ctx)
+	return ids, err
+}
+
+func (s *RecordingPackageStore) packageCleanupCandidates(ctx context.Context) ([]string, time.Time, error) {
 	if err := NewRecordingCaptureStore(s.db).reconcileTerminalPackages(ctx); err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
-	// Filter protected captures before LIMIT so they cannot occupy every batch.
-	// The deadline/grant/lease predicate makes them eligible when the hold ends.
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM recording_packages p WHERE cleanup_after<=clock_timestamp() AND `+packageCleanupEligible+`
- ORDER BY cleanup_after LIMIT 10`)
+	// Filter protected captures before LIMIT. Keep the database's cutoff even
+	// for an empty batch so the remaining count uses the same eligibility clock.
+	eligible := fmt.Sprintf(packageCleanupEligibleAt, "statement_timestamp()")
+	rows, err := s.db.QueryContext(ctx, `WITH batch AS (
+ SELECT p.id, p.cleanup_after FROM recording_packages p WHERE cleanup_after<=statement_timestamp() AND `+eligible+`
+ ORDER BY cleanup_after LIMIT $1
+ )
+ SELECT batch.id, snapshot.cutoff FROM (SELECT statement_timestamp() AS cutoff) snapshot
+ LEFT JOIN batch ON true ORDER BY batch.cleanup_after`, packageCleanupLimit)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 	defer rows.Close()
 	var ids []string
+	var cutoff time.Time
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
+		var id sql.NullString
+		if err := rows.Scan(&id, &cutoff); err != nil {
+			return nil, time.Time{}, err
 		}
-		ids = append(ids, id)
+		if id.Valid {
+			ids = append(ids, id.String)
+		}
 	}
-	return ids, rows.Err()
+	return ids, cutoff, rows.Err()
 }
 
 // Cleanup uses the same session lock as URL issuance and only deletes declared
 // object paths. Failed deletion is retried; successful sweeps are repeated to
 // remove late writes made with capabilities issued before complete/expiry.
 func (s *RecordingPackageStore) CleanupPackage(ctx context.Context, id string, deleteObjects func(context.Context, []string) error) error {
-	return s.locks.WithSessionLock(ctx, "package-"+id, func(ctx context.Context, conn *sql.Conn) error {
+	_, err := s.cleanupPackage(ctx, id, deleteObjects)
+	return err
+}
+
+func (s *RecordingPackageStore) cleanupPackage(ctx context.Context, id string, deleteObjects func(context.Context, []string) error) (bool, error) {
+	var swept bool
+	err := s.locks.WithSessionLock(ctx, "package-"+id, func(ctx context.Context, conn *sql.Conn) error {
 		p, err := (recordingPackageSession{query: conn}).Get(ctx, id)
 		if err != nil {
 			return err
@@ -213,26 +237,67 @@ func (s *RecordingPackageStore) CleanupPackage(ctx context.Context, id string, d
 		// ponytail: daily declared-key sweep retains metadata; add bounded metadata
 		// compaction only after retention policy and provider late-write bounds agree.
 		_, err = conn.ExecContext(ctx, `UPDATE recording_packages SET cleanup_after=CASE WHEN state='expired' AND GREATEST(media_expires_at+interval '1 hour',grant_cleanup_after)>clock_timestamp() THEN GREATEST(media_expires_at+interval '1 hour',grant_cleanup_after) ELSE clock_timestamp()+interval '24 hours' END WHERE id=$1`, id)
+		swept = err == nil
 		return err
 	})
+	return swept, err
 }
 
 // Keep cleanup's synchronous work bounded independently of the long media job.
 func (s *RecordingPackageStore) ReconcilePackages(ctx context.Context, deleteObjects func(context.Context, []string) error) error {
-	ids, err := s.PackageCleanupCandidates(ctx)
+	started := time.Now()
+	ids, cutoff, err := s.packageCleanupCandidates(ctx)
 	if err != nil {
 		return err
 	}
 	cleanupCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
+	var swept, skipped, failed int
 	var failures error
 	for _, id := range ids {
 		if err := cleanupCtx.Err(); err != nil {
-			return errors.Join(failures, err)
-		}
-		if err := s.CleanupPackage(cleanupCtx, id, deleteObjects); err != nil {
 			failures = errors.Join(failures, err)
+			break
+		}
+		completed, err := s.cleanupPackage(cleanupCtx, id, deleteObjects)
+		switch {
+		case err != nil:
+			failed++
+			failures = errors.Join(failures, err)
+		case completed:
+			swept++
+		default:
+			skipped++
 		}
 	}
+	// IDs come from the package primary key without a multiplying join.
+	attrs := []any{"cutoff", cutoff, "batch", 1, "limit", packageCleanupLimit,
+		"selected", len(ids), "unique", len(ids), "limit_reached", len(ids) == packageCleanupLimit,
+		"swept", swept, "skipped", skipped, "failed", failed, "unattempted", len(ids) - swept - skipped - failed}
+	attrs = append(attrs, s.measurePackageCleanupRemaining(cleanupCtx, cutoff)...)
+	slog.InfoContext(ctx, "recording_package_cleanup_batch", append(attrs, "elapsed_ms", time.Since(started).Milliseconds())...)
 	return failures
+}
+
+func (s *RecordingPackageStore) measurePackageCleanupRemaining(ctx context.Context, cutoff time.Time) []any {
+	// This best-effort read shares the cleanup deadline and cannot fail cleanup.
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	if ctx.Err() != nil {
+		return []any{"remaining_measured", false}
+	}
+	eligible := fmt.Sprintf(packageCleanupEligibleAt, "$1::timestamptz")
+	var due, overdue int64
+	var oldest sql.NullTime
+	err := s.db.QueryRowContext(ctx, `SELECT count(*),
+ count(*) FILTER (WHERE cleanup_after<$1::timestamptz-interval '1 hour'), min(cleanup_after)
+ FROM recording_packages p WHERE cleanup_after<=$1::timestamptz AND `+eligible, cutoff).Scan(&due, &overdue, &oldest)
+	if err != nil {
+		return []any{"remaining_measured", false}
+	}
+	var oldestSeconds int64
+	if oldest.Valid {
+		oldestSeconds = int64(cutoff.Sub(oldest.Time) / time.Second)
+	}
+	return []any{"remaining_measured", true, "remaining_due", due, "remaining_overdue", overdue, "oldest_due_seconds", oldestSeconds}
 }

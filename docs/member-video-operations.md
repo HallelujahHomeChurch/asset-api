@@ -215,6 +215,15 @@ every byte remains present. Repeated successful sweeps move the next check forwa
 The query is bounded to five seconds; failure emits `recording_health_unavailable`
 without blocking processing. Keep this Job's `LOG_LEVEL=info` for heartbeat alerts.
 
+The package cleanup phase emits one `recording_package_cleanup_batch` summary
+for its single batch of up to 10. `swept` counts confirmed sweeps that completed
+and rescheduled the package. `skipped`, `failed` and `unattempted` report the
+other selected candidates. A sweep may find no physical objects to delete.
+The post-batch read uses the original database cutoff with current row state.
+It reports eligible `remaining_due`, `remaining_overdue` (over one hour),
+and `oldest_due_seconds`. Deferred retries remain visible in `failed`.
+`remaining_measured=false` means the counts are unavailable.
+
 Alert definitions belong to the shared `azure-infra` observability configuration:
 review a create-only Terraform plan before enabling notifications. Monitor a
 15-minute missing heartbeat, worker errors, persistent cleanup backlog, and the
