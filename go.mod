@@ -1,6 +1,6 @@
 module hhc/asset-api
 
-go 1.26.10
+go 1.26.11
 
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.21.1
