@@ -9,11 +9,13 @@ import (
 // The six-hour writer grace covers the existing worker's 5.5-hour deadline.
 // Failed remote captures retain seven days; normal VOD final objects are owned
 // by the package retention policy and never enumerated by this cleanup.
-const captureCleanupSafe = `GREATEST(c.expires_at+interval '6 hours',
- CASE WHEN ` + capturePackageTerminal + ` THEN COALESCE(c.terminal_at,clock_timestamp())+interval '7 days'
+const captureCleanupSafeAt = `GREATEST(c.expires_at+interval '6 hours',
+ CASE WHEN ` + capturePackageTerminal + ` THEN COALESCE(c.terminal_at,%[1]s)+interval '7 days'
  WHEN c.state IN ('failed','expired','aborted') OR c.package_id IS NULL THEN COALESCE(c.terminal_at,c.expires_at)+interval '7 days' ELSE c.expires_at END,
- l.read_grant_until,l.claimed_until)<=clock_timestamp()
- AND NOT EXISTS(SELECT 1 FROM recording_processing_slots s WHERE s.job_id IN (c.id,'live:'||c.id,'preview:'||c.id) AND s.leased_until>clock_timestamp())`
+ l.read_grant_until,l.claimed_until)<=%[1]s
+ AND NOT EXISTS(SELECT 1 FROM recording_processing_slots s WHERE s.job_id IN (c.id,'live:'||c.id,'preview:'||c.id) AND s.leased_until>%[1]s)`
+
+var captureCleanupSafe = fmt.Sprintf(captureCleanupSafeAt, "clock_timestamp()")
 
 // Shared sprites serve all capture-backed VOD. B1 playback also reads the
 // canonical capture media; temporary validation attempts are never VOD inputs.

@@ -1,8 +1,12 @@
 package postgres
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -153,5 +157,93 @@ func TestPackageCleanupSkipsTenProtectedCaptures(t *testing.T) {
 	}
 	if len(released) != 100 {
 		t.Fatalf("eligible capture packages stayed protected: %v", released)
+	}
+}
+
+func TestPackageCleanupObservesFirstBatchAtOriginalCutoff(t *testing.T) {
+	ctx := t.Context()
+	db := isolatedIntegrationDB(t)
+	if err := migrations.Run(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	packages := NewRecordingPackageStore(db)
+	var ids []string
+	for i := range 14 {
+		id := fmt.Sprintf("batch-test-%02d", i)
+		ids = append(ids, id)
+		if err := packages.Create(ctx, testRecordingPackage(t, id, id, id)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE recording_packages SET state='expired',
+		cleanup_after=clock_timestamp()+CASE
+			WHEN id < 'batch-test-11' THEN interval '-2 hours'+right(id,2)::int*interval '1 minute'
+			WHEN id < 'batch-test-13' THEN interval '-1 minute'
+			ELSE interval '1 day' END`); err != nil {
+		t.Fatal(err)
+	}
+
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	providerFailure := errors.New("private provider detail")
+	var swept int
+	err := packages.ReconcilePackages(ctx, func(ctx context.Context, keys []string) error {
+		id := strings.Split(keys[0], "/")[2]
+		if id == ids[0] {
+			// A selected candidate is rescheduled before its lock is acquired.
+			// A separate package becomes due after the batch cutoff.
+			if _, err := db.ExecContext(ctx, `UPDATE recording_packages SET cleanup_after=CASE
+				WHEN id=$1 THEN clock_timestamp()+interval '1 day'
+				ELSE clock_timestamp() END WHERE id IN ($1,$2)`, ids[1], ids[13]); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if id == ids[2] {
+			return providerFailure
+		}
+		swept++
+		return nil
+	})
+	if !errors.Is(err, providerFailure) || swept != 8 {
+		t.Fatalf("first batch: %d completed delete calls, error %v", swept, err)
+	}
+	if strings.Contains(logs.String(), ids[0]) || strings.Contains(logs.String(), providerFailure.Error()) {
+		t.Fatal("cleanup observation leaked per-package or provider detail")
+	}
+
+	type batchLog struct {
+		Message           string `json:"msg"`
+		Batch             int    `json:"batch"`
+		Selected          int    `json:"selected"`
+		Unique            int    `json:"unique"`
+		LimitReached      bool   `json:"limit_reached"`
+		Swept             int    `json:"swept"`
+		Skipped           int    `json:"skipped"`
+		Failed            int    `json:"failed"`
+		RemainingMeasured bool   `json:"remaining_measured"`
+		RemainingDue      int    `json:"remaining_due"`
+		RemainingOverdue  int    `json:"remaining_overdue"`
+		OldestDueSeconds  int64  `json:"oldest_due_seconds"`
+	}
+	var batches []batchLog
+	for dec := json.NewDecoder(&logs); dec.More(); {
+		var entry batchLog
+		if err := dec.Decode(&entry); err != nil {
+			t.Fatal(err)
+		}
+		if entry.Message == "recording_package_cleanup_batch" {
+			batches = append(batches, entry)
+		}
+	}
+	if len(batches) != 1 {
+		t.Fatalf("got %d first-batch observations, want 1", len(batches))
+	}
+	got := batches[0]
+	if got.Batch != 1 || got.Selected != 10 || got.Unique != 10 || !got.LimitReached ||
+		got.Swept != 8 || got.Skipped != 1 || got.Failed != 1 ||
+		!got.RemainingMeasured || got.RemainingDue != 3 || got.RemainingOverdue != 1 || got.OldestDueSeconds < 6600 {
+		t.Fatalf("first-batch observation: %+v", got)
 	}
 }
