@@ -33,3 +33,20 @@ BenchmarkLivePublicationBeforeAfter -benchtime=3x -count=3` and the required med
 tools. Long paced input, real storage, background workloads and device playback
 remain independent acceptance checks. No production broadcast or load is created
 by this benchmark.
+
+## Shared-slot admission during handoff
+
+Live claims prefer slot 2. An accepted broadcast creation, fresh confirmed media input or
+recent package seal protects admission for five minutes, refreshed by input.
+During this interval background processing and derived media use slot 1. If a
+previous background lease is already using slot 2, the next free slot is held
+for live. Existing owners retain their lease. After the window expires, both
+slots are available to eligible background work again. Revocation, expiry and
+terminal captures cease to qualify.
+
+When slot 2 already serves live and a source or package is ready for processing,
+the next free general slot goes to that background work. Queue dispatch follows
+the same capacity rules, including a background wake whose worker has not yet
+claimed a slot. This is admission control. Two long claims which already owned
+both slots before a broadcast arrived still have to drain. Live claims take one
+complete three-rendition segment at a time and preserve in-order publication.

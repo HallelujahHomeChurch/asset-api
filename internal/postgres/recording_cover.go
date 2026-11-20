@@ -129,7 +129,7 @@ func (s *RecordingCoverStore) Claim(ctx context.Context) (RecordingCover, error)
 	}
 	defer tx.Rollback()
 	var slot int
-	err = tx.QueryRowContext(ctx, `SELECT slot FROM recording_processing_slots WHERE leased_until IS NULL OR leased_until<=clock_timestamp() ORDER BY slot FOR UPDATE SKIP LOCKED LIMIT 1`).Scan(&slot)
+	err = tx.QueryRowContext(ctx, claimBackgroundSlot).Scan(&slot)
 	if errors.Is(err, sql.ErrNoRows) {
 		return empty, assets.ErrNotFound
 	}

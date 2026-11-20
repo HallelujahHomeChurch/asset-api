@@ -113,7 +113,7 @@ func (s *RecordingCaptureStore) ClaimLiveValidation(ctx context.Context) (Record
 			return assets.ErrNotFound
 		}
 		var slot int
-		if err := tx.QueryRowContext(ctx, `SELECT slot FROM recording_processing_slots WHERE leased_until IS NULL OR leased_until<=clock_timestamp() ORDER BY slot FOR UPDATE SKIP LOCKED LIMIT 1`).Scan(&slot); errors.Is(err, sql.ErrNoRows) {
+		if err := tx.QueryRowContext(ctx, claimLiveSlot).Scan(&slot); errors.Is(err, sql.ErrNoRows) {
 			return assets.ErrNotFound
 		} else if err != nil {
 			return err
