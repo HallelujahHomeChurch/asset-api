@@ -331,6 +331,7 @@ datasets:
       - {name: recording_live_attempts.created_at, purpose: Anchor writer grace, necessity: required, data_classes: [activity, security]}
       - {name: recording_live_attempts.finished_at, purpose: Track completed processing lease, necessity: required, data_classes: [activity, security]}
       - {name: recording_live_attempts.purged, purpose: Drain cleanup in bounded batches, necessity: required, data_classes: [activity, security]}
+      - {name: recording_live_attempts.last_swept_at, purpose: Revisit older attempts after a successful deletion sweep, necessity: required, data_classes: [activity, security]}
     attribution: {mode: manual, explanation: CMS owns uploader identity and viewer scope authorization.}
     legal_basis: {status: pending_legal, reference: null}
     retention: {status: pending_legal, rule: null, action: none}
