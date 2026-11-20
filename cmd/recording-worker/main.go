@@ -147,27 +147,39 @@ func processRecording(ctx context.Context, mode string, db *sql.DB, objects *r2.
 				slog.Info("recording_live_worker_exit", "elapsed_ms", time.Since(started).Milliseconds(),
 					"processing_ms", busy.Milliseconds(), "non_processing_ms", (time.Since(started) - busy).Milliseconds(), "claims", liveClaims, "auxiliary_claims", auxiliaryClaims, "polls", polls, "failed", result != nil)
 			}()
+			pool := newLiveClaims()
+			defer func() {
+				// An individual claim error stops admission. Already fenced siblings
+				// keep their parent context and drain before the election ends.
+				result = errors.Join(result, pool.join())
+			}()
 			// Stay across cron boundaries without changing claim/slot concurrency.
 			// Use gaps between fragments for optional media so a background
 			// validation cannot monopolize the other global slot for a whole live.
 			return drainLiveValidation(ctx, started.Add(liveWorkerWindow), 5*time.Second,
 				func(ctx context.Context) (bool, error) {
-					if err := check(ctx); err != nil {
-						return false, err
-					}
 					polls++
 					before := time.Now()
-					done, err := recordingvalidation.RunLiveValidation(ctx, liveStore, objects, probe)
+					done, err := pool.poll(ctx, func(ctx context.Context) (func() error, error) {
+						if err := check(ctx); err != nil {
+							return nil, err
+						}
+						work, err := recordingvalidation.ClaimLiveWork(ctx, liveStore, objects, probe)
+						if work != nil {
+							liveClaims++
+						}
+						return work, err
+					}, 2*time.Second)
 					busy += time.Since(before)
-					if done {
-						liveClaims++
-					}
 					return done, err
 				}, func(ctx context.Context) (bool, error) {
 					active, err := liveStore.LiveInputPending(ctx)
 					liveSession = liveSession || active
 					return active, err
 				}, func(ctx context.Context) bool {
+					if pool.active > 0 {
+						return false
+					}
 					if err := check(ctx); err != nil {
 						return false
 					}
