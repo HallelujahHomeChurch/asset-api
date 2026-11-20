@@ -195,3 +195,34 @@ func TestObserveCleanupPreservesFailureAndCancellation(t *testing.T) {
 		}
 	}
 }
+
+func TestLivePollRefillsBeforeSlowClaimReturns(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		pool := newLiveClaims()
+		ctx := context.Background()
+		release := make(chan struct{})
+		var started int
+		claim := func(context.Context) (func() error, error) {
+			if started == 3 {
+				return nil, nil
+			}
+			started++
+			slow := started == 1
+			return func() error {
+				if slow {
+					<-release
+				}
+				return nil
+			}, nil
+		}
+		for started < 3 {
+			if _, err := pool.poll(ctx, claim, time.Second); err != nil {
+				t.Fatal(err)
+			}
+		}
+		close(release)
+		if err := pool.join(); err != nil {
+			t.Fatal(err)
+		}
+	})
+}

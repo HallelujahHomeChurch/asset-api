@@ -17,28 +17,16 @@ type LiveObjects interface {
 	AdvanceLivePointer(context.Context, string, int64, int) error
 }
 
-// Drain both global slots across captures; each capture still advances serially.
-// Join every claimed batch before the caller starts cleanup or long VOD work.
-func RunLiveValidation(ctx context.Context, store *postgres.RecordingCaptureStore, objects LiveObjects, probe PackageMediaProbe) (bool, error) {
-	done := make(chan error, 2)
-	count := 0
-	var result error
-	for count < 2 {
-		claim, err := store.ClaimLiveValidation(ctx)
-		if errors.Is(err, assets.ErrNotFound) {
-			break
-		}
-		if err != nil {
-			result = err
-			break
-		}
-		count++
-		go func() { done <- runLiveClaim(ctx, store, objects, probe, claim) }()
+// ClaimLiveWork reserves one fenced slot. A nil function means no work is ready.
+func ClaimLiveWork(ctx context.Context, store *postgres.RecordingCaptureStore, objects LiveObjects, probe PackageMediaProbe) (func() error, error) {
+	claim, err := store.ClaimLiveValidation(ctx)
+	if errors.Is(err, assets.ErrNotFound) {
+		return nil, nil
 	}
-	for i := 0; i < count; i++ {
-		result = errors.Join(result, <-done)
+	if err != nil {
+		return nil, err
 	}
-	return count > 0, result
+	return func() error { return runLiveClaim(ctx, store, objects, probe, claim) }, nil
 }
 
 // Media bytes never become reachable through the common pointer before checks.
@@ -46,17 +34,23 @@ func runLiveClaim(ctx context.Context, store *postgres.RecordingCaptureStore, ob
 	snapshot := claim.Snapshot
 	claimedAt := time.Now()
 	err := RunProcessingClaim(ctx, func(ctx context.Context) error { return store.HeartbeatLive(ctx, claim) }, func(ctx context.Context) (result error) {
+		const publicationStageTimeout = 20 * time.Second
 		stage, started := "resume_publication", time.Now()
+		var times liveCopyTiming
+		var commitDuration time.Duration
 		logStage := func(success bool) {
 			slog.Info("recording_live_stage", "capture_id", claim.Capture.ID, "claim_id", claim.ClaimID, "sequence", claim.Sequence,
-				"segment_frames", claim.Capture.SegmentFrames, "stage", stage, "elapsed_ms", time.Since(started).Milliseconds(), "succeeded", success)
+				"segment_frames", claim.Capture.SegmentFrames, "stage", stage, "elapsed_ms", time.Since(started).Milliseconds(), "succeeded", success,
+				"head_max_ms", times.head.Milliseconds(), "copy_max_ms", times.copy.Milliseconds(), "batch_commit_ms", commitDuration.Milliseconds())
 		}
 		defer func() { logStage(result == nil) }()
 		if snapshot.Revision == snapshot.PublishedRevision {
 			if claim.EndOnly {
+				endCtx, cancel := context.WithTimeout(ctx, publicationStageTimeout)
+				defer cancel()
 				stage = "commit_end"
 				var err error
-				snapshot, err = store.CommitLiveEnd(ctx, claim)
+				snapshot, err = store.CommitLiveEnd(endCtx, claim)
 				if err != nil {
 					return err
 				}
@@ -93,7 +87,9 @@ func runLiveClaim(ctx context.Context, store *postgres.RecordingCaptureStore, ob
 				}
 				logStage(true)
 				stage, started = "stable_publication", time.Now()
-				versions, err := publishLiveObjects(ctx, objects, claim, batch)
+				stableCtx, cancelStable := context.WithTimeout(ctx, publicationStageTimeout)
+				defer cancelStable()
+				versions, err := copyLiveObjects(stableCtx, objects, claim, batch, &times)
 				if err != nil {
 					return err
 				}
@@ -103,33 +99,40 @@ func runLiveClaim(ctx context.Context, store *postgres.RecordingCaptureStore, ob
 						fragment.Validation.SegmentETag = versions[fragment.Validation.Segment.Path]
 					}
 				}
-				snapshot, err = store.CommitLiveBatch(ctx, claim, batch)
+				commitStarted := time.Now()
+				snapshot, err = store.CommitLiveBatch(stableCtx, claim, batch)
+				commitDuration = time.Since(commitStarted)
 				if err != nil {
 					return err
 				}
 			}
 		}
 		logStage(true)
+		playlistCtx, cancel := context.WithTimeout(ctx, publicationStageTimeout)
+		defer cancel()
 		stage, started = "playlists", time.Now()
 		playlists, err := assets.RecordingLivePlaylists(snapshot.Segments, snapshot.Ended, claim.Capture.SegmentFrames)
 		if err != nil {
 			return err
 		}
-		if err := publishLivePlaylists(ctx, objects, claim.Capture.ID, snapshot.Revision, playlists); err != nil {
+		if err := publishLivePlaylists(playlistCtx, objects, claim.Capture.ID, snapshot.Revision, playlists); err != nil {
 			return err
 		}
 		logStage(true)
 		stage, started = "pointer", time.Now()
-		return objects.AdvanceLivePointer(ctx, claim.Capture.ID, snapshot.Revision, len(snapshot.Segments)-1)
+		return objects.AdvanceLivePointer(playlistCtx, claim.Capture.ID, snapshot.Revision, len(snapshot.Segments)-1)
 	}, func(ctx context.Context, ready bool, failure string) error {
+		finishCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		finishStarted := time.Now()
 		var finishErr error
 		if ready {
-			finishErr = store.FinishLivePublication(ctx, claim, snapshot.Revision)
+			finishErr = store.FinishLivePublication(finishCtx, claim, snapshot.Revision)
 		} else {
-			finishErr = store.FailLiveClaim(ctx, claim, failure == "invalid")
+			finishErr = store.FailLiveClaim(finishCtx, claim, failure == "invalid")
 		}
 		slog.Info("recording_live_claim", "capture_id", claim.Capture.ID, "claim_id", claim.ClaimID, "sequence", claim.Sequence,
-			"elapsed_ms", time.Since(claimedAt).Milliseconds(), "published", ready && finishErr == nil, "failure", failure)
+			"revision", snapshot.Revision, "snapshot_last_sequence", len(snapshot.Segments)-1, "finish_elapsed_ms", time.Since(finishStarted).Milliseconds(), "elapsed_ms", time.Since(claimedAt).Milliseconds(), "published", ready && finishErr == nil, "failure", failure)
 		return finishErr
 	}, 30*time.Second)
 	if errors.Is(err, assets.ErrConflict) && ctx.Err() == nil {
@@ -145,8 +148,10 @@ func runLiveClaim(ctx context.Context, store *postgres.RecordingCaptureStore, ob
 	return err
 }
 
+type liveCopyTiming struct{ head, copy time.Duration }
+
 // Join bounded provider copies before committing the batch or releasing its lease.
-func publishLiveObjects(ctx context.Context, objects LiveObjects, claim postgres.RecordingLiveClaim, batch map[string]assets.RecordingLiveFragment) (map[string]string, error) {
+func copyLiveObjects(ctx context.Context, objects LiveObjects, claim postgres.RecordingLiveClaim, batch map[string]assets.RecordingLiveFragment, timing *liveCopyTiming) (map[string]string, error) {
 	versions := make(map[string]string, len(claim.Objects))
 	pending := make([]assets.RecordingPackageObject, 0, len(claim.Objects))
 	for _, object := range claim.Objects {
@@ -180,13 +185,21 @@ func publishLiveObjects(ctx context.Context, objects LiveObjects, claim postgres
 					return
 				}
 				object := pending[index]
+				headStarted := time.Now()
 				size, etag, err := objects.Head(workCtx, from+object.Path)
+				mu.Lock()
+				timing.head = max(timing.head, time.Since(headStarted))
+				mu.Unlock()
 				if err == nil && size != object.SizeBytes {
 					err = assets.ErrInvalidUpload
 				}
 				if err == nil {
 					var published string
+					copyStarted := time.Now()
 					published, err = objects.PublishLiveObject(workCtx, from+object.Path, to+object.Path, etag)
+					mu.Lock()
+					timing.copy = max(timing.copy, time.Since(copyStarted))
+					mu.Unlock()
 					if err == nil && published == "" {
 						err = assets.ErrInvalidUpload
 					}

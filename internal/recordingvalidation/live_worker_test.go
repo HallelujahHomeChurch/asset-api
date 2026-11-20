@@ -440,3 +440,75 @@ func TestS10LiveWorkerShortTailBeforeAndDuringSeal(t *testing.T) {
 		})
 	}
 }
+
+func TestLiveClaimsServeWaitingCaptureBeforeRecentlyPublished(t *testing.T) {
+	db, store, _, ids := liveWorkerFixture(t)
+	if _, err := db.Exec(`UPDATE recording_live SET last_advanced_at=now() WHERE capture_id=$1`, ids[0]); err != nil {
+		t.Fatal(err)
+	}
+	claim, err := store.ClaimLiveValidation(context.Background())
+	if err != nil || claim.Capture.ID == ids[0] {
+		t.Fatalf("waiting capture lost to recently served capture: %s %v", claim.Capture.ID, err)
+	}
+}
+
+type deadlineLiveObjects struct {
+	*liveWorkerObjects
+	deadline time.Duration
+}
+
+func (o *deadlineLiveObjects) PublishLiveObject(ctx context.Context, from, to, etag string) (string, error) {
+	deadline, _ := ctx.Deadline()
+	o.mu.Lock()
+	o.deadline = time.Until(deadline)
+	o.mu.Unlock()
+	return "", context.DeadlineExceeded
+}
+func TestPublicationBudgetLeavesRetryableClaim(t *testing.T) {
+	if os.Getenv("TEST_DATABASE_URL") == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	probe, pack, media, declarations, _ := liveMovingMediaFixture(t, 300)
+	db, store, objects, _ := liveWorkerMediaFixture(t, pack, media, declarations)
+	if _, err := db.Exec(`UPDATE recording_captures SET segment_frames=300`); err != nil {
+		t.Fatal(err)
+	}
+	objects.passThrough = true
+	bounded := &deadlineLiveObjects{liveWorkerObjects: objects}
+	probe.Objects = bounded
+	ctx := context.Background()
+	claim, err := store.ClaimLiveValidation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = runLiveClaim(ctx, store, bounded, probe, claim); err != nil {
+		t.Fatal(err)
+	}
+	if bounded.deadline <= 0 || bounded.deadline > 20*time.Second {
+		t.Fatalf("stable copy deadline: %v", bounded.deadline)
+	}
+	var retry bool
+	if err = db.QueryRow(`SELECT published_sequence=-1 AND claim_id IS NULL AND attempts=1 AND next_attempt_at>now() FROM recording_live WHERE capture_id=$1`, claim.Capture.ID).Scan(&retry); err != nil || !retry {
+		t.Fatalf("retry persisted: %v %v", retry, err)
+	}
+}
+
+// Collect a bounded pair for fixtures that assert one round of media work.
+func RunLiveValidation(ctx context.Context, store *postgres.RecordingCaptureStore, objects LiveObjects, probe PackageMediaProbe) (bool, error) {
+	done := make(chan error, 2)
+	count := 0
+	var result error
+	for count < cap(done) {
+		work, err := ClaimLiveWork(ctx, store, objects, probe)
+		if err != nil || work == nil {
+			result = err
+			break
+		}
+		count++
+		go func() { done <- work() }()
+	}
+	for range count {
+		result = errors.Join(result, <-done)
+	}
+	return count > 0, result
+}

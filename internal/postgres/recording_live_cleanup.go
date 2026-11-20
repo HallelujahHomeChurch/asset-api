@@ -163,8 +163,9 @@ func (s *RecordingCaptureStore) cleanupLive(ctx context.Context, id string, dele
 	if err = remove(live); err != nil {
 		return err
 	}
-	// Repeated sweeps are intentional: late provider completion can follow a timeout.
-	attempts, err := s.db.QueryContext(ctx, `SELECT claim_id,sequence FROM recording_live_attempts WHERE capture_id=$1 ORDER BY purged,created_at LIMIT 100`, id)
+	// Sweep previously untouched attempts first, then revisit least recently
+	// swept attempts so a late provider write can be removed on any page.
+	attempts, err := s.db.QueryContext(ctx, `SELECT claim_id,sequence FROM recording_live_attempts WHERE capture_id=$1 ORDER BY purged,last_swept_at NULLS FIRST,created_at,claim_id LIMIT 100`, id)
 	if err != nil {
 		return err
 	}
@@ -195,7 +196,7 @@ func (s *RecordingCaptureStore) cleanupLive(ctx context.Context, id string, dele
 		if err = remove(keys); err != nil {
 			return err
 		}
-		if _, err = s.db.ExecContext(ctx, `UPDATE recording_live_attempts SET purged=true WHERE claim_id=$1`, a.id); err != nil {
+		if _, err = s.db.ExecContext(ctx, `UPDATE recording_live_attempts SET purged=true,last_swept_at=clock_timestamp() WHERE claim_id=$1`, a.id); err != nil {
 			return err
 		}
 	}

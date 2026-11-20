@@ -51,16 +51,20 @@ func RunPackageValidation(ctx context.Context, repository *postgres.RecordingPac
 	}, func(ctx context.Context) error {
 		logger.Info("recording_package_validation_start")
 		waitStarted := time.Now()
-		history, err := waitForLiveArchive(ctx, repository, claim.Package.ID)
-		timing.Stage("live_archive_wait", time.Since(waitStarted))
+		history, reason, err := waitForLiveArchive(ctx, repository, claim.Package.ID)
+		waitDuration := time.Since(waitStarted)
+		timing.Stage("live_archive_wait", waitDuration)
 		used := false
 		if err == nil {
 			_, used, err = freezeLiveArchive(ctx, claim.Package, claim.ClaimID, history, objects, probe)
 			if err == nil && !used {
+				if reason == "published_end" {
+					reason = "evidence_mismatch"
+				}
 				_, err = FreezeRecordingPackage(ctx, claim.Package, claim.ClaimID, objects, probe)
 			}
 		}
-		logger.Info("recording_package_validation_mode", "live_evidence_reused", used, "live_segments", len(history))
+		logger.Info("recording_package_validation_mode", "live_evidence_reused", used, "live_segments", len(history), "archive_decision", reason, "live_archive_wait_ms", waitDuration.Milliseconds(), "succeeded", err == nil)
 		timing.Finish(err)
 		logPackageResult(logger, "recording_package_validation_result", started, err)
 		// Worker durations overlap; totals attribute work, not wall-clock latency.
