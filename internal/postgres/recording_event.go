@@ -20,19 +20,29 @@ func NewRecordingEventStore(db *sql.DB, sources bool) *RecordingEventStore {
 	return s
 }
 func (s *RecordingEventStore) workReady(ctx context.Context, lane string) (bool, error) {
-	var query string
+	var media, exhausted string
 	switch lane {
 	case "live":
-		query = `SELECT 1 WHERE EXISTS (` + liveWakeCandidate + `) OR EXISTS (` + liveCoverWakeCandidate + `) OR EXISTS (` + livePreviewWakeCandidate + `) OR EXISTS (` + livePreviewBootstrapCandidate + `) OR EXISTS (SELECT 1 FROM recording_live_covers WHERE state='processing' AND attempts=3 AND claimed_until<=now())`
+		media = `EXISTS (` + liveCoverWakeCandidate + `) OR EXISTS (` + livePreviewWakeCandidate + `) OR EXISTS (` + livePreviewBootstrapCandidate + `)`
+		exhausted = `EXISTS (SELECT 1 FROM recording_live_covers WHERE state='processing' AND attempts=3 AND claimed_until<=now())`
 	case "processing":
-		query = `SELECT 1 WHERE EXISTS (` + packageWakeCandidate + `) OR EXISTS (SELECT 1 FROM recording_packages WHERE state='validating' AND validation_attempts=3 AND claimed_until<=now())`
+		media = `EXISTS (` + packageWakeCandidate + `)`
+		exhausted = `EXISTS (SELECT 1 FROM recording_packages WHERE state='validating' AND validation_attempts=3 AND claimed_until<=now())`
 		if s.sources {
-			query = `SELECT 1 WHERE EXISTS (` + sourceWakeCandidate + `) OR EXISTS (` + query + `) OR EXISTS (SELECT 1 FROM recording_sources WHERE state IN ('finalizing','queued','processing') AND processing_attempts=3 AND claimed_until<=now())`
+			media += ` OR EXISTS (` + sourceWakeCandidate + `)`
+			exhausted += ` OR EXISTS (SELECT 1 FROM recording_sources WHERE state IN ('finalizing','queued','processing') AND processing_attempts=3 AND claimed_until<=now())`
 		}
 	case "preview":
-		query = `SELECT 1 WHERE EXISTS (` + audioWakeCandidate + `) OR EXISTS(SELECT 1 FROM recording_audio WHERE state='processing' AND attempts=3 AND claimed_until<=now()) OR EXISTS (` + coverWakeCandidate + `) OR EXISTS (` + previewWakeCandidate + `) OR EXISTS (SELECT 1 FROM recording_covers WHERE state='processing' AND attempts=3 AND claimed_until<=now()) OR EXISTS (SELECT 1 FROM recording_packages WHERE preview_state='processing' AND preview_attempts=3 AND preview_claimed_until<=now())`
+		media = `EXISTS (` + audioWakeCandidate + `) OR EXISTS (` + coverWakeCandidate + `) OR EXISTS (` + previewWakeCandidate + `)`
+		exhausted = `EXISTS (SELECT 1 FROM recording_audio WHERE state='processing' AND attempts=3 AND claimed_until<=now())
+ OR EXISTS (SELECT 1 FROM recording_covers WHERE state='processing' AND attempts=3 AND claimed_until<=now())
+ OR EXISTS (SELECT 1 FROM recording_packages WHERE preview_state='processing' AND preview_attempts=3 AND preview_claimed_until<=now())`
 	default:
 		return false, assets.ErrInvalidInput
+	}
+	query := `SELECT 1 WHERE (` + media + `) AND EXISTS (` + backgroundSlotCandidate + `) OR (` + exhausted + `)`
+	if lane == "live" {
+		query += ` OR EXISTS (` + liveWakeCandidate + `)`
 	}
 	var ready bool
 	err := s.db.QueryRowContext(ctx, `SELECT EXISTS (`+query+`)`).Scan(&ready)
@@ -54,7 +64,11 @@ func (s *RecordingEventStore) ClaimDispatch(ctx context.Context) (recordingqueue
 	if err = tx.QueryRowContext(ctx, `SELECT GREATEST((SELECT count(*) FROM recording_event_wakes WHERE state<>'idle' AND lease_until>now()),(SELECT count(*) FROM recording_processing_slots WHERE leased_until>now()))`).Scan(&occupied); err != nil || occupied >= 2 {
 		return event, false, err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT lane,generation FROM recording_event_wakes WHERE (state='idle' OR lease_until<=now()) AND next_check_at<=now() ORDER BY CASE WHEN lane='live' THEN 0 ELSE 1 END,last_dispatch_at NULLS FIRST,lane`)
+	rows, err := tx.QueryContext(ctx, `SELECT lane,generation FROM recording_event_wakes WHERE (state='idle' OR lease_until<=now()) AND next_check_at<=now()
+ AND (lane='live' OR NOT `+broadcastDemand+` OR NOT EXISTS (
+ SELECT 1 FROM recording_event_wakes other WHERE other.lane<>'live'
+ AND other.state<>'idle' AND other.lease_until>now()))
+ ORDER BY CASE WHEN lane='live' THEN 0 ELSE 1 END,last_dispatch_at NULLS FIRST,lane`)
 	if err != nil {
 		return event, false, err
 	}
