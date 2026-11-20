@@ -30,7 +30,7 @@ func TestLivePublicationBoundsCopiesAndJoinsFailure(t *testing.T) {
 				claim.Objects = append(claim.Objects, assets.RecordingPackageObject{Path: fmt.Sprint(i), SizeBytes: 10})
 			}
 			done := make(chan error, 1)
-			go func() { _, err := publishLiveObjects(ctx, objects, claim, nil); done <- err }()
+			go func() { _, err := copyLiveObjects(ctx, objects, claim, nil, &liveCopyTiming{}); done <- err }()
 			for i := 0; i < 3; i++ {
 				select {
 				case <-objects.started:
@@ -72,7 +72,7 @@ func TestLivePublicationBoundsCopiesAndJoinsFailure(t *testing.T) {
 func TestLivePublicationRejectsChangedObjectSize(t *testing.T) {
 	objects := &publicationObjects{}
 	claim := postgres.RecordingLiveClaim{Objects: []assets.RecordingPackageObject{{Path: "fragment", SizeBytes: 11}}}
-	if _, err := publishLiveObjects(context.Background(), objects, claim, nil); !errors.Is(err, assets.ErrInvalidUpload) || objects.copies.Load() != 0 {
+	if _, err := copyLiveObjects(context.Background(), objects, claim, nil, &liveCopyTiming{}); !errors.Is(err, assets.ErrInvalidUpload) || objects.copies.Load() != 0 {
 		t.Fatalf("changed object copied: %v", err)
 	}
 }

@@ -47,7 +47,7 @@ func BenchmarkLivePublicationBeforeAfter(b *testing.B) {
 						b.Fatal(err)
 					}
 					claim := postgres.RecordingLiveClaim{Capture: assets.RecordingCapture{ID: p.ID}, ClaimID: attempt, Objects: declarations}
-					if _, err := publishLiveObjects(context.Background(), objects, claim, batch); err != nil {
+					if _, err := copyLiveObjects(context.Background(), objects, claim, batch, &liveCopyTiming{}); err != nil {
 						b.Fatal(err)
 					}
 					playlists, err := assets.RecordingLivePlaylists(history, false, 300)

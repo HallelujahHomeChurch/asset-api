@@ -32,14 +32,14 @@ func TestArchiveWaitRequiresPublishedEndAndIsBounded(t *testing.T) {
 		unpublished := ready
 		unpublished.PublishedRevision = 1
 		store := &archiveSnapshots{values: []postgres.RecordingLiveSnapshot{unpublished, ready}}
-		got, err := waitForLiveArchive(context.Background(), store, "capture")
-		if err != nil || len(got) != 1 || store.calls != 2 {
+		got, reason, err := waitForLiveArchive(context.Background(), store, "capture")
+		if reason != "published_end" || err != nil || len(got) != 1 || store.calls != 2 {
 			t.Fatalf("unpublished evidence reused: %v %d", err, store.calls)
 		}
 		store = &archiveSnapshots{values: []postgres.RecordingLiveSnapshot{{}}}
 		started := time.Now()
-		got, err = waitForLiveArchive(context.Background(), store, "capture")
-		if err != nil || got != nil || time.Since(started) != time.Minute {
+		got, reason, err = waitForLiveArchive(context.Background(), store, "capture")
+		if reason != "wait_timeout" || err != nil || got != nil || time.Since(started) != time.Minute {
 			t.Fatalf("unbounded wait: %v %v", err, time.Since(started))
 		}
 	})
@@ -49,14 +49,14 @@ func TestArchiveWaitLegacyMissingAndCancellation(t *testing.T) {
 		{err: assets.ErrNotFound},
 		{values: []postgres.RecordingLiveSnapshot{{Segments: []assets.RecordingLiveSegment{{Renditions: map[string]assets.RecordingLiveFragment{"720p": {}}}}}}},
 	} {
-		got, err := waitForLiveArchive(context.Background(), store, "capture")
-		if err != nil || got != nil || store.calls != 1 {
+		got, reason, err := waitForLiveArchive(context.Background(), store, "capture")
+		if reason != "capture_missing" && reason != "legacy_receipt" || err != nil || got != nil || store.calls != 1 {
 			t.Fatalf("legacy fallback: %v", err)
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := waitForLiveArchive(ctx, &archiveSnapshots{values: []postgres.RecordingLiveSnapshot{{}}}, "capture")
+	_, _, err := waitForLiveArchive(ctx, &archiveSnapshots{values: []postgres.RecordingLiveSnapshot{{}}}, "capture")
 	if !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
@@ -73,8 +73,8 @@ func TestArchiveWaitBoundsTheDatabaseCall(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
 		start := time.Now()
-		got, err := waitForLiveArchive(ctx, blockedArchiveSnapshot{}, "capture")
-		if got != nil || err != nil || time.Since(start) != time.Minute {
+		got, reason, err := waitForLiveArchive(ctx, blockedArchiveSnapshot{}, "capture")
+		if reason != "wait_timeout" || got != nil || err != nil || time.Since(start) != time.Minute {
 			t.Fatalf("DB wait escaped bound: %v %v", err, time.Since(start))
 		}
 	})
