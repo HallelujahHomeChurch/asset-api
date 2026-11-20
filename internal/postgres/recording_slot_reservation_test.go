@@ -4,11 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"hhc/asset-api/internal/assets"
-	"hhc/asset-api/internal/migrations"
 	"strings"
 	"testing"
 	"time"
+
+	"hhc/asset-api/internal/assets"
+	"hhc/asset-api/internal/migrations"
 )
 
 func TestKnownBroadcastKeepsCapacityAcrossArchiveAdmissionAndIdleExpiry(t *testing.T) {
@@ -118,5 +119,77 @@ func TestProtectedWakeDoesNotDispatchTwoBackgroundLanes(t *testing.T) {
 	}
 	if e, ok, err = events.ClaimDispatch(ctx); err != nil || !ok || e.Lane != "live" {
 		t.Fatalf("live wake stranded: %v %v %v", e, ok, err)
+	}
+}
+
+func TestFreshSealProtectsAnOldBroadcastBeforeNextProducerExists(t *testing.T) {
+	ctx := context.Background()
+	db := isolatedIntegrationDB(t)
+	if err := migrations.Run(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	captures := NewRecordingCaptureStore(db).WithBroadcastObjects(&broadcastMemoryObjects{values: map[string][]byte{}})
+	now := time.Now().UTC()
+	old := now.Add(-30 * time.Minute)
+	a := assets.RecordingCapture{ID: strings.Repeat("a", 32), ActorID: "host", RecordingID: "first", CreateKey: "first", BroadcastEpoch: 1, State: "uploading", CreatedAt: old, ExpiresAt: now.Add(time.Hour), Receipts: map[string]assets.RecordingCaptureStoredReceipt{}}
+	if _, err := captures.CreateCapture(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("UPDATE recording_captures SET last_media_confirmed_at=$2 WHERE id=$1", a.ID, old); err != nil {
+		t.Fatal(err)
+	}
+	inv := testRecordingPackage(t, "archive", "host", "first").Inventory
+	if _, err := captures.UpdateCapture(ctx, a.ID, func(c *assets.RecordingCapture) error {
+		c.State = "freezing"
+		c.Inventory = &inv
+		c.PackageID = &a.ID
+		c.Receipts["seal"] = assets.RecordingCaptureStoredReceipt{Digest: "synthetic", Receipt: assets.RecordingCaptureReceipt{OperationKey: "seal", Operation: "seal", CaptureID: a.ID, AcceptedAt: now}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pkgs := NewRecordingPackageStore(db)
+	p := testRecordingPackage(t, "background", "other", "other")
+	if err := pkgs.Create(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := pkgs.Freeze(ctx, p.ID, now); err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func() { <-start; _, err := pkgs.ClaimPackageValidation(ctx); results <- err }()
+	}
+	close(start)
+	ok := 0
+	for i := 0; i < 2; i++ {
+		err := <-results
+		if err == nil {
+			ok++
+		} else if !errors.Is(err, assets.ErrNotFound) {
+			t.Fatal(err)
+		}
+	}
+	if ok != 1 {
+		t.Fatalf("accepted seal permitted %d simultaneous background claims before B existed", ok)
+	}
+	if _, err := db.Exec("UPDATE recording_packages SET completed_at=$2 WHERE id=$1", a.ID, old); err != nil {
+		t.Fatal(err)
+	}
+	var protected bool
+	if err := db.QueryRow("SELECT " + broadcastDemand).Scan(&protected); err != nil || protected {
+		t.Fatalf("idle expired handoff retained capacity: %t %v", protected, err)
+	}
+	b := a
+	b.ID = strings.Repeat("b", 32)
+	b.RecordingID = "second"
+	b.CreateKey = "second"
+	b.CreatedAt = now
+	if _, err := captures.CreateCapture(ctx, b); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pkgs.ClaimPackageValidation(ctx); !errors.Is(err, assets.ErrNotFound) {
+		t.Fatalf("B without a first segment lost its slot: %v", err)
 	}
 }

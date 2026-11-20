@@ -36,7 +36,7 @@ by this benchmark.
 
 ## Shared-slot admission during handoff
 
-Live claims prefer slot 2. An accepted broadcast creation, fresh common input or
+Live claims prefer slot 2. An accepted broadcast creation, fresh confirmed media input or
 recent package seal protects admission for five minutes, refreshed by input.
 During this interval background processing and derived media use slot 1. If a
 previous background lease is already using slot 2, the next free slot is held
