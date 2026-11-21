@@ -36,10 +36,19 @@ func TestCaptureSignalPersistsAcrossRestartAndLateConfirm(t *testing.T) {
 	}); e != nil {
 		t.Fatal(e)
 	}
+	publishedAt := received.Add(time.Second)
+	if _, err := db.ExecContext(ctx, `UPDATE recording_live SET revision=1,published_revision=1,published_sequence=0,published_media_end=10,last_advanced_at=$2 WHERE capture_id=$1`, c.ID, publishedAt); err != nil {
+		t.Fatal(err)
+	}
 	svc := assets.NewRecordingCaptureService(store, nil, func() time.Time { return now })
 	signal, e := svc.BroadcastSignal(ctx, c.ID, c.ActorID, true)
 	if e != nil || signal.EndSequenceExclusive == nil || *signal.EndSequenceExclusive != 3 {
 		t.Fatalf("%+v %v", signal, e)
+	}
+	if signal.LastConfirmedSequence == nil || *signal.LastConfirmedSequence != 2 ||
+		signal.LastPublishedSequence == nil || *signal.LastPublishedSequence != 0 ||
+		signal.LastPublishedAt == nil || !signal.LastPublishedAt.Equal(publishedAt) {
+		t.Fatalf("signal differs from persisted capture and live rows: %+v", signal)
 	}
 	restarted := NewRecordingCaptureStore(db)
 	saved, e := restarted.GetCapture(ctx, c.ID)

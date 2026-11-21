@@ -47,9 +47,20 @@ func config(t *testing.T) *pgx.ConnConfig {
 	if dsn == "" {
 		t.Skip("requires disposable loopback DB_PHASE_TEST_DSN")
 	}
+	return loopbackConfig(t, dsn, "db_phase_test")
+}
+
+func loopbackConfig(t *testing.T, dsn, database string) *pgx.ConnConfig {
+	t.Helper()
 	cfg, err := pgx.ParseConfig(dsn)
-	if err != nil || cfg.Database != "db_phase_test" || (cfg.Host != "localhost" && cfg.Host != "127.0.0.1") {
-		t.Fatal("requires disposable loopback db_phase_test")
+	if err != nil || (database != "" && cfg.Database != database) ||
+		(cfg.Host != "localhost" && cfg.Host != "127.0.0.1" && cfg.Host != "::1") {
+		t.Fatal("requires a disposable loopback test database")
+	}
+	for _, fallback := range cfg.Fallbacks {
+		if fallback.Host != cfg.Host {
+			t.Fatal("requires one loopback host")
+		}
 	}
 	return cfg
 }
@@ -251,5 +262,128 @@ func TestRevisionTagPreservesLocalAndBoundsLongNames(t *testing.T) {
 		if len(name) > 63 || (revision != "" && name == "local-name") {
 			t.Fatalf("unbounded/missing revision tag: %q bytes=%d", name, len(name))
 		}
+	}
+}
+
+// Drop writes on the warmed socket only. Reads retain the real TCP deadlines
+// installed by pgx, and a replacement connection reaches the same database.
+type stalledSocket struct {
+	net.Conn
+	stalled atomic.Bool
+	onStall func()
+}
+
+func (c *stalledSocket) Write(p []byte) (int, error) {
+	if c.stalled.Load() {
+		if c.onStall != nil {
+			c.onStall()
+		}
+		return len(p), nil
+	}
+	return c.Conn.Write(p)
+}
+
+func reuseConfig(t *testing.T) *pgx.ConnConfig {
+	t.Helper()
+	if os.Getenv("DB_PHASE_TEST_DSN") != "" {
+		return config(t)
+	}
+	// Run in the existing CI PostgreSQL lane as well as the standalone phase fixture.
+	if dsn := os.Getenv("TEST_DATABASE_URL"); dsn != "" && os.Getenv("ASSET_ALLOW_DESTRUCTIVE_TEST") == "1" {
+		return loopbackConfig(t, dsn, "")
+	}
+	t.Skip("requires disposable loopback PostgreSQL")
+	return nil
+}
+
+func TestRealStalledPoolReuse(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		callerBudget      time.Duration
+		refuseReplacement bool
+		cancelOnPing      bool
+		wantReset         time.Duration
+		wantErr           error
+	}{
+		{name: "replace", callerBudget: 6 * time.Second, wantReset: 2 * time.Second},
+		{name: "shorter caller", callerBudget: 200 * time.Millisecond, wantReset: 200 * time.Millisecond, wantErr: context.DeadlineExceeded},
+		{name: "caller cancellation", callerBudget: 6 * time.Second, cancelOnPing: true, wantErr: context.Canceled},
+		{name: "unavailable replacement", callerBudget: 6 * time.Second, refuseReplacement: true, wantReset: 2 * time.Second, wantErr: net.ErrClosed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := reuseConfig(t)
+			caller, cancelCaller := context.WithCancel(t.Context())
+			defer cancelCaller()
+			dial := cfg.DialFunc
+			var first atomic.Pointer[stalledSocket]
+			cfg.DialFunc = func(ctx context.Context, network, address string) (net.Conn, error) {
+				if first.Load() != nil && tc.refuseReplacement {
+					return nil, net.ErrClosed
+				}
+				c, err := dial(ctx, network, address)
+				if err != nil {
+					return nil, err
+				}
+				socket := &stalledSocket{Conn: c}
+				if tc.cancelOnPing {
+					socket.onStall = cancelCaller
+				}
+				first.CompareAndSwap(nil, socket)
+				return socket, nil
+			}
+			var observed events
+			db := Open(*cfg, observed.report)
+			defer db.Close()
+			db.SetMaxOpenConns(1)
+			var oldPID, newPID int
+			if err := db.QueryRowContext(t.Context(), "SELECT pg_backend_pid()").Scan(&oldPID); err != nil {
+				t.Fatal(err)
+			}
+			// Use pgx's default idle ping policy.
+			time.Sleep(1100 * time.Millisecond)
+			first.Load().stalled.Store(true)
+			ctx, cancel := context.WithTimeout(caller, tc.callerBudget)
+			defer cancel()
+			err := db.QueryRowContext(ctx, "SELECT pg_backend_pid()").Scan(&newPID)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("query error = %v, want %v", err, tc.wantErr)
+			}
+			if err == nil && newPID == oldPID {
+				t.Fatal("stalled backend was reused")
+			}
+			for _, e := range observed.take() {
+				if e.phase == "db_reset" && e.failed {
+					target := tc.wantReset
+					if e.elapsed < target-100*time.Millisecond || e.elapsed > target+time.Second {
+						t.Fatalf("reset took %v, want approximately %v", e.elapsed, target)
+					}
+					return
+				}
+			}
+			t.Fatal("failed reset missing")
+		})
+	}
+}
+
+func TestHealthyReusedTransactionKeepsCallerBudget(t *testing.T) {
+	cfg := reuseConfig(t)
+	db := Open(*cfg, func(context.Context, string, time.Duration, bool) {})
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	if err := db.PingContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
+	defer cancel()
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, "SELECT pg_sleep(2.2)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
 	}
 }

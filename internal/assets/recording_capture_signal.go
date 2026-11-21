@@ -5,8 +5,11 @@ import (
 	"time"
 )
 
-// Signal describes upload arrival, not verified playback progress.
+// RecordingBroadcastSignal reports upload arrival, live publication and the idle cutoff.
 type RecordingBroadcastSignal struct {
+	LastConfirmedSequence               *int       `json:"lastConfirmedSequence,omitempty"`
+	LastPublishedSequence               *int       `json:"lastPublishedSequence,omitempty"`
+	LastPublishedAt                     *time.Time `json:"lastPublishedAt,omitempty"`
 	RecoveryVersion                     string     `json:"recoveryVersion,omitempty"`
 	LastCommonConfirmedAt               *time.Time `json:"lastCommonConfirmedAt,omitempty"`
 	CommonConfirmedEndSequenceExclusive *int       `json:"commonConfirmedEndSequenceExclusive,omitempty"`
@@ -28,6 +31,14 @@ func (s *RecordingCaptureService) BroadcastSignal(ctx context.Context, id, actor
 		if c.BroadcastEpoch < 1 {
 			return ErrConflict
 		}
+		// Sample both watermarks from this capture transaction. The recovery
+		// cutoff can stay frozen while late segments continue to arrive.
+		end := confirmedCaptureEnd(*c)
+		lastConfirmed := end - 1
+		out.LastConfirmedSequence = &lastConfirmed
+		lastPublished := c.Progress.LastSequence
+		out.LastPublishedSequence = &lastPublished
+		out.LastPublishedAt = c.Progress.LastAdvancedAt
 		if c.Recovery.Version == RecordingRecoveryVersion {
 			out.RecoveryVersion = RecordingRecoveryVersion
 			out.State = "waiting"
@@ -81,7 +92,6 @@ func (s *RecordingCaptureService) BroadcastSignal(ctx context.Context, id, actor
 		if s.now().Before(deadline) || !allowClose {
 			return nil
 		}
-		end := confirmedCaptureEnd(*c)
 		if end > 0 {
 			c.IdleEndSequenceExclusive = &end
 			out.EndSequenceExclusive = &end

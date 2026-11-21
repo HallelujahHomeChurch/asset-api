@@ -1923,6 +1923,20 @@ paths:
                 required: [state, lastMediaConfirmedAt, deadline, endSequenceExclusive]
                 properties:
                   state: {type: string, enum: [waiting, healthy, interrupted, ended]}
+                  lastConfirmedSequence:
+                    type: integer
+                    minimum: -1
+                    maximum: 4319
+                    description: Last zero-based sequence in the contiguous confirmed prefix across all three renditions. A value of -1 means no common segment has been confirmed.
+                  lastPublishedSequence:
+                    type: integer
+                    minimum: -1
+                    maximum: 4319
+                    description: Last zero-based sequence published for playback. A value of -1 means publication has not started.
+                  lastPublishedAt:
+                    type: string
+                    format: date-time
+                    description: Time of the last advance of the published sequence, when available.
                   lastMediaConfirmedAt: {type: [string, 'null'], format: date-time}
                   deadline: {type: [string, 'null'], format: date-time}
                   endSequenceExclusive: {type: [integer, 'null'], minimum: 1, maximum: 4320}

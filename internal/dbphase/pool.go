@@ -75,7 +75,11 @@ type conn struct {
 
 func (c *conn) ResetSession(ctx context.Context) error {
 	started := time.Now()
-	err := c.nativeConn.ResetSession(ctx)
+	// Bound the idle connection check. pgx returns ErrBadConn on a failed
+	// ping so database/sql can replace it under the original caller context.
+	checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	err := c.nativeConn.ResetSession(checkCtx)
 	c.report(ctx, "db_reset", time.Since(started), err != nil)
 	return err
 }
