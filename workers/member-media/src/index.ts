@@ -349,9 +349,14 @@ async function handle(request: Request, env: Env, ctx?: ExecutionContext): Promi
       return origin ? withCors(response, origin) : response;
     }
   }
-  const object = await env.MEDIA_BUCKET.head(objectKey);
+  const fullSegment = request.method === 'GET' && (match[4].endsWith('.m4s') || match[4].endsWith('.ts')) &&
+    !['Range', 'If-Range', 'If-None-Match', 'If-Match', 'If-Modified-Since', 'If-Unmodified-Since'].some(header => request.headers.has(header));
+  const object = fullSegment ? await env.MEDIA_BUCKET.get(objectKey) : await env.MEDIA_BUCKET.head(objectKey);
   if (!object) return failure(404);
-  if (!Number.isSafeInteger(object.size) || object.size <= 0 || object.size > (match[4].endsWith('.vtt') ? 2 << 20 : match[4].endsWith('.m3u8') || match[4].startsWith('previews/') ? 1 << 20 : 128 << 20)) return failure(503);
+  if (!Number.isSafeInteger(object.size) || object.size <= 0 || object.size > (match[4].endsWith('.vtt') ? 2 << 20 : match[4].endsWith('.m3u8') || match[4].startsWith('previews/') ? 1 << 20 : 128 << 20)) {
+    if (fullSegment) await object.body?.cancel();
+    return failure(503);
+  }
   const mime = audio && match[4].endsWith('.ts') ? 'video/mp2t' : match[4].endsWith('.vtt') ? 'text/vtt' : match[4].endsWith('.jpg') ? 'image/jpeg' : match[4].endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : match[4].endsWith('.m4s') ? 'video/iso.segment' : 'video/mp4';
   const headers = new Headers({ 'Cache-Control': 'private, no-store', 'Content-Type': mime, 'X-Content-Type-Options': 'nosniff', 'Accept-Ranges': 'bytes', ETag: object.httpEtag });
   if (request.headers.get('If-None-Match') === object.httpEtag) {
@@ -371,7 +376,7 @@ async function handle(request: Request, env: Env, ctx?: ExecutionContext): Promi
     const response = new Response(null, { status: range ? 206 : 200, headers });
     return origin ? withCors(response, origin) : response;
   }
-  const data = await env.MEDIA_BUCKET.get(objectKey, range ? { range } : undefined);
+  const data = fullSegment ? object : await env.MEDIA_BUCKET.get(objectKey, range ? { range } : undefined);
   if (!data?.body) return failure(503);
   const response = new Response(data.body, { status: range ? 206 : 200, headers });
   if (cache && ctx && !range) {

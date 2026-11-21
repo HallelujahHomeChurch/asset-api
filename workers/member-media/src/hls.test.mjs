@@ -246,3 +246,30 @@ test('Cloudflare local runtime serves private R2 HLS and cached Range only after
     assert.equal((await mf.dispatchFetch(`https://media.alive.org.tw/__hhc_media_cache/${prefix}720p/seg-000000.m4s`)).status, 404);
   } finally { await mf.dispose(); }
 });
+
+test('a cold complete segment uses the same R2 GET for size, ETag and bytes', async () => {
+  const f = await fixture();
+  const resource = '720p/seg-000000.m4s';
+  const key = prefix + resource;
+  const headers = { Cookie: `hhc_media=${f.playback}` };
+  for (const [method, extra, status, ops, body] of [
+    ['GET', {}, 200, ['get'], 'abcdef'],
+    ['HEAD', {}, 200, ['head'], ''],
+    ['GET', {Range:'bytes=0-1'}, 206, ['head','get'], 'ab'],
+    ['GET', {'If-None-Match':'"v1"'}, 304, ['head'], ''],
+    ['GET', {Range:'bytes=10-'}, 416, ['head'], ''],
+    ['GET', {Range:'bytes=0-1','If-Range':'"stale"'}, 200, ['head','get'], 'abcdef'],
+  ]) {
+    f.calls.length = 0;
+    const response = await f.get(resource, {...headers, ...extra}, method);
+    assert.equal(response.status, status);
+    assert.equal(response.headers.get('ETag'), '"v1"');
+    if (status === 200) assert.equal(response.headers.get('Content-Length'), '6');
+    assert.equal(await response.text(), body);
+    assert.deepEqual(f.calls, ops.map(op => [op, key]));
+  }
+  for (const [metadata, status] of [[null, 404], [{size:0}, 503], [{size:128 * 1024 * 1024 + 1}, 503], [{size:6}, 503]]) {
+    f.env.MEDIA_BUCKET.get = async name => name === key ? metadata : null;
+    assert.equal((await f.get(resource, headers)).status, status);
+  }
+});
