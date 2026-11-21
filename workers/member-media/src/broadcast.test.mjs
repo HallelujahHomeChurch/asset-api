@@ -122,3 +122,79 @@ test('a completed VOD preview index beyond the live waterline still serves the f
  const vod=await worker.fetch(new Request(`https://media.alive.org.tw/videos/${recording}/packages/${capture}/sessions/${scope}/previews/index.vtt`,{headers:{Cookie:`hhc_media=${token}`}}),f.env);
  assert.equal(vod.status,200);assert.equal(await vod.text(),body);
 });
+
+test('each member playlist request checks the policy and publication pointer before projecting an immutable source', async t => {
+  const f = await fixture(10.01);
+  const token = await f.sign(f.claims);
+  const stored = new Map();
+  const lookups = [];
+  const waits = [];
+  const previous = globalThis.caches;
+  t.after(() => { globalThis.caches = previous; });
+  globalThis.caches = { default: {
+    async match(key) { lookups.push(key.url); return stored.get(key.url)?.clone(); },
+    async put(key, response) { stored.set(key.url, response); },
+  } };
+  let revision = 25;
+  let missingSource = false;
+  const original = f.env.MEDIA_BUCKET.get;
+  f.env.MEDIA_BUCKET.get = async key => {
+    if (missingSource && key.endsWith('/index.m3u8')) { f.calls.push(key); return null; }
+    if (key !== prefix + 'current.json') return original(key);
+    f.calls.push(key);
+    if (!revision) return null;
+    const body = JSON.stringify({revision, lastSequence:23});
+    return { size:body.length, httpEtag:'"pointer"', body:new Response(body).body };
+  };
+  const get = async (credential = token, base = path, method = 'GET') => {
+    f.calls.length = 0;
+    const request = new Request('https://media.example' + base + '720p/index.m3u8', {
+      method, headers: {Cookie:'hhc_media=' + credential, Origin:'https://www.alive.org.tw'},
+    });
+    const response = await worker.fetch(request, f.env, {waitUntil: promise => waits.push(promise)});
+    await Promise.all(waits.splice(0));
+    assert.equal(response.headers.get('Cache-Control'), 'private, no-store');
+    assert.equal(response.headers.get('Access-Control-Allow-Origin'), 'https://www.alive.org.tw');
+    return response;
+  };
+  const controls = [prefix + 'broadcast.json', prefix + 'current.json'];
+  const source = () => prefix + `playlists/${revision}/720p/index.m3u8`;
+  const cold = await get();
+  assert.equal(cold.status, 200);
+  const initial = await cold.text();
+  assert.deepEqual(f.calls, [...controls, source()]);
+  assert.equal(await (await get()).text(), initial);
+  assert.deepEqual(f.calls, controls);
+
+  assert.equal(await (await get(token, path, 'HEAD')).text(), '');
+  assert.deepEqual(f.calls, controls);
+
+  f.setPolicy({...f.policy, rangeRevision:4, startSequence:14, endSequenceExclusive:17, memberState:'vod'});
+  const vod = await f.sign({...f.claims, captureId:undefined, packageId:capture, prefix:`recordings/packages/${capture}/final/attempt/`});
+  const projected = await (await get(vod, path.replace('/captures/', '/packages/'))).text();
+  assert.match(projected, /#EXT-X-MEDIA-SEQUENCE:14\n/);
+  assert.equal((projected.match(/#EXTINF:/g) || []).length, 3);
+  assert.deepEqual(f.calls, controls);
+
+  revision++;
+  missingSource = true;
+  assert.equal((await get()).status, 404);
+  assert.deepEqual(f.calls, [...controls, source()]);
+  assert.equal(stored.size, 1);
+  missingSource = false;
+  assert.equal((await get()).status, 200);
+  assert.deepEqual(f.calls, [...controls, source()]);
+  assert.equal(stored.size, 2);
+  const accesses = lookups.length;
+  revision = null;
+  assert.equal((await get()).status, 404);
+  assert.deepEqual(f.calls, controls);
+  f.setPolicy({...f.policy, revoked:true});
+  assert.equal((await get()).status, 403);
+  assert.deepEqual(f.calls, controls.slice(0, 1));
+  for (const change of [{exp:1}, {scopeId:'other'}, {captureId:'b'.repeat(32)}]) {
+    assert.equal((await get(await f.sign({...f.claims, ...change}))).status, 401);
+    assert.deepEqual(f.calls, []);
+  }
+  assert.equal(lookups.length, accesses);
+});

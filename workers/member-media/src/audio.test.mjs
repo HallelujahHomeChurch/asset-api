@@ -15,19 +15,20 @@ async function fixture(){
  let policy={recordingId:'rec-1',epoch:1,rangeRevision:1,startSequence:1,endSequenceExclusive:3,revoked:false,memberState:'vod'};
  const playlist='#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:11\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:VOD\n'+Array.from({length:4},(_,i)=>`#EXTINF:10.005333,\nseg-${String(i).padStart(6,'0')}.ts\n`).join('')+'#EXT-X-ENDLIST\n';
  const calls=[];
+ let attempt='audio-one';
  const env={MEDIA_ISSUER:'test',ALLOWED_ORIGINS:'https://www.alive.org.tw',MEDIA_PUBLIC_KEYS:JSON.stringify({test:await crypto.subtle.exportKey('jwk',keys.publicKey)}),MEDIA_BUCKET:{
   async head(key){calls.push(key);return {size:6,httpEtag:'"one"'}},
   async get(key,options){calls.push(key);let body;
    if(key.endsWith('/broadcast.json')){if(!policy)return null;body=JSON.stringify(policy)}
-   else if(key===prefix+audio+'current.json')body='{"attempt":"audio-one"}';
-   else if(key===prefix+audio+'audio-one/index.m3u8')body=playlist;
-   else if(key.startsWith(prefix+audio+'audio-one/seg-'))body=options?.range?'ab':'abcdef';
+   else if(key===prefix+audio+'current.json')body=JSON.stringify({attempt});
+   else if(key===prefix+audio+attempt+'/index.m3u8')body=playlist;
+   else if(key.startsWith(prefix+audio+attempt+'/seg-'))body=options?.range?'ab':'abcdef';
    else throw new Error('unexpected object key '+key);
    return {size:Buffer.byteLength(body),body:new Response(body).body,httpEtag:'"one"'};
   }
  }};
- const get=(name,credential=token,method='GET',headers={})=>worker.fetch(new Request('https://media.alive.org.tw'+path+name,{method,headers:{...(credential?{Cookie:'hhc_media='+credential}:{}),...headers}}),env);
- return {get,calls,claims,sign,token,setPolicy:p=>{policy=p},policy};
+ const get=(name,credential=token,method='GET',headers={},ctx)=>worker.fetch(new Request('https://media.alive.org.tw'+path+name,{method,headers:{...(credential?{Cookie:'hhc_media='+credential}:{}),...headers}}),env,ctx);
+ return {get,calls,claims,sign,token,setAttempt:a=>{attempt=a},setPolicy:p=>{policy=p},policy};
 }
 
 test('AAC HLS uses the existing grant and own immutable prefix with current broadcast range',async()=>{
@@ -63,4 +64,37 @@ test('ordinary uploaded VOD audio uses the same session without broadcast policy
  const response=await f.get(audio+'index.m3u8',token);assert.equal(response.status,200);assert.ok((await response.text()).includes('seg-000000.ts'));
  assert.equal((await f.get(audio+'seg-000000.ts',token)).status,200);
  assert.equal((await f.get(audio+'seg-000000.ts',f.token)).status,503);
+});
+
+test('AAC projections refresh the attempt pointer and recover from source-cache failures',async t=>{
+  const f = await fixture();
+  const previous = globalThis.caches;
+  t.after(() => { globalThis.caches = previous; });
+  const entries = new Map();
+  let failCache = true;
+  globalThis.caches = {default:{
+    async match(key) { if (failCache) throw Error('cache unavailable'); return entries.get(key.url)?.clone(); },
+    async put(key, response) { if (failCache) throw Error('cache full'); entries.set(key.url, response); },
+  }};
+  const waits = [];
+  async function get() {
+    f.calls.length = 0;
+    const response = await f.get(audio+'index.m3u8', f.token, 'GET', {}, {waitUntil:p=>waits.push(p)});
+    await Promise.all(waits.splice(0));
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('Cache-Control'), 'private, no-store');
+    return response.text();
+  }
+  const controls = [`recordings/captures/${pkg}/final/broadcast.json`, prefix+audio+'current.json'];
+  const body = await get();
+  assert.deepEqual(f.calls, [...controls, prefix+audio+'audio-one/index.m3u8']);
+  failCache = false;
+  assert.equal(await get(), body);
+  assert.deepEqual(f.calls, [...controls, prefix+audio+'audio-one/index.m3u8']);
+  assert.equal(await get(), body);
+  assert.deepEqual(f.calls, controls);
+  f.setAttempt('audio-two');
+  assert.equal(await get(), body);
+  assert.deepEqual(f.calls, [...controls, prefix+audio+'audio-two/index.m3u8']);
+  assert.equal(entries.size, 2);
 });
