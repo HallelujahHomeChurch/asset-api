@@ -43,7 +43,9 @@ func (p PackageMediaProbe) generateSharedPreviews(ctx context.Context, id, media
 }
 
 func RunLivePreview(ctx context.Context, repo *postgres.RecordingPackageStore, objects LivePreviewObjects, probe PackageMediaProbe) (bool, error) {
-	c, err := repo.ClaimLivePreview(ctx)
+	admit, cancelAdmission := context.WithTimeout(ctx, liveAdmissionTimeout)
+	c, err := repo.ClaimLivePreview(admit)
+	cancelAdmission()
 	if errors.Is(err, assets.ErrNotFound) {
 		return false, nil
 	}

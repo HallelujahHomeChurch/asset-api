@@ -131,19 +131,25 @@ func (p PackageMediaProbe) validateLiveRendition(ctx context.Context, pack asset
 	}
 	path := filepath.Join(dir, r.Name+".mp4")
 	freezeStarted := time.Now()
+	// Bound provider I/O independently of the decoder and the renewable claim.
+	freezeCtx, cancelFreeze := context.WithTimeout(ctx, time.Minute)
 	err = writePackageScratch(path, func(w io.Writer) error {
 		var initErr error
 		if _, ok := p.reusableLiveInit(r.Name, init); ok {
-			reused, initErr = p.copyLiveInit(ctx, pack.ID, init, w)
+			reused, initErr = p.copyLiveInit(freezeCtx, pack.ID, init, w)
 		}
 		if initErr == nil && !reused {
-			initErr = freezePackageObject(ctx, pack, prefix, init, p.Objects, w, p.OnStage)
+			initErr = freezePackageObject(freezeCtx, pack, prefix, init, p.Objects, w, p.OnStage)
 		}
 		if err := initErr; err != nil {
 			return err
 		}
-		return freezePackageObject(ctx, pack, prefix, segment, p.Objects, w, p.OnStage)
+		return freezePackageObject(freezeCtx, pack, prefix, segment, p.Objects, w, p.OnStage)
 	})
+	if freezeCtx.Err() != nil {
+		err = freezeCtx.Err()
+	}
+	cancelFreeze()
 	freezeTime = time.Since(freezeStarted)
 	if err != nil {
 		return actual, reused, err
