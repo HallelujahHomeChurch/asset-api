@@ -512,3 +512,39 @@ func RunLiveValidation(ctx context.Context, store *postgres.RecordingCaptureStor
 	}
 	return count > 0, result
 }
+
+func TestLiveClaimAdmissionReturnsDuringRowLock(t *testing.T) {
+	db, store, objects, _ := liveWorkerFixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 9*time.Second)
+	defer cancel()
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec(`SELECT capture_id FROM recording_live FOR UPDATE`); err != nil {
+		t.Fatal(err)
+	}
+	work, err := ClaimLiveWork(ctx, store, objects, PackageMediaProbe{})
+	if work != nil || ctx.Err() != nil || err != nil {
+		t.Fatalf("lock contention must defer admission without losing the worker: err=%v parent=%v", err, ctx.Err())
+	}
+	if err = tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	// Allow the provider read to finish with a transient error after admission.
+	objects.release = make(chan struct{})
+	close(objects.release)
+	probe := PackageMediaProbe{Objects: objects, FFmpeg: "/usr/bin/false", FFprobe: "/usr/bin/false", ScratchRoot: t.TempDir()}
+	work, err = ClaimLiveWork(ctx, store, objects, probe)
+	if err != nil || work == nil {
+		t.Fatalf("eligible work was lost after unlock: %v", err)
+	}
+	if err := work(); err != nil {
+		t.Fatal(err)
+	}
+	var attempts int
+	if err := db.QueryRow(`SELECT count(*) FROM recording_live WHERE attempts=1 AND claim_id IS NULL AND published_sequence=-1`).Scan(&attempts); err != nil || attempts != 1 {
+		t.Fatalf("expected a released retryable claim without advancing the pointer: %d %v", attempts, err)
+	}
+}

@@ -282,6 +282,6 @@ func (s *RecordingCaptureStore) CommitLiveEnd(ctx context.Context, claim Recordi
 // claim fencing still prevents concurrent validation of the same capture.
 func (s *RecordingCaptureStore) LiveInputPending(ctx context.Context) (bool, error) {
 	var pending bool
-	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM recording_captures c JOIN recording_live l ON l.capture_id=c.id WHERE c.state IN ('uploading','freezing','validating','ready') AND c.terminal_at IS NULL AND NOT (`+capturePackageTerminal+`) AND c.expires_at>clock_timestamp() AND GREATEST(c.created_at,l.last_advanced_at)>clock_timestamp()-interval '2 minutes' AND NOT l.ended AND l.next_attempt_at<=clock_timestamp())`).Scan(&pending)
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM recording_captures c JOIN recording_live l ON l.capture_id=c.id WHERE c.state IN ('uploading','freezing','validating','ready') AND c.terminal_at IS NULL AND NOT (`+capturePackageTerminal+`) AND c.expires_at>clock_timestamp() AND GREATEST(c.created_at,c.last_media_confirmed_at,l.last_advanced_at)>clock_timestamp()-interval '2 minutes' AND NOT l.ended)`).Scan(&pending)
 	return pending, err
 }

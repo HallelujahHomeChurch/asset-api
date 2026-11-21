@@ -173,7 +173,9 @@ func processRecording(ctx context.Context, mode string, db *sql.DB, objects *r2.
 					busy += time.Since(before)
 					return done, err
 				}, func(ctx context.Context) (bool, error) {
-					active, err := liveStore.LiveInputPending(ctx)
+					pendingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+					defer cancel()
+					active, err := liveStore.LiveInputPending(pendingCtx)
 					liveSession = liveSession || active
 					return active, err
 				}, func(ctx context.Context) bool {
