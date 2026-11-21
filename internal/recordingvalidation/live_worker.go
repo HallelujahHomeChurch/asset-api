@@ -17,9 +17,17 @@ type LiveObjects interface {
 	AdvanceLivePointer(context.Context, string, int64, int) error
 }
 
+const liveAdmissionTimeout = 5 * time.Second
+
 // ClaimLiveWork reserves one fenced slot. A nil function means no work is ready.
 func ClaimLiveWork(ctx context.Context, store *postgres.RecordingCaptureStore, objects LiveObjects, probe PackageMediaProbe) (func() error, error) {
-	claim, err := store.ClaimLiveValidation(ctx)
+	admit, cancel := context.WithTimeout(ctx, liveAdmissionTimeout)
+	defer cancel()
+	claim, err := store.ClaimLiveValidation(admit)
+	if err != nil && admit.Err() == context.DeadlineExceeded && ctx.Err() == nil {
+		slog.Warn("recording_live_admission_timeout", "operation", "segment")
+		return nil, nil
+	}
 	if errors.Is(err, assets.ErrNotFound) {
 		return nil, nil
 	}
@@ -33,6 +41,7 @@ func ClaimLiveWork(ctx context.Context, store *postgres.RecordingCaptureStore, o
 func runLiveClaim(ctx context.Context, store *postgres.RecordingCaptureStore, objects LiveObjects, probe PackageMediaProbe, claim postgres.RecordingLiveClaim) error {
 	snapshot := claim.Snapshot
 	claimedAt := time.Now()
+	slog.Info("recording_live_claim_started", "capture_id", claim.Capture.ID, "claim_id", claim.ClaimID, "sequence", claim.Sequence)
 	err := RunProcessingClaim(ctx, func(ctx context.Context) error { return store.HeartbeatLive(ctx, claim) }, func(ctx context.Context) (result error) {
 		const publicationStageTimeout = 20 * time.Second
 		stage, started := "resume_publication", time.Now()
@@ -136,7 +145,9 @@ func runLiveClaim(ctx context.Context, store *postgres.RecordingCaptureStore, ob
 		return finishErr
 	}, 30*time.Second)
 	if errors.Is(err, assets.ErrConflict) && ctx.Err() == nil {
-		terminal, cleanupErr := store.FinishTerminalLiveClaim(ctx, claim)
+		cleanupCtx, cancel := context.WithTimeout(ctx, liveAdmissionTimeout)
+		defer cancel()
+		terminal, cleanupErr := store.FinishTerminalLiveClaim(cleanupCtx, claim)
 		if cleanupErr != nil {
 			return errors.Join(err, cleanupErr)
 		}

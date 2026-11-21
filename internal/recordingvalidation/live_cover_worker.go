@@ -122,7 +122,9 @@ func liveCoverCaptureID(id string) bool {
 }
 
 func RunLiveCoverProcessing(ctx context.Context, repo *postgres.RecordingLiveCoverStore, objects CoverObjects, probe PackageMediaProbe) (bool, error) {
-	c, err := repo.Claim(ctx)
+	admit, cancelAdmission := context.WithTimeout(ctx, liveAdmissionTimeout)
+	c, err := repo.Claim(admit)
+	cancelAdmission()
 	if errors.Is(err, assets.ErrNotFound) {
 		return false, nil
 	}

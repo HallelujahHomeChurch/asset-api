@@ -400,4 +400,13 @@ func TestIdleLiveInputDoesNotKeepWorkerWarm(t *testing.T) {
 	if pending, err := store.LiveInputPending(ctx); err != nil || pending {
 		t.Fatalf("stale input keeps idle worker awake: %v", err)
 	}
+	if _, err := db.ExecContext(ctx, `UPDATE recording_captures SET last_media_confirmed_at=now() WHERE id=$1`, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE recording_live SET next_attempt_at=now()+interval '30 seconds' WHERE capture_id=$1`, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	if pending, err := store.LiveInputPending(ctx); err != nil || !pending {
+		t.Fatalf("incoming media lost its standby worker during retry backoff: %v", err)
+	}
 }

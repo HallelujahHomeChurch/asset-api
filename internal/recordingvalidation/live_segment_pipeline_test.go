@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"hhc/asset-api/internal/assets"
@@ -176,4 +177,45 @@ func (s *blockedLiveObjects) Open(ctx context.Context, key string) (io.ReadClose
 	}
 	<-ctx.Done()
 	return nil, ctx.Err()
+}
+
+type stalledBodyObjects struct {
+	*packageMemoryObjects
+	reads  atomic.Int64
+	closes atomic.Int64
+}
+
+type stalledLiveBody struct {
+	ctx     context.Context
+	objects *stalledBodyObjects
+}
+
+func (s *stalledBodyObjects) Open(ctx context.Context, _ string) (io.ReadCloser, error) {
+	return &stalledLiveBody{ctx, s}, nil
+}
+
+func (b *stalledLiveBody) Read([]byte) (int, error) {
+	b.objects.reads.Add(1)
+	<-b.ctx.Done()
+	return 0, b.ctx.Err()
+}
+
+func (b *stalledLiveBody) Close() error {
+	b.objects.closes.Add(1)
+	return nil
+}
+
+func TestLiveSegmentTimesOutStalledProviderBeforeWorkerDeadline(t *testing.T) {
+	scratch := t.TempDir()
+	synctest.Test(t, func(t *testing.T) {
+		pack, memory, declarations := liveIntakeFixture()
+		blocked := &stalledBodyObjects{packageMemoryObjects: memory}
+		probe := PackageMediaProbe{Objects: blocked, FFmpeg: "/usr/bin/false", FFprobe: "/usr/bin/false", ScratchRoot: scratch}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		batch, err := probe.ValidateLiveSegment(ctx, pack.ID, "stalled-provider", 0, declarations)
+		if !errors.Is(err, context.DeadlineExceeded) || processingFailure(err) != "retry" || ctx.Err() != nil || batch != nil || blocked.reads.Load() != 3 || blocked.closes.Load() != 3 {
+			t.Fatalf("validation must release all reads while the worker can still retry: batch=%v err=%v parent=%v", batch, err, ctx.Err())
+		}
+	})
 }
