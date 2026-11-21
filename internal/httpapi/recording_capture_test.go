@@ -265,6 +265,12 @@ func TestCaptureRecoveryWireOptIn(t *testing.T) {
 			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &signal) != nil {
 				t.Fatal(w.Body.String())
 			}
+			if signal["lastConfirmedSequence"] != float64(-1) || signal["lastPublishedSequence"] != float64(-1) {
+				t.Fatalf("new capture watermarks: %v", signal)
+			}
+			if _, exists := signal["lastPublishedAt"]; exists {
+				t.Fatalf("unpublished timestamp: %v", signal)
+			}
 			marker, exists := signal["recoveryVersion"]
 			if tc.version == "" && exists || tc.version != "" && marker != tc.version {
 				t.Fatalf("capability %v", signal)
