@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"hhc/asset-api/internal/assets"
@@ -114,4 +115,66 @@ func (s *publicationObjects) PublishLiveObject(ctx context.Context, from, to, et
 	// A provider can finish late after cancellation; the caller must still join it.
 	<-s.release
 	return "published-etag", nil
+}
+
+type delayedPublicationHead struct {
+	*publicationObjects
+	calls   int
+	delayed int
+	err     error
+}
+
+func (s *delayedPublicationHead) Head(ctx context.Context, key string) (int64, string, error) {
+	s.calls++
+	if s.calls <= s.delayed {
+		<-ctx.Done()
+		return 0, "", ctx.Err()
+	}
+	if s.err != nil {
+		return 0, "", s.err
+	}
+	return s.publicationObjects.Head(ctx, key)
+}
+
+func TestLivePublicationRetriesOnlyItsOwnHeadDeadline(t *testing.T) {
+	denied := errors.New("forbidden")
+	for _, tc := range []struct {
+		name                    string
+		delayed                 int
+		stageBudget             time.Duration
+		cancelAfter             time.Duration
+		headErr, wantErr        error
+		calls, copies, timeouts int
+	}{
+		{"fast", 0, 20 * time.Second, 0, nil, nil, 1, 1, 0},
+		{"one stall", 1, 20 * time.Second, 0, nil, nil, 2, 1, 1},
+		{"two stalls", 2, 20 * time.Second, 0, nil, context.DeadlineExceeded, 2, 0, 2},
+		{"insufficient budget", 1, 5 * time.Second, 0, nil, context.DeadlineExceeded, 1, 0, 1},
+		{"stage expired", 1, time.Second, 0, nil, context.DeadlineExceeded, 1, 0, 0},
+		{"owner canceled", 1, 20 * time.Second, time.Second, nil, context.Canceled, 1, 0, 0},
+		{"denied", 0, 20 * time.Second, 0, denied, denied, 1, 0, 0},
+		{"provider deadline before local deadline", 0, 20 * time.Second, 0, context.DeadlineExceeded, context.DeadlineExceeded, 1, 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(t.Context(), tc.stageBudget)
+				defer cancel()
+				if tc.cancelAfter > 0 {
+					time.AfterFunc(tc.cancelAfter, cancel)
+				}
+				release := make(chan struct{})
+				close(release)
+				objects := &delayedPublicationHead{publicationObjects: &publicationObjects{started: make(chan struct{}, 1), release: release}, delayed: tc.delayed, err: tc.headErr}
+				claim := postgres.RecordingLiveClaim{Objects: []assets.RecordingPackageObject{{Path: "fragment", SizeBytes: 10}}}
+				var timing liveCopyTiming
+				versions, err := copyLiveObjects(ctx, objects, claim, nil, &timing)
+				if !errors.Is(err, tc.wantErr) || objects.calls != tc.calls || objects.copies.Load() != int64(tc.copies) || timing.headRetries != tc.calls-1 || timing.headTimeouts != tc.timeouts {
+					t.Fatalf("err=%v calls=%d copies=%d retries=%d timeouts=%d", err, objects.calls, objects.copies.Load(), timing.headRetries, timing.headTimeouts)
+				}
+				if tc.copies > 0 && versions["fragment"] != "published-etag" {
+					t.Fatal("missing conditional copy result", versions)
+				}
+			})
+		})
+	}
 }

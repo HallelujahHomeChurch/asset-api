@@ -43,10 +43,15 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	if err := run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+	if err := run(ctx); workerExitFailed(ctx, err) {
 		slog.Error("recording validation worker stopped", "error", err)
 		os.Exit(1)
 	}
+}
+
+// Only the process signal context can authorize a clean cancellation exit.
+func workerExitFailed(signalCtx context.Context, err error) bool {
+	return err != nil && (signalCtx.Err() == nil || !errors.Is(err, context.Canceled))
 }
 
 func run(ctx context.Context) (result error) {

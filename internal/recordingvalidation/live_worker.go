@@ -5,8 +5,10 @@ import (
 	"errors"
 	"hhc/asset-api/internal/assets"
 	"hhc/asset-api/internal/postgres"
+	"hhc/asset-api/internal/storage/r2"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -50,7 +52,7 @@ func runLiveClaim(ctx context.Context, store *postgres.RecordingCaptureStore, ob
 		logStage := func(success bool) {
 			slog.Info("recording_live_stage", "capture_id", claim.Capture.ID, "claim_id", claim.ClaimID, "sequence", claim.Sequence,
 				"segment_frames", claim.Capture.SegmentFrames, "stage", stage, "elapsed_ms", time.Since(started).Milliseconds(), "succeeded", success,
-				"head_max_ms", times.head.Milliseconds(), "copy_max_ms", times.copy.Milliseconds(), "batch_commit_ms", commitDuration.Milliseconds())
+				"head_max_ms", times.head.Milliseconds(), "head_local_timeouts", times.headTimeouts, "head_local_retries", times.headRetries, "head_http_attempts", times.headSends, "copy_max_ms", times.copy.Milliseconds(), "batch_commit_ms", commitDuration.Milliseconds())
 		}
 		defer func() { logStage(result == nil) }()
 		if snapshot.Revision == snapshot.PublishedRevision {
@@ -159,7 +161,44 @@ func runLiveClaim(ctx context.Context, store *postgres.RecordingCaptureStore, ob
 	return err
 }
 
-type liveCopyTiming struct{ head, copy time.Duration }
+type liveCopyTiming struct {
+	head, copy                time.Duration
+	headTimeouts, headRetries int
+	headSends                 int64
+}
+
+const livePublicationHeadTimeout = 2 * time.Second
+
+// HEAD is read-only. Retry only our own expired call, while the batch is
+// still active. If the SDK already retried, leave recovery to the claim.
+func headForLiveCopy(ctx context.Context, objects LiveObjects, key string, timing *liveCopyTiming) (int64, string, error) {
+	var sends atomic.Int64
+	counted := r2.WithAttemptCounter(ctx, &sends)
+	started := time.Now()
+	defer func() {
+		timing.head = time.Since(started)
+		timing.headSends = sends.Load()
+	}()
+	for {
+		child, cancel := context.WithTimeout(counted, livePublicationHeadTimeout)
+		size, etag, err := objects.Head(child, key)
+		localTimeout := child.Err() == context.DeadlineExceeded && errors.Is(err, context.DeadlineExceeded)
+		cancel()
+		if ctx.Err() != nil {
+			return 0, "", ctx.Err()
+		}
+		if !localTimeout {
+			return size, etag, err
+		}
+		timing.headTimeouts++
+		deadline, bounded := ctx.Deadline()
+		// Leave at least one call budget for the conditional copy and commit.
+		if timing.headRetries > 0 || sends.Load() > 1 || (bounded && time.Until(deadline) <= 2*livePublicationHeadTimeout) {
+			return 0, "", err
+		}
+		timing.headRetries++
+	}
+}
 
 // Join bounded provider copies before committing the batch or releasing its lease.
 func copyLiveObjects(ctx context.Context, objects LiveObjects, claim postgres.RecordingLiveClaim, batch map[string]assets.RecordingLiveFragment, timing *liveCopyTiming) (map[string]string, error) {
@@ -196,10 +235,13 @@ func copyLiveObjects(ctx context.Context, objects LiveObjects, claim postgres.Re
 					return
 				}
 				object := pending[index]
-				headStarted := time.Now()
-				size, etag, err := objects.Head(workCtx, from+object.Path)
+				var measured liveCopyTiming
+				size, etag, err := headForLiveCopy(workCtx, objects, from+object.Path, &measured)
 				mu.Lock()
-				timing.head = max(timing.head, time.Since(headStarted))
+				timing.head = max(timing.head, measured.head)
+				timing.headRetries += measured.headRetries
+				timing.headTimeouts += measured.headTimeouts
+				timing.headSends += measured.headSends
 				mu.Unlock()
 				if err == nil && size != object.SizeBytes {
 					err = assets.ErrInvalidUpload
