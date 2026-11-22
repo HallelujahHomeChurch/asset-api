@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"hhc/asset-api/internal/assets"
@@ -107,4 +108,29 @@ func TestPackageProgressDeadlineRetriesWithoutRestart(t *testing.T) {
 	if err != nil || !finished || validations != 1 || beats < 2 || writes < 2 {
 		t.Fatalf("same claim did not recover: err=%v ready=%v validations=%d beats=%d writes=%d", err, finished, validations, beats, writes)
 	}
+}
+
+func TestValidationDeadlineWhileHeartbeatInFlight(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		entered := make(chan struct{})
+		finished := 0
+		err := RunProcessingClaim(t.Context(), func(ctx context.Context) error {
+			close(entered)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Second):
+				return nil
+			}
+		}, func(context.Context) error { <-entered; return context.DeadlineExceeded }, func(ctx context.Context, ready bool, reason string) error {
+			finished++
+			if ctx.Err() != nil || ready || reason != "retry" {
+				t.Errorf("unexpected finalization: ready=%v reason=%q err=%v", ready, reason, ctx.Err())
+			}
+			return nil
+		}, 30*time.Second)
+		if err != nil || finished != 1 {
+			t.Fatalf("finish=%d err=%v", finished, err)
+		}
+	})
 }

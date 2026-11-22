@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -21,6 +22,7 @@ func TestR2DownloadRecordsRealSDKRetriesAndBody(t *testing.T) {
 	old := slog.Default()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
 	defer slog.SetDefault(old)
+	var attempts atomic.Int64
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
@@ -35,7 +37,7 @@ func TestR2DownloadRecordsRealSDKRetriesAndBody(t *testing.T) {
 	defer server.Close()
 	store := &Store{bucket: "private-bucket", client: s3.New(s3.Options{BaseEndpoint: aws.String(server.URL), Region: "auto", UsePathStyle: true, Credentials: credentials.NewStaticCredentialsProvider("key", "secret", ""), HTTPClient: server.Client(), Retryer: retry.NewStandard(func(o *retry.StandardOptions) { o.MaxAttempts = 2; o.MaxBackoff = time.Millisecond })})}
 	telemetry.Server(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := store.Open(r.Context(), "recordings/packages/private/master.m3u8")
+		body, err := store.Open(WithAttemptCounter(r.Context(), &attempts), "recordings/packages/private/master.m3u8")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -48,7 +50,7 @@ func TestR2DownloadRecordsRealSDKRetriesAndBody(t *testing.T) {
 		}
 		w.WriteHeader(200)
 	})).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/api/assets/public/synthetic", nil))
-	if calls != 2 {
+	if calls != 2 || attempts.Load() != 2 {
 		t.Fatal("SDK retry changed", calls)
 	}
 	for _, want := range []string{`"storage_attempt":{"count":2`, `"storage_retry":{"count":1`, `"storage_body":{"count":1`} {
