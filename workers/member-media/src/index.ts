@@ -59,6 +59,31 @@ async function boundedText(env: Env, key: string, limit: number): Promise<string
   return new TextDecoder().decode(bytes.subarray(0, size));
 }
 
+function mediaCache(): Cache | undefined {
+  return (globalThis.caches as CacheStorage & { default?: Cache } | undefined)?.default;
+}
+
+// The caller resolves the immutable capture revision or AAC attempt from the fresh pointer.
+async function memberPlaylist(request: Request, env: Env, ctx: ExecutionContext | undefined, key: string, policy: BroadcastPolicy, audio = false): Promise<Response> {
+  const cache = mediaCache();
+  const cacheKey = new Request(`${new URL(request.url).origin}/__hhc_source_playlist/${key}`);
+  const hit = await cache?.match(cacheKey).then(response => response?.text()).catch(() => undefined);
+  const raw = hit ?? await boundedText(env, key, 1 << 20);
+  if (raw === null) return failure(404);
+  const body = key.endsWith('/master.m3u8') ? raw : projectPlaylist(raw, policy, audio);
+  if (hit === undefined && cache && ctx) {
+    const internal = new Response(raw, { headers: { 'Cache-Control': 'public, max-age=86400' } });
+    ctx.waitUntil(cache.put(cacheKey, internal).catch(() => undefined));
+  }
+  return new Response(request.method === 'HEAD' ? null : body, {
+    headers: {
+      'Cache-Control': 'private, no-store',
+      'Content-Type': 'application/vnd.apple.mpegurl',
+      'X-Content-Type-Options': 'nosniff',
+    },
+  });
+}
+
 async function broadcastPolicy(env: Env, capture: string): Promise<BroadcastPolicy | null> {
   const raw = await boundedText(env, `recordings/captures/${capture}/final/broadcast.json`, 1024);
   if (raw === null) return null;
@@ -277,13 +302,7 @@ async function handle(request: Request, env: Env, ctx?: ExecutionContext): Promi
     const pointer = JSON.parse(raw);
     if (!pointer || Object.keys(pointer).join(',') !== 'attempt' || typeof pointer.attempt !== 'string' || !/^[a-zA-Z0-9-]{1,80}$/.test(pointer.attempt)) return failure(503);
     objectKey = playback.prefix! + 'audio/aac-hls-v1/' + pointer.attempt + '/' + match[4].slice('audio/aac-hls-v1/'.length);
-    if (policy && match[4].endsWith('.m3u8')) {
-      const playlist = await boundedText(env, objectKey, 1 << 20);
-      if (playlist === null) return failure(404);
-      const body = projectPlaylist(playlist, policy, true);
-      const response = new Response(request.method === 'HEAD' ? null : body, {headers: {'Cache-Control':'private, no-store','Content-Type':'application/vnd.apple.mpegurl','X-Content-Type-Options':'nosniff'}});
-      return origin ? withCors(response, origin) : response;
-    }
+    if (policy && match[4].endsWith('.m3u8')) return memberPlaylist(request, env, ctx, objectKey, policy, true);
   }
   if (!audio && (live || policy)) {
     const rawPrefix = policy ? `recordings/captures/${ids[1]}/final/` : playback.prefix!;
@@ -295,13 +314,7 @@ async function handle(request: Request, env: Env, ctx?: ExecutionContext): Promi
     if (!match[4].startsWith('previews/')) objectKey = rawPrefix + match[4];
     if (match[4].endsWith('.m3u8')) {
       objectKey = rawPrefix + `playlists/${pointer.revision}/` + match[4];
-      if (policy && !preview) {
-        const raw = await boundedText(env, objectKey, 1 << 20);
-        if (raw === null) return failure(404);
-        const body = match[4] === 'master.m3u8' ? raw : projectPlaylist(raw, policy);
-        const response = new Response(request.method === 'HEAD' ? null : body, {headers:{'Cache-Control':'private, no-store','Content-Type':'application/vnd.apple.mpegurl','X-Content-Type-Options':'nosniff'}});
-        return origin ? withCors(response, origin) : response;
-      }
+      if (policy && !preview) return memberPlaylist(request, env, ctx, objectKey, policy);
     }
   }
   if (match[4].startsWith('previews/')) {
@@ -334,7 +347,7 @@ async function handle(request: Request, env: Env, ctx?: ExecutionContext): Promi
     const response = new Response(request.method === 'HEAD' ? null : body, {headers:{'Cache-Control':'private, no-store','Content-Type':'text/vtt','X-Content-Type-Options':'nosniff'}});
     return origin ? withCors(response, origin) : response;
   }
-  const cache = (globalThis.caches as CacheStorage & { default?: Cache } | undefined)?.default;
+  const cache = mediaCache();
   const cacheKey = new Request(`${url.origin}/__hhc_media_cache/${objectKey}`);
   if (cache && !request.headers.has('If-Range')) {
     const headers = new Headers();
