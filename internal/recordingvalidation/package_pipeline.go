@@ -199,11 +199,24 @@ func checkFragmentScratch(dir string, required int64) error {
 }
 
 func writePackageScratch(path string, write func(io.Writer) error) error {
+	return writePackageScratchObserved(path, nil, write)
+}
+func writePackageScratchObserved(path string, record func(string, time.Time, error), write func(io.Writer) error) error {
+	started := time.Now()
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if record != nil {
+		record("scratch_open", started, err)
+	}
 	if err != nil {
 		return err
 	}
-	return errors.Join(write(file), file.Close())
+	writeErr := write(file)
+	started = time.Now()
+	closeErr := file.Close()
+	if record != nil {
+		record("scratch_close", started, closeErr)
+	}
+	return errors.Join(writeErr, closeErr)
 }
 
 func removePackageScratch(path string) error {

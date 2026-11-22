@@ -87,12 +87,16 @@ func RunPackageValidation(ctx context.Context, repository *postgres.RecordingPac
 func RunProcessingClaim(ctx context.Context, heartbeat, validate func(context.Context) error, finish func(context.Context, bool, string) error, interval time.Duration) error {
 	jobCtx, cancel := context.WithTimeout(ctx, 330*time.Minute)
 	defer cancel()
+	stopHeartbeat := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
 			select {
+			case <-stopHeartbeat:
+				done <- nil
+				return
 			case <-jobCtx.Done():
 				done <- nil
 				return
@@ -109,7 +113,8 @@ func RunProcessingClaim(ctx context.Context, heartbeat, validate func(context.Co
 		}
 	}()
 	err := validate(jobCtx)
-	cancel()
+	// Join an in-flight renewal under its own deadline before fenced finalization.
+	close(stopHeartbeat)
 	if beatErr := <-done; beatErr != nil {
 		return beatErr
 	}

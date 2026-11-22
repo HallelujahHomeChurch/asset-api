@@ -90,7 +90,7 @@ func (s *Store) CopyPackageObject(ctx context.Context, source, destination, sour
 	_, err := s.client.CopyObject(ctx, &s3.CopyObjectInput{
 		Bucket: aws.String(s.bucket), Key: aws.String(destination), CopySource: aws.String(url.PathEscape(s.bucket + "/" + source)), CopySourceIfMatch: aws.String(sourceETag),
 		MetadataDirective: types.MetadataDirectiveReplace, ContentType: aws.String(contentType), CacheControl: aws.String("private, max-age=0"),
-	})
+	}, func(o *s3.Options) { o.HTTPClient = storageHTTPObserver{s.client.Options().HTTPClient} })
 	if err != nil {
 		return fmt.Errorf("copy R2 package object: %w", err)
 	}

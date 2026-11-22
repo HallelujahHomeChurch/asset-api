@@ -133,24 +133,32 @@ func (p PackageMediaProbe) validateLiveRendition(ctx context.Context, pack asset
 	freezeStarted := time.Now()
 	// Bound provider I/O independently of the decoder and the renewable claim.
 	freezeCtx, cancelFreeze := context.WithTimeout(ctx, time.Minute)
-	err = writePackageScratch(path, func(w io.Writer) error {
+	observation := &liveFreeze{PackageObjects: p.Objects, part: "init"}
+	p.Objects = observation
+	freezeCtx = r2.WithAttemptCounter(freezeCtx, &observation.attempts)
+	err = writePackageScratchObserved(path, observation.record, func(w io.Writer) error {
+		w = freezeWriter{w, observation}
 		var initErr error
 		if _, ok := p.reusableLiveInit(r.Name, init); ok {
 			reused, initErr = p.copyLiveInit(freezeCtx, pack.ID, init, w)
 		}
 		if initErr == nil && !reused {
+			observation.failed = "" // A missing reusable init falls back to staging.
 			initErr = freezePackageObject(freezeCtx, pack, prefix, init, p.Objects, w, p.OnStage)
 		}
 		if err := initErr; err != nil {
 			return err
 		}
+		observation.part = "segment"
 		return freezePackageObject(freezeCtx, pack, prefix, segment, p.Objects, w, p.OnStage)
 	})
+
 	if freezeCtx.Err() != nil {
 		err = freezeCtx.Err()
 	}
 	cancelFreeze()
 	freezeTime = time.Since(freezeStarted)
+	observation.report(pack.ID, attempt, r.Name, sequence, freezeTime, err, ctx.Err())
 	if err != nil {
 		return actual, reused, err
 	}
