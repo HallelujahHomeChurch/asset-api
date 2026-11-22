@@ -11,7 +11,7 @@ import (
 
 type attemptCounterKey struct{}
 
-// WithAttemptCounter counts actual HTTP sends, including SDK retries, for a single freeze.
+// WithAttemptCounter counts actual HTTP sends, including SDK retries, for the observed operation.
 func WithAttemptCounter(ctx context.Context, counter *atomic.Int64) context.Context {
 	return context.WithValue(ctx, attemptCounterKey{}, counter)
 }

@@ -205,6 +205,16 @@ threshold only controls logging. A local freeze deadline and cancellation of
 the parent claim are reported separately. On validation completion the worker
 joins an in-flight bounded renewal before fenced finalization and retry.
 
+During stable publication, each pre-copy HEAD has a two-second deadline.
+If that deadline expires and the SDK has made at most one HTTP attempt,
+the worker can repeat the same HEAD once. A retry requires an active parent
+with over four seconds left in the shared 20-second publication budget.
+The SDK retains its own retry policy within each call. Stage logs report
+`head_http_attempts`, `head_local_timeouts` and `head_local_retries` alongside
+the maximum per-object HEAD elapsed time, including any local retry.
+COPY and the database commit use the remaining stage time. The one-minute
+validation freeze has its own diagnostics and deadline.
+
 Run `go test ./internal/recordingvalidation -run '^$' -bench '^BenchmarkLiveSegmentValidation$' -benchtime=3x -count=1`
 for the 30.03-second, 29.97 fps three-rendition moving-media benchmark. On
 macOS/Apple M4 with FFmpeg 8.1.2, serial versus two-worker validation averaged 1.891 versus
