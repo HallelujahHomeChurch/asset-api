@@ -226,3 +226,14 @@ func TestLivePollRefillsBeforeSlowClaimReturns(t *testing.T) {
 		}
 	})
 }
+
+func TestOnlyProcessSignalMakesCancellationACleanExit(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	if !workerExitFailed(ctx, context.Canceled) || workerExitFailed(ctx, nil) {
+		t.Fatal("internal cancellation or clean exit misclassified")
+	}
+	cancel()
+	if workerExitFailed(ctx, context.Canceled) || !workerExitFailed(ctx, errors.New("worker failure")) {
+		t.Fatal("signal or unrelated failure misclassified")
+	}
+}
