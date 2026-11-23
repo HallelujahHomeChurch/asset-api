@@ -8,10 +8,13 @@ import (
 	"io"
 	"reflect"
 	"regexp"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/smithy-go"
+
+	"hhc/asset-api/internal/telemetry"
 )
 
 func broadcastPolicyKey(id string) string {
@@ -35,22 +38,34 @@ func parseBroadcastRange(raw []byte) (broadcastRange, error) {
 	}
 	return p, nil
 }
-func (s *Store) ReadBroadcastRange(ctx context.Context, id string) ([]byte, error) {
+func (s *Store) ReadBroadcastRange(ctx context.Context, id string) (result []byte, err error) {
 	if !sourceAttemptID.MatchString(id) {
 		return nil, ErrLiveConflict
 	}
-	object, err := s.client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(broadcastPolicyKey(id))})
+	reader := &authorityHTTPReader{observer: storageHTTPObserver{s.client.Options().HTTPClient}, start: time.Now()}
+	stage := "get"
+	var bodyElapsed time.Duration
+	defer func() { reader.finish(ctx, stage, bodyElapsed, err) }()
+	getCtx, finish := telemetry.StorageCall(ctx, "storage_response")
+	object, err := s.client.GetObject(getCtx, &s3.GetObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(broadcastPolicyKey(id))}, func(opts *s3.Options) { opts.HTTPClient = reader })
+	finish(err)
 	if err != nil {
 		return nil, err
 	}
+	stage = "body"
+	start := time.Now()
 	raw, err := io.ReadAll(io.LimitReader(object.Body, 1025))
 	err = errors.Join(err, object.Body.Close())
+	bodyElapsed = time.Since(start)
+	telemetry.RecordPhase(ctx, "storage_body", bodyElapsed, err != nil)
 	if err != nil {
 		return nil, err
 	}
+	stage = "validate"
 	if _, err = parseBroadcastRange(raw); err != nil {
 		return nil, err
 	}
+	stage = "complete"
 	return raw, nil
 }
 
