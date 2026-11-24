@@ -16,11 +16,17 @@ if have_tools; then
   exit 0
 fi
 
+script_dir="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
 apt_options=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
 for ((attempt = 1; attempt <= attempts; attempt++)); do
+  options=("${apt_options[@]}")
+  if [[ "${ImageOS:-}" == ubuntu24 && "${RUNNER_ARCH:-}" == X64 && "$attempt" != 2 ]]; then
+    # Use the signed Ubuntu archive directly. Keep the runner mirror as a fallback.
+    options+=(-o "Dir::Etc::sourcelist=$script_dir/ubuntu-noble-media.sources" -o Dir::Etc::sourceparts=-)
+  fi
   echo "Installing ffmpeg (attempt ${attempt}/${attempts}, ${attempt_timeout}s per apt step)"
-  if $sudo_command timeout --kill-after=10 "$attempt_timeout" apt-get "${apt_options[@]}" update \
-    && $sudo_command timeout --kill-after=10 "$attempt_timeout" env DEBIAN_FRONTEND=noninteractive apt-get "${apt_options[@]}" install -y ffmpeg \
+  if $sudo_command timeout --kill-after=10 "$attempt_timeout" apt-get "${options[@]}" update \
+    && $sudo_command timeout --kill-after=10 "$attempt_timeout" env DEBIAN_FRONTEND=noninteractive apt-get "${options[@]}" install -y --no-install-recommends ffmpeg \
     && have_tools; then
     exit 0
   fi

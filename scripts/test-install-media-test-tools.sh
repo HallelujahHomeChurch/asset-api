@@ -38,7 +38,7 @@ STUB
 run_case() {
   local mode="$1" expected="$2" dir="$work/$1" status=0
   make_stubs "$dir" "$mode"
-  PATH="$dir:$tools" MEDIA_TOOLS_SUDO="" MEDIA_TOOLS_INSTALL_TIMEOUT_SECONDS=2 \
+  ImageOS=ubuntu24 RUNNER_ARCH=X64 PATH="$dir:$tools" MEDIA_TOOLS_SUDO="" MEDIA_TOOLS_INSTALL_TIMEOUT_SECONDS=2 \
     MEDIA_TOOLS_INSTALL_RETRY_DELAY_SECONDS=0 "$script" >"$dir/out" 2>&1 || status=$?
   if [[ "$status" != "$expected" ]]; then
     echo "case $mode: exit $status, want $expected" >&2
@@ -57,6 +57,12 @@ grep -q '^dpkg --configure -a' "$calls" || { echo "dpkg was not repaired before 
 
 calls="$(run_case always-fail 1)"
 [[ "$(grep -c ' install ' "$calls")" == 3 ]] || { echo "failing install was not bounded to 3 attempts" >&2; exit 1; }
+
+grep ' install ' "$calls" | sed -n '1p;3p' | grep -c 'ubuntu-noble-media.sources' | grep -qx 2
+if grep ' install ' "$calls" | sed -n '2p' | grep -q 'ubuntu-noble-media.sources'; then
+  echo "retry did not fall back to runner mirror" >&2
+  exit 1
+fi
 
 # Pre-installed tools skip apt entirely.
 pre="$work/preinstalled"; mkdir -p "$pre"
