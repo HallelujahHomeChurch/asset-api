@@ -159,13 +159,29 @@ func (s *Store) Head(ctx context.Context, key string) (size int64, etag string, 
 	return aws.ToInt64(result.ContentLength), aws.ToString(result.ETag), nil
 }
 
-func (s *Store) Open(ctx context.Context, key string) (body io.ReadCloser, err error) {
+func (s *Store) Open(ctx context.Context, key string) (io.ReadCloser, error) {
+	return s.open(ctx, key, 0)
+}
+
+// OpenLiveInit gives a stalled first GET one retry within the live freeze deadline.
+func (s *Store) OpenLiveInit(ctx context.Context, key string) (io.ReadCloser, error) {
+	return s.open(ctx, key, 5*time.Second)
+}
+
+func (s *Store) open(ctx context.Context, key string, firstHeaderBudget time.Duration) (body io.ReadCloser, err error) {
 	ctx, finish := telemetry.StorageCall(ctx, "storage_response")
 	defer func() { finish(err) }()
 	if !validKey(key) {
 		return nil, errors.New("invalid recording key")
 	}
-	result, err := s.client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key)}, func(o *s3.Options) { o.HTTPClient = storageHTTPObserver{s.client.Options().HTTPClient} })
+	result, err := s.client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key)}, func(o *s3.Options) {
+		observer := storageHTTPObserver{o.HTTPClient}
+		o.HTTPClient = observer
+		if deadline, ok := ctx.Deadline(); firstHeaderBudget > 0 && ok && time.Until(deadline) > 2*firstHeaderBudget {
+			o.HTTPClient = &liveInitHTTPClient{client: observer, firstHeaderBudget: firstHeaderBudget}
+			o.RetryMaxAttempts = 2
+		}
+	})
 	if err != nil {
 		var failure smithy.APIError
 		if errors.As(err, &failure) && (failure.ErrorCode() == "NoSuchKey" || failure.ErrorCode() == "NotFound") {

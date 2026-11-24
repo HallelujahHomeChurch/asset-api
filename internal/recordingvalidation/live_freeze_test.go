@@ -38,3 +38,37 @@ func TestLiveFreezeReportsPartialReadBeforeDecode(t *testing.T) {
 		t.Fatal("provider detail logged")
 	}
 }
+
+type routedFreezeReads struct {
+	PackageObjects
+	keys []string
+}
+
+func (r *routedFreezeReads) OpenLiveInit(ctx context.Context, key string) (io.ReadCloser, error) {
+	r.keys = append(r.keys, "init:"+key)
+	return io.NopCloser(strings.NewReader("init")), nil
+}
+
+func (r *routedFreezeReads) Open(ctx context.Context, key string) (io.ReadCloser, error) {
+	r.keys = append(r.keys, "ordinary:"+key)
+	return io.NopCloser(strings.NewReader("segment")), nil
+}
+
+func TestFreezeOnlyInitializationUsesHeaderRecovery(t *testing.T) {
+	store := new(routedFreezeReads)
+	f := liveFreeze{PackageObjects: store}
+	for _, part := range []string{"init", "segment"} {
+		f.part = part
+		body, err := f.Open(t.Context(), part)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := io.ReadAll(body)
+		if closeErr := body.Close(); err != nil || closeErr != nil || string(got) != part {
+			t.Fatalf("part=%s got=%q read=%v close=%v", part, got, err, closeErr)
+		}
+	}
+	if strings.Join(store.keys, ",") != "init:init,ordinary:segment" {
+		t.Fatalf("read routes: %v", store.keys)
+	}
+}
