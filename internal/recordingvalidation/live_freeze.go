@@ -57,7 +57,13 @@ func (f *liveFreeze) CopyPackageObject(ctx context.Context, from, to, etag strin
 
 func (f *liveFreeze) Open(ctx context.Context, key string) (io.ReadCloser, error) {
 	start := time.Now()
-	body, err := f.PackageObjects.Open(ctx, key)
+	open := f.PackageObjects.Open
+	if initReader, ok := f.PackageObjects.(interface {
+		OpenLiveInit(context.Context, string) (io.ReadCloser, error)
+	}); ok && f.part == "init" {
+		open = initReader.OpenLiveInit
+	}
+	body, err := open(ctx, key)
 	f.record("get_headers", start, err)
 	if err != nil {
 		return nil, err
