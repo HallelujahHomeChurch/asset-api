@@ -40,6 +40,14 @@ type requestObservation struct {
 }
 type requestKey struct{}
 
+// RequestIdentity returns the sanitized identifiers created at HTTP ingress.
+func RequestIdentity(ctx context.Context) (string, string) {
+	if o, ok := ctx.Value(requestKey{}).(*requestObservation); ok {
+		return o.id, o.route
+	}
+	return "", ""
+}
+
 var diagnosticID = regexp.MustCompile(`^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[47][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$`)
 
 func observeRequest(ctx context.Context, r *http.Request) context.Context {
@@ -53,6 +61,14 @@ func observeRequest(ctx context.Context, r *http.Request) context.Context {
 	}
 	route := "other"
 	parts := strings.Split(r.URL.Path, "/")
+	if r.Method == "POST" && len(parts) == 5 && parts[1] == "priv" && parts[2] == "recording-captures" && parts[3] != "" {
+		switch parts[4] {
+		case "grant":
+			route = "recording_live_grant"
+		case "preview-grant":
+			route = "recording_preview_grant"
+		}
+	}
 	if (r.Method == "GET" || r.Method == "HEAD") && len(parts) >= 4 && parts[1] == "priv" && parts[2] == "recording-packages" && parts[3] != "" {
 		switch {
 		case len(parts) == 4:
