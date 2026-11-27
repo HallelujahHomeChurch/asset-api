@@ -77,7 +77,7 @@ func TestDataGovernanceManifest(t *testing.T) {
 		"asset.recording-retention-policy", "asset.recording-retention-previews",
 		"asset.recording-covers", "asset.recording-cover-attempts", "asset.recording-cover-references",
 		"asset.recording-deletions",
-		"asset.recording-captures", "asset.recording-capture-objects", "asset.recording-live", "asset.recording-live-attempts",
+		"asset.recording-captures", "asset.recording-capture-objects", "asset.recording-live", "asset.recording-live-repairs", "asset.recording-live-attempts",
 		"asset.recording-sources", "asset.recording-source-attempts",
 		"asset.recording-packages",
 		"asset.recording-processing-slots", "asset.recording-package-attempts", "asset.recording-live-previews", "asset.recording-preview-attempts",
