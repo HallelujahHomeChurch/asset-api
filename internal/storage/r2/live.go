@@ -18,7 +18,7 @@ import (
 )
 
 var liveObjectKey = regexp.MustCompile(`^recordings/captures/([a-f0-9]{32})/final/((480p|720p|1080p)/(init\.mp4|seg-[0-9]{6}\.m4s))$`)
-var liveDeleteKey = regexp.MustCompile(`^recordings/captures/[a-f0-9]{32}/final/(current\.json|(480p|720p|1080p)/(init\.mp4|seg-[0-9]{6}\.m4s)|playlists/[1-9][0-9]{0,4}/(master\.m3u8|(480p|720p|1080p)/index\.m3u8))$`)
+var liveDeleteKey = regexp.MustCompile(`^recordings/captures/[a-f0-9]{32}/final/(current\.json|(480p|720p|1080p)/(init\.mp4|(sub-)?seg-[0-9]{6}\.m4s)|playlists/[1-9][0-9]{0,4}/(master\.m3u8|(480p|720p|1080p)/index\.m3u8))$`)
 var livePlaylistName = regexp.MustCompile(`^(master\.m3u8|(480p|720p|1080p)/index\.m3u8)$`)
 var ErrLiveConflict = errors.New("live pointer conflict")
 
@@ -129,4 +129,28 @@ func (s *Store) advanceLivePointerKey(ctx context.Context, key string, revision 
 func preconditionFailed(err error) bool {
 	var api smithy.APIError
 	return errors.As(err, &api) && (api.ErrorCode() == "PreconditionFailed" || api.ErrorCode() == "ConditionalRequestConflict")
+}
+
+func (s *Store) PutLiveSubstitute(ctx context.Context, id, rendition string, seq int, data []byte) error {
+	if !sourceAttemptID.MatchString(id) || (rendition != "480p" && rendition != "720p" && rendition != "1080p") || seq < 1 || seq >= 4320 || len(data) == 0 || len(data) > 32<<20 {
+		return errors.New("invalid live substitute")
+	}
+	key := fmt.Sprintf("recordings/captures/%s/final/%s/sub-seg-%06d.m4s", id, rendition, seq)
+	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key), Body: bytes.NewReader(data), ContentType: aws.String("video/mp4"), IfNoneMatch: aws.String("*")})
+	if !preconditionFailed(err) {
+		return err
+	}
+	body, err := s.Open(ctx, key)
+	if err != nil {
+		return err
+	}
+	existing, err := io.ReadAll(io.LimitReader(body, int64(len(data))+1))
+	err = errors.Join(err, body.Close())
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(existing, data) {
+		return ErrLiveConflict
+	}
+	return nil
 }

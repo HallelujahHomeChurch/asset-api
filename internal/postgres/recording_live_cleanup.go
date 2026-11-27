@@ -187,7 +187,18 @@ func (s *RecordingCaptureStore) cleanupLive(ctx context.Context, id string, dele
 	if err != nil {
 		return err
 	}
+	substitutes := make(map[int]bool)
 	for _, a := range work {
+		if !retainMedia && a.seq > 0 && !substitutes[a.seq] {
+			var keys []string
+			for _, r := range assets.LiveRenditions() {
+				keys = append(keys, fmt.Sprintf("%s%s/sub-seg-%06d.m4s", prefix, r.Name, a.seq))
+			}
+			if err = remove(keys); err != nil {
+				return err
+			}
+			substitutes[a.seq] = true
+		}
 		keys := []string{}
 		for _, r := range assets.LiveRenditions() {
 			base := "recordings/packages/" + c.ID + "/final/" + a.id + "/" + r.Name + "/"

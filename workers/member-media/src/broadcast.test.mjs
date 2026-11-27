@@ -239,3 +239,20 @@ test('a member starting on the failed sequence receives its sibling media and in
   assert.ok(manifest.includes('seg-000010.m4s'));
   assert.ok(!manifest.includes('seg-000008'));
 });
+
+test('same-profile substitute remains inside the authorized interval', async () => {
+  const f = await fixture(10.01);
+  f.setPolicy({...f.policy, startSequence: 9, endSequenceExclusive: 11});
+  const original = f.env.MEDIA_BUCKET.get;
+  f.env.MEDIA_BUCKET.get = async key => {
+    const object = await original(key);
+    if (!key.endsWith('/480p/index.m3u8')) return object;
+    const raw = await new Response(object.body).text();
+    const body = raw.replace('seg-000009.m4s', 'sub-seg-000009.m4s');
+    return {...object, size: Buffer.byteLength(body), body: new Response(body).body};
+  };
+  const response = await f.get('480p/index.m3u8');
+  assert.equal(response.status, 200);
+  assert.ok((await response.text()).includes('sub-seg-000009.m4s'));
+  assert.equal((await f.get('480p/sub-seg-000008.m4s')).status, 404);
+});

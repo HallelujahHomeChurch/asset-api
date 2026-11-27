@@ -8,6 +8,7 @@ import (
 )
 
 type RecordingLiveFragment struct {
+	Substitute  bool                     `json:"substitute,omitempty"`
 	WasGap      bool                     `json:"wasGap,omitempty"`
 	Gap         bool                     `json:"gap,omitempty"`
 	Validation  *RecordingLiveValidation `json:"validation,omitempty"`
@@ -105,7 +106,7 @@ func appendLiveSegment(history []RecordingLiveSegment, batch map[string]Recordin
 			if !exists {
 				return nil, ErrInvalidUpload
 			}
-			value = RecordingLiveFragment{Gap: true, Start: timeline.Start, End: timeline.End, FrameRate: timeline.FrameRate, VideoFrames: timeline.VideoFrames, Codecs: last.Codecs}
+			value = RecordingLiveFragment{Gap: true, Substitute: value.Substitute, Start: timeline.Start, End: timeline.End, FrameRate: timeline.FrameRate, VideoFrames: timeline.VideoFrames, Codecs: last.Codecs}
 		}
 		if frames == 300 && value.FrameRate != 30000.0/1001 || value.FrameRate != 30 && value.FrameRate != 30000.0/1001 {
 			return nil, ErrInvalidUpload
@@ -180,28 +181,6 @@ func RecordingLivePlaylists(history []RecordingLiveSegment, ended bool, profile 
 			return nil, err
 		}
 	}
-	// Every variant must have the same discontinuity sequence at an ABR switch.
-	targets := make([]map[string]string, len(verified))
-	switches := make([]bool, len(verified))
-	for i, segment := range verified {
-		targets[i] = make(map[string]string, 3)
-		for _, r := range LiveRenditions() {
-			target := r.Name
-			if f := segment.Renditions[target]; f.Gap || (!ended && f.WasGap) {
-				for _, sibling := range []string{"480p", "720p", "1080p"} {
-					f := segment.Renditions[sibling]
-					if !f.Gap && (ended || !f.WasGap) {
-						target = sibling
-						break
-					}
-				}
-			}
-			targets[i][r.Name] = target
-			if i > 0 && targets[i-1][r.Name] != target {
-				switches[i] = true
-			}
-		}
-	}
 	playlists := make(map[string][]byte, 4)
 	var master strings.Builder
 	master.WriteString("#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-INDEPENDENT-SEGMENTS\n")
@@ -213,17 +192,18 @@ func RecordingLivePlaylists(history []RecordingLiveSegment, ended bool, profile 
 			target = 11
 		}
 		fmt.Fprintf(&playlist, "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:%d\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:EVENT\n#EXT-X-MAP:URI=\"init.mp4\"\n", target)
-		for i, segment := range verified {
-			target := targets[i][r.Name]
-			v := segment.Renditions[target]
+		for _, segment := range verified {
+			v := segment.Renditions[r.Name]
 			prefix := ""
-			if target != r.Name {
-				prefix = "../" + target + "/"
+			gapTag := ""
+			if v.Gap || (!ended && v.WasGap) {
+				if v.Substitute {
+					prefix = "sub-"
+				} else {
+					gapTag = "#EXT-X-GAP\n"
+				}
 			}
-			if switches[i] {
-				fmt.Fprintf(&playlist, "#EXT-X-DISCONTINUITY\n#EXT-X-MAP:URI=\"%sinit.mp4\"\n", prefix)
-			}
-			fmt.Fprintf(&playlist, "#EXTINF:%.6f,\n%sseg-%06d.m4s\n", v.End-v.Start, prefix, segment.Sequence)
+			fmt.Fprintf(&playlist, "#EXTINF:%.6f,\n%s%sseg-%06d.m4s\n", v.End-v.Start, gapTag, prefix, segment.Sequence)
 		}
 		if ended {
 			playlist.WriteString("#EXT-X-ENDLIST\n")

@@ -112,8 +112,11 @@ func runLiveClaim(ctx context.Context, store *postgres.RecordingCaptureStore, ob
 						fragment.Validation.SegmentETag = versions[fragment.Validation.Segment.Path]
 					}
 				}
+				prepareLiveSubstitutes(ctx, objects, probe, claim, batch)
 				commitStarted := time.Now()
-				snapshot, err = store.CommitLiveBatch(stableCtx, claim, batch)
+				commitCtx, cancelCommit := context.WithTimeout(ctx, liveAdmissionTimeout)
+				snapshot, err = store.CommitLiveBatch(commitCtx, claim, batch)
+				cancelCommit()
 				commitDuration = time.Since(commitStarted)
 				if err != nil {
 					return err

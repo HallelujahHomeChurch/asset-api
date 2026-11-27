@@ -36,9 +36,9 @@ type Claims = {
 };
 
 const cookieName = 'hhc_media';
-const packageRoute = /^\/videos\/([a-zA-Z0-9-]{1,80})\/packages\/([a-f0-9]{32})\/sessions\/([a-zA-Z0-9-]{1,80})\/(cookie|audio\/aac-hls-v1\/(?:index\.m3u8|seg-\d{6}\.ts)|master\.m3u8|previews\/(?:index\.vtt|seg-\d{6}\.jpg)|(?:480p|720p|1080p)\/(?:index\.m3u8|init\.mp4|seg-\d{6}\.m4s))$/;
+const packageRoute = /^\/videos\/([a-zA-Z0-9-]{1,80})\/packages\/([a-f0-9]{32})\/sessions\/([a-zA-Z0-9-]{1,80})\/(cookie|audio\/aac-hls-v1\/(?:index\.m3u8|seg-\d{6}\.ts)|master\.m3u8|previews\/(?:index\.vtt|seg-\d{6}\.jpg)|(?:480p|720p|1080p)\/(?:index\.m3u8|init\.mp4|(?:sub-)?seg-\d{6}\.m4s))$/;
 const finalPrefix = /^recordings\/packages\/([a-f0-9]{32})\/final\/[a-zA-Z0-9-]{1,80}\/$/;
-const liveRoute = /^\/videos\/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\/captures\/([a-f0-9]{32})\/sessions\/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\/(cookie|master\.m3u8|previews\/(?:index\.vtt|seg-\d{6}\.jpg)|(?:480p|720p|1080p)\/(?:index\.m3u8|init\.mp4|seg-\d{6}\.m4s))$/;
+const liveRoute = /^\/videos\/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\/captures\/([a-f0-9]{32})\/sessions\/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\/(cookie|master\.m3u8|previews\/(?:index\.vtt|seg-\d{6}\.jpg)|(?:480p|720p|1080p)\/(?:index\.m3u8|init\.mp4|(?:sub-)?seg-\d{6}\.m4s))$/;
 const previewRoute = new RegExp(liveRoute.source.replace('sessions', 'previews'));
 const livePrefix = /^recordings\/captures\/([a-f0-9]{32})\/final\/$/;
 const encoder = new TextEncoder();
@@ -97,15 +97,15 @@ async function broadcastPolicy(env: Env, capture: string): Promise<BroadcastPoli
   return p;
 }
 
-function playlistSegments(raw: string, audio = false): {sequence: number; duration: number; prefix: string; gap: boolean; discontinuity: boolean}[] {
+function playlistSegments(raw: string, audio = false): {sequence: number; duration: number; prefix: string; gap: boolean; discontinuity: boolean; sub: boolean}[] {
   if (!raw.startsWith('#EXTM3U\n')) throw new Error('Invalid playlist');
   const pattern = audio
     ? /#EXTINF:(?<duration>\d+(?:\.\d+)?),\nseg-(?<sequence>\d{6})\.ts\n/g
-    : /(?:(?<switch>#EXT-X-DISCONTINUITY)\n(?:#EXT-X-MAP:[^\n]+\n)?)?#EXTINF:(?<duration>\d+(?:\.\d+)?),\n(?<gap>#EXT-X-GAP\n)?(?<prefix>\.\.\/(?:480p|720p|1080p)\/)?seg-(?<sequence>\d{6})\.m4s\n/g;
+    : /(?:(?<switch>#EXT-X-DISCONTINUITY)\n(?:#EXT-X-MAP:[^\n]+\n)?)?#EXTINF:(?<duration>\d+(?:\.\d+)?),\n(?<gap>#EXT-X-GAP\n)?(?<prefix>\.\.\/(?:480p|720p|1080p)\/)?(?<sub>sub-)?seg-(?<sequence>\d{6})\.m4s\n/g;
   const segments = [...raw.matchAll(pattern)].map(match => {
     const fields = match.groups!;
     return { duration: Number(fields.duration), sequence: Number(fields.sequence),
-      prefix: fields.prefix ?? '', gap: Boolean(fields.gap), discontinuity: Boolean(fields.switch) };
+      sub: Boolean(fields.sub), prefix: fields.prefix ?? '', gap: Boolean(fields.gap), discontinuity: Boolean(fields.switch) };
   });
   if (!segments.length || segments.length > 4320 || segments.some((s,i) => s.sequence !== i || s.duration <= 0 || s.duration > 31)) throw new Error('Invalid playlist timeline');
   return segments;
@@ -125,7 +125,7 @@ function projectPlaylist(raw: string, policy: BroadcastPolicy, audio = false): s
       out += `#EXT-X-DISCONTINUITY\n#EXT-X-MAP:URI="${segment.prefix}init.mp4"\n`;
       activePrefix = segment.prefix;
     }
-    out += `#EXTINF:${segment.duration.toFixed(6)},\n${segment.gap ? '#EXT-X-GAP\n' : ''}${segment.prefix}seg-${String(segment.sequence).padStart(6,'0')}.${audio ? 'ts' : 'm4s'}\n`;
+    out += `#EXTINF:${segment.duration.toFixed(6)},\n${segment.gap ? '#EXT-X-GAP\n' : ''}${segment.prefix}${segment.sub ? 'sub-' : ''}seg-${String(segment.sequence).padStart(6,'0')}.${audio ? 'ts' : 'm4s'}\n`;
   }
   if (ended) out += '#EXT-X-ENDLIST\n';
   return out;

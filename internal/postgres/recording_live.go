@@ -209,7 +209,7 @@ func (s *RecordingCaptureStore) CommitLiveBatch(ctx context.Context, claim Recor
 		}
 		for _, o := range claim.Objects {
 			rendition, _, _ := strings.Cut(o.Path, "/")
-			if _, ok := batch[rendition]; !ok {
+			if f, ok := batch[rendition]; !ok || f.Gap {
 				continue
 			}
 			result, err := tx.ExecContext(ctx, `UPDATE recording_capture_objects SET state='verified' WHERE capture_id=$1 AND path=$2 AND sha256=$3 AND size_bytes=$4 AND state IN ('queued','verified')`, c.ID, o.Path, o.SHA256, o.SizeBytes)

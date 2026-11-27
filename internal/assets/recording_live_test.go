@@ -170,16 +170,12 @@ func TestLiveRenditionGapDoesNotBlockNextSequence(t *testing.T) {
 	}
 	for _, r := range LiveRenditions() {
 		list := string(lists[r.Name+"/index.m3u8"])
-		if strings.Count(list, "#EXT-X-DISCONTINUITY\n") != 2 {
-			t.Fatalf("unaligned variant %s", r.Name)
+		if !strings.Contains(list, "seg-000925.m4s") {
+			t.Fatalf("stopped %s", r.Name)
 		}
-		fallbacks := strings.Count(list, "../720p/seg-")
-		if r.Name == "480p" {
-			if fallbacks != 1 || !strings.Contains(list, "../720p/seg-000924.m4s\n#EXT-X-DISCONTINUITY\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:10.010000,\nseg-000925.m4s") {
-				t.Fatal("expected only 480p/924 marked unavailable")
-			}
-		} else if fallbacks != 0 || !strings.Contains(list, "seg-000925.m4s") {
-			t.Fatalf("%s stopped or marked unavailable", r.Name)
+		gap := strings.Contains(list, "#EXT-X-GAP\nseg-000924.m4s")
+		if gap != (r.Name == "480p") {
+			t.Fatalf("wrong gap in %s", r.Name)
 		}
 	}
 	repaired := history[924].Renditions["480p"]
@@ -190,7 +186,7 @@ func TestLiveRenditionGapDoesNotBlockNextSequence(t *testing.T) {
 		t.Fatal("repair changed the active viewer timeline", err)
 	}
 	replay, err := RecordingLivePlaylists(history, true, 300)
-	if err != nil || strings.Contains(string(replay["480p/index.m3u8"]), "../720p/") {
+	if err != nil || strings.Contains(string(replay["480p/index.m3u8"]), "#EXT-X-GAP") {
 		t.Fatal("repaired replay still points to fallback", err)
 	}
 
