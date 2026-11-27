@@ -18,7 +18,7 @@ import (
 )
 
 var liveObjectKey = regexp.MustCompile(`^recordings/captures/([a-f0-9]{32})/final/((480p|720p|1080p)/(init\.mp4|seg-[0-9]{6}\.m4s))$`)
-var liveDeleteKey = regexp.MustCompile(`^recordings/captures/[a-f0-9]{32}/final/(current\.json|(480p|720p|1080p)/(init\.mp4|seg-[0-9]{6}\.m4s)|playlists/[1-9][0-9]{0,3}/(master\.m3u8|(480p|720p|1080p)/index\.m3u8))$`)
+var liveDeleteKey = regexp.MustCompile(`^recordings/captures/[a-f0-9]{32}/final/(current\.json|(480p|720p|1080p)/(init\.mp4|seg-[0-9]{6}\.m4s)|playlists/[1-9][0-9]{0,4}/(master\.m3u8|(480p|720p|1080p)/index\.m3u8))$`)
 var livePlaylistName = regexp.MustCompile(`^(master\.m3u8|(480p|720p|1080p)/index\.m3u8)$`)
 var ErrLiveConflict = errors.New("live pointer conflict")
 
@@ -41,7 +41,7 @@ func (s *Store) PublishLiveObject(ctx context.Context, source, destination, etag
 }
 
 func (s *Store) PutLivePlaylist(ctx context.Context, id string, revision int64, name string, data []byte) error {
-	if !sourceAttemptID.MatchString(id) || revision < 1 || revision > 4321 || !livePlaylistName.MatchString(name) || len(data) < 8 || len(data) > 1<<20 || !bytes.HasPrefix(data, []byte("#EXTM3U\n")) {
+	if !sourceAttemptID.MatchString(id) || revision < 1 || revision > 17281 || !livePlaylistName.MatchString(name) || len(data) < 8 || len(data) > 1<<20 || !bytes.HasPrefix(data, []byte("#EXTM3U\n")) {
 		return errors.New("invalid live playlist")
 	}
 	key := fmt.Sprintf("recordings/captures/%s/final/playlists/%d/%s", id, revision, name)
@@ -73,7 +73,7 @@ type livePointer struct {
 // R2 conditional PUT fences delayed publishers. Replaying an older revision
 // cannot overwrite a newer common waterline, including after lease loss.
 func (s *Store) AdvanceLivePointer(ctx context.Context, id string, revision int64, lastSequence int) error {
-	if !sourceAttemptID.MatchString(id) || revision < 1 || revision > 4321 || lastSequence < 0 || lastSequence > 4319 {
+	if !sourceAttemptID.MatchString(id) || revision < 1 || revision > 17281 || lastSequence < 0 || lastSequence > 4319 {
 		return errors.New("invalid live pointer")
 	}
 	key := "recordings/captures/" + id + "/final/current.json"
@@ -99,7 +99,7 @@ func (s *Store) advanceLivePointerKey(ctx context.Context, key string, revision 
 			var previous livePointer
 			decoder := json.NewDecoder(bytes.NewReader(raw))
 			decoder.DisallowUnknownFields()
-			if len(raw) > 128 || decoder.Decode(&previous) != nil || decoder.Decode(new(any)) != io.EOF || previous.Revision < 1 || previous.Revision > 4321 || previous.LastSequence < 0 || previous.LastSequence > 4319 || aws.ToString(current.ETag) == "" {
+			if len(raw) > 128 || decoder.Decode(&previous) != nil || decoder.Decode(new(any)) != io.EOF || previous.Revision < 1 || previous.Revision > 17281 || previous.LastSequence < 0 || previous.LastSequence > 4319 || aws.ToString(current.ETag) == "" {
 				return errors.New("invalid stored live pointer")
 			}
 			if previous.Revision >= revision {

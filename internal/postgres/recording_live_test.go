@@ -410,3 +410,77 @@ func TestIdleLiveInputDoesNotKeepWorkerWarm(t *testing.T) {
 		t.Fatalf("incoming media lost its standby worker during retry backoff: %v", err)
 	}
 }
+
+func TestLiveRepairAdvancesRevisionWithoutReplayingHealthySequences(t *testing.T) {
+	ctx := context.Background()
+	db := isolatedIntegrationDB(t)
+	if err := migrations.Run(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	store := NewRecordingCaptureStore(db)
+	now := time.Now().UTC()
+	c := assets.RecordingCapture{ID: strings.Repeat("a", 32), ActorID: "22222222-2222-4222-8222-222222222222", RecordingID: "11111111-1111-4111-8111-111111111111", CreateKey: "live-repair", State: "uploading", CreatedAt: now, ExpiresAt: now.Add(time.Hour), Receipts: map[string]assets.RecordingCaptureStoredReceipt{}}
+	if _, err := store.CreateCapture(ctx, c); err != nil {
+		t.Fatal(err)
+	}
+	_, err := store.UpdateCapture(ctx, c.ID, func(c *assets.RecordingCapture) error {
+		for _, r := range assets.LiveRenditions() {
+			for _, filename := range []string{"init.mp4", "seg-000000.m4s", "seg-000001.m4s", "seg-000002.m4s"} {
+				c.Objects = append(c.Objects, assets.RecordingCaptureObject{RecordingPackageObject: assets.RecordingPackageObject{Path: r.Name + "/" + filename, SizeBytes: 10, SHA256: strings.Repeat("b", 64)}, State: "queued"})
+			}
+		}
+		c.DeclaredObjects = len(c.Objects)
+		c.DeclaredBytes = int64(len(c.Objects) * 10)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for seq := 0; seq < 3; seq++ {
+		claim, err := store.ClaimLiveValidation(ctx)
+		if err != nil || claim.Sequence != seq {
+			t.Fatalf("claim %d: %v", seq, err)
+		}
+		batch := map[string]assets.RecordingLiveFragment{}
+		for _, r := range assets.LiveRenditions() {
+			if seq == 1 && r.Name == "480p" {
+				continue
+			}
+			batch[r.Name] = assets.RecordingLiveFragment{Start: float64(seq * 30), End: float64((seq + 1) * 30), FrameRate: 30, Codecs: "avc1.64001f,mp4a.40.2"}
+		}
+		snapshot, err := store.CommitLiveBatch(ctx, claim, batch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = store.FinishLivePublication(ctx, claim, snapshot.Revision); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err = db.ExecContext(ctx, "UPDATE recording_live_repairs SET next_attempt_at=now() WHERE capture_id=$1", c.ID); err != nil {
+		t.Fatal(err)
+	}
+	r, err := store.ClaimLiveRepair(ctx)
+	if err != nil || r.Sequence != 1 || r.Rendition != "480p" || len(r.Objects) != 2 {
+		t.Fatalf("repair claim: %+v %v", r, err)
+	}
+	f := r.Snapshot.Segments[1].Renditions["480p"]
+	f.Gap = false
+	f.Validation = &assets.RecordingLiveValidation{Init: r.Objects[0], Segment: r.Objects[1], InitETag: "init", SegmentETag: "repaired", Version: "live-fragment-v1"}
+	if err = store.FinishLiveRepair(ctx, r, &f); err != nil {
+		t.Fatal(err)
+	}
+	claim, err := store.ClaimLiveValidation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f = claim.Snapshot.Segments[1].Renditions["480p"]
+	if claim.Sequence != 3 || claim.Snapshot.Revision != 4 || !f.WasGap || f.Gap || f.Validation.SegmentETag != "repaired" {
+		t.Fatalf("repaired snapshot: %+v", claim.Snapshot)
+	}
+	if err = store.FinishLivePublication(ctx, claim, 4); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.ClaimLiveRepair(ctx); !errors.Is(err, assets.ErrNotFound) {
+		t.Fatalf("duplicate repair: %v", err)
+	}
+}

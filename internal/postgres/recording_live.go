@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"hhc/asset-api/internal/assets"
+	"strings"
 	"time"
 )
 
@@ -136,6 +137,9 @@ func (s *RecordingCaptureStore) ClaimLiveValidation(ctx context.Context) (Record
 					var o assets.RecordingPackageObject
 					o.Path = path
 					if err := tx.QueryRowContext(ctx, `SELECT size_bytes,sha256 FROM recording_capture_objects WHERE capture_id=$1 AND path=$2 AND state IN ('queued','verified')`, id, path).Scan(&o.SizeBytes, &o.SHA256); errors.Is(err, sql.ErrNoRows) {
+						if claim.Sequence > 0 {
+							continue
+						}
 						return assets.ErrNotFound
 					} else if err != nil {
 						return err
@@ -178,16 +182,23 @@ func (s *RecordingCaptureStore) CommitLiveBatch(ctx context.Context, claim Recor
 				}
 			}
 		}
-		segments, err := assets.AppendLiveSegment(snapshot.Segments, batch, normalTail, claim.Capture.SegmentFrames)
+		segments, err := assets.AppendAvailableLiveSegment(snapshot.Segments, batch, normalTail, claim.Capture.SegmentFrames)
 		if err != nil {
 			if c.Inventory != nil && errors.Is(err, assets.ErrCaptureMissingObjects) {
 				return assets.ErrInvalidUpload
 			}
 			return err
 		}
-		revision := int64(len(segments))
+		revision := snapshot.Revision + 1
 		if normalTail {
 			revision++
+		}
+		for name, fragment := range segments[claim.Sequence].Renditions {
+			if fragment.Gap {
+				if _, err := tx.ExecContext(ctx, `INSERT INTO recording_live_repairs(capture_id,sequence,rendition,next_attempt_at) VALUES($1,$2,$3,now()+interval '20 seconds')`, c.ID, claim.Sequence, name); err != nil {
+					return err
+				}
+			}
 		}
 		raw, err := json.Marshal(segments)
 		if err != nil {
@@ -197,6 +208,10 @@ func (s *RecordingCaptureStore) CommitLiveBatch(ctx context.Context, claim Recor
 			return err
 		}
 		for _, o := range claim.Objects {
+			rendition, _, _ := strings.Cut(o.Path, "/")
+			if _, ok := batch[rendition]; !ok {
+				continue
+			}
 			result, err := tx.ExecContext(ctx, `UPDATE recording_capture_objects SET state='verified' WHERE capture_id=$1 AND path=$2 AND sha256=$3 AND size_bytes=$4 AND state IN ('queued','verified')`, c.ID, o.Path, o.SHA256, o.SizeBytes)
 			if err != nil {
 				return err

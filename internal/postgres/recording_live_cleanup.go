@@ -13,7 +13,7 @@ const captureCleanupSafeAt = `GREATEST(c.expires_at+interval '6 hours',
  CASE WHEN ` + capturePackageTerminal + ` THEN COALESCE(c.terminal_at,%[1]s)+interval '7 days'
  WHEN c.state IN ('failed','expired','aborted') OR c.package_id IS NULL THEN COALESCE(c.terminal_at,c.expires_at)+interval '7 days' ELSE c.expires_at END,
  l.read_grant_until,l.claimed_until)<=%[1]s
- AND NOT EXISTS(SELECT 1 FROM recording_processing_slots s WHERE s.job_id IN (c.id,'live:'||c.id,'preview:'||c.id) AND s.leased_until>%[1]s)`
+ AND NOT EXISTS(SELECT 1 FROM recording_processing_slots s WHERE s.job_id IN (c.id,'live:'||c.id,'preview:'||c.id,'repair:'||c.id) AND s.leased_until>%[1]s)`
 
 var captureCleanupSafe = fmt.Sprintf(captureCleanupSafeAt, "clock_timestamp()")
 

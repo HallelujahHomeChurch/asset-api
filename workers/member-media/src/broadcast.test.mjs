@@ -198,3 +198,44 @@ test('each member playlist request checks the policy and publication pointer bef
   }
   assert.equal(lookups.length, accesses);
 });
+test('member playlist keeps a rendition gap inside the granted sequence range', async () => {
+  const f = await fixture(10.01);
+  const get = f.env.MEDIA_BUCKET.get;
+  f.env.MEDIA_BUCKET.get = async key => {
+    const object = await get(key);
+    if (!key.endsWith('/480p/index.m3u8')) return object;
+    const raw = await new Response(object.body).text();
+    const body = raw.replace(/seg-00000[79]\.m4s/g, name => '#EXT-X-GAP\n' + name);
+    return {...object, body: new Response(body).body, size: Buffer.byteLength(body)};
+  };
+
+  const response = await f.get('480p/index.m3u8');
+  assert.equal(response.status, 200);
+  const body = await response.text();
+  assert.equal(body.match(/#EXT-X-GAP/g)?.length, 1);
+  assert.ok(body.includes('#EXTINF:10.010000,\n#EXT-X-GAP\nseg-000009.m4s\n#EXTINF:10.010000,\nseg-000010.m4s'));
+  assert.ok(!body.includes('seg-000007'));
+  const healthy = await f.get('720p/index.m3u8');
+  assert.equal(healthy.status, 200);
+  assert.ok(!(await healthy.text()).includes('#EXT-X-GAP'));
+});
+
+test('a member starting on the failed sequence receives its sibling media and init, then returns to their selected rendition', async () => {
+  const f = await fixture(10.01);
+  f.setPolicy({...f.policy, startSequence: 9, endSequenceExclusive: 11});
+  const original = f.env.MEDIA_BUCKET.get;
+  f.env.MEDIA_BUCKET.get = async key => {
+    const object = await original(key);
+    if (!key.endsWith('/480p/index.m3u8')) return object;
+    const raw = await new Response(object.body).text();
+    const body = raw.replace('seg-000009.m4s', '../720p/seg-000009.m4s');
+    return {...object, size: Buffer.byteLength(body), body: new Response(body).body};
+  };
+  const response = await f.get('480p/index.m3u8');
+  assert.equal(response.status, 200);
+  const manifest = await response.text();
+  assert.match(manifest, /MAP:URI="\.\.\/720p\/init.mp4"/);
+  assert.ok(manifest.includes('../720p/seg-000009.m4s\n#EXT-X-DISCONTINUITY\n#EXT-X-MAP:URI="init.mp4"'));
+  assert.ok(manifest.includes('seg-000010.m4s'));
+  assert.ok(!manifest.includes('seg-000008'));
+});

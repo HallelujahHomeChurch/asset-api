@@ -23,7 +23,7 @@ func (s *RecordingEventStore) workReady(ctx context.Context, lane string) (bool,
 	var media, exhausted string
 	switch lane {
 	case "live":
-		media = `EXISTS (` + liveCoverWakeCandidate + `) OR EXISTS (` + livePreviewWakeCandidate + `) OR EXISTS (` + livePreviewBootstrapCandidate + `)`
+		media = `EXISTS (` + liveRepairCandidate + `) OR EXISTS (` + liveCoverWakeCandidate + `) OR EXISTS (` + livePreviewWakeCandidate + `) OR EXISTS (` + livePreviewBootstrapCandidate + `)`
 		exhausted = `EXISTS (SELECT 1 FROM recording_live_covers WHERE state='processing' AND attempts=3 AND claimed_until<=now())`
 	case "processing":
 		media = `EXISTS (` + packageWakeCandidate + `)`

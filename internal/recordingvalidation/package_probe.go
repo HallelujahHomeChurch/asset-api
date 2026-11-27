@@ -22,6 +22,7 @@ import (
 )
 
 type PackageMediaProbe struct {
+	allowLiveGaps                bool // Set only after a full initial segment established all rendition profiles.
 	LiveInitEvidence             map[string]assets.RecordingLiveValidation
 	Objects                      PackageObjects
 	FFmpeg, FFprobe, ScratchRoot string
