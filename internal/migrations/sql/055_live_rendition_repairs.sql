@@ -1,5 +1,3 @@
-ALTER TABLE recording_live DROP CONSTRAINT recording_live_revision_check;
-ALTER TABLE recording_live ADD CONSTRAINT recording_live_revision_check CHECK (revision BETWEEN 0 AND 17281);
 CREATE TABLE recording_live_repairs (
  capture_id text NOT NULL REFERENCES recording_live(capture_id) ON DELETE CASCADE,
  sequence integer NOT NULL CHECK (sequence BETWEEN 1 AND 4319),
