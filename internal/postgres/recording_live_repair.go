@@ -83,6 +83,10 @@ func (s *RecordingCaptureStore) FinishLiveRepair(ctx context.Context, r LiveRepa
 			return assets.ErrConflict
 		}
 		if fragment != nil && snap.Revision == snap.PublishedRevision && snap.Segments[r.Sequence].Renditions[r.Rendition].Gap {
+			receipt := fragment.Validation
+			if fragment.Gap || receipt == nil || len(r.Objects) != 2 || receipt.Init != r.Objects[0] || receipt.Segment != r.Objects[1] || receipt.InitETag == "" || receipt.SegmentETag == "" {
+				return assets.ErrInvalidUpload
+			}
 			fragment.WasGap = true
 			raw, err := json.Marshal(fragment)
 			if err != nil {
