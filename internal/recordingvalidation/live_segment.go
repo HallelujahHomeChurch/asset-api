@@ -167,6 +167,7 @@ func (p PackageMediaProbe) validateLiveRendition(ctx context.Context, pack asset
 	freezeCtx, cancelFreeze := context.WithTimeout(ctx, time.Minute)
 	observation := &liveFreeze{PackageObjects: p.Objects, part: "init"}
 	p.Objects = observation
+	freezeCtx = r2.WithLiveAttempt(freezeCtx, pack.ID, attempt, r.Name, "freeze", sequence)
 	freezeCtx = r2.WithAttemptCounter(freezeCtx, &observation.attempts)
 	err = writePackageScratchObserved(path, observation.record, func(w io.Writer) error {
 		w = freezeWriter{w, observation}

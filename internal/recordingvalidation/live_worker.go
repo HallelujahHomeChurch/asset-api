@@ -293,7 +293,9 @@ func copyLiveObjects(ctx context.Context, objects LiveObjects, claim postgres.Re
 				}
 				object := pending[index]
 				var measured liveCopyTiming
-				size, etag, err := headForLiveCopy(workCtx, objects, from+object.Path, &measured)
+				rendition, _, _ := strings.Cut(object.Path, "/")
+				transferCtx := r2.WithLiveAttempt(workCtx, claim.Capture.ID, claim.ClaimID, rendition, "stable", claim.Sequence)
+				size, etag, err := headForLiveCopy(transferCtx, objects, from+object.Path, &measured)
 				mu.Lock()
 				timing.head = max(timing.head, measured.head)
 				timing.headRetries += measured.headRetries
@@ -306,7 +308,7 @@ func copyLiveObjects(ctx context.Context, objects LiveObjects, claim postgres.Re
 				if err == nil {
 					var published string
 					copyStarted := time.Now()
-					published, err = objects.PublishLiveObject(workCtx, from+object.Path, to+object.Path, etag)
+					published, err = objects.PublishLiveObject(transferCtx, from+object.Path, to+object.Path, etag)
 					mu.Lock()
 					timing.copy = max(timing.copy, time.Since(copyStarted))
 					mu.Unlock()
