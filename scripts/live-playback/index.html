@@ -17,6 +17,7 @@ function frame(_, metadata) {
 }
 video.requestVideoFrameCallback(frame);
 video.onwaiting = () => { if (video.currentTime > 1 && video.currentTime < 26) state.stalls.push(video.currentTime); };
+video.addEventListener('playing', () => fetch('/playing'), {once: true});
 video.onerror = () => state.errors.push('media error ' + video.error.code);
 if (location.search === '?native') {
   video.src = '480p/index.m3u8';

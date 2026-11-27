@@ -18,6 +18,9 @@ args = parser.parse_args()
 root = args.directory
 shutil.copyfile(Path(__file__).with_name("index.html"), root / "index.html")
 requested = set()
+# Publish the next healthy sequence while the viewer is already playing.
+playing_at = None
+manifests = []
 
 
 class MediaHandler(http.server.SimpleHTTPRequestHandler):
@@ -25,7 +28,28 @@ class MediaHandler(http.server.SimpleHTTPRequestHandler):
                       ".m3u8": "application/vnd.apple.mpegurl", ".m4s": "video/mp4"}
 
     def do_GET(self):
+        global playing_at
         requested.add(self.path)
+        if self.path == "/playing":
+            if playing_at is None:
+                playing_at = time.monotonic()
+            self.send_response(204)
+            self.end_headers()
+            return
+        if self.path == "/480p/index.m3u8":
+            data = (root / "480p/index.m3u8").read_text()
+            advanced = playing_at is not None and time.monotonic() >= playing_at + 1
+            if not advanced:
+                data = data[:data.rindex("#EXTINF:")]
+            manifests.append(advanced)
+            raw = data.encode()
+            self.send_response(200)
+            self.send_header("Content-Type", self.extensions_map[".m3u8"])
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+            return
         super().do_GET()
 
 
@@ -50,6 +74,7 @@ with http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler) as server:
                 break
             time.sleep(0.5)
         print(json.dumps(result, indent=2), flush=True)
+        assert False in manifests and True in manifests, "viewer did not reload the advancing EVENT playlist"
         assert result and not result["stalls"] and not result["errors"], "playback stalled or failed"
         assert result["first"] < 1 and result["middle"] > 10 and result["end"] > 10 and result["last"] > 26
         assert {"/480p/seg-000000.m4s", "/480p/sub-seg-000001.m4s", "/480p/seg-000002.m4s"} <= requested
