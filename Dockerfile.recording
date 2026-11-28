@@ -13,6 +13,8 @@ RUN apt-get update \
  && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libapt-pkg6.0)" ge '2.6.2' \
  && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' perl-base)" ge '5.36.0-7+deb12u4' \
  && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libpcre2-8-0)" ge '10.42-1+deb12u2' \
+ && apt-get install -y --only-upgrade libpam0g libpam-modules libpam-modules-bin libpam-runtime \
+ && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libpam0g)" ge '1.5.2-6+deb12u3' \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /asset-recording-worker /asset-recording-worker
 COPY --from=build /asset-recording-cover-backfill /asset-recording-cover-backfill

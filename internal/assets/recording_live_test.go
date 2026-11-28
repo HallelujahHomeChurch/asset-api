@@ -145,3 +145,49 @@ func TestLiveLegacyHistoryIsPreviouslyVerified30FPS(t *testing.T) {
 		t.Fatalf("legacy rate change: %v", err)
 	}
 }
+
+func TestLiveRenditionGapDoesNotBlockNextSequence(t *testing.T) {
+	var history []RecordingLiveSegment
+	for seq := 0; seq <= 925; seq++ {
+		batch := liveBatch(float64(seq)*10.01, float64(seq+1)*10.01)
+		for name, fragment := range batch {
+			fragment.FrameRate = 30000.0 / 1001
+			fragment.VideoFrames = 300
+			batch[name] = fragment
+		}
+		if seq == 924 {
+			delete(batch, "480p")
+		}
+		var err error
+		history, err = AppendAvailableLiveSegment(history, batch, false, 300)
+		if err != nil {
+			t.Fatalf("sequence %d: %v", seq, err)
+		}
+	}
+	lists, err := RecordingLivePlaylists(history, false, 300)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range LiveRenditions() {
+		list := string(lists[r.Name+"/index.m3u8"])
+		if !strings.Contains(list, "seg-000925.m4s") {
+			t.Fatalf("stopped %s", r.Name)
+		}
+		gap := strings.Contains(list, "#EXT-X-GAP\nseg-000924.m4s")
+		if gap != (r.Name == "480p") {
+			t.Fatalf("wrong gap in %s", r.Name)
+		}
+	}
+	repaired := history[924].Renditions["480p"]
+	repaired.Gap, repaired.WasGap = false, true
+	history[924].Renditions["480p"] = repaired
+	live, err := RecordingLivePlaylists(history, false, 300)
+	if err != nil || string(live["480p/index.m3u8"]) != string(lists["480p/index.m3u8"]) {
+		t.Fatal("repair changed the active viewer timeline", err)
+	}
+	replay, err := RecordingLivePlaylists(history, true, 300)
+	if err != nil || strings.Contains(string(replay["480p/index.m3u8"]), "#EXT-X-GAP") {
+		t.Fatal("repaired replay still points to fallback", err)
+	}
+
+}

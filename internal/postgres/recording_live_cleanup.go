@@ -13,7 +13,7 @@ const captureCleanupSafeAt = `GREATEST(c.expires_at+interval '6 hours',
  CASE WHEN ` + capturePackageTerminal + ` THEN COALESCE(c.terminal_at,%[1]s)+interval '7 days'
  WHEN c.state IN ('failed','expired','aborted') OR c.package_id IS NULL THEN COALESCE(c.terminal_at,c.expires_at)+interval '7 days' ELSE c.expires_at END,
  l.read_grant_until,l.claimed_until)<=%[1]s
- AND NOT EXISTS(SELECT 1 FROM recording_processing_slots s WHERE s.job_id IN (c.id,'live:'||c.id,'preview:'||c.id) AND s.leased_until>%[1]s)`
+ AND NOT EXISTS(SELECT 1 FROM recording_processing_slots s WHERE s.job_id IN (c.id,'live:'||c.id,'preview:'||c.id,'repair:'||c.id) AND s.leased_until>%[1]s)`
 
 var captureCleanupSafe = fmt.Sprintf(captureCleanupSafeAt, "clock_timestamp()")
 
@@ -187,7 +187,18 @@ func (s *RecordingCaptureStore) cleanupLive(ctx context.Context, id string, dele
 	if err != nil {
 		return err
 	}
+	substitutes := make(map[int]bool)
 	for _, a := range work {
+		if !retainMedia && a.seq > 0 && !substitutes[a.seq] {
+			var keys []string
+			for _, r := range assets.LiveRenditions() {
+				keys = append(keys, fmt.Sprintf("%s%s/sub-seg-%06d.m4s", prefix, r.Name, a.seq))
+			}
+			if err = remove(keys); err != nil {
+				return err
+			}
+			substitutes[a.seq] = true
+		}
 		keys := []string{}
 		for _, r := range assets.LiveRenditions() {
 			base := "recordings/packages/" + c.ID + "/final/" + a.id + "/" + r.Name + "/"

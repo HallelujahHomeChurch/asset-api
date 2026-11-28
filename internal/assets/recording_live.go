@@ -8,6 +8,9 @@ import (
 )
 
 type RecordingLiveFragment struct {
+	Substitute  bool                     `json:"substitute,omitempty"`
+	WasGap      bool                     `json:"wasGap,omitempty"`
+	Gap         bool                     `json:"gap,omitempty"`
 	Validation  *RecordingLiveValidation `json:"validation,omitempty"`
 	VideoFrames int                      `json:"videoFrames,omitempty"`
 	FrameRate   float64                  `json:"frameRate,omitempty"`
@@ -51,6 +54,16 @@ func historicalLiveFrameRate(fragment RecordingLiveFragment) float64 {
 // Only a complete, decoded three-rendition batch advances the common waterline.
 // Short segments wait for normal seal so a crash cannot manufacture an ENDLIST.
 func AppendLiveSegment(history []RecordingLiveSegment, batch map[string]RecordingLiveFragment, normalTail bool, profile ...int) ([]RecordingLiveSegment, error) {
+	return appendLiveSegment(history, batch, normalTail, false, profile...)
+}
+
+// AppendAvailableLiveSegment uses the established rendition profiles and a
+// decoded sibling's timeline to mark missing media. A gap has no validation receipt.
+func AppendAvailableLiveSegment(history []RecordingLiveSegment, batch map[string]RecordingLiveFragment, normalTail bool, profile ...int) ([]RecordingLiveSegment, error) {
+	return appendLiveSegment(history, batch, normalTail, true, profile...)
+}
+
+func appendLiveSegment(history []RecordingLiveSegment, batch map[string]RecordingLiveFragment, normalTail, allowGaps bool, profile ...int) ([]RecordingLiveSegment, error) {
 	frames := 900
 	if len(profile) > 0 && profile[0] != 0 {
 		frames = profile[0]
@@ -62,19 +75,38 @@ func AppendLiveSegment(history []RecordingLiveSegment, batch map[string]Recordin
 	if frames == 300 {
 		nominal = 10.01
 	}
-	if len(batch) != 3 {
+	var timeline *RecordingLiveFragment
+	for _, rendition := range LiveRenditions() {
+		if fragment, ok := batch[rendition.Name]; ok && !fragment.Gap {
+			timeline = &fragment
+			break
+		}
+	}
+	if timeline == nil || len(batch) > 3 || len(batch) != 3 && (!allowGaps || len(history) == 0) {
 		return nil, ErrCaptureMissingObjects
 	}
 	if len(history) >= RecordingMaxSegments {
 		return nil, ErrInvalidUpload
+	}
+	for name := range batch {
+		if name != "480p" && name != "720p" && name != "1080p" {
+			return nil, ErrInvalidInput
+		}
 	}
 	var reference *RecordingLiveFragment
 	cloned := make(map[string]RecordingLiveFragment, 3)
 	waitForSeal := false
 	for _, r := range LiveRenditions() {
 		value, ok := batch[r.Name]
-		if !ok {
-			return nil, ErrCaptureMissingObjects
+		if !ok || value.Gap {
+			if !allowGaps || len(history) == 0 || value.Validation != nil {
+				return nil, ErrCaptureMissingObjects
+			}
+			last, exists := history[len(history)-1].Renditions[r.Name]
+			if !exists {
+				return nil, ErrInvalidUpload
+			}
+			value = RecordingLiveFragment{Gap: true, Substitute: value.Substitute, Start: timeline.Start, End: timeline.End, FrameRate: timeline.FrameRate, VideoFrames: timeline.VideoFrames, Codecs: last.Codecs}
 		}
 		if frames == 300 && value.FrameRate != 30000.0/1001 || value.FrameRate != 30 && value.FrameRate != 30000.0/1001 {
 			return nil, ErrInvalidUpload
@@ -141,7 +173,10 @@ func RecordingLivePlaylists(history []RecordingLiveSegment, ended bool, profile 
 			fragment.FrameRate = historicalLiveFrameRate(fragment)
 			batch[name] = fragment
 		}
-		verified, err = AppendLiveSegment(verified, batch, ended && i == len(history)-1, profile...)
+		if len(batch) != len(LiveRenditions()) {
+			return nil, ErrInvalidUpload
+		}
+		verified, err = AppendAvailableLiveSegment(verified, batch, ended && i == len(history)-1, profile...)
 		if err != nil {
 			return nil, err
 		}
@@ -157,9 +192,18 @@ func RecordingLivePlaylists(history []RecordingLiveSegment, ended bool, profile 
 			target = 11
 		}
 		fmt.Fprintf(&playlist, "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:%d\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:EVENT\n#EXT-X-MAP:URI=\"init.mp4\"\n", target)
-		for _, segment := range history {
+		for _, segment := range verified {
 			v := segment.Renditions[r.Name]
-			fmt.Fprintf(&playlist, "#EXTINF:%.6f,\nseg-%06d.m4s\n", v.End-v.Start, segment.Sequence)
+			prefix := ""
+			gapTag := ""
+			if v.Gap || (!ended && v.WasGap) {
+				if v.Substitute {
+					prefix = "sub-"
+				} else {
+					gapTag = "#EXT-X-GAP\n"
+				}
+			}
+			fmt.Fprintf(&playlist, "#EXTINF:%.6f,\n%s%sseg-%06d.m4s\n", v.End-v.Start, gapTag, prefix, segment.Sequence)
 		}
 		if ended {
 			playlist.WriteString("#EXT-X-ENDLIST\n")

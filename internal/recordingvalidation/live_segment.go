@@ -33,6 +33,9 @@ func (p PackageMediaProbe) ValidateLiveSegment(ctx context.Context, captureID, a
 		for _, name := range []string{"init.mp4", fmt.Sprintf("seg-%06d.m4s", sequence)} {
 			o, ok := selected[r.Name+"/"+name]
 			if !ok {
+				if p.allowLiveGaps {
+					continue
+				}
 				return nil, assets.ErrCaptureMissingObjects
 			}
 			if o.SizeBytes < 1 || o.SizeBytes > assets.RecordingObjectMaxBytes || len(o.SHA256) != 64 {
@@ -59,10 +62,17 @@ func (p PackageMediaProbe) ValidateLiveSegment(ctx context.Context, captureID, a
 	jobCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	jobs := make(chan int, len(renditions))
-	for index := range renditions {
+	for index, r := range renditions {
+		if _, ok := selected[fmt.Sprintf("%s/seg-%06d.m4s", r.Name, sequence)]; !ok {
+			continue
+		}
+		if _, ok := selected[r.Name+"/init.mp4"]; !ok {
+			continue
+		}
 		jobs <- index
 	}
 	close(jobs)
+	available := make([]bool, len(renditions))
 	actuals := make([]segmentProbe, len(renditions))
 	reusedInits := make([]bool, len(renditions))
 	var workers sync.WaitGroup
@@ -76,34 +86,50 @@ func (p PackageMediaProbe) ValidateLiveSegment(ctx context.Context, captureID, a
 				if jobCtx.Err() != nil {
 					return
 				}
-				actual, reused, err := p.validateLiveRendition(jobCtx, pack, prefix, dir, attempt, sequence, renditions[index], selected)
+				renditionCtx := jobCtx
+				cancelRendition := func() {}
+				if p.allowLiveGaps {
+					renditionCtx, cancelRendition = context.WithTimeout(jobCtx, 15*time.Second)
+				}
+				actual, reused, err := p.validateLiveRendition(renditionCtx, pack, prefix, dir, attempt, sequence, renditions[index], selected)
+				cancelRendition()
 				if err != nil {
 					errorMu.Lock()
 					if root == nil || errors.Is(root, context.Canceled) && !errors.Is(err, context.Canceled) {
 						root = err
 					}
 					errorMu.Unlock()
+					if p.allowLiveGaps && jobCtx.Err() == nil {
+						slog.Warn("recording_live_rendition_unavailable", "capture_id", captureID, "claim_id", attempt, "sequence", sequence, "rendition", renditions[index].Name)
+						continue
+					}
 					cancel()
 					return
 				}
+				available[index] = true
 				actuals[index] = actual
 				reusedInits[index] = reused
 			}
 		}()
 	}
 	workers.Wait()
-	if root != nil {
+	if root != nil && !p.allowLiveGaps {
 		return nil, root
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	result = make(map[string]assets.RecordingLiveFragment, len(renditions))
+	var frameRate float64
 	for index, r := range renditions {
+		if !available[index] {
+			continue
+		}
 		actual := actuals[index]
-		if actual.AudioChannels != 2 || actual.FrameRate != actuals[0].FrameRate {
+		if actual.AudioChannels != 2 || frameRate != 0 && actual.FrameRate != frameRate {
 			return nil, assets.ErrInvalidUpload
 		}
+		frameRate = actual.FrameRate
 		result[r.Name] = assets.RecordingLiveFragment{VideoFrames: actual.VideoFrames, Start: actual.Start, End: actual.End, Codecs: actual.Codecs, FrameRate: actual.FrameRate}
 		fragment := result[r.Name]
 		fragment.Validation = &assets.RecordingLiveValidation{Version: liveValidationVersion, Init: selected[r.Name+"/init.mp4"], Segment: selected[fmt.Sprintf("%s/seg-%06d.m4s", r.Name, sequence)]}
@@ -111,6 +137,12 @@ func (p PackageMediaProbe) ValidateLiveSegment(ctx context.Context, captureID, a
 			fragment.Validation.InitETag = prior.InitETag
 		}
 		result[r.Name] = fragment
+	}
+	if len(result) == 0 {
+		if root == nil {
+			return nil, assets.ErrCaptureMissingObjects
+		}
+		return nil, root
 	}
 	return result, nil
 }
@@ -135,6 +167,7 @@ func (p PackageMediaProbe) validateLiveRendition(ctx context.Context, pack asset
 	freezeCtx, cancelFreeze := context.WithTimeout(ctx, time.Minute)
 	observation := &liveFreeze{PackageObjects: p.Objects, part: "init"}
 	p.Objects = observation
+	freezeCtx = r2.WithLiveAttempt(freezeCtx, pack.ID, attempt, r.Name, "freeze", sequence)
 	freezeCtx = r2.WithAttemptCounter(freezeCtx, &observation.attempts)
 	err = writePackageScratchObserved(path, observation.record, func(w io.Writer) error {
 		w = freezeWriter{w, observation}
@@ -154,7 +187,7 @@ func (p PackageMediaProbe) validateLiveRendition(ctx context.Context, pack asset
 	})
 
 	if freezeCtx.Err() != nil {
-		err = freezeCtx.Err()
+		err = errors.Join(err, freezeCtx.Err())
 	}
 	cancelFreeze()
 	freezeTime = time.Since(freezeStarted)

@@ -1,0 +1,31 @@
+<!doctype html><meta charset="utf-8"><title>Live rendition recovery acceptance</title>
+<video muted playsinline controls></video><button>Play</button>
+<script src="hls.min.js"></script>
+<script>
+const video = document.querySelector('video');
+const state = window.result = {first: null, last: null, frames: 0, middle: 0, end: 0, stalls: [], errors: []};
+function frame(_, metadata) {
+  const time = metadata.mediaTime;
+  state.first ??= time;
+  if (state.last !== null && time - state.last > 1) state.errors.push('video timestamp jumped at ' + time);
+  state.last = time;
+  state.frames++;
+  if (video.videoWidth !== 854 || video.videoHeight !== 480) state.errors.push('unexpected video dimensions');
+  if (time > 10.5 && time < 19.5) state.middle++;
+  if (time > 21) state.end++;
+  video.requestVideoFrameCallback(frame);
+}
+video.requestVideoFrameCallback(frame);
+video.onwaiting = () => { if (video.currentTime > 1 && video.currentTime < 26) state.stalls.push(video.currentTime); };
+video.addEventListener('playing', () => fetch('/playing'), {once: true});
+video.onerror = () => state.errors.push('media error ' + video.error.code);
+if (location.search === '?native') {
+  video.src = '480p/index.m3u8';
+} else {
+  const player = new Hls({startPosition: 0});
+  player.on(Hls.Events.ERROR, (_, event) => {if (event.fatal) state.errors.push(event.details);});
+  player.loadSource('480p/index.m3u8');
+  player.attachMedia(video);
+}
+document.querySelector('button').onclick = () => video.play().catch(error => state.errors.push(error.name));
+</script>

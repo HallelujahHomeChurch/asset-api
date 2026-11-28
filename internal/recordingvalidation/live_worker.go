@@ -7,6 +7,7 @@ import (
 	"hhc/asset-api/internal/postgres"
 	"hhc/asset-api/internal/storage/r2"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -31,7 +32,7 @@ func ClaimLiveWork(ctx context.Context, store *postgres.RecordingCaptureStore, o
 		return nil, nil
 	}
 	if errors.Is(err, assets.ErrNotFound) {
-		return nil, nil
+		return claimLiveRepair(ctx, store, objects, probe)
 	}
 	if err != nil {
 		return nil, err
@@ -69,12 +70,13 @@ func runLiveClaim(ctx context.Context, store *postgres.RecordingCaptureStore, ob
 				stage = "validation"
 				probe.LiveInitEvidence = make(map[string]assets.RecordingLiveValidation)
 				if len(snapshot.Segments) > 0 {
-					for name, fragment := range snapshot.Segments[len(snapshot.Segments)-1].Renditions {
+					for name, fragment := range snapshot.Segments[0].Renditions {
 						if fragment.Validation != nil {
 							probe.LiveInitEvidence[name] = *fragment.Validation
 						}
 					}
 				}
+				probe.allowLiveGaps = len(snapshot.Segments) > 0
 				batch, err := probe.ValidateLiveSegment(ctx, claim.Capture.ID, claim.ClaimID, claim.Sequence, claim.Objects)
 				if err != nil {
 					return err
@@ -88,7 +90,7 @@ func runLiveClaim(ctx context.Context, store *postgres.RecordingCaptureStore, ob
 						}
 					}
 				}
-				if _, err = assets.AppendLiveSegment(snapshot.Segments, batch, normalTail, claim.Capture.SegmentFrames); err != nil {
+				if _, err = assets.AppendAvailableLiveSegment(snapshot.Segments, batch, normalTail, claim.Capture.SegmentFrames); err != nil {
 					slog.Info("recording_live_boundary", "capture_id", claim.Capture.ID, "claim_id", claim.ClaimID, "sequence", claim.Sequence,
 						"sealed_snapshot", claim.Capture.Inventory != nil, "normal_tail", normalTail, "waiting_for_seal", errors.Is(err, assets.ErrCaptureMissingObjects))
 					if claim.Capture.Inventory != nil && errors.Is(err, assets.ErrCaptureMissingObjects) {
@@ -100,7 +102,7 @@ func runLiveClaim(ctx context.Context, store *postgres.RecordingCaptureStore, ob
 				stage, started = "stable_publication", time.Now()
 				stableCtx, cancelStable := context.WithTimeout(ctx, publicationStageTimeout)
 				defer cancelStable()
-				versions, err := copyLiveObjects(stableCtx, objects, claim, batch, &times)
+				versions, err := publishLiveRenditions(stableCtx, objects, claim, batch, &times)
 				if err != nil {
 					return err
 				}
@@ -110,8 +112,11 @@ func runLiveClaim(ctx context.Context, store *postgres.RecordingCaptureStore, ob
 						fragment.Validation.SegmentETag = versions[fragment.Validation.Segment.Path]
 					}
 				}
+				prepareLiveSubstitutes(ctx, objects, probe, claim, batch)
 				commitStarted := time.Now()
-				snapshot, err = store.CommitLiveBatch(stableCtx, claim, batch)
+				commitCtx, cancelCommit := context.WithTimeout(ctx, liveAdmissionTimeout)
+				snapshot, err = store.CommitLiveBatch(commitCtx, claim, batch)
+				cancelCommit()
 				commitDuration = time.Since(commitStarted)
 				if err != nil {
 					return err
@@ -200,11 +205,66 @@ func headForLiveCopy(ctx context.Context, objects LiveObjects, key string, timin
 	}
 }
 
+// Once the initial profiles are established, one storage failure must not
+// cancel independent renditions. Keep time for the fenced database commit.
+func publishLiveRenditions(ctx context.Context, objects LiveObjects, claim postgres.RecordingLiveClaim, batch map[string]assets.RecordingLiveFragment, timing *liveCopyTiming) (map[string]string, error) {
+	if claim.Sequence == 0 {
+		return copyLiveObjects(ctx, objects, claim, batch, timing)
+	}
+	type outcome struct {
+		name     string
+		versions map[string]string
+		timing   liveCopyTiming
+		err      error
+	}
+	out := make(chan outcome, len(batch))
+	count := len(batch)
+	for name, fragment := range batch {
+		go func() {
+			child, cancel := context.WithTimeout(ctx, 12*time.Second)
+			defer cancel()
+			var result outcome
+			result.name = name
+			result.versions, result.err = copyLiveObjects(child, objects, claim, map[string]assets.RecordingLiveFragment{name: fragment}, &result.timing)
+			out <- result
+		}()
+	}
+	versions := make(map[string]string)
+	var failed error
+	for range count {
+		res := <-out
+		timing.head = max(timing.head, res.timing.head)
+		timing.copy = max(timing.copy, res.timing.copy)
+		timing.headRetries += res.timing.headRetries
+		timing.headTimeouts += res.timing.headTimeouts
+		timing.headSends += res.timing.headSends
+		if res.err != nil {
+			delete(batch, res.name)
+			failed = errors.Join(failed, res.err)
+			continue
+		}
+		for key, version := range res.versions {
+			versions[key] = version
+		}
+	}
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if len(batch) == 0 {
+		return nil, failed
+	}
+	return versions, nil
+}
+
 // Join bounded provider copies before committing the batch or releasing its lease.
 func copyLiveObjects(ctx context.Context, objects LiveObjects, claim postgres.RecordingLiveClaim, batch map[string]assets.RecordingLiveFragment, timing *liveCopyTiming) (map[string]string, error) {
 	versions := make(map[string]string, len(claim.Objects))
 	pending := make([]assets.RecordingPackageObject, 0, len(claim.Objects))
 	for _, object := range claim.Objects {
+		rendition, _, _ := strings.Cut(object.Path, "/")
+		if _, ok := batch[rendition]; batch != nil && !ok {
+			continue
+		}
 		reused := false
 		for _, fragment := range batch {
 			receipt := fragment.Validation
@@ -236,7 +296,9 @@ func copyLiveObjects(ctx context.Context, objects LiveObjects, claim postgres.Re
 				}
 				object := pending[index]
 				var measured liveCopyTiming
-				size, etag, err := headForLiveCopy(workCtx, objects, from+object.Path, &measured)
+				rendition, _, _ := strings.Cut(object.Path, "/")
+				transferCtx := r2.WithLiveAttempt(workCtx, claim.Capture.ID, claim.ClaimID, rendition, "stable", claim.Sequence)
+				size, etag, err := headForLiveCopy(transferCtx, objects, from+object.Path, &measured)
 				mu.Lock()
 				timing.head = max(timing.head, measured.head)
 				timing.headRetries += measured.headRetries
@@ -249,7 +311,7 @@ func copyLiveObjects(ctx context.Context, objects LiveObjects, claim postgres.Re
 				if err == nil {
 					var published string
 					copyStarted := time.Now()
-					published, err = objects.PublishLiveObject(workCtx, from+object.Path, to+object.Path, etag)
+					published, err = objects.PublishLiveObject(transferCtx, from+object.Path, to+object.Path, etag)
 					mu.Lock()
 					timing.copy = max(timing.copy, time.Since(copyStarted))
 					mu.Unlock()

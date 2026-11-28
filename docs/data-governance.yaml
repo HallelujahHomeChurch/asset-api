@@ -317,6 +317,23 @@ datasets:
     legal_basis: {status: pending_legal, reference: null}
     retention: {status: pending_legal, rule: null, action: none}
     cleanup: {mode: none, implementation: [], evidence: []}
+  - id: asset.recording-live-repairs
+    owner: asset-api
+    purpose: Track missing live renditions until validated media is available.
+    necessity: required
+    storage: {kind: postgres, resource: recording_live_repairs, sources: [{path: internal/postgres/recording_live_repair.go, symbol: RecordingCaptureStore.FinishLiveRepair}]}
+    subject_keys: []
+    data_classes: [activity, security]
+    fields:
+      - {name: recording_live_repairs.capture_id, purpose: Identify the capture being repaired, necessity: required, data_classes: [activity]}
+      - {name: recording_live_repairs.sequence, purpose: Locate the missing time interval, necessity: required, data_classes: [activity]}
+      - {name: recording_live_repairs.rendition, purpose: Identify the missing video quality, necessity: required, data_classes: [activity]}
+      - {name: recording_live_repairs.next_attempt_at, purpose: Bound retry frequency and lease duration, necessity: required, data_classes: [activity]}
+      - {name: recording_live_repairs.claim_id, purpose: Fence concurrent repair attempts, necessity: required, data_classes: [activity, security]}
+    attribution: {mode: manual, explanation: CMS owns uploader identity and viewer scope authorization.}
+    legal_basis: {status: pending_legal, reference: null}
+    retention: {status: pending_legal, rule: null, action: none}
+    cleanup: {mode: none, implementation: [], evidence: []}
   - id: asset.recording-live-attempts
     owner: asset-api
     purpose: Validate and retain private live media without storing playback credentials.

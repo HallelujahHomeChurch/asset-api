@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"hhc/asset-api/internal/assets"
+	"hhc/asset-api/internal/postgres"
 	"math"
 	"os"
 	"os/exec"
@@ -137,6 +138,30 @@ func testLiveSegmentFrameRate(t *testing.T, rate string) {
 	history, err = assets.AppendLiveSegment(history, tail, true, profile)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if profile == 300 {
+		receipt := history[0].Renditions["480p"]
+		receipt.Validation.InitETag = "etag"
+		delete(tail, "480p")
+		partial, err := assets.AppendAvailableLiveSegment(history[:1], tail, true, profile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := postgres.LiveRepair{RecordingLiveClaim: postgres.RecordingLiveClaim{
+			Capture: assets.RecordingCapture{ID: p.ID}, Sequence: 1, ClaimID: "repair-480",
+			Snapshot: postgres.RecordingLiveSnapshot{Segments: partial},
+		}, Rendition: "480p"}
+		for _, object := range declarations[1] {
+			if strings.HasPrefix(object.Path, "480p/") {
+				r.Objects = append(r.Objects, object)
+			}
+		}
+		target := &liveWorkerObjects{packageMemoryObjects: objects, passThrough: true}
+		repaired, err := repairLiveRendition(context.Background(), target, probe, r)
+		if err != nil || repaired == nil || repaired.Gap || repaired.Validation.SegmentETag == "" || target.published.Load() != 1 {
+			t.Fatalf("targeted repair: %+v %v copies=%d", repaired, err, target.published.Load())
+		}
+		history[1].Renditions["480p"] = *repaired
 	}
 	for index, segment := range history {
 		for name, fragment := range segment.Renditions {

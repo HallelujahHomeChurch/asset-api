@@ -1,0 +1,51 @@
+name: Live playback acceptance
+on:
+  pull_request:
+    paths:
+      - 'internal/recordingvalidation/live_substitute*'
+      - 'internal/assets/recording_live.go'
+      - 'workers/member-media/src/index.ts'
+      - 'scripts/live-playback/**'
+      - '.github/workflows/live-playback.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  playback:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { browser: chrome, runner: ubuntu-24.04 }
+          - { browser: safari, runner: macos-15 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+      - name: Prepare local media runtime
+        run: |
+          if ! command -v ffmpeg; then
+            if [[ "$RUNNER_OS" == macOS ]]; then brew install ffmpeg; else sudo apt-get update && sudo apt-get install -y ffmpeg; fi
+          fi
+          if [[ "$RUNNER_OS" == macOS ]]; then sudo safaridriver --enable; fi
+          python3 -m venv "$RUNNER_TEMP/webdriver"
+          "$RUNNER_TEMP/webdriver/bin/pip" install selenium==4.29.0
+      - name: Generate and decode the published fallback
+        run: HHC_REQUIRE_MEDIA_TESTS=1 HHC_PLAYBACK_FIXTURE="$RUNNER_TEMP/playback" go test ./internal/recordingvalidation -run '^TestLiveSubstitutePlayback$' -count=1 -v
+      - name: Verify viewer continuity
+        run: |
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            curl --fail --silent --show-error https://registry.npmjs.org/hls.js/-/hls.js-1.7.3.tgz -o "$RUNNER_TEMP/hls.tgz"
+            digest=$(openssl dgst -binary -sha512 "$RUNNER_TEMP/hls.tgz" | openssl base64 -A)
+            test "$digest" = 'MsPlx6yVW4Qv4C7mEVou4/gk/5cN2dVxOTnrNjPSmyH2f0Ln+/UkG10Ax1PE6OvrmTVPKgQYozTtBaPOuCzq7A=='
+            tar -xOzf "$RUNNER_TEMP/hls.tgz" package/dist/hls.min.js > "$RUNNER_TEMP/playback/hls.min.js"
+          else
+            touch "$RUNNER_TEMP/playback/hls.min.js"
+          fi
+          "$RUNNER_TEMP/webdriver/bin/python" scripts/live-playback/browser.py "${{ matrix.browser }}" "$RUNNER_TEMP/playback"
