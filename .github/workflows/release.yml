@@ -112,11 +112,9 @@ jobs:
             echo 'exact_fix=true' >> "$GITHUB_OUTPUT"
           fi
 
-  verify:
+  tests:
     needs: agent_docs
     if: ${{ needs.agent_docs.result == 'success' && needs.agent_docs.outputs.docs_only != 'true' && needs.agent_docs.outputs.config_recovery_only != 'true' }}
-    outputs:
-      image_artifact_id: ${{ steps.images_artifact.outputs.artifact-id }}
     # Keep the validated media fixture toolchain during the ubuntu-latest rollout.
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -197,28 +195,35 @@ jobs:
           if ! python3 scripts/broadcast-fixture-cache.py validate "$HHC_BROADCAST_FIXTURE_DIR/raw" "$FIXTURE_KEY"; then
             rm -rf -- "$HHC_BROADCAST_FIXTURE_DIR/raw"
           fi
-      - run: |
+      - name: Verify database roles and policy fixtures
+        run: |
           ./scripts/bootstrap-migration-role.test.sh
           ./scripts/test-migration-policy-test.sh
           ./scripts/test-migration-policy.sh internal/migrations/sql/*.sql
           ./scripts/test-what-if-policy.sh
+      - name: Run Go race and integration suites
+        run: |
           mkdir -p .artifacts/data-governance
           set -o pipefail
           python3 scripts/test-go-lanes_test.py
           python3 scripts/test-go-lanes.py
+      - name: Summarize test timings
+        env:
+          FIXTURE_CACHE_HIT: ${{ steps.broadcast_restore.outputs.cache-hit }}
+          FIXTURE_KEY: ${{ steps.broadcast_fixture.outputs.key }}
+        run: python3 scripts/summarize-test-timings.py >> "$GITHUB_STEP_SUMMARY"
+      - name: Export governance evidence
+        run: |
           GOVERNANCE_TEST_EVENTS="$PWD/.artifacts/data-governance/test-events.jsonl" \
           GOVERNANCE_OUTPUT_DIR="$PWD/.artifacts/data-governance/export" \
             go test ./internal/governance -run '^TestDataGovernanceExport$' -count=1
           bash scripts/test-publish-data-governance.sh
+      - name: Vet Go packages
+        run: |
           go vet ./...
+      - name: Verify release policy
+        run: |
           ./scripts/test-release-workflow.sh
-          python3 scripts/build-release-images.py
-          ./scripts/test-image-binaries.sh asset-api:verify
-          docker run --rm --entrypoint ffprobe asset-recording:verify -version >/dev/null
-          clam_help="$(docker run --rm --entrypoint clamscan asset-scan:verify --help)"
-          for flag in --max-filesize --max-scansize --max-files --max-recursion --alert-exceeds-max --alert-encrypted; do
-            grep -Fq -- "$flag" <<<"$clam_help"
-          done
       - name: Store verified governance manifest
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -239,6 +244,31 @@ jobs:
         with:
           path: ${{ env.HHC_BROADCAST_FIXTURE_DIR }}/raw
           key: broadcast-raw-${{ steps.broadcast_fixture.outputs.key }}
+
+  images:
+    needs: agent_docs
+    if: ${{ needs.agent_docs.result == 'success' && needs.agent_docs.outputs.docs_only != 'true' && needs.agent_docs.outputs.config_recovery_only != 'true' }}
+    permissions:
+      contents: read
+    outputs:
+      image_artifact_id: ${{ steps.images_artifact.outputs.artifact-id }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Build runtime images
+        run: |
+          python3 scripts/build-release-images.py
+      - name: Smoke test verified images
+        run: |
+          ./scripts/test-image-binaries.sh asset-api:verify
+          docker run --rm --entrypoint ffprobe asset-recording:verify -version >/dev/null
+          clam_help="$(docker run --rm --entrypoint clamscan asset-scan:verify --help)"
+          for flag in --max-filesize --max-scansize --max-files --max-recursion --alert-exceeds-max --alert-encrypted; do
+            grep -Fq -- "$flag" <<<"$clam_help"
+          done
       - name: Seal verified release images
         run: bash scripts/release-image-artifact.sh pack "$RUNNER_TEMP/release-images" "$GITHUB_SHA" asset-api:verify asset-scan:verify asset-recording:verify
       # Expired artifacts require a fresh verify run; deploy-only retries never rebuild.
@@ -251,6 +281,23 @@ jobs:
           if-no-files-found: error
           retention-days: 1
           compression-level: 0
+
+  verify:
+    needs: [agent_docs, tests, images]
+    if: ${{ !cancelled() && needs.agent_docs.result == 'success' && needs.agent_docs.outputs.docs_only != 'true' && needs.agent_docs.outputs.config_recovery_only != 'true' }}
+    runs-on: ubuntu-latest
+    outputs:
+      image_artifact_id: ${{ needs.images.outputs.image_artifact_id }}
+    steps:
+      - name: Require successful verification jobs
+        env:
+          AGENT_DOCS: ${{ needs.agent_docs.result }}
+          TESTS: ${{ needs.tests.result }}
+          IMAGES: ${{ needs.images.result }}
+        run: |
+          test "$AGENT_DOCS" = success
+          test "$TESTS" = success
+          test "$IMAGES" = success
 
   deploy:
     needs: [verify, deploy_media]

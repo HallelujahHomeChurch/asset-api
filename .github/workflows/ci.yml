@@ -24,6 +24,7 @@ jobs:
       contents: read
     outputs:
       docs_only: ${{ steps.diff.outputs.docs_only }}
+      broadcast_unrelated: ${{ steps.diff.outputs.broadcast_unrelated }}
       config_only: ${{ steps.diff.outputs.config_only }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -38,6 +39,7 @@ jobs:
           HEAD_SHA: ${{ github.sha }}
         run: |
           python3 .github/scripts/ci-agent-docs.py "$EVENT_NAME" "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          python3 .github/scripts/ci-agent-docs.py --broadcast "$EVENT_NAME" "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
           python3 .github/scripts/ci-runtime-env.py "$EVENT_NAME" "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
       - name: Test configuration routing
         if: steps.diff.outputs.config_only != 'true' && steps.diff.outputs.docs_only != 'true'
@@ -47,14 +49,9 @@ jobs:
           python3 scripts/test-runtime-env.py
           python3 scripts/test-restore-runtime-template.py
 
-  verify:
+  tests:
     needs: agent_docs
     if: ${{ !cancelled() && !inputs.cancellation_fixture && (needs.agent_docs.result != 'success' || (needs.agent_docs.outputs.docs_only != 'true' && needs.agent_docs.outputs.config_only != 'true')) }}
-    outputs:
-      image_artifact_id: ${{ steps.images_artifact.outputs.artifact-id }}
-      api_config_id: ${{ steps.image_fixture.outputs.api_config_id }}
-      scan_config_id: ${{ steps.image_fixture.outputs.scan_config_id }}
-      recording_config_id: ${{ steps.image_fixture.outputs.recording_config_id }}
     # Keep the validated media fixture toolchain during the ubuntu-latest rollout.
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -77,6 +74,7 @@ jobs:
       TEST_MEDIA_DATABASE_URL: postgres://postgres:postgres@localhost:5432/asset_media_test?sslmode=disable
       TEST_POSTGRES_DSN: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
       ASSET_ALLOW_DESTRUCTIVE_TEST: "1"
+      HHC_SKIP_BROADCAST_RANGE: ${{ needs.agent_docs.result == 'success' && needs.agent_docs.outputs.broadcast_unrelated == 'true' && '1' || '0' }}
       HHC_REQUIRE_MEDIA_TESTS: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -93,7 +91,6 @@ jobs:
         run: |
           trivy_cache="$RUNNER_TEMP/trivy-cache"
           mkdir -p "$trivy_cache"
-          echo "TRIVY_CACHE=$trivy_cache" >> "$GITHUB_ENV"
           docker run --rm \
             -v "$PWD:/workspace:ro" \
             -v "$trivy_cache:/root/.cache/trivy" \
@@ -117,6 +114,7 @@ jobs:
       - name: Create isolated media test database
         run: docker exec "${{ job.services.postgres.id }}" createdb --username=postgres asset_media_test
       - name: Fingerprint synthetic broadcast inputs
+        if: env.HHC_SKIP_BROADCAST_RANGE != '1'
         id: broadcast_fixture
         run: |
           python3 scripts/test-broadcast-fixture-cache.py
@@ -124,56 +122,54 @@ jobs:
           fingerprint="$(python3 scripts/broadcast-fixture-cache.py key)"
           echo "key=$fingerprint" >> "$GITHUB_OUTPUT"
       - name: Restore synthetic broadcast raw media
+        if: env.HHC_SKIP_BROADCAST_RANGE != '1'
         id: broadcast_restore
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ${{ env.HHC_BROADCAST_FIXTURE_DIR }}/raw
           key: broadcast-raw-${{ steps.broadcast_fixture.outputs.key }}
       - name: Validate restored raw media before reuse
+        if: env.HHC_SKIP_BROADCAST_RANGE != '1'
         env:
           FIXTURE_KEY: ${{ steps.broadcast_fixture.outputs.key }}
         run: |
           if ! python3 scripts/broadcast-fixture-cache.py validate "$HHC_BROADCAST_FIXTURE_DIR/raw" "$FIXTURE_KEY"; then
             rm -rf -- "$HHC_BROADCAST_FIXTURE_DIR/raw"
           fi
-      - run: |
+      - name: Verify database roles and policy fixtures
+        run: |
           ./scripts/bootstrap-migration-role.test.sh
           ./scripts/test-line-media-acl-inventory.sh
           ./scripts/test-migration-policy-test.sh
           ./scripts/test-migration-policy.sh internal/migrations/sql/*.sql
           ./scripts/test-what-if-policy.sh
           ./scripts/test-install-media-test-tools.sh
+      - name: Run Go race and integration suites
+        run: |
           mkdir -p .artifacts/data-governance
           set -o pipefail
           python3 scripts/test-go-lanes_test.py
           python3 scripts/test-go-lanes.py
           python3 scripts/test-scan-worker-scale.py
+      - name: Summarize test timings
+        env:
+          FIXTURE_CACHE_HIT: ${{ steps.broadcast_restore.outputs.cache-hit }}
+          FIXTURE_KEY: ${{ steps.broadcast_fixture.outputs.key }}
+        run: python3 scripts/summarize-test-timings.py >> "$GITHUB_STEP_SUMMARY"
+      - name: Export governance evidence
+        run: |
           GOVERNANCE_TEST_EVENTS="$PWD/.artifacts/data-governance/test-events.jsonl" \
           GOVERNANCE_OUTPUT_DIR="$PWD/.artifacts/data-governance/export" \
             go test ./internal/governance -run '^TestDataGovernanceExport$' -count=1
           bash scripts/test-publish-data-governance.sh
+      - name: Vet Go packages
+        run: |
           go vet ./...
+      - name: Verify release policy
+        run: |
           ./scripts/test-release-workflow.sh
           az bicep build --file infra/recording-source.bicep --stdout >/dev/null
           az bicep build --file infra/main.bicep --stdout >/dev/null
-          python3 scripts/build-release-images.py
-          ./scripts/test-image-binaries.sh asset-api:verify
-          docker run --rm --entrypoint ffprobe asset-recording:verify -version >/dev/null
-          docker run --rm \
-            -v /var/run/docker.sock:/var/run/docker.sock \
-            -v "$TRIVY_CACHE:/root/.cache/trivy" \
-            ghcr.io/aquasecurity/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 \
-            image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 asset-api:verify
-          docker run --rm \
-            -v /var/run/docker.sock:/var/run/docker.sock \
-            -v "$TRIVY_CACHE:/root/.cache/trivy" \
-            ghcr.io/aquasecurity/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 \
-            image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 asset-scan:verify
-          docker run --rm \
-            -v /var/run/docker.sock:/var/run/docker.sock \
-            -v "$TRIVY_CACHE:/root/.cache/trivy" \
-            ghcr.io/aquasecurity/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 \
-            image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 asset-recording:verify
       - name: Store verified governance manifest
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -185,15 +181,57 @@ jobs:
             .artifacts/data-governance/export/data-governance.yaml
             .artifacts/data-governance/export/data-governance.json
       - name: Seal verified synthetic broadcast raw media
+        if: env.HHC_SKIP_BROADCAST_RANGE != '1'
         env:
           FIXTURE_KEY: ${{ steps.broadcast_fixture.outputs.key }}
         run: python3 scripts/broadcast-fixture-cache.py seal "$HHC_BROADCAST_FIXTURE_DIR/raw" "$FIXTURE_KEY"
       - name: Cache verified synthetic broadcast raw media
-        if: steps.broadcast_restore.outputs.cache-hit != 'true'
+        if: env.HHC_SKIP_BROADCAST_RANGE != '1' && steps.broadcast_restore.outputs.cache-hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ${{ env.HHC_BROADCAST_FIXTURE_DIR }}/raw
           key: broadcast-raw-${{ steps.broadcast_fixture.outputs.key }}
+
+  images:
+    needs: agent_docs
+    if: ${{ !cancelled() && !inputs.cancellation_fixture && (needs.agent_docs.result != 'success' || (needs.agent_docs.outputs.docs_only != 'true' && needs.agent_docs.outputs.config_only != 'true')) }}
+    permissions:
+      contents: read
+    outputs:
+      image_artifact_id: ${{ steps.images_artifact.outputs.artifact-id }}
+      api_config_id: ${{ steps.image_fixture.outputs.api_config_id }}
+      scan_config_id: ${{ steps.image_fixture.outputs.scan_config_id }}
+      recording_config_id: ${{ steps.image_fixture.outputs.recording_config_id }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Build runtime images
+        run: |
+          python3 scripts/build-release-images.py
+      - name: Smoke test verified images
+        run: |
+          ./scripts/test-image-binaries.sh asset-api:verify
+          docker run --rm --entrypoint ffprobe asset-recording:verify -version >/dev/null
+      - name: Scan runtime images
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$RUNNER_TEMP/trivy-cache:/root/.cache/trivy" \
+            ghcr.io/aquasecurity/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 \
+            image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 asset-api:verify
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$RUNNER_TEMP/trivy-cache:/root/.cache/trivy" \
+            ghcr.io/aquasecurity/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 \
+            image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 asset-scan:verify
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$RUNNER_TEMP/trivy-cache:/root/.cache/trivy" \
+            ghcr.io/aquasecurity/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 \
+            image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 asset-recording:verify
       - name: Test release image handoff with tiny Docker fixtures
         id: image_fixture
         run: bash scripts/test-release-image-artifact.sh "$RUNNER_TEMP/release-images"
@@ -207,19 +245,36 @@ jobs:
           retention-days: 1
           compression-level: 0
 
+  verify:
+    needs: [agent_docs, tests, images, image-transport]
+    if: ${{ !cancelled() && !inputs.cancellation_fixture && (needs.agent_docs.result != 'success' || (needs.agent_docs.outputs.docs_only != 'true' && needs.agent_docs.outputs.config_only != 'true')) }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require successful verification jobs
+        env:
+          AGENT_DOCS: ${{ needs.agent_docs.result }}
+          TESTS: ${{ needs.tests.result }}
+          IMAGES: ${{ needs.images.result }}
+          IMAGE_TRANSPORT: ${{ needs.image-transport.result }}
+        run: |
+          test "$AGENT_DOCS" = success
+          test "$TESTS" = success
+          test "$IMAGES" = success
+          test "$IMAGE_TRANSPORT" = success
+
   image-transport:
-    needs: verify
+    needs: images
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Require immutable image artifact ID
         env:
-          IMAGE_ARTIFACT_ID: ${{ needs.verify.outputs.image_artifact_id }}
+          IMAGE_ARTIFACT_ID: ${{ needs.images.outputs.image_artifact_id }}
         run: '[[ "$IMAGE_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]'
       - name: Download verified release images
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          artifact-ids: ${{ needs.verify.outputs.image_artifact_id }}
+          artifact-ids: ${{ needs.images.outputs.image_artifact_id }}
           path: ${{ runner.temp }}/release-images
           digest-mismatch: error
       - name: Verify and load release images
@@ -227,9 +282,9 @@ jobs:
         run: bash scripts/release-image-artifact.sh load "$RUNNER_TEMP/release-images" "$GITHUB_SHA"
       - name: Verify transported producer config identities
         env:
-          EXPECTED_API: ${{ needs.verify.outputs.api_config_id }}
-          EXPECTED_SCAN: ${{ needs.verify.outputs.scan_config_id }}
-          EXPECTED_RECORDING: ${{ needs.verify.outputs.recording_config_id }}
+          EXPECTED_API: ${{ needs.images.outputs.api_config_id }}
+          EXPECTED_SCAN: ${{ needs.images.outputs.scan_config_id }}
+          EXPECTED_RECORDING: ${{ needs.images.outputs.recording_config_id }}
           ACTUAL_API: ${{ steps.images.outputs.api_config_id }}
           ACTUAL_SCAN: ${{ steps.images.outputs.scan_config_id }}
           ACTUAL_RECORDING: ${{ steps.images.outputs.recording_config_id }}

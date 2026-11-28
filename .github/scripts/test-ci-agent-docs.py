@@ -36,8 +36,8 @@ class AgentDocsTests(unittest.TestCase):
         self.git('add', '-A')
         self.git('-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture')
 
-    def classify(self, event='pull_request', base=None, head=None):
-        result = subprocess.run(['python3', str(SCRIPT), event, base or self.base, head or self.git('rev-parse', 'HEAD')], cwd=self.repo, text=True, capture_output=True)
+    def classify(self, event='pull_request', base=None, head=None, broadcast=False):
+        result = subprocess.run(['python3', str(SCRIPT), *(['--broadcast'] if broadcast else []), event, base or self.base, head or self.git('rev-parse', 'HEAD')], cwd=self.repo, text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         return result.stdout.strip()
 
@@ -55,6 +55,19 @@ class AgentDocsTests(unittest.TestCase):
             self.put(path, 'changed\n')
             self.commit()
             self.assertEqual(self.classify(base=previous), 'docs_only=false', path)
+
+    def test_broadcast_scope(self):
+        self.put('cmd/scan-worker/main.go', 'package main')
+        self.commit()
+        self.assertEqual(self.classify(broadcast=True), 'broadcast_unrelated=true')
+        self.assertEqual(self.classify('push', broadcast=True), 'broadcast_unrelated=false')
+        self.put('internal/recordingvalidation/live_playlists.go')
+        self.commit()
+        self.assertEqual(self.classify(broadcast=True), 'broadcast_unrelated=false')
+        previous = self.git('rev-parse', 'HEAD')
+        self.git('mv', 'internal/recordingvalidation/live_playlists.go', 'cmd/scan-worker/helper.go')
+        self.commit()
+        self.assertEqual(self.classify(base=previous, broadcast=True), 'broadcast_unrelated=false')
 
     def test_source_rename_is_not_document_only(self):
         self.git('mv', 'source.go', 'README.md')
