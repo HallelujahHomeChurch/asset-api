@@ -38,6 +38,10 @@ def proven_paths(event, base, head, predicate):
     return True
 
 
+def docs_only(event, base, head):
+    return proven_paths(event, base, head, document)
+
+
 if __name__ == '__main__':
     broadcast = sys.argv[1:2] == ['--broadcast']
     args = sys.argv[2:] if broadcast else sys.argv[1:]
