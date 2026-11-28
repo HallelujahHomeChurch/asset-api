@@ -46,6 +46,8 @@ ASSET_ALLOW_DESTRUCTIVE_TEST=1 HHC_REQUIRE_MEDIA_TESTS=1 \
 python3 scripts/test-go-lanes.py
 ```
 
+On PRs limited to unrelated scan, retention or signature-refresh entry points and Markdown, only the 24-segment broadcast range case reports an explicit skip. Normal releases run the complete suite.
+
 The runner publishes `.artifacts/data-governance/test-events.jsonl` only after
 both lanes succeed and every package has a terminal result. Failure or cancellation
 stops both process groups. `python3 scripts/test-go-lanes_test.py` checks package
@@ -55,12 +57,11 @@ for comparison; both paths require disposable PostgreSQL and media tools.
 Governance export still runs after the complete event stream is available.
 
 The fixed API, scan and recording image builds overlap at most two Docker
-clients on the existing verify runner. API builds first to populate the shared
+clients on a dedicated runner in parallel with the test suites. API builds first to populate the shared
 Go cache; scan and recording then build together. Failure or cancellation stops
 and joins owned build process groups; no completion is reported until all three builds
 succeed. Existing binary/media/security checks and immutable image handoff run
-afterward. Build elapsed times are logged; runner count and required-check names
-are unchanged. Runtime deployment never rebuilds these verified images.
+afterward. Build elapsed times are logged; the required verify check waits for all producers. Runtime deployment never rebuilds these verified images.
 
 ## Routes
 

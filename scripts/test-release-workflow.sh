@@ -192,7 +192,7 @@ grep -Fq 'image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 asset-ap
 grep -Fq 'image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 asset-scan:verify' .github/workflows/ci.yml
 for candidate in .github/workflows/ci.yml "$workflow"; do
   verify_job="$(awk '
-    /^  verify:/ { capture = 1; next }
+    /^  tests:/ { capture = 1; next }
     capture && /^  [[:alnum:]_-]+:/ { exit }
     capture { print }
   ' "$candidate")"
@@ -624,7 +624,8 @@ release = Path('.github/workflows/release.yml').read_text()
 ci = Path('.github/workflows/ci.yml').read_text()
 assert 'az acr build' not in release, 'release must publish the verified images without rebuilding'
 for text in (release, ci):
-    assert 'artifact-ids: ${{ needs.verify.outputs.image_artifact_id }}' in text
+    producer = 'verify' if text == release else 'images'
+    assert 'artifact-ids: ${{ needs.' + producer + '.outputs.image_artifact_id }}' in text
     assert 'digest-mismatch: error' in text
     assert 'retention-days: 1' in text
     assert 'compression-level: 0' in text
@@ -657,7 +658,7 @@ grep -Fq "resource scanWarmerIdentity 'Microsoft.ManagedIdentity/userAssignedIde
 for media_workflow in .github/workflows/ci.yml "$workflow"; do
   grep -Fq 'run: ./scripts/install-media-test-tools.sh' "$media_workflow"
   if grep -Fq 'sudo apt-get install -y ffmpeg' "$media_workflow"; then echo "unbounded ffmpeg install in $media_workflow" >&2; exit 1; fi
-  awk '/^  verify:$/{v=1;next} v&&/^  [a-z_-]+:$/{exit} v&&/^    timeout-minutes: [0-9]+$/{found=1} END{exit !found}' "$media_workflow"
+  awk '/^  tests:$/{v=1;next} v&&/^  [a-z_-]+:$/{exit} v&&/^    timeout-minutes: [0-9]+$/{found=1} END{exit !found}' "$media_workflow"
 done
 grep -q 'test-install-media-test-tools.sh' .github/workflows/ci.yml
 

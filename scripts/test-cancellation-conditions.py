@@ -2,6 +2,8 @@
 import ast
 from pathlib import Path
 import re
+import subprocess
+import textwrap
 import unittest
 
 RELEASE = Path('.github/workflows/release.yml').read_text()
@@ -31,6 +33,26 @@ def evaluate(expression, *, failed=False, cancelled=False, runtime='skipped', se
 
 
 class CancellationConditions(unittest.TestCase):
+    def test_required_gate_rejects_each_unsuccessful_producer(self):
+        for workflow, jobs in [(CI, ['agent_docs', 'tests', 'images', 'image-transport']),
+                               (RELEASE, ['agent_docs', 'tests', 'images'])]:
+            gate = re.search(
+                r'^  verify:\n(.*?)(?=^  [\w-]+:)', workflow, re.M | re.S).group(1)
+            self.assertIn('needs: [' + ', '.join(jobs) + ']', gate)
+            self.assertIn('!cancelled()', gate)
+            script = textwrap.dedent(gate.split('        run: |\n')[1])
+            environment = {}
+            for job in jobs:
+                key = job.upper().replace('-', '_')
+                self.assertIn(key + ': ${{ needs.' + job + '.result }}', gate)
+                environment[key] = 'success'
+            def run(values):
+                return subprocess.run(['bash', '-e', '-c', script], env=values).returncode
+            self.assertEqual(run(environment), 0)
+            for key in environment:
+                for status in ('failure', 'cancelled', 'skipped'):
+                    self.assertNotEqual(run(dict(environment, **{key: status})), 0)
+
     def test_actual_fixture_uses_production_conditions(self):
         for name in ['Settle interrupted runtime deployment', 'Roll back failed runtime']:
             self.assertEqual(condition(RELEASE, name), condition(CI, name))
