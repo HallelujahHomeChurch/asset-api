@@ -1,12 +1,11 @@
 name: Live playback acceptance
 on:
   pull_request:
-    paths:
-      - 'internal/recordingvalidation/live_substitute*'
-      - 'internal/assets/recording_live.go'
-      - 'workers/member-media/src/index.ts'
-      - 'scripts/live-playback/**'
-      - '.github/workflows/live-playback.yml'
+    paths-ignore:
+      - '**/*.md'
+      - 'cmd/scan-worker/*.go'
+      - 'cmd/retention-worker/*.go'
+      - 'cmd/signature-refresh/*.go'
 
 permissions:
   contents: read

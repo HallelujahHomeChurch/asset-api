@@ -24,6 +24,7 @@ jobs:
       contents: read
     outputs:
       docs_only: ${{ steps.diff.outputs.docs_only }}
+      broadcast_unrelated: ${{ steps.diff.outputs.broadcast_unrelated }}
       config_only: ${{ steps.diff.outputs.config_only }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -38,6 +39,7 @@ jobs:
           HEAD_SHA: ${{ github.sha }}
         run: |
           python3 .github/scripts/ci-agent-docs.py "$EVENT_NAME" "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          python3 .github/scripts/ci-agent-docs.py --broadcast "$EVENT_NAME" "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
           python3 .github/scripts/ci-runtime-env.py "$EVENT_NAME" "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
       - name: Test configuration routing
         if: steps.diff.outputs.config_only != 'true' && steps.diff.outputs.docs_only != 'true'
@@ -77,6 +79,7 @@ jobs:
       TEST_MEDIA_DATABASE_URL: postgres://postgres:postgres@localhost:5432/asset_media_test?sslmode=disable
       TEST_POSTGRES_DSN: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
       ASSET_ALLOW_DESTRUCTIVE_TEST: "1"
+      HHC_SKIP_BROADCAST_RANGE: ${{ needs.agent_docs.result == 'success' && needs.agent_docs.outputs.broadcast_unrelated == 'true' && '1' || '0' }}
       HHC_REQUIRE_MEDIA_TESTS: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -117,6 +120,7 @@ jobs:
       - name: Create isolated media test database
         run: docker exec "${{ job.services.postgres.id }}" createdb --username=postgres asset_media_test
       - name: Fingerprint synthetic broadcast inputs
+        if: env.HHC_SKIP_BROADCAST_RANGE != '1'
         id: broadcast_fixture
         run: |
           python3 scripts/test-broadcast-fixture-cache.py
@@ -124,12 +128,14 @@ jobs:
           fingerprint="$(python3 scripts/broadcast-fixture-cache.py key)"
           echo "key=$fingerprint" >> "$GITHUB_OUTPUT"
       - name: Restore synthetic broadcast raw media
+        if: env.HHC_SKIP_BROADCAST_RANGE != '1'
         id: broadcast_restore
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ${{ env.HHC_BROADCAST_FIXTURE_DIR }}/raw
           key: broadcast-raw-${{ steps.broadcast_fixture.outputs.key }}
       - name: Validate restored raw media before reuse
+        if: env.HHC_SKIP_BROADCAST_RANGE != '1'
         env:
           FIXTURE_KEY: ${{ steps.broadcast_fixture.outputs.key }}
         run: |
@@ -205,11 +211,12 @@ jobs:
             .artifacts/data-governance/export/data-governance.yaml
             .artifacts/data-governance/export/data-governance.json
       - name: Seal verified synthetic broadcast raw media
+        if: env.HHC_SKIP_BROADCAST_RANGE != '1'
         env:
           FIXTURE_KEY: ${{ steps.broadcast_fixture.outputs.key }}
         run: python3 scripts/broadcast-fixture-cache.py seal "$HHC_BROADCAST_FIXTURE_DIR/raw" "$FIXTURE_KEY"
       - name: Cache verified synthetic broadcast raw media
-        if: steps.broadcast_restore.outputs.cache-hit != 'true'
+        if: env.HHC_SKIP_BROADCAST_RANGE != '1' && steps.broadcast_restore.outputs.cache-hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ${{ env.HHC_BROADCAST_FIXTURE_DIR }}/raw

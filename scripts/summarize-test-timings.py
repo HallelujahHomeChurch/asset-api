@@ -17,6 +17,8 @@ with Path(".artifacts/data-governance/test-events.jsonl").open() as events:
             bucket = tests if name else packages
             bucket.append((event["Elapsed"], name or event["Package"]))
         if event.get("Test") == "TestBroadcastRealDecodedRangeAndDerivatives":
+            if event["Action"] in {"pass", "skip"}:
+                print(f"- Broadcast range: {event['Action']}")
             output = event.get("Output", "")
             if "broadcast timing:" in output:
                 print("- " + output.split("broadcast timing:", 1)[1].strip())

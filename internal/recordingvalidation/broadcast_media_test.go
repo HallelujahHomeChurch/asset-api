@@ -20,6 +20,9 @@ import (
 // testsrc burns elapsed capture seconds into the image. Yellow/green/red bars
 // distinguish rehearsal [0,8), public [8,20), and post-service [20,24).
 func TestBroadcastRealDecodedRangeAndDerivatives(t *testing.T) {
+	if os.Getenv("HHC_SKIP_BROADCAST_RANGE") == "1" {
+		t.Skip("PR changes are confined to documentation and unrelated worker entry points")
+	}
 	ffmpeg, err := exec.LookPath("ffmpeg")
 	if err != nil {
 		if os.Getenv("HHC_REQUIRE_MEDIA_TESTS") == "1" {
