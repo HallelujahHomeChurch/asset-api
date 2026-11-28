@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // testsrc burns elapsed capture seconds into the image. Yellow/green/red bars
@@ -47,6 +48,7 @@ func TestBroadcastRealDecodedRangeAndDerivatives(t *testing.T) {
 	objects.bytes = map[string][]byte{}
 	declarations := make([][]assets.RecordingPackageObject, 24)
 	for _, r := range assets.LiveRenditions() {
+		started := time.Now()
 		dir := filepath.Join(root, "raw", r.Name)
 		if err = os.MkdirAll(dir, 0700); err != nil {
 			t.Fatal(err)
@@ -65,6 +67,7 @@ func TestBroadcastRealDecodedRangeAndDerivatives(t *testing.T) {
 				t.Fatalf("29.97 fixture %s: %v %s", r.Name, err, out)
 			}
 		}
+		t.Logf("broadcast timing: %s raw media (reused=%t) %s", r.Name, reuse, time.Since(started))
 		for seq := 0; seq < 24; seq++ {
 			for _, name := range []string{"init.mp4", fmt.Sprintf("seg-%06d.m4s", seq)} {
 				data, err := os.ReadFile(filepath.Join(dir, name))
@@ -80,6 +83,7 @@ func TestBroadcastRealDecodedRangeAndDerivatives(t *testing.T) {
 	}
 	probe := PackageMediaProbe{Objects: objects, FFmpeg: ffmpeg, FFprobe: ffprobe, ScratchRoot: t.TempDir()}
 	var history []assets.RecordingLiveSegment
+	started := time.Now()
 	for seq, inventory := range declarations {
 		batch, err := probe.ValidateLiveSegment(ctx, p.ID, fmt.Sprintf("validated-%d", seq), seq, inventory)
 		if err != nil {
@@ -90,6 +94,7 @@ func TestBroadcastRealDecodedRangeAndDerivatives(t *testing.T) {
 			t.Fatalf("raw continuity %d: %v", seq, err)
 		}
 	}
+	t.Logf("broadcast timing: segment validation %s", time.Since(started))
 	start, end := 8, 20
 	policy := assets.RecordingBroadcastRange{MemberState: "vod", RecordingID: p.RecordingID, Epoch: 1, RangeRevision: 3, StartSequence: &start, EndSequenceExclusive: &end}
 	projection := assets.BroadcastProjection(policy, history, 25, true)
@@ -121,9 +126,11 @@ func TestBroadcastRealDecodedRangeAndDerivatives(t *testing.T) {
 	}
 	writes := map[string][]byte{}
 	put := func(_ context.Context, key string, data []byte) error { writes[key] = data; return nil }
+	started = time.Now()
 	if err = probe.GenerateCoversWithTimeline(ctx, p, "broadcast-covers", nil, history[start:end], put); err != nil {
 		t.Fatal(err)
 	}
+	t.Logf("broadcast timing: covers %s", time.Since(started))
 	for key, data := range writes {
 		img, err := jpeg.Decode(bytes.NewReader(data))
 		if err != nil {
@@ -134,9 +141,11 @@ func TestBroadcastRealDecodedRangeAndDerivatives(t *testing.T) {
 			t.Fatalf("outside-range cover %s pixel=%d/%d/%d", key, r, g, b)
 		}
 	}
+	started = time.Now()
 	if err = probe.GeneratePreviewsWithTimeline(ctx, p, "broadcast-previews", history, put); err != nil {
 		t.Fatal(err)
 	}
+	t.Logf("broadcast timing: previews %s", time.Since(started))
 	vtt := string(writes[p.FinalPrefix+"previews/broadcast-previews/index.vtt"])
 	if !strings.Contains(vtt, "00:04:00.240 --> 00:04:05.240\nseg-000008.jpg") {
 		t.Fatalf("measured preview timeline missing: %s", vtt)
